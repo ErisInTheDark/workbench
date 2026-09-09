@@ -52,6 +52,32 @@ test("the database node proves readiness before exposing transcript work and clo
   }
 });
 
+test("database retirement still closes its worker when diagnostic persistence fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-close-"));
+  const instance = WorkbenchDatabaseNode.create(
+    { legacyMigrationProjectRoot: directory } as OrchestratorProcessContext,
+    {
+      get: () => { throw new Error("No dependencies"); },
+      handoffState: undefined,
+      isReplacing: () => false,
+      lease: { isCurrent: () => true },
+      mode: "initial",
+    },
+  );
+  const database = instance.registrations.database!;
+  try {
+    await instance.start();
+    instance.registrations.transcriptShadowLog!.flush = async () => {
+      throw new Error("diagnostic storage failed");
+    };
+    await assert.rejects(async () => await instance.dispose(), /diagnostic storage failed/u);
+    assert.equal(database.state, "closed");
+  } finally {
+    await database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Codex recovery settles every provider gap independently of harness availability", async () => {
   const pendingThreadIds = ["thread-a", "thread-b"];
   const calls: string[] = [];

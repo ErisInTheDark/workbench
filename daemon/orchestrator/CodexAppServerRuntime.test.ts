@@ -15,9 +15,9 @@ function deferred<TValue = void>() {
   return { promise, resolve };
 }
 
-function runtimeOwner() {
+function runtimeOwner(stopAsync = async () => {}, retirePrevious = async () => {}) {
   let deliver!: (message: unknown) => void;
-  const appServer = { stopAsync: async () => undefined } as unknown as CodexAppServer;
+  const appServer = { stopAsync, retirePrevious } as unknown as CodexAppServer;
   const context = {
     codexAppServerOptions: {
       logError() {},
@@ -33,6 +33,116 @@ function runtimeOwner() {
   });
   return { deliver: (message: unknown) => deliver(message), runtime };
 }
+
+test("shutdown requests current and predecessor process retirement before waiting for either", async () => {
+  const previous = deferred();
+  const current = deferred();
+  let previousStarted = false;
+  let currentStarted = false;
+  const { runtime } = runtimeOwner(
+    async () => { currentStarted = true; await current.promise; },
+    async () => { previousStarted = true; await previous.promise; },
+  );
+  const stopping = runtime.stop();
+  try {
+    assert.equal(previousStarted, true);
+    assert.equal(currentStarted, true);
+  } finally {
+    previous.resolve();
+    current.resolve();
+    await stopping;
+  }
+});
+
+test("shutdown retains failures from both current and predecessor retirement", async () => {
+  const current = new Error("current retirement failed");
+  const previous = new Error("previous retirement failed");
+  const { runtime } = runtimeOwner(
+    async () => { throw current; },
+    async () => { throw previous; },
+  );
+  await assert.rejects(runtime.stop(), error => error instanceof AggregateError
+    && error.errors.includes(current) && error.errors.includes(previous));
+});
+
+test("process retirement is not held hostage by an old message handler", async () => {
+  let stopped = false;
+  const { deliver, runtime } = runtimeOwner(async () => { stopped = true; });
+  const entered = deferred();
+  const release = deferred();
+  runtime.attachBridge({
+    async handleUpstreamMessage() { entered.resolve(); await release.promise; },
+  } as unknown as CodexStdioBridge);
+  deliver("old message");
+  await entered.promise;
+  const stopping = runtime.stop();
+  try {
+    assert.equal(stopped, true);
+  } finally {
+    release.resolve();
+    await stopping;
+  }
+});
+
+test("expired handoff keeps queued ingress private until the replacement is committed", async () => {
+  const { deliver, runtime } = runtimeOwner();
+  const entered = deferred();
+  const release = deferred();
+  const received = deferred();
+  const messages: unknown[] = [];
+  const oldBridge = {
+    async prepareForReload() {},
+    async waitForIdle() {},
+    expireForReload() {},
+    async handleUpstreamMessage() { entered.resolve(); await release.promise; },
+    async detachForReload() { return { pendingResponses: new Map() }; },
+    async retireAfterHandoff() {},
+    resumeAfterReloadFailure() {},
+  } as unknown as CodexStdioBridge;
+  const replacement = {
+    async handleUpstreamMessage(message: unknown) { messages.push(message); received.resolve(); },
+  } as unknown as CodexStdioBridge;
+  runtime.attachBridge(oldBridge);
+  deliver("old read");
+  await entered.promise;
+  try {
+    const handoff = runtime.beginBridgeHandoff(oldBridge);
+    handoff.expire();
+    await handoff.detach();
+    runtime.attachBridge(replacement, { publish: false });
+    deliver("queued fact");
+    await Promise.resolve();
+    assert.deepEqual(messages, []);
+    await handoff.commit();
+    runtime.attachBridge(replacement);
+    await received.promise;
+    assert.deepEqual(messages, ["queued fact"]);
+  } finally {
+    release.resolve();
+    await runtime.stop();
+  }
+});
+
+test("a late detach cannot clear a different attached bridge", async () => {
+  const { deliver, runtime } = runtimeOwner();
+  const entered = deferred();
+  const release = deferred();
+  const delivered = deferred();
+  const oldBridge = {
+    async prepareForReload() {},
+    async detachForReload() { entered.resolve(); await release.promise; return { pendingResponses: new Map() }; },
+    resumeAfterReloadFailure() {},
+  } as unknown as CodexStdioBridge;
+  runtime.attachBridge(oldBridge);
+  const detaching = runtime.detachBridge(oldBridge);
+  await entered.promise;
+  runtime.attachBridge({ async handleUpstreamMessage() { delivered.resolve(); } } as unknown as CodexStdioBridge);
+  release.resolve();
+  await detaching;
+  assert.equal(runtime.isAvailable(), true);
+  deliver("new message");
+  await delivered.promise;
+});
 
 test("page reads drain before the upstream handoff gate closes", async () => {
   const { deliver, runtime } = runtimeOwner();

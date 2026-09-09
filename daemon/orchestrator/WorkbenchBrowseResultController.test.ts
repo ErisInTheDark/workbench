@@ -81,6 +81,54 @@ function createEvent(action: string): WorkbenchBrowseResultEvent {
   };
 }
 
+test("expired enrichment cannot write or steer after rollback resumes the owner", async () => {
+  const read = deferred<ThreadReadResponse>();
+  const entered = deferred<void>();
+  const writes: WorkbenchBrowseResultEntry[] = [];
+  let steers = 0;
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["opencode"],
+    logError: () => {},
+    readThread: async () => { entered.resolve(); return await read.promise; },
+    recordResult: async entry => { writes.push(entry); },
+    steerTurn: async () => { steers++; return "turn"; },
+  });
+  controller.record(createEvent("old"));
+  const screenshot = controller.deliverScreenshot("thread-1", "data:image/png;base64,YQ==");
+  const rejected = assert.rejects(screenshot, /retired/);
+  await entered.promise;
+  controller.expire();
+  await controller.waitForIdle();
+  controller.resume();
+  read.resolve(createThreadResponse("thread-1", "turn"));
+  await rejected;
+  controller.record(createEvent("new"));
+  await controller.waitForIdle();
+  assert.deepEqual(writes.map(entry => entry.action), ["new"]);
+  assert.equal(steers, 0);
+});
+
+test("expiry retains the barrier for a result write that has already started", async () => {
+  const writing = deferred<void>();
+  const release = deferred<void>();
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex"],
+    logError: () => {},
+    readThread: async () => createThreadResponse("thread-1", "turn"),
+    recordResult: async () => { writing.resolve(); await release.promise; },
+    steerTurn: async () => null,
+  });
+  controller.record(createEvent("issued"));
+  await writing.promise;
+  controller.expire();
+  let idle = false;
+  const waiting = controller.waitForIdle().then(() => { idle = true; });
+  await Promise.resolve();
+  assert.equal(idle, false);
+  release.resolve();
+  await waiting;
+});
+
 test("records one thread's deferred results in emission order", async () => {
   const readGate = deferred<ThreadReadResponse>();
   const recorded: WorkbenchBrowseResultEntry[] = [];

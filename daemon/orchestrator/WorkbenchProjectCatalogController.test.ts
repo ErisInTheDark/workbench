@@ -55,6 +55,28 @@ function createProject(id: string, rootPath = `C:/projects/${id}`): WorkbenchPro
   };
 }
 
+test("replacement catalog serves its retained snapshot while discovery is pending", async () => {
+  const discovery = deferred<WorkbenchProjectOption[]>();
+  const initialSnapshot = { data: [createProject("retained")], rootPath: "C:/projects" };
+  const options = {
+    initialSnapshot,
+    now: () => 1,
+    discoverProjects: () => discovery.promise,
+    createWatcher: (root: string, listener: (event: string, filename: string | Buffer | null) => void, recursive: boolean) => (
+      new FakeWatcher(root, listener, recursive)
+    ),
+  };
+  const controller = new WorkbenchProjectCatalogController(options);
+  try {
+    assert.deepEqual(controller.getCurrentSnapshot(), initialSnapshot);
+    await controller.ensureLoaded();
+    assert.deepEqual(await controller.readCatalog(), initialSnapshot);
+  } finally {
+    controller.dispose();
+    discovery.resolve([createProject("fresh")]);
+  }
+});
+
 function createIconResponse() {
   let body = new Uint8Array();
   let headers: Record<string, string | number> = {};

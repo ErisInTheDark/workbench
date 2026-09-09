@@ -20,6 +20,30 @@ import {
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+
+test("worker migration waits for its owner to retain the rollback checkpoint", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const version = WORKBENCH_DATABASE_SCHEMA_VERSION - 1;
+  const old = new Database(databasePath);
+  installWorkbenchDatabaseSchema(old, { targetVersion: version });
+  old.close();
+  const options = {
+    databasePath,
+    beforeMigration: (_backupPath: string) => { throw new Error("rollback checkpoint was not retained"); },
+  };
+  const controller = new WorkbenchDatabaseController(options);
+  try {
+    await assert.rejects(controller.start(), /rollback checkpoint was not retained/u);
+  } finally {
+    await controller.close();
+    const inspection = new Database(databasePath, { readonly: true });
+    try { assert.equal(inspection.pragma("user_version", { simple: true }), version); }
+    finally { inspection.close(); }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("worker startup retains its old-schema backup even when closed during opening", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
@@ -106,6 +130,93 @@ test("the database worker opens, proves readiness, reports all tables, and close
     await reopened.close();
   } finally {
     await reopened?.close();
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a suspended database resumes the same worker and queued reads after rollback", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-suspend-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const controller = new WorkbenchDatabaseController({ databasePath });
+  try {
+    const initial = await controller.start();
+    await controller.suspend();
+    const queued = controller.getInventory();
+    const external = new Database(databasePath);
+    external.close();
+    await controller.resume();
+    assert.deepEqual(await queued, initial);
+    assert.deepEqual(await controller.getInventory(), initial);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("retirement releases suspended callers before dependant disposal closes the worker", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-retire-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  let queued: Promise<unknown> | undefined;
+  try {
+    await controller.start();
+    await controller.suspend();
+    queued = controller.getInventory();
+    void queued.catch(() => {});
+    controller.retireSuspendedAdmission();
+    await assert.rejects(queued, /retired/u);
+    await assert.rejects(controller.getInventory(), /retired/u);
+    assert.equal(controller.state, "suspended", "Retirement admission must not prematurely dispose the worker");
+  } finally {
+    await controller.close();
+    await queued?.catch(() => {});
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the retained worker restores both schema and data before releasing queued callers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-worker-schema-rollback-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const controller = new WorkbenchDatabaseController({ databasePath });
+  try {
+    const inventory = await controller.start();
+    await controller.suspend();
+    const candidate = new Database(databasePath);
+    let checkpoint: string;
+    try {
+      candidate.exec("CREATE TABLE rollback_evidence(legacy TEXT); INSERT INTO rollback_evidence VALUES ('retained')");
+      checkpoint = await preserveWorkbenchDatabaseBackup(candidate, join(directory, "rollback"));
+      candidate.exec("DROP TABLE rollback_evidence; CREATE TABLE candidate_only(value TEXT)");
+      candidate.pragma(`user_version = ${inventory.schemaVersion + 1}`);
+    } finally { candidate.close(); }
+    const queued = controller.getInventory();
+    await controller.resume(checkpoint);
+    const restoredInventory = await queued;
+    assert.equal(restoredInventory.schemaVersion, inventory.schemaVersion);
+    assert.equal(restoredInventory.tableNames.includes("candidate_only"), false);
+    const inspection = new Database(databasePath, { readonly: true });
+    try {
+      assert.deepEqual(inspection.prepare("SELECT legacy FROM rollback_evidence").all(), [{ legacy: "retained" }]);
+    } finally { inspection.close(); }
+    await controller.suspend();
+    await controller.resume();
+    assert.deepEqual(await controller.getInventory(), restoredInventory);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("retiring a suspended database rejects queued work instead of hanging it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-retire-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    await controller.start();
+    await controller.suspend();
+    const rejected = assert.rejects(controller.getInventory(), /closed|retired/u);
+    await controller.close();
+    await rejected;
+  } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -703,6 +814,22 @@ test("shadow projection failures stay request-scoped and leave durable health", 
     assert.equal(failed.errorCode, "projection-failure");
     assert.equal(failed.errorText, "Thread-state projection failed: unexpected projector failure.");
     assert.deepEqual(await controller.readThreadStateShadowStatus(), failed);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed rollback checkpoint can be retried through the retained database worker", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-rollback-retry-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    const inventory = await controller.start();
+    await controller.suspend();
+    await assert.rejects(controller.resume(join(directory, "missing-checkpoint.sqlite3")));
+    await assert.rejects(controller.getInventory());
+    await controller.resume();
+    assert.deepEqual(await controller.getInventory(), inventory);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

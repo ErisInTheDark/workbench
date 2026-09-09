@@ -1,5 +1,5 @@
 /*
- * Keywords: isolated runtime, source copy, paid diagnostic, process lifecycle, RPC.
+ * Keywords: isolated runtime, source copy, diagnostics, process lifecycle, RPC, HTTP.
  * Exports:
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
  */
@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { createSpawnOptions, killProcessTreeAsync } from "../daemon/orchestrator/process-helpers";
+import { pathToFileURL } from "node:url";
+import { createSpawnOptions } from "../daemon/orchestrator/process-helpers";
 import { CodexAppServerClient } from "../shared/codex/app-server-client";
 import { isCodexJsonRpcFailure } from "../shared/codex/protocol";
 import WorkbenchTranscriptClient from "../app/workbench/database/transcript/WorkbenchTranscriptClient";
@@ -22,31 +23,53 @@ export default class IsolatedWorkbench {
   readonly events: Message[] = [];
   private readonly observers = new Set<() => void>();
   private child: ChildProcess | null = null;
+  private appChild: ChildProcess | null = null;
+  private appLog = "";
+  private appAddress: string | null = null;
   private client: CodexAppServerClient | null = null;
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
   private closed = false;
-  private constructor(readonly root: string, readonly project: string, readonly origin: string, private readonly openCodePort: number, readonly signal: AbortSignal) {}
+  private constructor(readonly root: string, readonly project: string, readonly origin: string, private readonly openCodePort: number, readonly signal: AbortSignal, private readonly codexIdentity: boolean) {}
+
+  get processIds() { return { orchestrator: this.child?.pid, app: this.appChild?.pid }; }
+  get output() { return this.log; }
+  get appOutput() { return this.appLog; }
+  get appOrigin() {
+    assert.ok(this.appAddress, "Isolated app must be listening");
+    return this.appAddress;
+  }
+
+  async waitForAppExit() {
+    assert.ok(this.appChild, "Diagnostic app must have been started");
+    const child = this.appChild;
+    if (child.exitCode === null && child.signalCode === null) {
+      await once(child, "exit", { signal: this.signal });
+    }
+    return child.exitCode;
+  }
 
   get transcripts() {
     assert.ok(this.transcriptClient, "Diagnostic transcript client must be connected");
     return this.transcriptClient;
   }
 
-  static async create(source: string, signal: AbortSignal) {
+  static async create(source: string, signal: AbortSignal, options = { codexIdentity: true }) {
     const fixtures = path.join(source, ".workbench", "diagnostics");
     await fs.mkdir(fixtures, { recursive: true });
     const root = await fs.mkdtemp(path.join(fixtures, "wb-live-"));
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
-    const ignored = new Set(["node_modules", ".workbench", ".git", ".next", "dist", ".env.local"]);
-    for (const directory of ["app", "daemon", "shared", "instructions", "runner", "package"]) {
+    const ignored = new Set(["node_modules", ".workbench", ".git", ".next", "dist", "target", ".env.local"]);
+    for (const directory of ["app", "daemon", "shared", "instructions", "runner", "package", "static", "tray"]) {
       await fs.cp(path.join(source, directory), path.join(project, directory), {
         recursive: true, filter: (file) => !ignored.has(path.basename(file)),
       });
     }
     await fs.copyFile(path.join(source, "package.json"), path.join(project, "package.json"));
     await fs.copyFile(path.join(source, ".gitignore"), path.join(project, ".gitignore"));
+    await fs.mkdir(path.join(project, ".workbench"), { recursive: true });
+    await fs.copyFile(path.join(source, "diagnostics/isolated-shutdown.mjs"), path.join(project, ".workbench/isolated-shutdown.mjs"));
     await fs.symlink(path.join(source, "node_modules"), path.join(project, "node_modules"), "junction");
     for (const directory of ["daemon", "app", "shared"]) {
       const dependencies = path.join(source, directory, "node_modules");
@@ -77,7 +100,7 @@ export default class IsolatedWorkbench {
     assert.ok(providerAddress && typeof providerAddress !== "string");
     await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
     await new Promise<void>((resolve, reject) => providerListener.close((error) => error ? reject(error) : resolve()));
-    if (process.platform === "win32") {
+    if (options.codexIdentity && process.platform === "win32") {
       // Convex-lab's sharing boundary: reuse the existing Windows identity, not
       // its sessions or the whole .sandbox directory. Never initialise another.
       const main = path.join(os.homedir(), ".codex");
@@ -95,10 +118,10 @@ export default class IsolatedWorkbench {
         throw error;
       }
     }
-    return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, providerAddress.port, signal);
+    return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, providerAddress.port, signal, options.codexIdentity);
   }
 
-  async start(profileDocument: object, prefixProof: string) {
+  async start(profileDocument: object = { version: 1, profiles: {} }, prefixProof = "lifecycle") {
     this.closed = false;
     const logOffset = this.log.length;
     const home = path.join(this.root, "codex");
@@ -110,24 +133,14 @@ export default class IsolatedWorkbench {
     await fs.writeFile(path.join(this.project, ".workbench", "runtime", "composer-profiles.json"), JSON.stringify(profileDocument));
     await fs.writeFile(path.join(this.project, "AGENTS.md"), `For the live startup diagnostic, include ${prefixProof} in your final reply. Do not edit files or start other agents.\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-    await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
+    if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
     await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
-      + (process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
-    const env = {
-      ...process.env, CODEX_HOME: home, WORKBENCH_LIBRARY_ROOT: library,
-      HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
-      WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
-      WORKBENCH_ORCHESTRATOR_LOOP: "1",
-      WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
-      TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
-      CODEX_APP_SERVER_URL: this.origin.replace("http:", "ws:"),
-      XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
-      XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
-      OPENCODE_SERVER_PORT: String(this.openCodePort),
-    };
-    const child = spawn(process.execPath, ["--import", "tsx", "orchestrator/index.ts"], {
+      + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
+    const env = this.environment();
+    const child = spawn(process.execPath, ["--import", "tsx", "--import",
+      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "orchestrator/index.ts"], {
       ...createSpawnOptions(path.join(this.project, "daemon"), env, true),
-      windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
     this.child = child;
     const collect = (chunk: Buffer) => {
@@ -139,7 +152,7 @@ export default class IsolatedWorkbench {
     child.stderr!.on("data", collect);
     child.once("exit", () => { for (const observer of this.observers) observer(); });
     await this.until(() => {
-      if (child.exitCode !== null) throw new Error(`Isolated daemon exited ${child.exitCode}\n${this.log.slice(-12000)}`);
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Isolated daemon exited ${child.exitCode}\n${this.log.slice(-12000)}`);
       return this.log.slice(logOffset).includes("[codex-bridge] listening on");
     });
     const client = new CodexAppServerClient();
@@ -161,6 +174,54 @@ export default class IsolatedWorkbench {
       for (const observer of this.observers) observer();
     });
     await this.withSignal(client.connect(this.origin.replace("http:", "ws:")), this.signal);
+  }
+
+  private environment(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
+      HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
+      WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
+      WORKBENCH_ORCHESTRATOR_LOOP: "1",
+      WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
+      TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
+      CODEX_APP_SERVER_URL: this.origin.replace("http:", "ws:"),
+      XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
+      XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
+      OPENCODE_SERVER_PORT: String(this.openCodePort),
+    };
+    // These children represent a separate installation, never the agent's live caller.
+    for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT"]) delete env[key];
+    env.WORKBENCH_APP_HOST = "127.0.0.1";
+    return env;
+  }
+
+  async startApp() {
+    assert.equal(this.appChild, null);
+    const offset = this.appLog.length;
+    const child = spawn(process.execPath, ["--import", "tsx", "--import",
+      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "app/index.ts"], {
+      ...createSpawnOptions(this.project, { ...this.environment(), TSX_TSCONFIG_PATH: path.join(this.project, "app/tsconfig.json") }, true),
+      windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
+    });
+    this.appChild = child;
+    const collect = (chunk: Buffer) => {
+      this.appLog += chunk.toString();
+      appendFileSync(path.join(this.root, "app.log"), chunk);
+      for (const observer of this.observers) observer();
+    };
+    child.stdout!.on("data", collect);
+    child.stderr!.on("data", collect);
+    child.once("exit", () => { for (const observer of this.observers) observer(); });
+    await this.until(() => {
+      const output = this.appLog.slice(offset);
+      if (child.exitCode !== null || child.signalCode !== null || output.includes("failed to start:")) {
+        throw new Error(`Isolated app failed\n${output.slice(-12000)}`);
+      }
+      const match = output.match(/listening at (http:\/\/[^\s]+)/u);
+      if (!match) return false;
+      this.appAddress = match[1];
+      return true;
+    });
   }
 
   async request<T = unknown>(method: string, params: unknown = {}, fields: object = {}, signal = this.signal): Promise<T> {
@@ -201,8 +262,17 @@ export default class IsolatedWorkbench {
     this.transcriptClient = null;
     this.client?.dispose();
     this.client = null;
-    if (this.child) {
-      const child = this.child;
+    const children = { app: this.appChild, orchestrator: this.child };
+    const results = await Promise.allSettled([
+      this.child ? this.stopChild(this.child).then(() => { this.child = null; }) : Promise.resolve(),
+      this.appChild ? this.stopChild(this.appChild).then(() => { this.appChild = null; this.appAddress = null; }) : Promise.resolve(),
+    ]);
+    const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    if (errors.length) throw new AggregateError(errors, "Isolated process cleanup failed");
+    return { app: children.app?.exitCode, orchestrator: children.orchestrator?.exitCode };
+  }
+
+  private async stopChild(child: ChildProcess) {
       try {
         if (child.exitCode === null && child.signalCode === null) {
           const signal = AbortSignal.timeout(45_000);
@@ -210,41 +280,23 @@ export default class IsolatedWorkbench {
             () => null,
             (error: Error) => error,
           );
-          // Keep the root alive until its descendants are retired. Exiting the
-          // daemon first can orphan a provider that still owns transcript locks.
-          assert.ok(child.pid, "Diagnostic process must have an owned PID");
-          if (process.platform === "win32") {
-            await IsolatedWorkbench.command("pwsh", ["-NoProfile", "-Command", `
-$ErrorActionPreference = 'Stop'
-$processes = @(Get-CimInstance Win32_Process)
-$owned = @($processes | Where-Object ProcessId -EQ ${child.pid})
-if ($owned.Count -ne 1) { throw 'Diagnostic root process disappeared before retirement' }
-do {
-  $ids = @($owned.ProcessId)
-  $added = @($processes | Where-Object { $_.ParentProcessId -in $ids -and $_.ProcessId -notin $ids })
-  $owned += $added
-} while ($added.Count -gt 0)
-& taskkill /PID ${child.pid} /T /F 2>&1 | Out-String | Write-Output
-$survivors = @(Get-CimInstance Win32_Process | Where-Object {
-  $current = $_
-  $owned | Where-Object { $_.ProcessId -eq $current.ProcessId -and $_.CreationDate -eq $current.CreationDate }
-})
-if ($survivors.Count) { throw "Diagnostic process tree still alive: $($survivors.ProcessId -join ', ')" }
-exit 0
-`], this.project, process.env, signal);
-          } else {
-            await killProcessTreeAsync(child.pid);
-          }
+          const sendError = child.connected
+            ? await new Promise<Error | null>((resolve) => {
+              child.send({ type: "workbench-diagnostic-close" }, error => resolve(error ?? null));
+            })
+            : new Error("Diagnostic shutdown channel disconnected before exit");
           const exitError = await exited;
-          if (exitError) throw exitError;
+          // A failed startup can close IPC before its exit event reaches us.
+          // Confirmed exit completes cleanup; otherwise retain both failures.
+          if (exitError) throw sendError
+            ? new AggregateError([sendError, exitError], "Diagnostic shutdown did not complete")
+            : exitError;
         }
       } finally {
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr?.destroy();
       }
-      this.child = null;
-    }
   }
 
   async close() {
@@ -255,7 +307,7 @@ exit 0
       const auth = path.resolve(this.root, "codex", "auth.json");
       assert.ok(auth.startsWith(`${path.resolve(this.root)}${path.sep}`));
       await fs.rm(auth, { force: true });
-      if (process.platform === "win32") {
+      if (this.codexIdentity && process.platform === "win32") {
         // Unlink these exact fixture entries. Recursive removal could reach the
         // shared sandbox identity and must never be used here.
         await fs.unlink(path.join(this.root, "codex", ".sandbox-secrets"));

@@ -60,6 +60,8 @@ function createController(options: {
   onDisconnect?: (connectionId: string) => void;
   onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
   onHarnessRequest?: (message: JsonRpcRequest) => Promise<JsonRpcResponse> | JsonRpcResponse;
+  resolvePublicRequest?: WorkbenchWebSocketRequestControllerOptions["harnesses"]["resolvePublicRequest"];
+  reportDelivery?: WorkbenchWebSocketRequestControllerOptions["reportDelivery"];
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
@@ -71,10 +73,10 @@ function createController(options: {
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
       handleNativeBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
-      resolvePublicRequest: async (value, request) => {
+      resolvePublicRequest: options.resolvePublicRequest ?? (async (value, request) => {
         if (value !== "codex" && value !== "copilot" && value !== "opencode") throw new Error("Unknown Workbench harness.");
         return { harness: value, request };
-      },
+      }),
       request: async (_harness, message) => await options.onHarnessRequest?.(message) ?? {
         id: message.id ?? null,
         result: {},
@@ -87,6 +89,7 @@ function createController(options: {
     },
     initialState: options.initialState,
     now: () => options.clock.nowMs,
+    reportDelivery: options.reportDelivery ?? ((delivery) => controller.completeDelivery(delivery)),
     reload: options.reload ?? {
       getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
       subscribeReloadDirt: () => () => undefined,
@@ -108,6 +111,108 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("an old identity lookup cannot dispatch a new command after rollback resumes admission", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let dispatched = 0;
+  const { controller } = createController({
+    clock: new FakeClock(),
+    resolvePublicRequest: async (_harness, request) => {
+      enter();
+      await held;
+      return { harness: "codex", request };
+    },
+    onHarnessMessage: () => { dispatched++; },
+  });
+  try {
+    const handling = controller.handleMessage(createClient(), "connection", Buffer.from(JSON.stringify({
+      id: 1, method: "thread/read", params: { threadId: "thread" },
+    })), false);
+    const rejected = assert.rejects(handling, /retired/);
+    await entered;
+    controller.suspend();
+    await controller.resumeAfterFailedReload();
+    release();
+    await rejected;
+    assert.equal(dispatched, 0);
+  } finally {
+    release();
+    controller.dispose();
+  }
+});
+
+for (const kind of ["event", "response"] as const) {
+  test(`a late ${kind} send failure settles through the current graph owner`, async () => {
+    const clock = new FakeClock();
+    let current!: WorkbenchWebSocketRequestController;
+    const reportDelivery: NonNullable<WorkbenchWebSocketRequestControllerOptions["reportDelivery"]> = (
+      delivery,
+    ) => current.completeDelivery(delivery);
+    const previous = createController({ clock, reportDelivery }).controller;
+    current = previous;
+    let finish!: (error?: Error) => void;
+    let hold = false;
+    const client = createClient((_data, callback) => {
+      if (hold) finish = callback!;
+      else callback?.();
+    });
+    if (kind === "response") {
+      await previous.handleMessage(client, "connection", Buffer.from(JSON.stringify({
+        id: 7, method: "thread/read", params: { threadId: "thread" }, workbenchHarness: "codex",
+      })), false);
+    }
+    hold = true;
+    const failure = new Error("socket write failed");
+    const sending = previous.sendJsonToClient(client, kind === "event"
+      ? { workbenchHarness: "codex", method: "item/agentMessage/delta", params: {} }
+      : { id: 7, result: {} });
+    const checked = assert.rejects(sending, (error) => error === failure);
+    current = createController({ clock, initialState: previous.detachForReload(), reportDelivery }).controller;
+    try {
+      finish(failure);
+      await checked;
+      assert.equal(current.readEventStreamHealth().unacknowledgedEvents, 0);
+      assert.deepEqual(current.detachForReload().pending, []);
+    } finally {
+      previous.dispose();
+      current.dispose();
+    }
+  });
+}
+
+test("rollback restores transcript subscriptions without reviving their old publication callbacks", async () => {
+  const subscriptions = new Map<string, Parameters<WorkbenchWebSocketRequestControllerOptions["transcript"]["subscribe"]>[0]>();
+  const sent: Array<{ method?: string }> = [];
+  const { controller } = createController({
+    clock: new FakeClock(),
+    transcript: {
+      read: async () => null,
+      subscribe: async (subscription) => { subscriptions.set(subscription.id, subscription); },
+      unsubscribe: (id) => { subscriptions.delete(id); },
+    },
+  });
+  const client = createClient((data, callback) => { sent.push(JSON.parse(String(data))); callback?.(); });
+  try {
+    await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", 1, {
+      params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub" },
+    }), false);
+    const previous = [...subscriptions.values()][0]!;
+    controller.detachForReload();
+    assert.equal(subscriptions.size, 0);
+    await controller.resumeAfterFailedReload();
+    assert.equal(subscriptions.size, 1);
+    const restored = [...subscriptions.values()][0]!;
+    await previous.publish(null);
+    assert.equal(sent.filter(({ method }) => method === "workbench/transcript/updated").length, 0);
+    await restored.publish(null);
+    assert.equal(sent.filter(({ method }) => method === "workbench/transcript/updated").length, 1);
+  } finally {
+    controller.dispose();
+  }
+});
 
 test("traffic logs cover notifications in both directions without adding event logs for query replies", async () => {
   const clock = new FakeClock();

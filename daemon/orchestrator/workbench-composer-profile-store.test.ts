@@ -45,6 +45,27 @@ function profile(id: string, updatedAt: number): WorkbenchComposerProfile {
   };
 }
 
+test("retired legacy profile reads cannot initiate an import write", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-retired-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let writes = 0;
+  const store = new WorkbenchComposerProfileStore(root, {
+    query: async () => { enter(); await pending; return []; },
+    executeTransaction: async () => { writes += 1; return { changes: 0 }; },
+  });
+  const starting = store.start().then(() => null, (error: Error) => error);
+  await entered;
+  const disposing = store.dispose();
+  release();
+  const [failure] = await Promise.all([starting, disposing]);
+  assert.equal(writes, 0);
+  assert.match(failure?.message ?? "", /closed/u);
+});
+
 test("persists acknowledged profile mutations across store restarts", async (context) => {
   const { create } = await fixture(context);
   const store = create();

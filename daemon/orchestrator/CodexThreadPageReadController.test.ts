@@ -26,6 +26,35 @@ function page(threadId: string): WorkbenchThreadPageResponse {
   };
 }
 
+test("expiry releases hung reads and fences their continuations across rollback", async () => {
+  const controller = new CodexThreadPageReadController();
+  const entered = deferred<void>();
+  const provider = deferred<void>();
+  const finished = deferred<void>();
+  let writes = 0;
+  const reading = controller.run(async (signal) => {
+    entered.resolve();
+    try {
+      await provider.promise;
+      signal.throwIfAborted();
+      writes += 1;
+      return page("old");
+    } finally {
+      finished.resolve();
+    }
+  }, { key: "thread" });
+  const rejected = assert.rejects(reading, /retired/u);
+  await entered.promise;
+  controller.expire();
+  controller.resumeAfterFailedReload();
+  assert.equal((await controller.run(async () => page("new"), { key: "thread" })).thread.id, "new");
+  await controller.waitForIdle();
+  await rejected;
+  provider.resolve();
+  await finished.promise;
+  assert.equal(writes, 0);
+});
+
 test("identical keyed reads share one active operation while distinct keys stay independent", async () => {
   const controller = new CodexThreadPageReadController();
   const shared = deferred<WorkbenchThreadPageResponse>();

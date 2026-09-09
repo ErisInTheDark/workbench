@@ -39,6 +39,25 @@ function fixture() {
   };
 }
 
+test("rollback resumes pending event windows without reviving a cancelled callback", () => {
+  const { logger, lines, timers, advance } = fixture();
+  logger.record("out", "codex", "delta", 10);
+  logger.record("out", "codex", "delta", 20);
+  const oldCallback = [...timers.values()][0]!.callback;
+  logger.suspend();
+  advance(3_000);
+  assert.equal(lines.length, 1);
+  logger.resumeAfterFailedReload();
+  oldCallback();
+  assert.equal(lines.length, 1);
+  assert.equal(timers.size, 1);
+  advance(0);
+  assert.equal(lines.length, 2);
+  logger.dispose();
+  assert.equal(timers.size, 0);
+  assert.throws(() => logger.resumeAfterFailedReload(), /disposed/u);
+});
+
 test("event types aggregate independently without aligning their windows", () => {
   const { logger, lines, timers, advance } = fixture();
   logger.record("out", "codex", "item/agentMessage/delta", 100);

@@ -14,7 +14,7 @@ import {
   applyWorkbenchDatabaseSchema, createTable, defineSubsystemHistory, defineTableHistory,
   defineWorkbenchDatabaseSchema, rebuildTable, tableVersion,
 } from "./schema/schema-history.ts";
-import migrateWorkbenchDatabase, { preserveWorkbenchDatabaseBackup } from "./workbench-database-migration.ts";
+import migrateWorkbenchDatabase, { preserveWorkbenchDatabaseBackup, restoreWorkbenchDatabaseBackup } from "./workbench-database-migration.ts";
 
 const oldTable = defineTable("records", {
   id: integer().primaryKey(), legacy: text().notNull(), kept: text().notNull(),
@@ -102,6 +102,51 @@ test("an unwritable backup destination prevents any schema change", async contex
   await assert.rejects(migrateWorkbenchDatabase(database, schema), /backup/i);
   assert.equal(database.pragma("user_version", { simple: true }), 1);
   assert.deepEqual(database.prepare("SELECT legacy FROM records").all(), []);
+});
+
+test("migration cannot change the schema before its rollback checkpoint is acknowledged", async context => {
+  const { database } = await fixture(context);
+  database.prepare("INSERT INTO records VALUES (1, 'old value', 'kept value')").run();
+  const options = {
+    targetVersion: 2,
+    beforeMigration: async (backupPath: string) => {
+      const backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+      try {
+        assert.equal(backup.pragma("user_version", { simple: true }), 1);
+        assert.deepEqual(backup.prepare("SELECT * FROM records").get(), {
+          id: 1, legacy: "old value", kept: "kept value",
+        });
+      } finally { backup.close(); }
+      throw new Error("checkpoint acknowledgement rejected");
+    },
+  };
+  await assert.rejects(migrateWorkbenchDatabase(database, schema, options), /checkpoint acknowledgement rejected/u);
+  assert.equal(database.pragma("user_version", { simple: true }), 1);
+  assert.deepEqual(database.prepare("SELECT * FROM records").get(), {
+    id: 1, legacy: "old value", kept: "kept value",
+  });
+});
+
+test("rollback restores removed schema and WAL data after a successful upgrade, then permits retry", async context => {
+  const { database } = await fixture(context);
+  const databasePath = database.name;
+  database.exec("INSERT INTO records VALUES (1, 'old-only value', 'kept value')");
+  let checkpoint = "";
+  await migrateWorkbenchDatabase(database, schema, { beforeMigration: value => { checkpoint = value; } });
+  database.exec("UPDATE records SET kept = 'candidate value'");
+  assert.throws(() => database.prepare("SELECT legacy FROM records").get(), /column/);
+  database.close();
+  await restoreWorkbenchDatabaseBackup(checkpoint, databasePath);
+  const restored = new Database(databasePath);
+  try {
+    assert.equal(restored.pragma("user_version", { simple: true }), 1);
+    assert.deepEqual(restored.prepare("SELECT * FROM records").all(), [
+      { id: 1, legacy: "old-only value", kept: "kept value" },
+    ]);
+    await migrateWorkbenchDatabase(restored, schema);
+    assert.equal(restored.pragma("user_version", { simple: true }), 2);
+    assert.deepEqual(restored.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "kept value" }]);
+  } finally { restored.close(); }
 });
 
 test("an invalid backup is not published and cannot permit migration", async context => {

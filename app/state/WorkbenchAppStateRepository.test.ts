@@ -15,6 +15,7 @@ import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/s
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { appStateSchema, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
+import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 
 async function temporaryDatabase(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-"));
@@ -50,6 +51,50 @@ test("app startup preserves its pre-upgrade database even when closed during ope
   } finally {
     await repository.close();
   }
+});
+
+test("app migration cannot run before the branch retains its rollback checkpoint", async (context) => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 1 });
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await assert.rejects(repository.start(() => {
+      throw new Error("app checkpoint was not retained");
+    }), /app checkpoint was not retained/u);
+  } finally {
+    await repository.close();
+  }
+  const inspection = new Database(databasePath, { readonly: true });
+  try { assert.equal(inspection.pragma("user_version", { simple: true }), 1); }
+  finally { inspection.close(); }
+});
+
+test("the retained app repository restores schema, data and registration before a later reload", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  const registration = await repository.start();
+  await repository.close();
+  const candidate = new Database(databasePath);
+  let checkpoint: string;
+  try {
+    candidate.exec("CREATE TABLE rollback_evidence(legacy TEXT); INSERT INTO rollback_evidence VALUES ('retained')");
+    checkpoint = await preserveWorkbenchDatabaseBackup(candidate, path.join(path.dirname(databasePath), "rollback"));
+    candidate.exec("DROP TABLE rollback_evidence; CREATE TABLE candidate_only(value TEXT)");
+    const version = candidate.pragma("user_version", { simple: true }) as number;
+    candidate.pragma(`user_version = ${version + 1}`);
+  } finally { candidate.close(); }
+  try {
+    assert.equal(await repository.resume(checkpoint), registration);
+    const inspection = new Database(databasePath, { readonly: true });
+    try {
+      assert.deepEqual(inspection.prepare("SELECT legacy FROM rollback_evidence").all(), [{ legacy: "retained" }]);
+      assert.equal(inspection.prepare("SELECT name FROM sqlite_schema WHERE name = 'candidate_only'").get(), undefined);
+    } finally { inspection.close(); }
+    await repository.close();
+    assert.equal(await repository.resume(), registration);
+  } finally { await repository.close(); }
 });
 
 test("the local daemon registration remains stable across app restarts", async (context) => {

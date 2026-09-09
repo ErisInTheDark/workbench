@@ -25,10 +25,64 @@ function options(overrides: Partial<OpenCodeAppServerOptions> = {}): OpenCodeApp
   };
 }
 
+test("replacement waits for predecessor retirement before launching and shutdown cancels that launch", async () => {
+  let release!: () => void;
+  const retirement = new Promise<void>(resolve => { release = resolve; });
+  const previous = new OpenCodeAppServer(options({
+    createServer: () => ({ start: async () => "http://127.0.0.1:4096", close: () => retirement }),
+  }));
+  await previous.getBaseUrl();
+  let created = false;
+  const replacement = new OpenCodeAppServer(options({
+    previousAppServer: previous,
+    createServer: () => {
+      created = true;
+      return { start: async () => "http://127.0.0.1:4096", close: async () => {} };
+    },
+  }));
+  const startup = replacement.getBaseUrl();
+  const rejected = assert.rejects(startup, /retired/u);
+  try {
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(created, false, "A replacement must not race the old listener");
+  } finally {
+    const shutdown = replacement.stop();
+    release();
+    await shutdown;
+    await rejected;
+  }
+  assert.equal(created, false, "Shutdown must prevent late predecessor completion from launching");
+});
+
+test("managed stop waits for owned process retirement and propagates failure", async () => {
+  let release!: () => void;
+  const retirement = new Promise<void>(resolve => { release = resolve; });
+  const server = new OpenCodeAppServer(options({
+    createServer: () => ({ start: async () => "http://127.0.0.1:4096", close: () => retirement }),
+  }));
+  await server.getBaseUrl();
+  let stopped = false;
+  const stopping = server.stop().then(() => { stopped = true; });
+  try {
+    await Promise.resolve();
+    assert.equal(stopped, false, "The owner cannot declare closure while its child still retires");
+  } finally { release(); await stopping; }
+
+  const failure = new Error("owned process termination denied");
+  const failed = Promise.reject(failure);
+  void failed.catch(() => {});
+  const broken = new OpenCodeAppServer(options({
+    createServer: () => ({ start: async () => "http://127.0.0.1:4096", close: () => failed }),
+  }));
+  await broken.getBaseUrl();
+  await assert.rejects(broken.stop(), error => error === failure);
+});
+
 test("external OpenCode selection is normalized and never closed by restart or stop", async () => {
   let createCount = 0;
   const server = new OpenCodeAppServer(options({
-    createServer: (async () => { createCount += 1; throw new Error("unexpected managed startup"); }) as NonNullable<OpenCodeAppServerOptions["createServer"]>,
+    createServer: () => { createCount += 1; throw new Error("unexpected managed startup"); },
     environment: { NODE_ENV: "test", OPENCODE_SERVER_URL: "http://127.0.0.1:4096/path?query=yes" },
   }));
   assert.equal(await server.getBaseUrl(), "http://127.0.0.1:4096");
@@ -42,12 +96,12 @@ test("managed server startup is coalesced, restores config environment, and rest
   const closed: number[] = [];
   let createCount = 0;
   const server = new OpenCodeAppServer(options({
-    createServer: (async () => {
+    createServer: () => {
       createCount += 1;
       assert.equal(environment.OPENCODE_CONFIG_DIR, "C:/overlay");
       const id = createCount;
-      return { close: () => { closed.push(id); }, url: `http://127.0.0.1:${4096 + id}/nested` };
-    }) as NonNullable<OpenCodeAppServerOptions["createServer"]>,
+      return { close: async () => { closed.push(id); }, start: async () => `http://127.0.0.1:${4096 + id}/nested` };
+    },
     environment,
   }));
   assert.deepEqual(await Promise.all([server.getBaseUrl(), server.getBaseUrl()]), ["http://127.0.0.1:4097", "http://127.0.0.1:4097"]);
@@ -64,7 +118,7 @@ test("transient startup failure cools down while missing executable failure disa
   let now = 1_000;
   let transientAttempts = 0;
   const transient = new OpenCodeAppServer(options({
-    createServer: (async () => { transientAttempts += 1; throw new Error("port unavailable"); }) as NonNullable<OpenCodeAppServerOptions["createServer"]>,
+    createServer: () => { transientAttempts += 1; throw new Error("port unavailable"); },
     now: () => now,
     retryCooldownMs: 100,
   }));
@@ -77,7 +131,7 @@ test("transient startup failure cools down while missing executable failure disa
 
   let missingAttempts = 0;
   const missing = new OpenCodeAppServer(options({
-    createServer: (async () => { missingAttempts += 1; throw new Error("spawn opencode ENOENT"); }) as NonNullable<OpenCodeAppServerOptions["createServer"]>,
+    createServer: () => { missingAttempts += 1; throw new Error("spawn opencode ENOENT"); },
   }));
   await assert.rejects(missing.getBaseUrl(), /could not find the OpenCode executable/u);
   assert.equal(missing.isDisabled(), true);
@@ -85,4 +139,36 @@ test("transient startup failure cools down while missing executable failure disa
   assert.equal(missingAttempts, 1);
   await missing.restart();
   assert.equal(missing.isDisabled(), false);
+});
+
+test("stop owns the process before readiness and late readiness cannot replace the next server", async () => {
+  let entered!: () => void;
+  const starting = new Promise<void>((resolve) => { entered = resolve; });
+  let deliver!: (url: string) => void;
+  let retiredClosed!: () => void;
+  const closed = new Promise<void>((resolve) => { retiredClosed = resolve; });
+  let oldSignal: AbortSignal | undefined;
+  let calls = 0;
+  const server = new OpenCodeAppServer(options({
+    createServer: (settings) => {
+      if (++calls > 1) return { start: async () => "http://127.0.0.1:4098", close: async () => {} };
+      oldSignal = settings?.signal;
+      return {
+        start: () => { entered(); return new Promise((resolve) => { deliver = resolve; }); },
+        close: async () => { retiredClosed(); },
+      };
+    },
+  }));
+  const oldStart = server.getBaseUrl();
+  const rejected = assert.rejects(oldStart, /retired/u);
+  await starting;
+  const stopped = server.stop();
+  assert.equal(oldSignal?.aborted, true);
+  await stopped;
+  await rejected;
+  assert.equal(await server.getBaseUrl(), "http://127.0.0.1:4098");
+  deliver("http://127.0.0.1:4097");
+  await closed;
+  assert.equal(await server.getBaseUrl(), "http://127.0.0.1:4098");
+  await server.stop();
 });

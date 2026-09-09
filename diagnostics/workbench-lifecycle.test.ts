@@ -1,0 +1,178 @@
+/*
+ * Keywords: startup, reload, expiry, rollback, SQLite, HTTP, WebSocket, integration.
+ * No exports. One isolated lifecycle scenario, never ordinary test discovery.
+ */
+import assert from "node:assert/strict";
+import path from "node:path";
+import { test } from "node:test";
+import Database from "better-sqlite3";
+import IsolatedWorkbench from "./IsolatedWorkbench";
+import { appendLifecycleMigration, installLifecycleProbe, writeLifecycleFault } from "./lifecycle-fixture";
+import {
+  WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
+  WORKBENCH_RELOAD_DIRT_UPDATED_METHOD, WorkbenchOrchestratorReloadDirtEnvelopeSchema,
+  type OrchestratorReloadResponse,
+} from "../shared/workbench/orchestrator-reload";
+import type { WorkbenchReloadDirtSnapshot } from "../shared/reload/workbench-reload";
+import type { WorkbenchProjectsPayload } from "../shared/types";
+
+function inspectDatabase(file: string, table?: string) {
+  const database = new Database(file, { readonly: true });
+  try {
+    return {
+      version: database.pragma("user_version", { simple: true }) as number,
+      table: table ? Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)) : false,
+      integrity: database.pragma("integrity_check", { simple: true }),
+    };
+  } finally { database.close(); }
+}
+
+test("real application survives reload expiry, migrated candidate failure, retry and cold reopening", {
+  skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "diagnostics/workbench-lifecycle.test.ts",
+  timeout: 600_000,
+}, async (t) => {
+  const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, { codexIdentity: false });
+  console.log(`lifecycle fixture: ${runtime.root}`);
+  const appDatabase = path.join(runtime.project, ".workbench/app/app-state.sqlite3");
+  const serverDatabase = path.join(runtime.project, ".workbench/workbench.sqlite3");
+  const runtimePath = "/api/workbench-app-runtime?version=3";
+  const http = async (route: string, init?: RequestInit) => {
+    const response = await fetch(new URL(route, runtime.appOrigin), {
+      ...init, signal: init?.signal ? AbortSignal.any([t.signal, init.signal]) : t.signal,
+    });
+    assert.ok(response.ok, `App ${route}: ${response.status} ${await response.clone().text()}`);
+    return response;
+  };
+  const appState = async () => (await http("/api/workbench-client-state")).json() as Promise<{ daemonRegistrationId: string }>;
+  const appDirt = async (signal?: AbortSignal) => (await (await http(runtimePath, { signal })).json() as { reloadDirt: WorkbenchReloadDirtSnapshot }).reloadDirt;
+  const serverDirt = async () => WorkbenchOrchestratorReloadDirtEnvelopeSchema.parse(
+    await runtime.request(WORKBENCH_RELOAD_DIRT_READ_METHOD)).snapshot;
+  const clean = (dirt: Pick<WorkbenchReloadDirtSnapshot, "dirtyScopes" | "pendingScopes"> & { error?: string | null }) => {
+    assert.deepEqual(dirt.pendingScopes, [], "Admission is not reload completion");
+    assert.equal(dirt.error, null);
+    assert.ok(!dirt.dirtyScopes.some(({ scope }) => scope.endsWith(":process")), "Reload must not manufacture process dirt");
+  };
+  const assets = async () => {
+    const html = await (await http("/")).text();
+    const urls = [...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/gu)]
+      .map((match) => match[1]);
+    assert.ok(urls.some((url) => url.includes(".js")), "Cold startup must serve a compiled script");
+    assert.ok(urls.some((url) => url.includes(".css")), "Cold startup must serve compiled styles");
+    for (const url of urls) {
+      assert.equal(new URL(url, runtime.appOrigin).origin, runtime.appOrigin, "Assets must stay in the fixture");
+      assert.ok((await (await http(url)).arrayBuffer()).byteLength > 0);
+    }
+  };
+  const reloadServer = async (scopes: string[], failure = false, all = false) => {
+    // Reading registers this connection for subsequent dirt notifications.
+    await serverDirt();
+    const offset = runtime.events.length;
+    const admitted = await runtime.request<OrchestratorReloadResponse>(WORKBENCH_RELOAD_METHOD, { scopes, ...(all ? { all: true } : {}) });
+    assert.equal(admitted.state, "running");
+    assert.deepEqual(admitted.appliedScopes, []);
+    await runtime.until(() => {
+      const snapshots = runtime.events.slice(offset)
+        .filter((event) => event.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD)
+        .map((event) => WorkbenchOrchestratorReloadDirtEnvelopeSchema.parse(event.params).snapshot);
+      const pending = snapshots.findIndex((snapshot) => snapshot.pendingScopes.length > 0);
+      return pending >= 0 && snapshots.slice(pending + 1).some((snapshot) => snapshot.pendingScopes.length === 0);
+    }, AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]));
+    const dirt = await serverDirt();
+    if (failure) assert.match(dirt.error ?? "", /Lifecycle injected activation failure/u);
+    else clean(dirt);
+  };
+  const reloadApp = async (scopes: string[], failure = false) => {
+    const signal = AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]);
+    const offset = runtime.appOutput.length;
+    const response = await http(runtimePath, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scopes }) });
+    assert.equal(response.status, 202);
+    await runtime.until(() => {
+      const output = runtime.appOutput.slice(offset);
+      return output.includes(failure ? "reload execution failed:" : "reloaded app nodes:");
+    }, signal);
+    // The swap log precedes the controller's async dirt refresh.
+    let dirt = await appDirt(signal);
+    while (dirt.pendingScopes.length) dirt = await appDirt(signal);
+    if (failure) assert.match(dirt.error ?? "", /Lifecycle injected activation failure/u);
+    else clean(dirt);
+  };
+  try {
+    await installLifecycleProbe(runtime.project);
+    await runtime.start();
+    await runtime.startApp();
+    await assets();
+    const ids = runtime.processIds;
+    assert.ok(ids.app && ids.orchestrator);
+    const registration = await appState();
+    assert.ok(registration.daemonRegistrationId);
+    const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
+    assert.ok(catalog.data.some((project) => path.resolve(project.rootPath) === runtime.project));
+    console.log("cold entrypoints, SQLite, compiled assets and ingress passed");
+
+    await reloadServer(["server:database"]);
+    await reloadApp(["client:database"]);
+    await reloadServer(["server:core", "server:topology", "server:commands", "server:websocket"], false, true);
+    assert.deepEqual(runtime.processIds, ids);
+    console.log("database reload and reload-all passed without process dirt");
+
+    for (const owner of ["orchestrator", "app"] as const) {
+      const server = owner === "orchestrator";
+      const scope = server ? "server:database" : "client:database";
+      const fail = server ? "server:core" : "client:http";
+      const database = server ? serverDatabase : appDatabase;
+      const reload = server ? reloadServer : reloadApp;
+      const output = () => server ? runtime.output : runtime.appOutput;
+      const previous = inspectDatabase(database);
+      const table = await appendLifecycleMigration(runtime.project, owner, previous.version + 1);
+      await writeLifecycleFault(runtime.project, { hold: scope, fail, database, table });
+      const offset = output().length;
+      console.log(`${owner}: holding real old-work grace, then failing after migration`);
+      await reload([scope], true);
+      const failed = output().slice(offset);
+      assert.ok(failed.includes(`[lifecycle] held ${scope}`));
+      assert.ok(failed.includes(`[lifecycle] expired ${scope}`), "Expired drain must continue replacement, not cancel it");
+      assert.ok(failed.includes(`[lifecycle] migration-observed ${fail}`), "Failure must follow real migration");
+      assert.ok(failed.includes(`[lifecycle] resumed ${scope}`), "The retained database must resume");
+      const heldIdentity = failed.match(new RegExp(`\\[lifecycle\\] held ${scope} ([a-f0-9-]+)`, "u"))?.[1];
+      assert.ok(heldIdentity);
+      assert.ok(failed.includes(`[lifecycle] resumed ${scope} ${heldIdentity}`), "Rollback must resume the retained owner");
+      assert.deepEqual(inspectDatabase(database, table), { version: previous.version, table: false, integrity: "ok" });
+      assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);
+      await runtime.request("project/catalog/read");
+      await assets();
+      assert.deepEqual(runtime.processIds, ids, "Rollback must not require process restart");
+
+      // Keep the held drain on retry: an old generation must expire fresh work again.
+      await writeLifecycleFault(runtime.project, { hold: scope });
+      const retryOffset = output().length;
+      await reload([scope]);
+      assert.ok(output().slice(retryOffset).includes(`[lifecycle] expired ${scope}`));
+      assert.ok(output().slice(retryOffset).includes(`[lifecycle] held ${scope} ${heldIdentity}`), "Retry must replace that same retained owner");
+      assert.deepEqual(inspectDatabase(database, table), { version: previous.version + 1, table: true, integrity: "ok" });
+      assert.deepEqual(runtime.processIds, ids);
+      console.log(`${owner}: schema restored after failure; same-process retry migrated successfully`);
+      await writeLifecycleFault(runtime.project, {});
+    }
+    assert.deepEqual(await runtime.stop(), { app: 0, orchestrator: 0 }, "Owners must complete shutdown successfully before reopen");
+    await runtime.start();
+    await runtime.startApp();
+    await assets();
+    assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);
+    await runtime.request("project/catalog/read");
+    clean(await appDirt());
+    clean(await serverDirt());
+    assert.equal(inspectDatabase(appDatabase).integrity, "ok");
+    assert.equal(inspectDatabase(serverDatabase).integrity, "ok");
+    assert.deepEqual(await runtime.stop(), { app: 0, orchestrator: 0 });
+    console.log("cold reopening preserved durable state");
+    await writeLifecycleFault(runtime.project, { fail: "client:http", initial: true });
+    await assert.rejects(runtime.startApp(), /Lifecycle injected activation failure/u);
+    assert.equal(await runtime.waitForAppExit(), 1, "Failed startup must close its owners and exit without external killing");
+    console.log("failed startup cleaned up its own resources; lifecycle checks passed");
+  } catch (error) {
+    console.error("lifecycle failed", error, "\napp tail\n", runtime.appOutput.slice(-12000), "\norchestrator tail\n", runtime.output.slice(-12000));
+    throw error;
+  } finally {
+    await runtime.close();
+  }
+});

@@ -13,6 +13,44 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("a directory barrier waits for its own writes without waiting for a sibling owner", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-atomic-json-owner-"));
+  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const directory = path.join(root, "transcripts");
+  const file = path.join(directory, "state.json");
+  const store = new AtomicJsonStore();
+  await store.write(file, { count: 0 });
+  const ownEntered = deferred();
+  const otherEntered = deferred();
+  const releaseOwn = deferred();
+  const releaseOther = deferred();
+  const own = store.update(file, { count: 0 }, async () => {
+    ownEntered.resolve();
+    await releaseOwn.promise;
+    return { count: 1 };
+  });
+  const other = new AtomicJsonStore().update(path.join(root, "transcripts-other", "state.json"), {}, async () => {
+    otherEntered.resolve();
+    await releaseOther.promise;
+    return {};
+  });
+  await Promise.all([ownEntered.promise, otherEntered.promise]);
+  let drained = false;
+  const drain = store.waitForIdle(directory).then(() => { drained = true; });
+  try {
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), { count: 0 });
+    assert.equal(drained, false);
+    releaseOwn.resolve();
+    await own;
+    assert.deepEqual(await store.read(file, {}), { count: 1 });
+    assert.equal(drained, true);
+  } finally {
+    releaseOwn.resolve();
+    releaseOther.resolve();
+    await Promise.all([own, other, drain]);
+  }
+});
+
 test("fresh wrappers serialize updates to one file without losing either write", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-atomic-json-reload-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));

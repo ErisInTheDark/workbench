@@ -26,6 +26,7 @@ for (const mode of ["initial", "replacement"] as const) {
     let available = 0;
     const parent = {
       appServer: {
+        async retirePrevious() {},
         send(request: JsonRpcRequest) {
           if (request.method === "initialize") {
             queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result: {} }));
@@ -33,6 +34,16 @@ for (const mode of ["initial", "replacement"] as const) {
         },
       },
       attachBridge(value: CodexStdioBridge) { bridge = value; },
+      deactivateBridge() {},
+      beginBridgeHandoff(value: CodexStdioBridge) {
+        return {
+          waitForIdle: () => value.waitForIdle(),
+          expire: () => value.expireForReload(),
+          detach: () => value.detachForReload(),
+          resume: () => value.resumeAfterReloadFailure(),
+          commit: () => value.retireAfterHandoff(),
+        };
+      },
       detachBridge: async () => bridge.detachForReload(),
     };
     const registrations = {
@@ -57,6 +68,7 @@ for (const mode of ["initial", "replacement"] as const) {
       handoffState: undefined, isReplacing: () => false,
       lease: { isCurrent: () => true }, mode,
     });
+    bridge = instance.registrations.codexBridge!;
     bridge.recoverSqliteTranscriptThread = async (_id, signal?: AbortSignal) => {
       entered.resolve();
       signal?.addEventListener("abort", () => { cancelled = true; release.resolve(); }, { once: true });
@@ -66,21 +78,26 @@ for (const mode of ["initial", "replacement"] as const) {
     let activation: Promise<void> | undefined;
     try {
       await instance.start();
+      await instance.activate?.();
+      instance.afterCommit?.();
       if (mode === "initial") {
         await bridge.ensureInitialized({ method: "initialize", params: {} });
       } else {
         let activated = false;
-        activation = Promise.resolve(instance.activate?.()).then(() => { activated = true; });
+        activation = Promise.resolve().then(() => { activated = true; });
         await entered.promise;
         await Promise.resolve();
         assert.equal(activated, true, "provider recovery must not keep reload activation pending");
       }
       assert.equal(available, mode === "initial" ? 0 : 1, "initialisation must not duplicate process-owned turn recovery");
       await entered.promise;
-      const retirement = instance.detachForReload!({ isReplacing: () => false });
+      const handoff = instance.beginHandoff!({ isReplacing: () => false });
+      handoff.expire();
+      const retirement = handoff.detach();
       await Promise.resolve();
       assert.equal(cancelled, true, "retirement must cancel recovery before draining the bridge");
       await retirement;
+      await handoff.commit();
       assert.deepEqual(failures, [], "owned cancellation is not a recording failure");
     } finally {
       release.resolve();

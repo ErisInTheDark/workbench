@@ -7,14 +7,14 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const file = "diagnostics/workbench-live.test.ts";
+const file = "diagnostics/workbench-codex.test.ts";
 const args = process.argv.slice(2).filter((value) => value !== "--");
 if (args.length !== 1 || args[0] !== file) {
-  console.error(`Real Codex usage required. Run: pnpm test:live -- ${file}`);
+  console.error(`Real Codex usage required. Run: pnpm test:codex -- ${file}`);
   process.exitCode = 1;
 } else {
   process.chdir(path.join(projectRoot, "daemon"));
-  process.env.WORKBENCH_LIVE_TEST_FILE = file;
+  process.env.WORKBENCH_CODEX_TEST_FILE = file;
   console.log("Paid live diagnostic: one luna.low turn, isolated runtime, exact created-thread cleanup.");
   const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
   // The test owns a ten-minute spend budget, including cleanup. The runner only

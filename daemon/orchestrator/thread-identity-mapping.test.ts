@@ -596,6 +596,7 @@ test("public socket routing and reload handoff retain native request correlation
   }], { identities: owners.threads, itemIdentities: owners.items });
   const create = (initialState?: ReturnType<WorkbenchWebSocketRequestController["detachForReload"]>) => (
     new WorkbenchWebSocketRequestController({
+      reportDelivery: (delivery) => controller.completeDelivery(delivery),
       harnesses, identities: owners, initialState,
       setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimeout() {},
       reload: { getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }), subscribeReloadDirt: () => () => {} },

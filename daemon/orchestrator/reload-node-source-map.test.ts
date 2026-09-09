@@ -74,3 +74,32 @@ test("retired graph generations stay behind the active root source boundary", ()
     cancelReloadNodeSourceState();
   }
 });
+
+test("a direct process dependency remains process-owned across graph module generations", () => {
+  const mainModule = require.main;
+  const rootModule = require.cache[require.resolve("./orchestrator-root-node")];
+  assert.ok(mainModule);
+  assert.ok(rootModule);
+  const filename = path.join(path.dirname(rootModule.filename), "shared-process-dependency.ts");
+  const sharedModule = { children: [], filename } as NodeModule;
+  const nextModule = { children: [], filename } as NodeModule;
+  mainModule.children.push(sharedModule);
+  rootModule.children.push(sharedModule);
+  const readProcessOwnership = () => {
+    observeReloadNodeGraphSources(graph, rootModule, []);
+    return activateReloadNodeSourceState().descriptors
+      .find(({ scope }) => scope === "server:process")!.paths
+      .includes("daemon/orchestrator/shared-process-dependency.ts");
+  };
+  try {
+    assert.equal(readProcessOwnership(), true, "a direct process import exists before the first reload");
+    rootModule.children.splice(rootModule.children.indexOf(sharedModule), 1, nextModule);
+    assert.equal(readProcessOwnership(), true, "changing graph module identity must not discover new process ownership");
+  } finally {
+    mainModule.children.splice(mainModule.children.indexOf(sharedModule), 1);
+    const rootIndex = rootModule.children.findIndex((child) => child === sharedModule || child === nextModule);
+    if (rootIndex >= 0) rootModule.children.splice(rootIndex, 1);
+    observeReloadNodeGraphSources(graph, rootModule, []);
+    activateReloadNodeSourceState();
+  }
+});

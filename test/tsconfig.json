@@ -21,6 +21,7 @@
     "incremental": true
   },
   "include": [
+    "../diagnostics/**/*.ts",
     "./**/*.ts",
     "../app/**/*.ts",
     "../app/**/*.tsx",

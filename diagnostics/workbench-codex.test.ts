@@ -17,7 +17,7 @@ import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } f
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
 
 test("current Workbench admits luna.low, preserves managed identity and records a real turn", {
-  skip: process.env.WORKBENCH_LIVE_TEST_FILE !== "diagnostics/workbench-live.test.ts",
+  skip: process.env.WORKBENCH_CODEX_TEST_FILE !== "diagnostics/workbench-codex.test.ts",
   timeout: 600_000,
 }, async (t) => {
   const source = path.resolve(process.cwd(), "..");

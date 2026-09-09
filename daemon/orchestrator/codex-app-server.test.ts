@@ -158,6 +158,50 @@ test("failed retirement fences replacement until an explicit stop retry succeeds
   assert.equal(children.length, 0);
 });
 
+test("predecessor retirement closes every generation even when an older one fails", async () => {
+  const oldest = new Error("oldest retirement failed");
+  const previous = new Error("previous retirement failed");
+  const server = new CodexAppServer({
+    projectRoot: "C:/workspace", onFatalExit() {}, onMessage() {},
+    previousAppServer: {
+      retirePrevious: async () => { throw oldest; },
+      stopAsync: async () => { throw previous; },
+    } as unknown as CodexAppServer,
+  });
+  await assert.rejects(server.retirePrevious(), error => error instanceof AggregateError
+    && error.errors.includes(oldest) && error.errors.includes(previous));
+});
+
+test("a new process owner cannot spawn until its retained predecessor retires", async () => {
+  const release = deferred();
+  let spawned = 0;
+  const options = {
+    createChild: () => fakeChild(++spawned),
+    log() {}, logError() {}, onFatalExit() {}, onMessage() {},
+    projectRoot: "C:/workspace",
+    terminateChildAsync: async () => {},
+  };
+  const previous = new CodexAppServer({ ...options, terminateChildAsync: () => release.promise });
+  previous.send({ method: "old" });
+  const candidate = new CodexAppServer({ ...options, previousAppServer: previous });
+  try {
+    assert.throws(() => candidate.send({ method: "too early" }), /previous.*retir/i);
+    assert.equal(spawned, 1);
+    await candidate.stopAsync();
+    previous.send({ method: "rollback still usable" });
+    const retiring = candidate.retirePrevious();
+    assert.throws(() => candidate.send({ method: "still too early" }), /previous.*retir/i);
+    release.resolve();
+    await retiring;
+    candidate.send({ method: "new" });
+    assert.equal(spawned, 2);
+  } finally {
+    release.resolve();
+    await previous.stopAsync();
+    await candidate.stopAsync();
+  }
+});
+
 test("unexpected leader exit still retires its group before allowing replacement", async () => {
   const first = fakeChild(401);
   const children = [first, fakeChild(402)];

@@ -17,6 +17,58 @@ const address = {
   url: "http://127.0.0.1:43210",
 };
 
+test("closing during runtime startup reaches the owner and prevents listener publication", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  let runtimeClosed = false;
+  let leaseClosed = false;
+  let listenerCreated = false;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const app = new WorkbenchApp({
+    callerThreadId: null,
+    acquireLaunchLease: async () => ({ dispose: async () => { leaseClosed = true; } }),
+    createRuntime: () => ({
+      start: async () => { enter(); await pending; },
+      close: async () => { runtimeClosed = true; release(); },
+      handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+    }),
+    createServer: () => {
+      listenerCreated = true;
+      return { start: async () => address, close: async () => {}, moveToPort: async () => address };
+    },
+  });
+  const starting = app.start().then(() => null, error => error);
+  await entered;
+  const closing = app.close();
+  try {
+    await Promise.resolve();
+    assert.equal(runtimeClosed, true, "Startup resources must already belong to the application");
+    assert.ok(await starting instanceof Error);
+    await closing;
+    assert.equal(leaseClosed, true);
+    assert.equal(listenerCreated, false);
+  } finally { release(); await starting; await closing; }
+});
+
+test("a lease acquired after close begins is released without constructing a runtime", async () => {
+  let deliver!: (lease: WorkbenchAppLease) => void;
+  let released = false;
+  const lease = new Promise<WorkbenchAppLease>(resolve => { deliver = resolve; });
+  const app = new WorkbenchApp({
+    callerThreadId: null,
+    acquireLaunchLease: () => lease,
+    createRuntime: () => { throw new Error("A closing app must not create a runtime"); },
+    createServer: () => { throw new Error("A closing app must not create a listener"); },
+  });
+  const starting = app.start().then(() => null, error => error);
+  const closing = app.close();
+  deliver({ dispose: async () => { released = true; } });
+  assert.ok(await starting instanceof Error);
+  await closing;
+  assert.equal(released, true, "Late-acquired resources cannot escape closure");
+});
+
 function fixture(options: {
   environmentPort?: number | null;
   failMove?: boolean;

@@ -16,6 +16,10 @@ import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLog
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
+import AppCompilerNode from "./AppCompilerNode.ts";
+import type { AppProcessContext } from "./app-process-context.ts";
+import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
+import type { ReloadableNodeBuild } from "workbench-shared/reload/ReloadableNode";
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -55,10 +59,15 @@ class TestResponse extends EventEmitter {
 function runtime() {
   const compiler = {
     close: async () => {},
+    shutdown: async () => {},
+    retainPublishedGeneration() {},
+    retire() {},
+    suspend: async () => {},
+    resumeAfterFailedReload: async () => {},
     getFrontendGeneration: () => ({ javascript: "javascript-one", stylesheet: "stylesheet-one" }),
     outputDirectoryPath: "C:/workbench-output",
     startWatching: async () => "C:/workbench-output",
-  } as WorkbenchFrontendCompiler;
+  } as unknown as WorkbenchFrontendCompiler;
   const database = {
     close: async () => {},
     start: async () => "registration",
@@ -85,6 +94,36 @@ function runtime() {
     repositoryRootPath: "C:/repo",
   });
 }
+
+test("compiler replacement commits before its first build completes", async () => {
+  let release!: () => void;
+  const buildGate = new Promise<void>(resolve => { release = resolve; });
+  let builds = 0;
+  const compiler = {
+    retainPublishedGeneration() {},
+    startWatching: async () => { builds++; await buildGate; return "output"; },
+    retire() {},
+    close: async () => {},
+    shutdown: async () => {},
+  } as unknown as WorkbenchFrontendCompiler;
+  const logger = new WorkbenchProcessLogger({ color: false, writeError() {}, writeOutput() {} });
+  const instance = AppCompilerNode.create({ createCompiler: () => compiler } as unknown as AppProcessContext, {
+    get: key => key === "logger" ? logger : { readGlobalPreference: () => false },
+    handoffState: { generation: { javascript: "old-js", stylesheet: "old-css" } },
+    mode: "replacement",
+  } as ReloadableNodeBuild<AppRuntimeObjects>);
+  const preparing = instance.start();
+  try {
+    assert.equal(builds, 0, "a private candidate must not start the replacement build");
+    await preparing;
+    instance.afterCommit?.();
+    assert.equal(builds, 1);
+  } finally {
+    release();
+    await preparing;
+    await instance.dispose();
+  }
+});
 
 async function appProductionSourcePaths() {
   const sourcePaths: string[] = [];
@@ -120,6 +159,8 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("app/state/WorkbenchAppStateController.ts"), ["client:state"]);
   assert.deepEqual(owners("app/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
   assert.deepEqual(owners("app/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
+  assert.deepEqual(owners("app/globals.css"), []);
+  assert.deepEqual(owners("app/tailwind.css"), []);
   assert.deepEqual(owners("app/runtime/AppHttpNode.ts"), ["client:http", "client:topology"]);
   assert.deepEqual(owners("app/index.ts"), ["client:process"]);
   assert.deepEqual(owners("app/app-command-line.ts"), ["client:process"]);
@@ -183,13 +224,18 @@ test("reloads the database with a fresh repository constructor and no process re
     createCompiler: (_logger, readReactDevelopmentMode) => {
       return {
         close: async () => {},
+        shutdown: async () => {},
+        retainPublishedGeneration() {},
+        retire() {},
+        suspend: async () => {},
+        resumeAfterFailedReload: async () => {},
         getFrontendGeneration: () => ({ javascript: "javascript-one", stylesheet: "stylesheet-one" }),
         outputDirectoryPath,
         startWatching: async () => {
           compilerModes.push(readReactDevelopmentMode());
           return outputDirectoryPath;
         },
-      } as WorkbenchFrontendCompiler;
+      } as unknown as WorkbenchFrontendCompiler;
     },
     createDatabase: (Repository) => {
       constructors.push(Repository);

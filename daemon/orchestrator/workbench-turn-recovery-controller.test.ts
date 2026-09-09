@@ -12,6 +12,28 @@ import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "workbench-shared/workbench/th
 import WorkbenchTurnRecoveryController, { MAX_AUTOMATIC_RECOVERY_THREADS } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
 
+for (const cancelledOwner of ["controller", "bridge"] as const) {
+test(`${cancelledOwner} expiry cannot settle a late provider result after rollback resumes the owner`, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-expiry-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => {});
+  controller.observeRequest("codex", { id: "start", method: "turn/start", params: { threadId: "thread", input: [] } });
+  const candidates = controller.capture(["codex"]);
+  let finish!: (result: "recovered") => void;
+  const provider = new Promise<"recovered">((resolve) => { finish = resolve; });
+  const caller = new AbortController();
+  const recovery = controller.recover(candidates, () => provider, undefined, undefined, caller.signal);
+  if (cancelledOwner === "controller") controller.expireRuntimeDrain();
+  else caller.abort(new Error("provider bridge retired"));
+  await controller.detachForReload();
+  controller.resumeAfterFailedReload();
+  finish("recovered");
+  await recovery;
+  assert.deepEqual(controller.capture(["codex"]), candidates);
+  await controller.recover(candidates, async () => "recovered");
+  assert.deepEqual(controller.capture(["codex"]), []);
+});
+}
+
 test("controller admits only observed starts, excludes goals, and keeps newest ten", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-controller-"));
   const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);

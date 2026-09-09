@@ -542,7 +542,6 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       assert.equal(items[0].namespace, "workbench");
       assert.equal(items[0].call_id, undefined);
       assert.match(items[0].output, /target\.txt.*present/);
-      assert.equal(pendingUserInputRequests.size, 0);
       if (settlement === "resolved") {
         await bridge.handleUpstreamMessage({ method: "serverRequest/resolved", params: { threadId: "thread", requestId: 10 } });
       } else if (settlement === "cancelled") {
@@ -551,7 +550,9 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
         } });
       } else if (settlement === "reload" || settlement === "restart") {
         const initialState = await bridge.detachForReload({ restartingAppServer: settlement === "restart" });
+        await bridge.retireAfterHandoff({ restartingAppServer: settlement === "restart" });
         bridge = new CodexStdioBridge({ ...options, initialState });
+        await bridge.settleRestartedResponses();
       }
       await bridge.handleUpstreamMessage(settlement === "failed"
         ? { id: injection.id, error: { code: -32000, message: "injection rejected" } }
@@ -577,7 +578,6 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
         },
       });
       assert.equal(upstreamMessages.length, before);
-      assert.equal(pendingUserInputRequests.size, 1);
       assert.equal(notifications.at(-1)?.method, "questionnaire/requested");
     } finally {
       await bridge.dispose();
@@ -1646,6 +1646,140 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     releaseSqlite.resolve();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("failed process replacement resumes the retained initialized bridge", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-rollback-"));
+  let sent = false;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() { sent = true; } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState: {
+      initializeResult: { retained: true },
+      pendingResponses: new Map(),
+      pendingUserInputRequests: new Map(),
+      requestIdAllocator: { next: 7 },
+      upstreamInitialized: true,
+    },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const candidateState = await bridge.detachForReload({ restartingAppServer: true });
+    assert.equal(candidateState.upstreamInitialized, false);
+    bridge.resumeAfterReloadFailure();
+    await bridge.ensureInitialized({ id: 0, method: "initialize", params: {} });
+    assert.deepEqual(bridge.getInitializeResult(), { retained: true });
+    assert.equal(sent, false);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rollback starts a fresh initialization without letting the old attempt overwrite it", async () => {
+  const oldResponse = deferred<JsonRpcResponse>();
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null, sendToClient() {},
+    storageRoot: testWorkbenchLibraryRoot,
+  });
+  let attempts = 0;
+  const owner = bridge as unknown as { dispatchRequest(): Promise<{ response: Promise<JsonRpcResponse> }> };
+  owner.dispatchRequest = async () => ({
+    response: ++attempts === 1 ? oldResponse.promise : Promise.resolve({ id: 2, result: { fresh: true } }),
+  });
+  const first = bridge.ensureInitialized({ method: "initialize" }).catch(error => error);
+  let second: Promise<void> | undefined;
+  try {
+    bridge.expireForReload();
+    bridge.resumeAfterReloadFailure();
+    second = bridge.ensureInitialized({ method: "initialize" });
+    assert.equal(attempts, 2);
+    await second;
+    oldResponse.resolve({ id: 1, result: { stale: true } });
+    assert.match(String(await first), /retired/);
+    assert.deepEqual(bridge.getInitializeResult(), { fresh: true });
+  } finally {
+    oldResponse.resolve({ id: 1, result: { stale: true } });
+    await first;
+    await second?.catch(() => undefined);
+    await bridge.disposeImmediately();
+  }
+});
+
+test("an expired page read cannot begin transcript hydration after the old provider reply arrives", async () => {
+  const entered = deferred<void>();
+  const upstream = deferred<JsonRpcResponse>();
+  const finished = deferred<void>();
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: testWorkbenchLibraryRoot,
+  });
+  const owner = bridge as unknown as {
+    dispatchRequest(): Promise<{ response: Promise<JsonRpcResponse> }>;
+    ensureTranscriptStore(): CodexTranscriptStore;
+    readThreadContext(...args: [JsonRpcRequest, AbortSignal?]): Promise<object>;
+  };
+  let hydrationStarted = false;
+  owner.dispatchRequest = async () => { entered.resolve(); return { response: upstream.promise }; };
+  owner.ensureTranscriptStore = () => { hydrationStarted = true; throw new Error("late hydration"); };
+  const readContext = owner.readThreadContext.bind(bridge);
+  owner.readThreadContext = async (...args) => {
+    try { return await readContext(...args); }
+    finally { finished.resolve(); }
+  };
+  try {
+    const reading = bridge.handleBridgeRequest({ id: 1, method: "workbench/thread/page/read", params: { threadId: "thread", cursor: null } });
+    await entered.promise;
+    bridge.expireForReload();
+    assert.match((await reading)?.error?.message ?? "", /retired/);
+    bridge.resumeAfterReloadFailure();
+    upstream.resolve({ id: 1, result: { thread: bridgeThread() } });
+    await finished.promise;
+    assert.equal(hydrationStarted, false);
+  } finally {
+    upstream.resolve({ id: 1, error: { code: -32000, message: "cleanup" } });
+    await bridge.disposeImmediately();
+  }
+});
+
+test("expired command preparation cannot send through a bridge resumed after rollback", async () => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", testWorkbenchLibraryRoot);
+  instructions.augment = async message => { entered.resolve(); await release.promise; return message; };
+  let sends = 0;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() { sends++; } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", instructions,
+    handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {},
+    resolveProjectFromCwd: async () => null, sendToClient() {},
+    storageRoot: testWorkbenchLibraryRoot,
+  });
+  const client: BridgeClient = { OPEN: 1, readyState: 1, send() {}, close() {}, on() {}, once() {} };
+  try {
+    const preparing = bridge.forwardRequest({ id: 1, method: "thread/read", params: { threadId: "thread" } }, client, 1);
+    const rejected = assert.rejects(preparing, /retired/);
+    await entered.promise;
+    bridge.expireForReload();
+    bridge.resumeAfterReloadFailure();
+    release.resolve();
+    await rejected;
+    assert.equal(sends, 0);
+  } finally {
+    release.resolve();
+    await bridge.disposeImmediately();
   }
 });
 

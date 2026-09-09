@@ -17,17 +17,17 @@ test("waits for live descendants after the leader exits but not for zombies or u
     new Map([[102, "102 (child) S 1 101"]]),
     new Map([[102, "102 (child) Z 1 101"], [103, "103 (unrelated) S 1 999"]]),
   ];
-  const signalled: number[] = [];
+  const signalled: { pid: number; signal: NodeJS.Signals }[] = [];
   let observation = 0;
   const retirement = new LinuxProcessGroupRetirement({
-    signalGroup: (pid) => { signalled.push(pid); },
+    signalGroup: (pid, signal) => { signalled.push({ pid, signal }); },
     listProcessIds: async () => [...snapshots[observation]!.keys()],
     readProcessStat: async (pid) => snapshots[observation]!.get(pid)!,
     waitForNextCheck: async () => { observation += 1; },
   });
   await retirement.retire(101);
   assert.equal(observation, 2);
-  assert.deepEqual(signalled, [101]);
+  assert.deepEqual(signalled, [{ pid: 101, signal: "SIGKILL" }], "Force retirement cannot depend on cooperative signal handling");
 });
 
 test("only missing groups and disappeared proc entries are expected failures", async () => {

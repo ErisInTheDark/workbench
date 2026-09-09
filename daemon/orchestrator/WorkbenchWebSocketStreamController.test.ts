@@ -109,6 +109,23 @@ function prepare(controller: WorkbenchWebSocketStreamController, client: BridgeC
   return event;
 }
 
+test("rollback preserves delivery receipts and final disposal cannot be resumed", () => {
+  const clock = new FakeClock();
+  const { controller } = createController({ clock });
+  const client = createClient();
+  const event = prepare(controller, client, "codex");
+  controller.commitDelivery(event, 100);
+  controller.detachForReload();
+  clock.advance(5_000);
+  controller.resumeAfterFailedReload();
+  assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 1);
+  assert.equal(controller.acknowledge(client, event.sequence), true);
+  assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 0);
+  controller.detachForReload();
+  controller.dispose();
+  assert.throws(() => controller.resumeAfterFailedReload(), /disposed/u);
+});
+
 test("logs only aggregate behind and recovered transitions", () => {
   const clock = new FakeClock();
   const { controller, lines } = createController({ clock });

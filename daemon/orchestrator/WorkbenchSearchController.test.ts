@@ -34,3 +34,36 @@ test("search refreshes projects and changed current-project files before queryin
   await controller.dispose();
   await assert.rejects(controller.search({ projectId: "project", query: "after" }), /disposed/u);
 });
+
+for (const blockedRead of ["catalog", "files"] as const) {
+  test(`retired search cannot write a late ${blockedRead} projection`, async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const writes: string[] = [];
+    const controller = new WorkbenchSearchController({
+      database: {
+        replaceSearchProjects: async () => { writes.push("projects"); },
+        replaceSearchProjectFiles: async () => { writes.push("files"); },
+        search: async () => ({ results: [] }),
+      },
+      logWarning: () => undefined,
+      readCatalog: async () => {
+        if (blockedRead === "catalog") { entered(); await pending; }
+        return { data: [] };
+      },
+      readProjectSnapshot: async () => {
+        if (blockedRead === "files") { entered(); await pending; }
+        return { tree: [] };
+      },
+    });
+    const searching = assert.rejects(controller.search({ projectId: "project", query: "file" }), /disposed/u);
+    await started;
+    const before = [...writes];
+    const disposing = controller.dispose();
+    release();
+    await Promise.all([searching, disposing]);
+    assert.deepEqual(writes, before);
+  });
+}

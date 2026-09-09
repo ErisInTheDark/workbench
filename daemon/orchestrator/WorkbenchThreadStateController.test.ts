@@ -53,6 +53,57 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
 
+for (const scope of ["project", "global"] as const) {
+  test(`retiring thread state fences ${scope} storage reads before repair writes`, async () => {
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    let release!: (value: null) => void;
+    const gate = new Promise<null>(resolve => { release = resolve; });
+    const persistence = new MemoryThreadStatePersistence();
+    if (scope === "project") persistence.readProject = async () => { enter(); return await gate; };
+    else persistence.readGlobal = async () => { enter(); return await gate; };
+    const controller = new WorkbenchThreadStateController({
+      storageRoot: `retired-${scope}`, threadStateStore: persistence,
+      getProjectCatalog: () => ({ data: [], rootPath: "" }),
+      projectState: projectState(), publish() {}, reconcileProject: async () => [],
+    });
+    const reading = scope === "project" ? controller.getSnapshot("project") : controller.openGlobal("viewer", 6);
+    const rejected = assert.rejects(reading, /retired/);
+    await entered;
+    const disposing = controller.dispose();
+    await disposing;
+    release(null);
+    await rejected;
+    assert.equal(persistence.projects.size + persistence.globals.size, 0);
+  });
+}
+
+test("thread-state retirement retains an already-issued document write", async () => {
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const persistence = new MemoryThreadStatePersistence();
+  const write = persistence.writeProject.bind(persistence);
+  persistence.writeProject = async (...args) => { enter(); await gate; await write(...args); };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "retired-issued-write", threadStateStore: persistence,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(), publish() {}, reconcileProject: async () => [],
+  });
+  const reading = controller.getSnapshot("project");
+  const settlement = Promise.allSettled([reading]);
+  await entered;
+  let disposed = false;
+  const disposing = controller.dispose().then(() => { disposed = true; });
+  await Promise.resolve();
+  assert.equal(disposed, false);
+  release();
+  await disposing;
+  await settlement;
+  assert.equal(persistence.projects.has("project"), true);
+});
+
 test("first title observation is durable before a rename and keeps its timestamp after restart", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const identity = { harness: "codex" as const, threadId: "existing-thread" };

@@ -19,6 +19,37 @@ function thread(): Thread {
   };
 }
 
+test("a read from the expired bridge generation cannot alter state after rollback", async () => {
+  let entered!: () => void;
+  const reading = new Promise<void>((resolve) => { entered = resolve; });
+  let finish!: (value: object) => void;
+  const metadata = new Promise<object>((resolve) => { finish = resolve; });
+  const bridge = new OpenCodeBridge({
+    appServer: {} as OpenCodeAppServer,
+    projectRoot: "C:/repo",
+    onNotification() {},
+    getReloadableModules: () => ({
+      opencodeLiveThreadState: { createOpenCodeLiveThreadState: () => ({ sessions: new Map() }) },
+      opencodeThreadState: { opencodeSessionToThread: () => thread() },
+    }) as unknown as OrchestratorReloadableModules,
+  });
+  (bridge as unknown as { ensureClient(): Promise<object> }).ensureClient = async () => ({ session: {
+    get: () => { entered(); return metadata; },
+    status: async () => ({ data: {} }),
+  } });
+  const request = bridge.handleRequest({
+    id: 1, method: "thread/read", params: { threadId: "thread", includeTurns: false },
+  });
+  await reading;
+  bridge.expireRuntimeDrain();
+  await bridge.detachForReload();
+  bridge.resumeAfterFailedReload();
+  finish({ data: { id: "thread", directory: "C:/late" } });
+  assert.match((await request).error?.message ?? "", /retired/u);
+  assert.equal((await bridge.detachForReload()).sessionDirectories.has("thread"), false);
+  await bridge.stop();
+});
+
 test("OpenCode metadata lookup does not fetch transcript messages", async () => {
   const bridge = new OpenCodeBridge({
     appServer: {} as OpenCodeAppServer, projectRoot: "C:/repo", onNotification() {},

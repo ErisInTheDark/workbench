@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import ReloadableNode, { defineReloadableNodeGraph, type ReloadableNodeGraph } from "./ReloadableNode";
+import ReloadableNode, { defineReloadableNodeGraph, type ReloadableNodeGraph, type ReloadableNodeHandoff } from "./ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 
 interface Objects {
@@ -41,6 +41,244 @@ function node(options: {
 function loader(initial: Graph, replacement: Graph) {
   return { load: () => initial, reload: () => replacement };
 }
+
+function handoff(overrides: Partial<ReloadableNodeHandoff> = {}): ReloadableNodeHandoff {
+  return {
+    waitForIdle: async () => undefined,
+    expire: () => undefined,
+    detach: () => undefined,
+    resume: () => undefined,
+    commit: () => undefined,
+    ...overrides,
+  };
+}
+
+test("terminal shutdown reaches resource owners without waiting for caller leases", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  let forced = false;
+  let disposed = false;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const admitted = new Promise<void>(resolve => { entered = resolve; });
+  const graph = defineReloadableNodeGraph([node({
+    scope: "server:a", provides: ["a"],
+    create: () => ({
+      registrations: { a: "value" }, start() {},
+      shutdown() { forced = true; },
+      dispose() { disposed = true; },
+    }),
+  })]);
+  const host = new ReloadableNodeHost(null, loader(graph, graph));
+  await host.start();
+  const work = host.run("a", async () => { entered(); await pending; });
+  await admitted;
+  const closing = host.dispose();
+  try {
+    assert.equal(forced, true, "Shutdown must request child retirement before awaiting blocked work");
+    await closing;
+    assert.equal(disposed, true);
+    await assert.rejects(host.run("a", value => value), /shutting down/u);
+  } finally {
+    release();
+    await work;
+    await closing;
+  }
+});
+
+test("shutdown cancels initial startup and prevents late activation", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  let activated = false;
+  let startSignal: AbortSignal | undefined;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const graph = defineReloadableNodeGraph([node({
+    scope: "server:a",
+    create: () => ({
+      registrations: {},
+      async start(_phase, signal) { startSignal = signal; enter(); await pending; },
+      activate() { activated = true; },
+      dispose() {},
+    }),
+  })]);
+  const host = new ReloadableNodeHost(null, loader(graph, graph));
+  const starting = host.start();
+  const settled = starting.then(() => null, error => error);
+  await entered;
+  const closing = host.dispose();
+  try {
+    assert.equal(startSignal?.aborted, true, "Closing must cancel the owner that is still starting");
+  } finally { release(); }
+  assert.ok(await settled instanceof Error);
+  await closing;
+  assert.equal(activated, false);
+});
+
+test("shutdown reaches a replacement owner before its startup publishes the candidate", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  let forced = false;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const graph = defineReloadableNodeGraph([node({
+    scope: "server:a",
+    create: (_context, build) => ({
+      registrations: {},
+      async start() { if (build.mode === "replacement") { enter(); await pending; } },
+      shutdown() { if (build.mode === "replacement") { forced = true; release(); } },
+      dispose() {},
+    }),
+  })]);
+  const host = new ReloadableNodeHost(null, loader(graph, graph));
+  await host.start();
+  const replacing = host.reload(["server:a"]).then(() => null, error => error);
+  await entered;
+  const closing = host.dispose();
+  try {
+    assert.equal(forced, true, "A starting candidate must already belong to shutdown");
+  } finally { release(); await replacing; await closing; }
+});
+
+test("reload publishes without waiting for native retirement but shutdown still owns that generation", async () => {
+  let release!: () => void;
+  let retired = false;
+  let stoppedOldOwner = false;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let generation = 0;
+  const graph = () => {
+    const current = generation++;
+    return defineReloadableNodeGraph([node({
+      scope: "server:a", provides: ["a"], lifecycle: "handoff",
+      create: () => ({
+        registrations: { a: String(current) },
+        start() {}, dispose() {},
+        shutdown() { if (current === 0) { stoppedOldOwner = true; release(); } },
+        beginHandoff: () => handoff({
+          commit: async () => { await pending; retired = true; },
+        }),
+      }),
+    })]);
+  };
+  const host = new ReloadableNodeHost(null, { load: graph, reload: graph });
+  await host.start();
+  try {
+    await host.reload(["server:a"]);
+    assert.equal(await host.run("a", value => value), "1");
+    assert.equal(retired, false, "Reload completion cannot be native process cleanup completion");
+    await host.dispose();
+    assert.equal(stoppedOldOwner, true);
+    assert.equal(retired, true);
+  } finally { release(); await host.dispose(); }
+});
+
+test("failed activation preserves the old branch and permits a later replacement", async () => {
+  let oldDisposed = false;
+  let rejectActivation = true;
+  const initial = defineReloadableNodeGraph([node({
+    scope: "server:a",
+    provides: ["a"],
+    create: () => ({
+      registrations: { a: "old" },
+      start: () => undefined,
+      dispose: () => { oldDisposed = true; },
+    }),
+  })]);
+  const replacement = () => defineReloadableNodeGraph([node({
+    scope: "server:a",
+    provides: ["a"],
+    create: () => ({
+      registrations: { a: "replacement" },
+      start: () => undefined,
+      activate: () => { if (rejectActivation) throw new Error("candidate activation rejected"); },
+      dispose: () => undefined,
+    }),
+  })]);
+  const host = new ReloadableNodeHost(null, { load: () => initial, reload: replacement });
+  await host.start();
+  await assert.rejects(host.reload(["server:a"]), /candidate activation rejected/u);
+  assert.equal(oldDisposed, false, "rollback must retain the actual old owner");
+  assert.equal(await host.run("a", (value) => value), "old");
+  rejectActivation = false;
+  await host.reload(["server:a"]);
+  assert.equal(await host.run("a", (value) => value), "replacement");
+  assert.equal(oldDisposed, true);
+  await host.dispose();
+});
+
+test("grace expiry retires old work without cancelling replacement or the next reload", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  let beginDrain!: () => void;
+  let expire!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const draining = new Promise<void>((resolve) => { beginDrain = resolve; });
+  const expired = new Promise<void>((resolve) => { expire = resolve; });
+  let generation = 0;
+  let forced = 0;
+  const graph = () => {
+    const version = generation++;
+    return defineReloadableNodeGraph([node({
+      scope: "server:a",
+      provides: ["a"],
+      create: () => ({
+        registrations: { a: String(version) },
+        start: () => undefined,
+        beginRuntimeDrain: () => { if (version === 0) beginDrain(); },
+        expireRuntimeDrain: () => { if (version === 0) forced += 1; },
+        dispose: () => undefined,
+      }),
+    })]);
+  };
+  const host = new ReloadableNodeHost(null, { load: graph, reload: graph }, {
+    createRuntimeDrainDeadline: () => ({ cancel: () => undefined, expired }),
+  });
+  await host.start();
+  const oldWork = host.run("a", async () => { enter(); await pending; });
+  await entered;
+  const replacing = host.reload(["server:a"]);
+  try {
+    await draining;
+    expire();
+    await replacing;
+    assert.equal(forced, 1);
+    assert.equal(await host.run("a", (value) => value), "1");
+    await host.reload(["server:a"]);
+    assert.equal(await host.run("a", (value) => value), "2");
+  } finally {
+    release();
+    await oldWork;
+  }
+});
+
+test("a rolled-back owner expires fresh work again on the next replacement attempt", async () => {
+  let forced = 0;
+  let fail = true;
+  const graph = defineReloadableNodeGraph([node({
+    scope: "server:a", provides: ["a"], lifecycle: "handoff",
+    create: (_context, build) => ({
+      registrations: { a: build.mode },
+      start: () => { if (build.mode === "replacement" && fail) throw new Error("candidate rejected"); },
+      beginHandoff: () => handoff({
+        waitForIdle: () => new Promise<void>(() => {}),
+        expire: () => { forced++; },
+      }),
+      dispose: () => {},
+    }),
+  })]);
+  const host = new ReloadableNodeHost(null, loader(graph, graph), {
+    createRuntimeDrainDeadline: () => ({ cancel() {}, expired: Promise.resolve() }),
+  });
+  await host.start();
+  try {
+    await assert.rejects(host.reload(["server:a"]), /candidate rejected/);
+    assert.equal(await host.run("a", value => value), "initial");
+    fail = false;
+    await host.reload(["server:a"]);
+    assert.equal(forced, 2);
+    assert.equal(await host.run("a", value => value), "replacement");
+  } finally { await host.dispose(); }
+});
 
 test("shared children initialize once after every parent and dispose before every parent", async () => {
   const events: string[] = [];
@@ -232,7 +470,7 @@ test("server topology migration preserves independent harness roots", async () =
   await host.dispose();
 });
 
-test("topology replacement publishes complete candidates and gates new work until its owner starts", async () => {
+test("topology replacement keeps candidates private until the complete branch is ready", async () => {
   let finishChildStart!: () => void;
   let reportChildStart!: () => void;
   const childCanFinish = new Promise<void>((resolve) => { finishChildStart = resolve; });
@@ -260,7 +498,7 @@ test("topology replacement publishes complete candidates and gates new work unti
     create: () => ({
       dispose: () => undefined,
       registrations: { a: "candidate", b: "candidate parent" },
-      start: () => { assert.equal(host.get("a"), "candidate"); },
+      start: () => { assert.equal(host.get("a"), "live"); },
     }),
     provides: ["a", "b"],
     scope: "server:a",
@@ -273,15 +511,13 @@ test("topology replacement publishes complete candidates and gates new work unti
 
   const reload = host.reload(["server:topology"]);
   await childStarted;
-  assert.equal(host.get("a"), "candidate");
-  let operationSettled = false;
-  const operation = host.run("child", (value) => value).finally(() => { operationSettled = true; });
-  await Promise.resolve();
-  assert.equal(operationSettled, false);
+  assert.equal(host.get("a"), "live");
+  assert.throws(() => host.get("child"), /unavailable/u);
+  assert.equal(await host.run("a", (value) => value), "live");
 
   finishChildStart();
   await reload;
-  assert.equal(await operation, "candidate child");
+  assert.equal(await host.run("child", (value) => value), "candidate child");
 });
 
 test("topology replacement releases retired waiters only after the complete candidate starts", async () => {
@@ -298,12 +534,16 @@ test("topology replacement releases retired waiters only after the complete cand
     create: () => {
       let detached = false;
       return {
-        detachForReload: async () => {
-          reportLiveDetach();
-          await liveCanDetach;
-          detached = true;
-          return state;
-        },
+        beginHandoff: () => handoff({
+          detach: async () => {
+            reportLiveDetach();
+            await liveCanDetach;
+            detached = true;
+            return state;
+          },
+          resume: () => { detached = false; },
+          commit: () => { assert.equal(detached, true); },
+        }),
         dispose: () => { assert.equal(detached, true); },
         registrations: { a: "live" },
         start: () => undefined,
@@ -317,7 +557,7 @@ test("topology replacement releases retired waiters only after the complete cand
     create: (_context, build) => {
       assert.equal(build.handoffState, state);
       return {
-        detachForReload: () => state,
+        beginHandoff: () => handoff({ detach: () => state }),
         dispose: () => undefined,
         registrations: { a: "candidate", b: "candidate parent" },
         start: async () => {
@@ -350,7 +590,7 @@ test("topology replacement releases retired waiters only after the complete cand
   assert.equal(await waiter, "candidate");
 });
 
-test("handoff replacement bounds retired disposal while keeping the candidate graph active", async () => {
+test("an issued durability barrier survives grace expiry without cancelling the active candidate", async () => {
   let expireRetirement!: () => void;
   let finishLiveDisposal!: () => void;
   let reportLiveDisposal!: () => void;
@@ -359,7 +599,7 @@ test("handoff replacement bounds retired disposal while keeping the candidate gr
   const deadlines: Array<{ cancel(): void; expire(): void; expired: Promise<void> }> = [];
   const child = (value: string) => node({
     create: () => ({
-      detachForReload: () => ({ value }),
+      beginHandoff: () => handoff({ detach: () => ({ value }) }),
       dispose: () => undefined,
       registrations: { child: value },
       start: () => undefined,
@@ -412,19 +652,15 @@ test("handoff replacement bounds retired disposal while keeping the candidate gr
   await liveDisposalStarted;
   expireRetirement();
 
-  await assert.rejects(
-    reload,
-    /Reload transition exceeded 30000ms.*server:a: dispose.*server:a: thread-state disposal/u,
-  );
   assert.equal(host.get("a"), "candidate");
   assert.equal(host.get("child"), "candidate child");
 
   finishLiveDisposal();
-  await Promise.resolve();
-  await assert.rejects(host.dispose(), /Reload transition exceeded/u);
+  await reload;
+  await host.dispose();
 });
 
-test("failed topology startup preserves handoff state and releases waiters after restoration starts", async () => {
+test("failed topology startup resumes the retained owner before releasing its waiters", async () => {
   let finishCandidateStart!: () => void;
   let finishRestoredStart!: () => void;
   let reportCandidateStart!: () => void;
@@ -437,24 +673,25 @@ test("failed topology startup preserves handoff state and releases waiters after
   const state = { destroyed: false, transfers: 0 };
   let host!: ReloadableNodeHost<null, Objects, never>;
   const liveParent = node({
-    create: (_context, build) => {
-      const restored = build.mode === "restore";
+    create: () => {
       let detached = false;
       return {
-        detachForReload: () => {
-          detached = true;
-          state.transfers += 1;
-          return state;
-        },
+        beginHandoff: () => handoff({
+          detach: () => {
+            detached = true;
+            state.transfers += 1;
+            return state;
+          },
+          resume: async () => {
+            assert.equal(host.get("a"), "live");
+            reportRestoredStart();
+            await restoredCanFinish;
+            detached = false;
+          },
+        }),
         dispose: () => { if (!detached) state.destroyed = true; },
-        registrations: { a: restored ? "restored" : "live" },
-        start: async () => {
-          if (!restored) return;
-          assert.equal(build.handoffState, state);
-          assert.equal(host.get("a"), "restored");
-          reportRestoredStart();
-          await restoredCanFinish;
-        },
+        registrations: { a: "live" },
+        start: () => undefined,
       };
     },
     lifecycle: "handoff",
@@ -464,14 +701,9 @@ test("failed topology startup preserves handoff state and releases waiters after
   const candidateParent = node({
     create: (_context, build) => {
       assert.equal(build.handoffState, state);
-      let detached = false;
       return {
-        detachForReload: () => {
-          detached = true;
-          state.transfers += 1;
-          return state;
-        },
-        dispose: () => { if (!detached) state.destroyed = true; },
+        beginHandoff: () => handoff({ detach: () => state }),
+        dispose: () => undefined,
         registrations: { a: "candidate", b: "candidate parent" },
         start: async () => {
           reportCandidateStart();
@@ -504,9 +736,9 @@ test("failed topology startup preserves handoff state and releases waiters after
 
   finishRestoredStart();
   await assert.rejects(reload, (error) => error === startupFailure);
-  assert.equal(await waiter, "restored");
+  assert.equal(await waiter, "live");
   assert.equal(state.destroyed, false);
-  assert.equal(state.transfers, 2);
+  assert.equal(state.transfers, 1);
 });
 
 test("failed topology startup restores the previous graph and registrations", async () => {
@@ -575,18 +807,14 @@ test("topology replacement activates the successor before retiring live atomic o
 });
 
 for (const mode of ["atomic", "handoff", "topology"] as const) {
-  test(`${mode} startup expiry rejects gate waiters and fences late activation`, async () => {
-    let reportEntered!: () => void;
-    let finishStart!: () => void;
-    let expire!: () => void;
-    const entered = new Promise<void>((resolve) => { reportEntered = resolve; });
-    const finish = new Promise<void>((resolve) => { finishStart = resolve; });
-    const deadline = new Promise<void>((resolve) => { expire = resolve; });
+  test(`${mode} startup failure retains the old branch and permits retry`, async () => {
+    let failStartup = true;
+    let oldDisposed = false;
     let activated = false;
     const live = node({
       create: () => ({
-        detachForReload: () => ({}),
-        dispose: () => undefined,
+        beginHandoff: () => handoff({ commit: () => { oldDisposed = true; } }),
+        dispose: () => { oldDisposed = true; },
         registrations: { a: "live" },
         start: () => undefined,
       }),
@@ -597,10 +825,10 @@ for (const mode of ["atomic", "handoff", "topology"] as const) {
     const candidate = node({
       create: () => ({
         activate: () => { activated = true; },
-        detachForReload: () => ({}),
+        beginHandoff: () => handoff(),
         dispose: () => undefined,
         registrations: mode === "topology" ? { a: "candidate", b: "extra" } : { a: "candidate" },
-        start: async () => { reportEntered(); await finish; },
+        start: () => { if (failStartup) throw new Error("candidate startup rejected"); },
       }),
       lifecycle: mode === "handoff" ? "handoff" : "atomic",
       provides: mode === "topology" ? ["a", "b"] : ["a"],
@@ -608,66 +836,68 @@ for (const mode of ["atomic", "handoff", "topology"] as const) {
     });
     const host = new ReloadableNodeHost(null, loader(
       defineReloadableNodeGraph([live]), defineReloadableNodeGraph([candidate]),
-    ), {
-      createRuntimeDrainDeadline: () => ({ cancel: () => undefined, expired: deadline }),
-    });
+    ));
     await host.start();
     const reload = host.reload([mode === "topology" ? "server:topology" : "server:a"]);
-    const rejected = assert.rejects(reload, /server:a.*start|start.*server:a/u);
-    await entered;
-    expire();
-    // Expiry is delivered before the controlled hook finishes; no wall-clock race.
-    await Promise.resolve();
-    finishStart();
-    await rejected;
+    await assert.rejects(reload, /candidate startup rejected/u);
     assert.equal(activated, false);
-    await assert.rejects(host.reload(["server:a"]), /reload|transition/u);
-    if (mode !== "atomic") await assert.rejects(host.run("a", (value) => value), /reload|transition/u);
+    assert.equal(oldDisposed, false);
+    assert.equal(await host.run("a", (value) => value), "live");
+    failStartup = false;
+    await host.reload([mode === "topology" ? "server:topology" : "server:a"]);
+    assert.equal(await host.run("a", (value) => value), "candidate");
+    assert.equal(oldDisposed, true);
+    await host.dispose();
   });
 }
 
-test("expiry before detach reopens the untouched live graph without starting a conflicting reload", async () => {
+test("expiry before detach forces handoff and leaves the next reload available", async () => {
   let finishWork!: () => void;
   let expire!: () => void;
   let reportWork!: () => void;
-  let reportDeadline!: () => void;
+  let reportDrain!: () => void;
   const workFinished = new Promise<void>((resolve) => { finishWork = resolve; });
   const workStarted = new Promise<void>((resolve) => { reportWork = resolve; });
-  const deadlineCreated = new Promise<void>((resolve) => { reportDeadline = resolve; });
+  const drainStarted = new Promise<void>((resolve) => { reportDrain = resolve; });
   const expired = new Promise<void>((resolve) => { expire = resolve; });
+  let generation = 0;
+  let forced = 0;
   const parent = node({
     create: () => ({
-      detachForReload: () => ({}), dispose: () => undefined,
-      registrations: { a: "live" }, start: () => undefined,
+      beginHandoff: () => handoff({
+        waitForIdle: async () => { reportDrain(); await workFinished; },
+        expire: () => { forced += 1; },
+      }),
+      dispose: () => undefined,
+      registrations: { a: String(++generation) }, start: () => undefined,
     }),
     lifecycle: "handoff", provides: ["a"], scope: "server:a",
   });
   const graph = defineReloadableNodeGraph([parent]);
   const host = new ReloadableNodeHost(null, loader(graph, graph), {
-    createRuntimeDrainDeadline: () => {
-      reportDeadline();
-      return { cancel: () => undefined, expired };
-    },
+    createRuntimeDrainDeadline: () => ({ cancel: () => undefined, expired }),
   });
   await host.start();
   const work = host.run("a", async () => { reportWork(); await workFinished; });
   await workStarted;
   const reload = host.reload(["server:a"]);
-  const rejected = assert.rejects(reload, /exceeded/u);
-  await deadlineCreated;
-  // Allow the synchronously loaded graph to enter its lease drain.
-  await Promise.resolve();
-  await Promise.resolve();
-  expire();
-  await rejected;
-  finishWork();
-  await work;
-  assert.equal(await host.run("a", (value) => value), "live");
-  await assert.rejects(host.reload(["server:a"]), /previous reload/u);
+  try {
+    await drainStarted;
+    expire();
+    await reload;
+    assert.equal(forced, 1);
+    assert.equal(await host.run("a", (value) => value), "2");
+    await host.reload(["server:a"]);
+    assert.equal(await host.run("a", (value) => value), "3");
+  } finally {
+    finishWork();
+    await work;
+  }
 });
 
-test("failed retirement keeps the activated graph usable but blocks conflicting replacement", async () => {
+test("failed retirement is reported without poisoning the committed graph or a later reload", async () => {
   const failure = new Error("retired resource did not close");
+  const logs: string[] = [];
   const live = node({
     create: () => ({
       dispose: () => { throw failure; }, registrations: { a: "old" }, start: () => undefined,
@@ -682,11 +912,13 @@ test("failed retirement keeps the activated graph usable but blocks conflicting 
   });
   const host = new ReloadableNodeHost(null, loader(
     defineReloadableNodeGraph([live]), defineReloadableNodeGraph([replacement]),
-  ));
+  ), { logError: (message) => { logs.push(message); } });
   await host.start();
-  await assert.rejects(host.reload(["server:a"]), (error) => error === failure);
+  await host.reload(["server:a"]);
   assert.equal(await host.run("a", (value) => value), "new");
-  await assert.rejects(host.reload(["server:a"]), /previous reload/u);
+  assert.ok(logs.some((message) => message.includes(failure.message)));
+  await host.reload(["server:a"]);
+  assert.equal(await host.run("a", (value) => value), "new");
 });
 
 test("a gated request follows its registration when topology changes its owner", async () => {
@@ -696,7 +928,7 @@ test("a gated request follows its registration when topology changes its owner",
   const detached = new Promise<void>((resolve) => { finishDetach = resolve; });
   const live = node({
     create: () => ({
-      detachForReload: async () => { reportDetach(); await detached; return {}; },
+      beginHandoff: () => handoff({ detach: async () => { reportDetach(); await detached; return {}; } }),
       dispose: () => undefined, registrations: { a: "old" }, start: () => undefined,
     }),
     lifecycle: "handoff", provides: ["a"], scope: "server:a",

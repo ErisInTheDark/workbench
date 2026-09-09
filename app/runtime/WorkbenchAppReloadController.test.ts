@@ -78,3 +78,27 @@ test("keeps process restart exclusive and cancellable before acknowledgement", a
   await completion;
   assert.deepEqual(events, ["restart"]);
 });
+
+test("a resumed reload owner reports failed replacement and accepts another batch", async () => {
+  const events: string[] = [];
+  let attempts = 0;
+  const controller = new WorkbenchAppReloadController({
+    dirt: {
+      beginReload: () => events.push("begin"),
+      completeReload: () => events.push("complete"),
+      failReload: () => events.push("fail"),
+    } as never,
+    execute: async (scopes) => {
+      if (++attempts === 1) {
+        controller.detachForReload();
+        controller.resumeAfterFailedReload();
+        throw new Error("candidate rejected");
+      }
+      return scopes;
+    },
+    schedule: (callback) => callback(),
+  });
+  await assert.rejects(controller.admit(["client:http"]).start(), /candidate rejected/u);
+  await controller.admit(["client:http"]).start();
+  assert.deepEqual(events, ["begin", "fail", "begin", "complete"]);
+});

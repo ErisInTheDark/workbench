@@ -4,8 +4,28 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import type { Socket } from "node:net";
 
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
+
+test("terminal close also force-closes requests on a retiring listener", async () => {
+  let enter!: () => void;
+  let socket!: Socket;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const server = new WorkbenchFrontendServer({
+    hostname: "127.0.0.1",
+    requests: { handleRequest: async (request) => { socket = request.socket; enter(); } },
+  });
+  const address = await server.start();
+  const request = fetch(address.url).then(() => null, error => error);
+  await entered;
+  await server.moveToPort(0, async () => {});
+  assert.equal(socket.destroyed, false, "Ordinary port moves must preserve admitted requests");
+  const closing = server.close();
+  try {
+    assert.equal(socket.destroyed, true, "Terminal close must reach the retained listener owner");
+  } finally { socket.destroy(); await request; await closing; }
+});
 
 test("keeps one bound port while delegating every request to the runtime owner", async (context) => {
   const paths: string[] = [];

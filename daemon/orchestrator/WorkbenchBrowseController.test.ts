@@ -11,6 +11,7 @@ import type { WorkbenchBrowseSessionListRequest, WorkbenchBrowseSessionSummary }
 import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
+import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
 
 function deferred() {
   let resolve = () => undefined;
@@ -44,6 +45,63 @@ function createController(
   });
 }
 
+test("expired identity lookup cannot launch work after rollback resumes admission", async () => {
+  const entered = deferred();
+  const release = deferred();
+  let executions = 0;
+  const controller = new WorkbenchBrowseController({
+    record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+  }, new WorkbenchBrowseRuntime(), {
+    handle: async () => { executions++; return Response.json({ ok: true }); },
+    listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),
+    controlSession: async () => ({ result: null, session: null, stopped: false }),
+    findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
+  }, {
+    nativeTarget: async () => { entered.resolve(); await release.promise; return { threadId: "native" }; },
+    publicThreadId: async () => "public",
+  });
+  const command = controller.executeBrowseRequest(Buffer.from('{"threadId":"public"}'), new AbortController().signal);
+  const rejected = assert.rejects(command, /reload/);
+  await entered.promise;
+  controller.expire();
+  await controller.waitForIdle();
+  controller.resume();
+  release.resolve();
+  await rejected;
+  await controller.executeBrowseRequest(Buffer.from("{}"), new AbortController().signal);
+  assert.equal(executions, 1);
+});
+
+test("a late screenshot cannot resolve asset identity or publish a result after cancellation", async () => {
+  const entered = deferred();
+  const release = deferred();
+  let publications = 0;
+  let identityReads = 0;
+  const runtime = {
+    resolveExecutionContext: async () => ({}),
+    run: async () => {
+      entered.resolve();
+      await release.promise;
+      return { ok: true, exitCode: 0, durationMs: 1, stderr: "", stdout: JSON.stringify({ base64: "YQ==", mimeType: "image/png" }) };
+    },
+  } as unknown as WorkbenchBrowseRuntime;
+  const handler = new WorkbenchBrowseRequestHandler({
+    record() { publications++; },
+    deliverScreenshot: async () => { publications++; return { kind: "steered", turnId: "turn" }; },
+    waitForIdle: async () => {},
+  }, runtime, async () => { identityReads++; throw new Error("retired screenshot reached asset identity"); });
+  const cancellation = new AbortController();
+  const request = handler.handle(Buffer.from(JSON.stringify({ action: "screenshot", threadId: "thread", session: "default", cwd: "C:/repo" })),
+    cancellation.signal, async task => await task());
+  await entered.promise;
+  cancellation.abort(new Error("reload"));
+  release.resolve();
+  const response = await request;
+  assert.equal(response.status, 400);
+  assert.equal(identityReads, 0);
+  assert.equal(publications, 0);
+});
+
 test("direct Browse request execution uses the same handler and cancellation signal as HTTP ingress", async () => {
   let receivedSignal: AbortSignal | null = null;
   const controller = createController(() => undefined, (signal) => { receivedSignal = signal; });
@@ -51,7 +109,11 @@ test("direct Browse request execution uses the same handler and cancellation sig
   const response = await controller.executeBrowseRequest(Buffer.from("{}"), abortController.signal);
 
   assert.equal(response.status, 200);
-  assert.equal(receivedSignal, abortController.signal);
+  assert.ok(receivedSignal);
+  const cancelled = new Error("caller cancelled");
+  abortController.abort(cancelled);
+  assert.equal(receivedSignal.aborted, true);
+  assert.equal(receivedSignal.reason, cancelled);
   assert.deepEqual(await response.json(), { ok: true });
 });
 
