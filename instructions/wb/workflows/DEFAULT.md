@@ -108,12 +108,7 @@ In Inspect mode:
 - do not edit files
 - do not ask for implementation approval yet
 
-Leave Inspect mode only when you can explain:
-
-- what the user appears to want
-- what shape exists now
-- what shape should exist after
-- what risks, tradeoffs, or hygiene matter
+Before leaving Inspect, complete Plan Analysis checks.
 
 ## Brief Mode
 
@@ -223,14 +218,9 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 ### Completion gate
 
-Before Review:
-
-- Confirm all approved work and required validation are complete, and no unresolved user request or steer remains.
-- Missing approved work is not a risk or exclusion. It forbids the completion path.
-- Run `tools.mcp__wb__git_arc_diff` against the current active arc. Do not substitute raw Git or an unrelated or superseded ref.
-- If the diff exposes an issue, continue in the correct mode without setting completed status or entering Review.
-- Otherwise, call `mcp__wbex__thread_status` with `status: "completed"`.
-- Then enter Review mode.
+- Perform universal Completion inspection and review checks against complete current arc diff.
+- Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
+- Only after checks pass, call `mcp__wbex__thread_status` with `status: "completed"`, then enter Review.
 
 ## Review Mode
 

@@ -68,7 +68,7 @@ Do not:
 - use a final answer to escape an active workflow
 - implement scope-expanding, ownership-changing, lifecycle-changing, contract-changing, validation-changing, mechanically uncertain, or ambiguous plan changes without a fresh approval path
 
-## Deep Analysis
+## Plan Analysis
 
 <!--
 The following paragraph is to prevent the following failure modes when telling agents you don't think they thought it through properly:
@@ -76,20 +76,29 @@ The following paragraph is to prevent the following failure modes when telling a
 2. Agents re-inter inspection and do a bunch more unnecessary research
 The proper behaviour is for the agent to rethink its plan or the things it's said based on what the user has pointed out. To the user, the failure may be obvious but difficult to explain. This is an opportunity for the agent to truly wrap its head around the full context, truly reason through the different angles, and produce a better plan or answer.
 -->
-When the user asks for more thought, rethink existing context and the concern before re-briefing. Consider every relevant angle. Inspect only for a specific missing fact. Use context the user says is sufficient. Seek deeper understanding, not repeated second-guessing.
+<!--
+These checks also run without the user having to request deeper thought. Inspection can identify real code and still produce a useless plan if the agent never asks what the proposed behavior lets the user accomplish or understand.
 
-**Hard rule: do not plan from vibes.**
+Agents can repeat the user's terminology while proposing behavior that serves a different purpose or undermines the intended result. A realistic walkthrough must test whether the shape is useful, not merely implementable. For diagnostics, agents must consider what measurements actually capture and what decisions the output enables, rather than assuming that familiar labels or more logging provide insight.
 
-Before briefing non-trivial work, inspect enough real context to name:
+User corrections must prompt reconsideration of the underlying shape, not just replacement of the latest disputed label or field. Matching existing output means understanding its semantics, not copying its vocabulary. More reading is not a substitute for this reasoning, and approval of an agent-authored plan does not silently erase the original intent.
+-->
+**Hard rule: verify intent, usefulness and mechanics before briefing.**
 
-- the goal, current shape, and desired shape
-- the behavior owner and enabling mechanics
-- the risks and edge cases
-- the simplest coherent route
+Before non-trivial plans, deliberately check each aspect against source and user requests:
+- **Intent:** What must user accomplish or understand? Translate terms into observable behavior; reconcile original request and later steers.
+- **Usefulness:** Walk a realistic use. Does result serve intent? What decision/action does each output enable?
+- **Fit:** Inspect existing owner and behavior being matched. Name meaningful differences; matching labels/appearance is not equivalence.
+- **Mechanics:** Trace trigger to user-visible result. Do identifiers/state exist when needed? Does API accept inputs? Does owner have information/authority? Preserve reload, cancellation, async and process boundaries.
+- **Counterexample:** What plausible wrong shape would fail intent? Walk distinguishing cases. Timing/aggregation: first, isolated, burst, sustained, final, independent groups, cleanup. Diagnostics: measurement boundaries, practical failures, existing coverage, misleading output.
+- **Simplicity:** Compare one plausible alternative across system, not diff size. Prefer fewer states, layers and divided owners.
+- **Proof:** What evidence distinguishes intended behavior from wrong shape? Separate demonstrated defects from explanations of reported symptom.
 
-During planning, collaborate instead of obeying. Tentative language such as `maybe`, `I think`, `in my opinion`, `IMO`, or `probably` opens the proposed means, not the stated goal, to challenge. Compare it with owners, invariants, project direction, and the simplest goal-fitting route. Surface an alternative only when it genuinely fits the goal better. Explain the tradeoff. Otherwise, support the user's route without manufacturing disagreement.
-
-Compare one plausible alternative to any non-trivial proposed route. Judge simplicity across the system, not diff size. A wider change can be simpler when it removes state, duplication, layers, or divided ownership. Mention rejected paths only when they affect user trust, scope, risk, architecture, or validation.
+- Tentative means invite challenge, not changed goals. Recommend alternatives only when better fit; explain tradeoff without manufactured disagreement.
+- Unknown mechanics: inspect missing facts. Impossible mechanics: stop/re-plan; approval cannot make them valid.
+- Lifecycle changes: state/address one failure theory before approval.
+- Show consequential differences, evidence and uncertainty, not checklist recital. Resolve intent conflicts explicitly; approval does not silently erase original requests.
+- User requests deeper thought: rethink concern across these aspects before re-briefing. Use sufficient context; inspect only specific missing facts, not reflexively more files.
 
 ## Avoid reflexive context gathering
 
@@ -184,7 +193,23 @@ Use `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })` for o
 
 #### Completion inspection and review
 
-Before summarizing, inspect the current arc. Use `tools.mcp__wb__git_arc_compare` for paths and counts or `tools.mcp__wb__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
+<!--
+The final diff is where promised behavior must be checked against what actually exists. Reviewing only changed paths, implementation tidiness or passing tests can bless an implementation that contradicts the user's request.
+
+Tests can pass because they encode the agent's chosen shape rather than the user's intended behavior. Red-first testing does not correct expectations that already embody the wrong interpretation. Validation must distinguish the requested outcome from plausible substitutes, rather than merely establish that the implementation behaves as written.
+
+Check original intent as well as the approved plan: an implementation can faithfully implement a bad plan. Walk distinguishing cases through the actual code while reading the complete diff, rather than reciting a checklist afterward. These rules belong in universal instructions because other workflows review diffs too; workflows own the trigger, not the substance of this verification.
+-->
+**Hard rule: review complete claimed diff against intent, not just implementation.**
+
+Before summarizing or proposing, inspect complete current arc with `tools.mcp__wb__git_arc_diff`; follow every page. Active workflow determines review timing.
+
+During diff inspection, deliberately verify each:
+- **Intent:** Does implementation satisfy every intent of original request, approved plan and later steers? Map each to code/evidence; only explicit user changes narrow obligations.
+- **Behavior:** Walk planned examples/counterexamples through code. Verify semantics, not names or file scope.
+- **Preservation:** Check promised owners, contracts, lifecycle and behavior; catch unapproved substitutions, omissions and additions.
+- **Proof:** Would validation reject plausible wrong shape? Separate passing tests from verified outcomes and uncertainty.
+- **Claims:** Does completion report match evidence? Partial fix does not prove original symptom resolved.
 
 Omit refs for current inspection. Use previous refs only for deliberate historical comparisons, including planning-drift notices. If lifecycle ownership is unclear, inspect `git_arc_scope` rather than guessing refs.
 
@@ -231,23 +256,6 @@ Fight nearby smells that create future cost:
 Aggressively propose related refactors when they improve project maintainability.
 
 If a refactor is warranted, but you believe it is truly out of scope for the current task, state it in the brief as potential follow-up work, and in review repeat the suggestion.
-
-## Mechanical Reality Check
-
-**Hard rule: think about whether the plan can actually work before implementing it.**
-
-Before implementation, check the mechanics that make the plan possible:
-
-- Does the required identifier, file, process, route, permission, or lifecycle state actually exist at that point?
-- Does the API or protocol accept the value you plan to send?
-- Does the proposed owner have enough information and authority to do the work?
-- Would the change preserve required reload, cancellation, async, or process boundaries?
-
-Before a small-looking lifecycle patch, state one failure theory for the proposed shape, such as "Could this new state desynchronize from existing state?" or "Could this callback path skip cleanup?" Address that theory in the plan before implementing.
-
-If the mechanics are unknown, inspect or propose a diagnostic plan.
-
-If the mechanics are impossible, stop and re-brief. User approval does not authorize impossible runtime behavior.
 
 ## Real Ownership
 

@@ -12,7 +12,7 @@ In this project, "update instructions" means update Markdown sources under `inst
 CRITICAL INSTRUCTION EDITING RULES:
 - "Strengthening" instructions does not mean more words!!!!! It means making the existing words more clear and EMPHASISED.
 - When adding new rules, think deeply about how to bake them into the existing text. Aim for more clear rules expressed in less overall words. Be very careful not to remove or weaken existing rules unless that's the intent.
-- HTML comments are stripped from emitted instructions and this AGENTS.md. Use them to name the agent failure the surrounding instructions prevent. Count instruction tokens before and after edits.
+- Keep emitted instructions concise. HTML comments are stripped from emitted instructions and this AGENTS.md; they add no runtime instruction tokens. Use comments freely for detailed rationale about agent failure patterns and why rules prevent them, not specific incidents. Preserve useful existing context; do not shorten comments to save instruction tokens. Count emitted instruction tokens before and after edits.
 
 ## Code Organization
 
