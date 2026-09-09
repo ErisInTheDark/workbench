@@ -13,6 +13,7 @@ import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
+import { WORKBENCH_TRANSCRIPT_COMMANDS } from "./transcript-command-definitions";
 import { WORKBENCH_TOC_COMMANDS } from "./toc-command-definition";
 import { WORKBENCH_STATS_COMMANDS } from "./stats-command-definitions";
 import {
@@ -28,6 +29,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_SUBAGENT_COMMANDS,
   ...WORKBENCH_THREAD_COMMANDS,
   ...WORKBENCH_TOKEN_COMMANDS,
+  ...WORKBENCH_TRANSCRIPT_COMMANDS,
   ...WORKBENCH_GIT_COMMANDS,
   ...WORKBENCH_GIT_ARC_COMMANDS,
   ...WORKBENCH_BROWSE_COMMANDS,

@@ -35,6 +35,7 @@ import type {
   WorkbenchTurnIdentityMetadata,
 } from "./thread-identity/workbench-thread-identity-types";
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
+import { TranscriptQueryError, type TranscriptQuery } from "./transcript/transcript-query-contract";
 import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
@@ -345,6 +346,14 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected context usage response: ${response.type}`);
     }
     return response.snapshot;
+  }
+
+  async queryTranscript(request: TranscriptQuery) {
+    await this.start();
+    const response = await this.#request({ type: "queryTranscript", request });
+    if (response.type !== "transcriptQueryResult") throw new WorkbenchDatabaseFailure(`Unexpected transcript query response: ${response.type}`);
+    if (response.result.ok === false) throw new TranscriptQueryError(response.result.error);
+    return response.result.page;
   }
 
   async readTranscriptMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {

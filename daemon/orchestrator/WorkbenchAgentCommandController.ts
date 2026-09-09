@@ -33,6 +33,7 @@ interface WorkbenchAgentDirectPort {
   executeThreadGitRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
@@ -373,6 +374,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/tokens" && request.body) {
       if (!this.direct.executeTokenCount) throw new Error("Token counting is not configured.");
       return await this.direct.executeTokenCount(request.body, signal);
+    }
+    if (request.path === "/internal/transcript" && request.body) {
+      if (!this.direct.executeTranscriptQuery) throw new Error("Transcript queries are not configured.");
+      return await this.direct.executeTranscriptQuery(request.body, signal);
     }
     if (request.path === "/internal/stats/claims" && request.body) {
       if (!this.direct.executeClaimStats) throw new Error("Claim statistics are not configured.");

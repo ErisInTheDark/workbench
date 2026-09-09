@@ -17,6 +17,8 @@ import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThread
 import WorkbenchTranscriptIdentityRepository from "./transcript/WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
+import WorkbenchTranscriptQueryRepository from "./transcript/WorkbenchTranscriptQueryRepository.ts";
+import { TranscriptQueryError } from "./transcript/transcript-query-contract.ts";
 import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./stats/WorkbenchClaimStatsRepository.ts";
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
@@ -229,6 +231,16 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "readThreadContextUsage") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({ id: request.id, type: "threadContextUsage", snapshot: transcriptRepository.readContextUsage(request.threadId) });
+    return;
+  }
+  if (request.type === "queryTranscript") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    try {
+      post({ id: request.id, type: "transcriptQueryResult", result: { ok: true, page: new WorkbenchTranscriptQueryRepository(database).read(request.request) } });
+    } catch (error) {
+      if (!(error instanceof TranscriptQueryError)) throw error;
+      post({ id: request.id, type: "transcriptQueryResult", result: { ok: false, error: error.message } });
+    }
     return;
   }
   if (request.type === "readTranscriptMaterializedTurnIds") {

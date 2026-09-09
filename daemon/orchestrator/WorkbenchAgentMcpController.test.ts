@@ -189,6 +189,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
+    assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
+    assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);
     const plan = inventory.tools.find(({ name }) => name === "git_plan_claims");
     assert.ok(plan);
     const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_plan_claims");

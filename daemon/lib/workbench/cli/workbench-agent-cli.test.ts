@@ -237,6 +237,21 @@ test("token commands restrict managed threads without restricting direct users",
   assert.match(insideThreadHelp.help, /wb tokens project/u);
 });
 
+test("transcript CLI accepts Workbench ids directly and restricts managed callers", async () => {
+  const context = { cwd: "C:/workbench", projectRoot: "C:/workbench", callerThreadId: "caller" };
+  const parsed = await parseWorkbenchAgentCliCommand([
+    "transcript", "search", "--thread", "wb-thread", "--query", "100%_literal", "--json",
+  ], context);
+  assert.equal(parsed.kind, "request");
+  if (parsed.kind !== "request") return;
+  assert.deepEqual(parsed.request.body?.threads, ["wb-thread"]);
+  assert.deepEqual(parsed.request.body?.queries, ["100%_literal"]);
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read", "--thread", "wb-thread"], context)).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read"], context)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x"], { ...context, cwd: "C:/elsewhere" })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "projects"], { ...context, cwd: "C:/elsewhere", callerThreadId: null })).kind, "request");
+});
+
 test("parses Markdown toc requests and exposes focused help", async () => {
   const parsed = await parseWorkbenchAgentCliCommand(["toc", "AGENTS.md"], { cwd: "C:/workspace" });
   assert.deepEqual(parsed, {

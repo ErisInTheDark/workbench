@@ -149,6 +149,28 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
   assert.equal(receivedSignal, cancellation.signal);
 });
 
+test("transcript CLI dispatch keeps Workbench target ids and rejects outside-root managed callers", async () => {
+  const bodies: object[] = [];
+  const controller = new WorkbenchAgentCommandController("http://127.0.0.1:1", {
+    ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    workbenchProjectRoot: "C:/workbench",
+    resolveCaller: async () => ({ threadId: "wb-caller", nativeThreadId: "native-caller", harness: "codex" }),
+    executeTranscriptQuery: async (body) => { bodies.push(body); return new Response("stored results"); },
+  });
+  const server = await startController(controller);
+  try {
+    for (const [cwd, expected] of [["C:/other", 400], ["C:/workbench", 200]] as const) {
+      const body = new URLSearchParams(agentCommandBody(["transcript", "search", "--thread", "wb-target", "--query", "needle"], cwd));
+      body.set("callerThreadId", "native-caller");
+      const response = await fetch(`${server.origin}/orchestrator/agent-command`, { method: "POST", body });
+      assert.equal(response.status, expected);
+    }
+    assert.equal(bodies.length, 1);
+    assert.ok("threads" in bodies[0]!);
+    assert.deepEqual(bodies[0].threads, ["wb-target"]);
+  } finally { await server.close(); await controller.dispose(); }
+});
+
 test("claim stats CLI dispatch preserves cwd and cancellation without an HTTP fallback", async () => {
   const signal = new AbortController().signal;
   const controller = new WorkbenchAgentCommandController("http://127.0.0.1:1", {

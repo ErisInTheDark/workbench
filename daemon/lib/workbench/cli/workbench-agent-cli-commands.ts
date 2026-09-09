@@ -86,6 +86,7 @@ export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly Orches
 const ROOT_HELP_COMMAND_ORDER = [
   "toc", "rg",
   "tokens", "tokens instructions", "tokens project",
+  "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
@@ -95,6 +96,28 @@ const ROOT_HELP_COMMAND_ORDER = [
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
+  {
+    key: "transcript", usage: "wb transcript <projects|threads|turns|search|read|show|stats> [options]", words: ["transcript"],
+    commandOrder: ["transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats"],
+    footer: [
+      "Start with a Workbench thread id: wb transcript search --thread <wb-id> --query <text>",
+      "Read directly: wb transcript read --thread <wb-id>. Inspect turns: wb transcript turns --thread <wb-id>.",
+      "Context: wb transcript read --thread <wb-id> --around <item-id> --context 5.",
+      "Expand: wb transcript show --thread <wb-id> --item <item-id>. Follow returned cursors for every field.",
+      "SQLite only: no provider materialisation, native transcript files, imports or writes. Coverage describes stored thread bodies.",
+      "All projects, archived and settled threads are included by default. --thread uses exact Workbench ids, not provider ids.",
+      "Common: --project <id> --harness <codex|copilot|opencode> --archived <true|false> --settled <true|false>.",
+      "Time: --since/--until <UTC-date|ISO-with-timezone|epoch-ms>, inclusive. Thread lists use activity time; items use creation time.",
+      "Search/read/stats: --turn <id> --kind <kind>... --phase <commentary|finalAnswer|unknown> --tool <exact-name> --file <path-substring>.",
+      "Kinds: user-message, user-steer, assistant-message, plan, reasoning, process, tool, collaboration, tool-output, file-change, web-search, questionnaire, approval, compaction, unknown.",
+      "Search/thread-title matching: --query <literal>... (all terms per item), --any (any term), --exclude <literal>..., --case-sensitive.",
+      "Search/read/show: --opaque includes canonical opaque fields, never binary assets or provider-native evidence.",
+      "Read/turns/search: --direction <older|newer>. Read pages render chronologically; older starts at the end, newer at the start.",
+      "Pages: --limit <1-50>, --cursor <returned-cursor>, --json. Search scans bounded worker batches until a page fills or history ends.",
+      "Cursors exclude new insertions, not edits to live items. Changed expansion content invalidates its cursor.",
+      "Managed agents must run at the Workbench repository root. Ordinary user CLI access is allowed. No MCP tools.",
+    ].join("\n"),
+  },
   {
     commandOrder: ["stats claims"],
     key: "stats", usage: "wb stats claims [options]", words: ["stats"],

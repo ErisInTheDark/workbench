@@ -21,6 +21,17 @@ import {
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+import { TranscriptQuerySchema } from "./transcript/transcript-query-contract";
+
+test("stored transcript queries cross the worker boundary and preserve invalid-id failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "transcript-query-worker-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    const page = await controller.queryTranscript(TranscriptQuerySchema.parse({ action: "stats" }));
+    assert.equal(page.coverage.threads, 0);
+    await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
+  } finally { await controller.close(); await rm(directory, { recursive: true, force: true }); }
+});
 
 test("worker migration waits for its owner to retain the rollback checkpoint", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));

@@ -44,6 +44,7 @@ import type {
   WorkbenchSearchResponse,
 } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository.ts";
+import type { TranscriptQuery, TranscriptQueryPage } from "./transcript/transcript-query-contract";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation.ts";
 import type {
   WorkbenchGitClaimImportCandidate,
@@ -84,6 +85,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readThreadStateShadowStatus" }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
+  | { type: "queryTranscript"; request: TranscriptQuery }
   | { type: "readThreadContextUsage"; threadId: string }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
   | { type: "replaceSearchProjects"; projects: readonly { id: string; name: string; rootPath: string }[] }
@@ -122,6 +124,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadStateShadowStatus"; status: WorkbenchThreadStateShadowStatus | null }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
+  | { id: number; type: "transcriptQueryResult"; result: { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } }
   | { id: number; type: "threadContextUsage"; snapshot: ThreadContextUsageSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
   | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }

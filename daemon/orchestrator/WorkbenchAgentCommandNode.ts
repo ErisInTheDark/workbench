@@ -12,6 +12,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
+import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
@@ -33,6 +34,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const claimStats = new WorkbenchClaimStatsController({
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
       read: async (request) => await database.readClaimStats(request),
+    });
+    const transcriptCommands = new WorkbenchTranscriptCommandController({
+      projectRoot: context.legacyMigrationProjectRoot,
+      read: async (query) => await database.queryTranscript(query),
     });
     const questionnaires = build.get("questionnaires");
     const subagents = build.get("subagents");
@@ -111,6 +116,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         }, signal);
       },
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
+      executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
@@ -147,6 +153,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchRipgrepController*.ts",
     "daemon/orchestrator/WorkbenchTokenCountController*.ts",
     "daemon/orchestrator/WorkbenchClaimStatsController*.ts",
+    "daemon/orchestrator/WorkbenchTranscriptCommandController*.ts",
+    "daemon/orchestrator/transcript-command-markdown.ts",
     "daemon/lib/workbench/commands/**",
     "daemon/lib/workbench/cli/**",
     "daemon/lib/workbench/thread/WorkbenchThreadRecallController.ts",

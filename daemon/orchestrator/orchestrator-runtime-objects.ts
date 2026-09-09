@@ -118,6 +118,7 @@ export interface OrchestratorBrowseExecution {
 }
 
 export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase {
+  queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   assertReady(): void;
   close(): Promise<void>;
