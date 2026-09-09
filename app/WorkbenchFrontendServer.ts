@@ -27,8 +27,8 @@ export default class WorkbenchFrontendServer {
   private address: HttpServerAddress | null = null;
   private readonly onDiagnostic: (message: string) => void;
   private readonly options: WorkbenchFrontendServerOptions;
-  private readonly retirementFailures: unknown[] = [];
-  private readonly retirements = new Set<Promise<void>>();
+  private readonly retirements = new Map<HttpServer, Promise<void>>();
+  private closing: Promise<void> | null = null;
   private server: HttpServer | null = null;
 
   constructor(options: WorkbenchFrontendServerOptions) {
@@ -46,15 +46,18 @@ export default class WorkbenchFrontendServer {
   }
 
   async start(): Promise<HttpServerAddress> {
+    if (this.closing) throw new Error("Workbench frontend server has closed.");
     if (this.server) throw new Error("Workbench frontend server has already started.");
     const server = this.createServer(this.options.port);
-    const address = await server.start();
     this.server = server;
+    const address = await server.start();
+    if (this.closing) throw new Error("Workbench frontend server closed during startup.");
     this.address = address;
     return address;
   }
 
   async moveToPort(port: number, beforeActivate: () => Promise<void>): Promise<HttpServerAddress> {
+    if (this.closing) throw new Error("Workbench frontend server is closing.");
     const previous = this.server;
     const currentAddress = this.address;
     if (!previous || !currentAddress) throw new Error("Workbench frontend server is not running.");
@@ -84,31 +87,29 @@ export default class WorkbenchFrontendServer {
     return candidateAddress;
   }
 
-  async close() {
-    const server = this.server;
-    this.server = null;
-    this.address = null;
-    const failures: unknown[] = [];
-    if (server) {
-      try {
-        await server.close();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    await Promise.all(this.retirements);
-    failures.push(...this.retirementFailures.splice(0));
-    throwFailures("Workbench frontend listener cleanup failed.", failures);
+  close() {
+    if (this.closing) return this.closing;
+    const servers = new Set([...this.retirements.keys(), ...(this.server ? [this.server] : [])]);
+    // Request force-close from every listener before awaiting any one of them.
+    const closures = [...servers].map(server => server.close({ force: true }));
+    this.closing = Promise.allSettled(closures).then(results => {
+      const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+      throwFailures("Workbench frontend listener cleanup failed.", failures);
+      this.server = null;
+      this.address = null;
+      this.retirements.clear();
+    });
+    return this.closing;
   }
 
   private retire(server: HttpServer) {
-    const retirement = server.close().catch((error: unknown) => {
-      this.retirementFailures.push(error);
-      this.onDiagnostic(`Workbench previous frontend listener failed to close: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    this.retirements.add(retirement);
-    void retirement.finally(() => {
-      this.retirements.delete(retirement);
-    });
+    const retirement = server.close();
+    this.retirements.set(server, retirement);
+    void retirement.then(
+      () => { this.retirements.delete(server); },
+      (error: unknown) => {
+        this.onDiagnostic(`Workbench previous frontend listener failed to close: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
   }
 }

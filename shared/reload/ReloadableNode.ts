@@ -3,7 +3,8 @@
  * Exports:
  * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies. Keywords: reload, lifecycle, access.
  * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics. Keywords: lease, drain, diagnostics.
- * - ReloadableNodeInstance/ReloadableNodeBuild: runtime registration and construction contracts. Keywords: registry, factory, handoff.
+ * - ReloadableNodeHandoff: reversible resource transfer, separate from expirable old-work waits.
+ * - ReloadableNodeInstance/ReloadableNodeBuild: runtime registration, construction and terminal shutdown contracts. Keywords: registry, factory, handoff.
  * - ReloadableNodeOptions/default ReloadableNode: parent-owned reloadable node definition with explicit hostile-boundary sources. Keywords: graph, children, scope, sources, worker, dynamic.
  * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host. Keywords: roots, topology, loader.
  */
@@ -21,16 +22,29 @@ export interface ReloadableNodeRuntimeDrainPending {
   label: string;
 }
 
+export interface ReloadableNodeHandoff {
+  waitForIdle(): Promise<void>;
+  expire(): void;
+  detach(): Promise<unknown> | unknown;
+  resume(): Promise<void> | void;
+  commit(): Promise<void> | void;
+}
+
 export interface ReloadableNodeInstance<TObjects extends object, TNotification> {
   activate?(): Promise<void> | void;
+  deactivate?(): Promise<void> | void;
+  afterCommit?(): void;
+  beginHandoff?(replacement: { isReplacing(scope: string): boolean }): ReloadableNodeHandoff;
   beginRuntimeDrain?(): void;
+  captureReloadState?(): unknown;
   detachForReload?(replacement: { isReplacing(scope: string): boolean }): Promise<unknown> | unknown;
   dispose(reportPhase?: (phase: string) => void): Promise<void> | void;
   expireRuntimeDrain?(): void;
   listRuntimeDrainPending?(): readonly ReloadableNodeRuntimeDrainPending[];
   observeProviderNotification?(notification: TNotification): Promise<void> | void;
   registrations: Partial<TObjects>;
-  start(reportPhase?: (phase: string) => void): Promise<void> | void;
+  shutdown?(): Promise<void> | void;
+  start(reportPhase?: (phase: string) => void, signal?: AbortSignal): Promise<void> | void;
 }
 
 export interface ReloadableNodeBuild<TObjects extends object> {

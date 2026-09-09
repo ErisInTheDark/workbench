@@ -26,7 +26,9 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {
+  afterCommit?(): void;
   beginRuntimeDrain(): void;
+  captureReloadState?(): unknown;
   dispose(reportPhase: (phase: string) => void): Promise<void> | void;
   registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
   observeProviderNotification(notification: OrchestratorProviderNotification): Promise<void> | void;
@@ -42,6 +44,14 @@ export default class WorkbenchCoreFeature implements ReloadableNodeInstance<Orch
 
   beginRuntimeDrain() {
     this.options.beginRuntimeDrain();
+  }
+
+  captureReloadState() {
+    return this.options.captureReloadState?.();
+  }
+
+  afterCommit() {
+    this.options.afterCommit?.();
   }
 
   async dispose(reportPhase: (phase: string) => void = () => undefined) {

@@ -9,6 +9,7 @@ import * as threadBootstrap from "../lib/thread-bootstrap";
 import { getWorkbenchLifecycleTurnId, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
+import type { WorkbenchProjectsPayload } from "workbench-shared/types";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexHealthMonitor from "./CodexHealthMonitor";
@@ -68,7 +69,7 @@ function createRecoveryCapability(
     kind: "turn",
     observeNotification: (notification) => controller.observeNotification(harness, notification),
     observeRequest: (request) => controller.observeRequest(harness, request),
-    recoverAvailable: async () => await controller.recoverAvailable(harness),
+    recoverAvailable: async signal => await controller.recoverAvailable(harness, undefined, undefined, signal),
     resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
   };
 }
@@ -140,9 +141,10 @@ function createWorkbenchCoreFeature(
   transcriptShadowLog: OrchestratorTranscriptShadowLog,
   threadIdentity: OrchestratorRuntimeObjects["threadIdentity"],
   transcriptIdentity: OrchestratorRuntimeObjects["transcriptIdentity"],
+  initialCatalog?: WorkbenchProjectsPayload,
 ) {
   const modules = createModules();
-  const projectCatalog = new WorkbenchProjectCatalogController();
+  const projectCatalog = new WorkbenchProjectCatalogController({ initialSnapshot: initialCatalog });
   const projectSnapshot = new WorkbenchProjectSnapshotController({
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
   });
@@ -378,6 +380,23 @@ function createWorkbenchCoreFeature(
     bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
+    captureReloadState: () => projectCatalog.getCurrentSnapshot(),
+    afterCommit: () => {
+      if (!initialCatalog) return;
+      stats.start();
+      browseSessionCleanup.start();
+      for (const [phase, start] of [
+        ["composer profiles", () => profileStore.start()],
+        ["loaded harness identities", () => harnesses.restoreLoadedIdentities()],
+        ["subagents", () => subagents.start()],
+        ["thread-state shadow", () => threadStateShadow.start()],
+        ["project discovery", () => projectCatalog.readCatalog()],
+      ] as const) {
+        void start().catch((error: unknown) => {
+          logThreadStateWarning(`Core background ${phase} failed: ${error instanceof Error ? error.message.slice(0, 300) : "non-Error rejection"}`);
+        });
+      }
+    },
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("codex health disposal");
@@ -443,6 +462,7 @@ function createWorkbenchCoreFeature(
     },
     registrations,
     start: async (reportPhase) => {
+      if (initialCatalog) return;
       reportPhase("composer profile startup");
       await profileStore.start();
       reportPhase("project discovery");
@@ -465,7 +485,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { get, lease }) => createWorkbenchCoreFeature(
+  create: (context, { get, lease, handoffState }) => createWorkbenchCoreFeature(
     context,
     lease,
     get("reloadDirt"),
@@ -476,6 +496,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("transcriptShadowLog"),
     get("threadIdentity"),
     get("transcriptIdentity"),
+    handoffState as WorkbenchProjectsPayload | undefined,
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",

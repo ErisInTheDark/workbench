@@ -7,19 +7,36 @@ import CodexAppServerRuntime from "./CodexAppServerRuntime";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
+import type CodexAppServer from "./CodexAppServer";
+import { logError } from "./process-helpers";
+
+interface CodexServerHandoff {
+  appServer: CodexAppServer;
+  retire(): Promise<void>;
+}
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "cli",
   children: [CodexBridgeNode],
-  create: (context) => {
-    const runtime = new CodexAppServerRuntime(context);
-    let detached = false;
+  create: (context, build) => {
+    const previous = build.handoffState as CodexServerHandoff | undefined;
+    const runtime = new CodexAppServerRuntime(context, { previousAppServer: previous?.appServer });
+    const reportRetirement = (error: unknown) => {
+      logError("codex-server", `previous process retirement failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+    };
     return {
-      detachForReload: async () => {
-        await runtime.stop();
-        detached = true;
+      afterCommit: () => {
+        void previous?.retire().catch(reportRetirement);
       },
-      dispose: async () => { if (!detached) await runtime.stop(); },
+      beginHandoff: () => ({
+        waitForIdle: async () => {},
+        expire: () => {},
+        detach: () => ({ appServer: runtime.appServer, retire: () => runtime.stop() } satisfies CodexServerHandoff),
+        resume: () => {},
+        commit: () => runtime.stop(),
+      }),
+      dispose: () => runtime.stop(),
+      shutdown: () => runtime.stop(),
       registrations: { codexAppServer: runtime },
       start: () => undefined,
     };

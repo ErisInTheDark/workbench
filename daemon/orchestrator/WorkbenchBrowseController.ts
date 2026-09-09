@@ -1,4 +1,5 @@
 /*
+ * Keywords: browse, cancellation, generation, HTTP, results, reload.
  * Exports:
  * - default WorkbenchBrowseController: own command tracking, cancellation, session access, HTTP adaptation, result-drain coordination, and reload state. Keywords: browse, orchestrator, controller, cancel, streaming, result, reload.
  * - WorkbenchBrowseIdentityPort: map declared public targets and native session results without touching browser payloads.
@@ -70,6 +71,7 @@ function waitForResponseDrain(response: http.ServerResponse, signal: AbortSignal
 }
 
 async function writeResponse(response: http.ServerResponse, upstream: Response, signal: AbortSignal) {
+  if (signal.aborted || response.writableEnded || response.destroyed) return;
   response.statusCode = upstream.status;
   for (const [name, value] of upstream.headers) response.setHeader(name, value);
   if (!upstream.body) {
@@ -82,7 +84,7 @@ async function writeResponse(response: http.ServerResponse, upstream: Response, 
   try {
     while (!signal.aborted) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done || signal.aborted) break;
       if (!response.write(Buffer.from(value))) {
         await waitForResponseDrain(response, signal);
       }
@@ -112,13 +114,14 @@ function sendHttpError(response: http.ServerResponse, error: unknown) {
 
 export default class WorkbenchBrowseController {
   private acceptingCommands = true;
+  private generation = new AbortController();
   private readonly activeCommands = new Set<Promise<void>>();
   private readonly activeHttpRequests = new Map<AbortController, Promise<void>>();
   private readonly requestHandler: WorkbenchBrowseRequestHandlerPort;
-  private readonly results: WorkbenchBrowseResultSink;
+  private readonly results: WorkbenchBrowseResultSink & { expire?(): void; resume?(): void };
 
   constructor(
-    results: WorkbenchBrowseResultSink,
+    results: WorkbenchBrowseResultSink & { expire?(): void; resume?(): void },
     runtime: WorkbenchBrowseRuntime = new WorkbenchBrowseRuntime(),
     requestHandler: WorkbenchBrowseRequestHandlerPort = new WorkbenchBrowseRequestHandler(results, runtime),
     private readonly identity?: WorkbenchBrowseIdentityPort,
@@ -128,29 +131,38 @@ export default class WorkbenchBrowseController {
   }
 
   async cleanupStaleInactiveSessions(options: Parameters<WorkbenchBrowseRequestHandler["findStaleInactiveSessionStops"]>[0]) {
+    const signal = this.generation.signal;
     const stopRequests = await this.requestHandler.findStaleInactiveSessionStops(options);
+    signal.throwIfAborted();
     for (const stopRequest of stopRequests) {
-      await this.runCommand(() => this.requestHandler.controlSession(stopRequest));
+      signal.throwIfAborted();
+      await this.runCommand(ownedSignal => this.requestHandler.controlSession(stopRequest, ownedSignal), signal);
     }
   }
 
   async listSessions(request: WorkbenchBrowseSessionListRequest, signal?: AbortSignal) {
-    return await this.runCommand(async () => {
-      const result = await this.requestHandler.listSessions(await this.nativeTarget(request), signal);
+    return await this.runCommand(async ownedSignal => {
+      const native = await this.nativeTarget(request);
+      ownedSignal.throwIfAborted();
+      const result = await this.requestHandler.listSessions(native, ownedSignal);
+      ownedSignal.throwIfAborted();
       if (!this.identity) return result;
       return { ...result, sessions: await Promise.all(result.sessions.map((session) => this.publicSession(session))) };
-    });
+    }, signal);
   }
 
   async controlSession(request: WorkbenchBrowseSessionControlRequest, signal?: AbortSignal) {
-    return await this.runCommand(async () => {
-      const result = await this.requestHandler.controlSession(await this.nativeTarget(request), signal);
+    return await this.runCommand(async ownedSignal => {
+      const native = await this.nativeTarget(request);
+      ownedSignal.throwIfAborted();
+      const result = await this.requestHandler.controlSession(native, ownedSignal);
+      ownedSignal.throwIfAborted();
       return { ...result, session: result.session ? await this.publicSession(result.session) : null };
-    });
+    }, signal);
   }
 
   async executeBrowseRequest(body: Buffer, signal: AbortSignal) {
-    return await this.runCommand(() => this.prepareBrowseRequest(body, signal));
+    return await this.runCommand(ownedSignal => this.prepareBrowseRequest(body, ownedSignal), signal);
   }
 
   private async prepareBrowseRequest(body: Buffer, signal: AbortSignal) {
@@ -178,7 +190,7 @@ export default class WorkbenchBrowseController {
     return await this.requestHandler.handle(
       body,
       signal,
-      (task) => this.runCommand(task),
+      (task) => this.runCommand(task, signal),
     );
   }
 
@@ -265,26 +277,51 @@ export default class WorkbenchBrowseController {
   }
 
   resume() {
+    if (this.generation.signal.aborted) this.generation = new AbortController();
+    this.results.resume?.();
     this.acceptingCommands = true;
+  }
+
+  expire() {
+    this.beginDrain();
+    this.generation.abort(new Error("Browse work was cancelled by a user-authorized reload."));
+    this.results.expire?.();
   }
 
   async waitForIdle() {
     await Promise.allSettled([
       ...this.activeCommands,
-      ...this.activeHttpRequests.values(),
+      ...[...this.activeHttpRequests].filter(([controller]) => !controller.signal.aborted).map(([, completion]) => completion),
     ]);
     await this.requestHandler.waitForIdle();
     await this.results.waitForIdle();
   }
 
-  async runCommand<TValue>(task: () => Promise<TValue>): Promise<TValue> {
+  async runCommand<TValue>(task: (signal: AbortSignal) => Promise<TValue>, callerSignal?: AbortSignal): Promise<TValue> {
     if (!this.acceptingCommands) throw new Error("Browse controller is draining for reload.");
+    const signal = callerSignal ? AbortSignal.any([callerSignal, this.generation.signal]) : this.generation.signal;
+    signal.throwIfAborted();
     let release = () => undefined;
     const active = new Promise<void>((resolve) => { release = resolve; });
     this.activeCommands.add(active);
+    let onAbort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
     try {
-      return await task();
+      const work = Promise.resolve().then(() => {
+        signal.throwIfAborted();
+        return task(signal);
+      }).catch((error: unknown) => {
+        if (signal.aborted && error !== signal.reason) {
+          console.warn(`[browse] retired command failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+        }
+        throw error;
+      });
+      return await Promise.race([work, cancelled]);
     } finally {
+      signal.removeEventListener("abort", onAbort);
       release();
       this.activeCommands.delete(active);
     }
@@ -300,9 +337,14 @@ export default class WorkbenchBrowseController {
       return;
     }
     const controller = bindRequestAbort(request, response);
+    const cancelled = () => sendHttpError(response, controller.signal.reason);
+    controller.signal.addEventListener("abort", cancelled, { once: true });
     const completion = operation(controller.signal)
       .catch((error: unknown) => { sendHttpError(response, error); })
-      .finally(() => { this.activeHttpRequests.delete(controller); });
+      .finally(() => {
+        controller.signal.removeEventListener("abort", cancelled);
+        this.activeHttpRequests.delete(controller);
+      });
     this.activeHttpRequests.set(controller, completion);
     void completion;
   }

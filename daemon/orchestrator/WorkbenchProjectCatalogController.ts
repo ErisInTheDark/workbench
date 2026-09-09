@@ -42,6 +42,7 @@ type ResolveProjectFromCatalog = (
 type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
 
 export interface WorkbenchProjectCatalogControllerOptions {
+  initialSnapshot?: WorkbenchProjectsPayload;
   cacheTtlMs?: number;
   createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
   discoverProjects?: typeof discoverProjects;
@@ -149,6 +150,7 @@ export default class WorkbenchProjectCatalogController {
   private readonly resolveProjectFromCatalog: ResolveProjectFromCatalog;
 
   constructor({
+    initialSnapshot,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     createWatcher = defaultCreateWatcher,
     discoverProjects: discoverProjectOptions = discoverProjects,
@@ -166,6 +168,9 @@ export default class WorkbenchProjectCatalogController {
     this.projectsRootPath = projectsRootPath;
     this.resolveProjectByIdFromCatalog = resolveProjectByIdFromCatalog;
     this.resolveProjectFromCatalog = resolveProjectFromCatalog;
+    if (initialSnapshot) {
+      this.catalog = { data: initialSnapshot.data, payload: initialSnapshot, serialized: JSON.stringify(initialSnapshot) };
+    }
     this.projectsWatcher = this.watchProjects();
   }
 

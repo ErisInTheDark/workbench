@@ -51,6 +51,7 @@ import type {
 } from "./stats/WorkbenchStatsImportRepository";
 
 export interface WorkbenchDatabaseControllerOptions {
+  beforeMigration?(backupPath: string): void;
   databasePath: string;
   workerUrl?: URL;
 }
@@ -68,7 +69,15 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+interface DatabaseSuspension {
+  admission: Promise<void>;
+  closed: Promise<void>;
+  release(): void;
+  retire(): void;
+}
+
 export default class WorkbenchDatabaseController {
+  readonly #beforeMigration: WorkbenchDatabaseControllerOptions["beforeMigration"];
   readonly #databasePath: string;
   readonly #worker: Worker;
   readonly #pending = new Map<number, PendingRequest>();
@@ -76,8 +85,11 @@ export default class WorkbenchDatabaseController {
   #state: WorkbenchDatabaseControllerState = "starting";
   #failure: WorkbenchDatabaseFailure | null = null;
   #startPromise: Promise<WorkbenchDatabaseInventory> | null = null;
+  #suspension: DatabaseSuspension | null = null;
+  #termination: Promise<number> | null = null;
 
-  constructor({ databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
+  constructor({ beforeMigration, databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
+    this.#beforeMigration = beforeMigration;
     this.#databasePath = databasePath;
     const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
     const transformTypes = "--experimental-transform-types";
@@ -108,15 +120,84 @@ export default class WorkbenchDatabaseController {
     throw new WorkbenchDatabaseFailure(`Workbench database is not ready: ${this.#state}`);
   }
 
-  start() {
-    if (this.#state === "failed") return Promise.reject(this.#failure);
+  start(): Promise<WorkbenchDatabaseInventory> {
+    if (this.#failure) return Promise.reject(this.#failure);
     if (this.#state === "closed") return Promise.reject(new WorkbenchDatabaseFailure("Workbench database is closed"));
-    this.#startPromise ??= this.#request({ type: "initialize", databasePath: this.#databasePath }).then((response) => {
+    if (this.#suspension) return this.#suspension.admission.then(() => this.start());
+    this.#startPromise ??= this.#request({
+      type: "initialize", databasePath: this.#databasePath, acknowledgeMigration: !!this.#beforeMigration,
+    }).then((response) => {
       if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database startup response: ${response.type}`);
       this.#state = "ready";
       return response.inventory;
     });
     return this.#startPromise;
+  }
+
+  async suspend() {
+    if (this.#suspension) return await this.#suspension.closed;
+    await this.start();
+    if (this.#suspension) return await this.#suspension.closed;
+    let release!: () => void;
+    let rejectAdmission!: (error: Error) => void;
+    const admission = new Promise<void>((resolve, reject) => { release = resolve; rejectAdmission = reject; });
+    // The node can retire an unused gate. Individual callers still receive its rejection.
+    void admission.catch(() => {});
+    this.#state = "suspended";
+    const closed = this.#request({ type: "suspend" }).then((response) => {
+      if (response.type !== "suspended") throw new WorkbenchDatabaseFailure(`Unexpected database suspension response: ${response.type}`);
+    }).catch((error: unknown) => {
+      this.#fail(error);
+      throw error;
+    });
+    this.#suspension = {
+      admission, closed, release,
+      retire: () => rejectAdmission(new WorkbenchDatabaseFailure("Suspended database admission was retired.")),
+    };
+    await closed;
+  }
+
+  retireSuspendedAdmission() {
+    this.#suspension?.retire();
+  }
+
+  async resume(restoreBackupPath?: string) {
+    const suspension = this.#suspension;
+    if (!suspension) {
+      this.assertReady();
+      return;
+    }
+    await suspension.closed;
+    this.#state = "starting";
+    this.#startPromise = this.#request({ type: "resume", restoreBackupPath }).then((response) => {
+      if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database resume response: ${response.type}`);
+      this.#state = "ready";
+      this.#failure = null;
+      this.#suspension = null;
+      suspension.release();
+      return response.inventory;
+    }).catch((error: unknown) => {
+      if (error instanceof WorkbenchDatabaseRequestFailure) {
+        this.#state = "suspended";
+        this.#failure = new WorkbenchDatabaseFailure(error.message);
+        suspension.release();
+      } else {
+        this.#fail(error);
+      }
+      throw error;
+    });
+    await this.#startPromise;
+  }
+
+  async abortPreparation() {
+    if (this.#state === "closed") { await this.#termination; return; }
+    this.#state = "closed";
+    const error = new WorkbenchDatabaseFailure("Candidate database preparation was retired.");
+    for (const pending of this.#pending.values()) pending.reject(error);
+    this.#pending.clear();
+    this.#suspension?.release();
+    this.#suspension = null;
+    await (this.#termination ??= this.#worker.terminate());
   }
 
   async getInventory() {
@@ -400,7 +481,14 @@ export default class WorkbenchDatabaseController {
   }
 
   async close() {
-    if (this.#state === "closed") return;
+    if (this.#state === "closed") { await this.#termination; return; }
+    if (this.#suspension) {
+      try { await this.#suspension.closed; }
+      catch (error) {
+        if (!this.#failure) throw error;
+        // The suspension caller owns this failure; close still terminates its worker.
+      }
+    }
     if (this.#state === "starting" && this.#startPromise) {
       try { await this.#startPromise; }
       catch (error) {
@@ -410,21 +498,26 @@ export default class WorkbenchDatabaseController {
     }
     if (this.#state === "starting" && this.#startPromise === null) {
       this.#state = "closed";
-      await this.#worker.terminate();
+      await (this.#termination ??= this.#worker.terminate());
       return;
     }
     if (this.#state === "failed") {
-      await this.#worker.terminate();
+      await (this.#termination ??= this.#worker.terminate());
       this.#state = "closed";
       return;
     }
     const response = await this.#request({ type: "close" });
     if (response.type !== "closed") throw new WorkbenchDatabaseFailure(`Unexpected database close response: ${response.type}`);
     this.#state = "closed";
-    await this.#worker.terminate();
+    this.#suspension?.release();
+    this.#suspension = null;
+    await (this.#termination ??= this.#worker.terminate());
   }
 
-  #request(request: WorkbenchDatabaseRequestPayload): Promise<WorkbenchDatabaseResponse> {
+  async #request(request: WorkbenchDatabaseRequestPayload): Promise<WorkbenchDatabaseResponse> {
+    if (this.#suspension && request.type !== "suspend" && request.type !== "resume" && request.type !== "close") {
+      await this.#suspension.admission;
+    }
     if (this.#state === "failed") return Promise.reject(this.#failure);
     if (this.#state === "closed") return Promise.reject(new WorkbenchDatabaseFailure("Workbench database is closed"));
     const id = this.#nextRequestId++;
@@ -437,6 +530,16 @@ export default class WorkbenchDatabaseController {
   #settle(response: WorkbenchDatabaseResponse) {
     const pending = this.#pending.get(response.id);
     if (!pending) return;
+    if (response.type === "migrationCheckpoint") {
+      try {
+        if (!this.#beforeMigration) throw new Error("Database requested an unowned migration checkpoint.");
+        this.#beforeMigration(response.backupPath);
+        this.#worker.postMessage({ id: response.id, type: "acknowledgeMigration" } satisfies WorkbenchDatabaseRequest);
+      } catch (error) {
+        this.#fail(error);
+      }
+      return;
+    }
     this.#pending.delete(response.id);
     if (response.type === "requestFailure") {
       pending.reject(new WorkbenchDatabaseRequestFailure(response.message));
@@ -456,6 +559,8 @@ export default class WorkbenchDatabaseController {
     const message = error instanceof Error ? error.message : String(error);
     this.#failure = error instanceof WorkbenchDatabaseFailure ? error : new WorkbenchDatabaseFailure(message.slice(0, 1_000));
     this.#state = "failed";
+    this.#suspension?.release();
+    this.#suspension = null;
     for (const pending of this.#pending.values()) pending.reject(this.#failure);
     this.#pending.clear();
   }

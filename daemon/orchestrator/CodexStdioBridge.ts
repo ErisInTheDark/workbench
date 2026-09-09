@@ -150,6 +150,7 @@ type PendingInternalResponse = {
   threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
   toolContext?: {
+    sent?: boolean;
     threadId: string;
     turnId: string;
     item: WorkbenchToolOutput;
@@ -176,10 +177,12 @@ export type CodexStdioBridgeOptions = {
   prepareThreadConfiguration?: (
     thread: Thread,
     requests: { resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest },
+    signal: AbortSignal,
   ) => Promise<{ resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest }>;
   prepareTurnStart?: (
     message: JsonRpcRequest,
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+    signal: AbortSignal,
   ) => Promise<void>;
   questionnaires?: Pick<WorkbenchQuestionnaireController, "list" | "respond">;
   recordSqliteTranscript?: (
@@ -224,6 +227,7 @@ export type CodexStdioBridgeReloadState = {
   initializeResult: unknown;
   unmaterializedThreadIds?: Set<string>;
   pendingResponses: Map<number, PendingResponse>;
+  retiringResponses?: Map<number, PendingResponse>;
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
   transcriptActiveTurns?: Map<string, string>;
@@ -343,30 +347,6 @@ function isJsonRpcServerRequest(message: unknown): message is ServerRequest {
     && "params" in message
     && !("result" in message)
     && !("error" in message);
-}
-
-function withTimeout<TValue>(promise: Promise<TValue>, timeoutMs: number | undefined, message: string) {
-  if (timeoutMs === undefined) {
-    return promise;
-  }
-
-  return new Promise<TValue>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(message));
-    }, timeoutMs);
-    timer.unref();
-
-    void promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 function asRecord(value: unknown) {
@@ -938,7 +918,8 @@ export default class CodexStdioBridge {
   private readonly storageRoot: string;
   private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
-  private readonly threadWindowLoader: CodexThreadWindowLoader;
+  private generation = new AbortController();
+  private readonly transcriptPersistence = new Set<Promise<unknown>>();
   private threadPageReadsPreparedForReload = false;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
   private transcriptStoreReloadPending = false;
@@ -947,12 +928,13 @@ export default class CodexStdioBridge {
   private commandQueue: Promise<unknown> = Promise.resolve();
   private readonly pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   private readonly pendingResponses: Map<number, PendingResponse>;
+  private readonly retiringResponses: Map<number, PendingResponse>;
   private readonly requestIdAllocator: RequestIdAllocator;
   private transcriptQueue: Promise<void> = Promise.resolve();
   private readonly transcriptTasks = new Set<Promise<void>>();
   private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
   private readonly pendingCompatibilityWindowImports = new Map<string, PendingCompatibilityWindowImport>();
-  private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
+  private transcriptInstrumentationTimer: NodeJS.Timeout | null = null;
   private nextTranscriptTaskId = 1;
   private transcriptLastLogAt: number | null = null;
   private transcriptSqliteFailureReported = false;
@@ -992,29 +974,27 @@ export default class CodexStdioBridge {
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
     this.transcriptShadowLog = transcriptShadowLog;
-    this.threadWindowLoader = new CodexThreadWindowLoader(async (request) => {
-      const dispatch = await this.dispatchRequest({
-        ...request,
-        [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
-      }, { internal: true });
-      if (!dispatch.response) throw new Error(`${request.method ?? "Codex request"} did not create an internal response.`);
-      return await dispatch.response;
-    });
-    this.fileChanges = new CodexFileChangeController(initialState?.fileChanges ?? {
+    this.fileChanges = new CodexFileChangeController(structuredClone(initialState?.fileChanges ?? {
       items: initialState?.fileChangeFailureMarkers ?? new Map(),
       turnCursors: initialState?.fileChangeTurnCursors ?? new Map(),
-    });
+    }));
     this.initializeResult = initialState?.initializeResult ?? null;
-    this.pendingResponses = initialState?.pendingResponses ?? new Map();
-    this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
+    this.pendingResponses = new Map([...initialState?.pendingResponses ?? []].map(([id, pending]) => [
+      id,
+      isPendingInternalResponse(pending) && pending.toolContext
+        ? { ...pending, toolContext: structuredClone(pending.toolContext) }
+        : pending,
+    ]));
+    this.retiringResponses = new Map(initialState?.retiringResponses ?? (restartingAppServer ? initialState?.pendingResponses : undefined));
+    this.pendingUserInputRequests = new Map(initialState?.pendingUserInputRequests);
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
-    this.transcriptActiveTurns = initialState?.transcriptActiveTurns ?? new Map();
-    this.transcriptThreadContexts = initialState?.transcriptThreadContexts ?? new Map();
+    this.transcriptActiveTurns = new Map(initialState?.transcriptActiveTurns);
+    this.transcriptThreadContexts = structuredClone(initialState?.transcriptThreadContexts ?? new Map());
     if (restartingAppServer) {
       for (const context of this.transcriptThreadContexts.values()) delete context.usageContext;
     }
-    this.transcriptSteers = initialState?.transcriptSteers ?? new Map();
-    this.unmaterializedThreadIds = initialState?.unmaterializedThreadIds ?? new Set();
+    this.transcriptSteers = structuredClone(initialState?.transcriptSteers ?? new Map());
+    this.unmaterializedThreadIds = new Set(initialState?.unmaterializedThreadIds);
     this.transcriptRecording = new CodexTranscriptRecordingController({
       ...(recordSqliteTranscript ? { recordSqlite: async (
         observations: readonly WorkbenchTranscriptObservation[],
@@ -1034,8 +1014,19 @@ export default class CodexStdioBridge {
     });
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     if (restartingAppServer) {
-      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
+      // A private candidate must not settle callbacks still owned by the retained bridge.
+      this.pendingResponses.clear();
+      this.pendingUserInputRequests.clear();
+      this.transcriptActiveTurns.clear();
+      this.unmaterializedThreadIds.clear();
+      this.initializeResult = null;
+      this.upstreamInitialized = false;
     }
+    this.startTranscriptInstrumentation();
+  }
+
+  private startTranscriptInstrumentation() {
+    if (this.transcriptInstrumentationTimer) return;
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation();
     }, CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS);
@@ -1060,7 +1051,8 @@ export default class CodexStdioBridge {
 
   stop() {
     this.beginStopping();
-    clearInterval(this.transcriptInstrumentationTimer);
+    if (this.transcriptInstrumentationTimer) clearInterval(this.transcriptInstrumentationTimer);
+    this.transcriptInstrumentationTimer = null;
     this.fileChanges.clear();
     this.transcriptSteers.clear();
   }
@@ -1087,15 +1079,11 @@ export default class CodexStdioBridge {
     await this.waitForIdle();
   }
 
-  async prepareForReload(options: CodexStdioBridgeReloadOptions = {}) {
+  async prepareForReload(_options: CodexStdioBridgeReloadOptions = {}) {
     if (this.threadPageReadsPreparedForReload) return;
     this.threadPageReads.beginDrain();
     try {
-      await withTimeout(
-        this.threadPageReads.waitForIdle(),
-        options.idleTimeoutMs,
-        "Codex bridge is busy with active thread-page reads; retry reload after those reads settle.",
-      );
+      await this.threadPageReads.waitForIdle();
       this.threadPageReadsPreparedForReload = true;
     } catch (error) {
       this.threadPageReads.resumeAfterFailedReload();
@@ -1104,44 +1092,44 @@ export default class CodexStdioBridge {
   }
 
   resumeAfterReloadFailure() {
-    if (!this.acceptingWork) return;
+    const expired = this.generation.signal.aborted;
+    if (expired) this.generation = new AbortController();
+    this.acceptingWork = true;
     this.threadPageReadsPreparedForReload = false;
     this.threadPageReads.resumeAfterFailedReload();
+    this.transcriptStore?.resumeAfterFailedReload();
+    this.startTranscriptInstrumentation();
+    if (expired) this.resumePendingToolContexts();
+  }
+
+  expireForReload() {
+    this.acceptingWork = false;
+    this.threadPageReads.expire();
+    this.generation.abort(new Error("Codex bridge generation retired."));
+    this.upstreamInitializePromise = null;
   }
 
   async detachForReload(options: CodexStdioBridgeReloadOptions = {}): Promise<CodexStdioBridgeReloadState> {
     await this.prepareForReload(options);
-    try {
-      await withTimeout(
-        this.waitForIdle(),
-        options.idleTimeoutMs,
-        "Codex bridge is busy with active work; retry reload after the current bridge work settles.",
-      );
-    } catch (error) {
-      this.resumeAfterReloadFailure();
-      throw error;
-    }
+    await this.waitForIdle();
     this.acceptingWork = false;
-    clearInterval(this.transcriptInstrumentationTimer);
-    if (options.restartingAppServer) {
-      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
-      await this.waitForIdle();
-    }
+    if (this.transcriptInstrumentationTimer) clearInterval(this.transcriptInstrumentationTimer);
+    this.transcriptInstrumentationTimer = null;
     if (this.transcriptStore) {
       await this.transcriptStore.dispose();
-      this.transcriptStore = null;
     }
     return {
-      fileChanges: this.fileChanges.state,
-      initializeResult: this.initializeResult,
-      pendingResponses: this.pendingResponses,
-      pendingUserInputRequests: this.pendingUserInputRequests,
+      fileChanges: structuredClone(this.fileChanges.state),
+      initializeResult: options.restartingAppServer ? null : this.initializeResult,
+      pendingResponses: options.restartingAppServer ? new Map() : new Map(this.pendingResponses),
+      retiringResponses: options.restartingAppServer ? new Map(this.pendingResponses) : new Map(this.retiringResponses),
+      pendingUserInputRequests: options.restartingAppServer ? new Map() : new Map(this.pendingUserInputRequests),
       requestIdAllocator: this.requestIdAllocator,
-      transcriptActiveTurns: this.transcriptActiveTurns,
-      transcriptSteers: this.transcriptSteers,
-      transcriptThreadContexts: this.transcriptThreadContexts,
-      unmaterializedThreadIds: this.unmaterializedThreadIds,
-      upstreamInitialized: this.upstreamInitialized,
+      transcriptActiveTurns: options.restartingAppServer ? new Map() : new Map(this.transcriptActiveTurns),
+      transcriptSteers: structuredClone(this.transcriptSteers),
+      transcriptThreadContexts: structuredClone(this.transcriptThreadContexts),
+      unmaterializedThreadIds: options.restartingAppServer ? new Set() : new Set(this.unmaterializedThreadIds),
+      upstreamInitialized: options.restartingAppServer ? false : this.upstreamInitialized,
     };
   }
 
@@ -1196,12 +1184,14 @@ export default class CodexStdioBridge {
       return;
     }
 
-    this.upstreamInitializePromise = (async () => {
-      const dispatch = await this.dispatchRequest(initializeMessage, { internal: true });
+    const signal = this.generation.signal;
+    const initialization = (async () => {
+      const dispatch = await this.dispatchRequest(initializeMessage, { internal: true, signal });
       if (!dispatch.response) {
         throw new Error("Codex initialize request did not create an internal response.");
       }
       const response = await dispatch.response;
+      signal.throwIfAborted();
       if (response.error) {
         throw new Error(response.error.message);
       }
@@ -1211,11 +1201,12 @@ export default class CodexStdioBridge {
       this.upstreamInitialized = true;
       this.onInitialized();
     })();
+    this.upstreamInitializePromise = initialization;
 
     try {
-      await this.upstreamInitializePromise;
+      await initialization;
     } finally {
-      this.upstreamInitializePromise = null;
+      if (this.upstreamInitializePromise === initialization) this.upstreamInitializePromise = null;
     }
   }
 
@@ -1408,34 +1399,34 @@ export default class CodexStdioBridge {
     const turns = await loader.recoverThread(thread, async ({ turn, previousCursor }) => {
       signal?.throwIfAborted();
       await this.captureTranscript(`sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
-        signal?.throwIfAborted();
-        const normalized = (await store.externalizeInlineImages(nativeThreadId, turn)).value;
-        await this.transcriptRecording.recordProviderFact({
+        const normalized = (await this.persistTranscript(() => store.externalizeInlineImages(nativeThreadId, turn))).value;
+        await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
           observations: [
             createCodexTranscriptProviderThreadObservation(nativeThreadId, context),
             createCodexTranscriptProviderTurnScopeObservation({ context, threadId: nativeThreadId, turn: normalized }),
           ],
           recordLegacy: () => store.recordProviderTurnPage(thread, turn, previousCursor),
-        });
+        }));
       }, { requireSqlite: true });
     }, async (catalog) => {
+      signal?.throwIfAborted();
       await this.captureTranscript(`sqlite-recovery-catalog:${threadId}`, async () => {
-        signal?.throwIfAborted();
-        await this.transcriptRecording.recordProviderFact({
-          observations: await this.createSqliteProviderWindowObservations({ ...thread, turns: catalog }),
+        const observations = this.createSqliteProviderWindowObservations({ ...thread, turns: catalog }, context);
+        await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
+          observations,
           recordLegacy: () => store.recordProviderTurnCatalog(thread, catalog),
-        });
+        }));
       }, { requireSqlite: true });
     });
     // All full pages have settled. Only compact catalogue metadata remains in memory.
+    signal?.throwIfAborted();
     await this.captureTranscript(`sqlite-recovery-complete:${threadId}`, async () => {
-      signal?.throwIfAborted();
       const catalog = { ...thread, turns };
-      const observations = await this.createSqliteProviderWindowObservations(catalog);
-      await this.transcriptRecording.recordProviderFact({
+      const observations = this.createSqliteProviderWindowObservations(catalog, context);
+      await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
         observations, recoveryBoundary,
         recordLegacy: () => store.recordProviderTurnCatalog(thread, turns),
-      });
+      }));
     }, { requireSqlite: true });
     this.transcriptShadowLog?.write({
       event: "capture-recovery-completed",
@@ -1553,10 +1544,10 @@ export default class CodexStdioBridge {
           if (this.identities) {
             const native = { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: threadId };
             if (!this.identities.threads.findNativeThread(native)) {
-              await this.identities.threads.observe({ ...context, native });
+              await this.persistTranscript(() => this.identities!.threads.observe({ ...context, native }));
             }
           }
-          await this.transcriptRecording.importCompatibilityWindow(async () => [window]);
+          await this.persistTranscript(() => this.transcriptRecording.importCompatibilityWindow(async () => [window]));
         } catch (error) {
           // Usage import has its own durable failed-work state, not live shadow failure semantics.
           throw new Error(error instanceof Error ? error.message : "Usage import settlement failed", { cause: error });
@@ -1579,7 +1570,7 @@ export default class CodexStdioBridge {
       return {
         id: requestId,
         result: await this.threadPageReads.run(
-          () => this.readThreadPage(message),
+          signal => this.readThreadPage(message, signal),
           { key: threadPageReadKey(message) },
         ),
       };
@@ -1677,6 +1668,7 @@ export default class CodexStdioBridge {
   }
 
   private queueToolContext(context: NonNullable<PendingInternalResponse["toolContext"]>) {
+    context.sent = false;
     const id = this.nextUpstreamRequestId();
     let pending!: PendingInternalResponse;
     const response = new Promise<JsonRpcResponse>((resolve, reject) => {
@@ -1688,26 +1680,44 @@ export default class CodexStdioBridge {
       // Register before filesystem work: resolution can arrive while analysis is still preparing.
       this.pendingResponses.set(id, pending);
     });
+    this.prepareQueuedToolContext(id, pending);
+    return response;
+  }
+
+  private prepareQueuedToolContext(id: number, pending: PendingInternalResponse) {
+    const signal = this.generation.signal;
     void this.enqueueCommand(async () => {
       try {
         await this.prepareToolContext(pending);
       } catch (error) {
+        if (signal.aborted) return;
         if (this.pendingResponses.get(id) !== pending) return;
         this.pendingResponses.delete(id);
         pending.resolve(await this.settleToolContext(pending, {
           id, error: { code: -32000, message: sanitizeTranscriptErrorMessage(error) },
         }));
       }
+    }).catch(error => {
+      if (error !== signal.reason) logError("codex-tool-context", sanitizeTranscriptErrorMessage(error));
     });
-    return response;
+  }
+
+  resumePendingToolContexts() {
+    for (const [id, pending] of this.pendingResponses) {
+      if (isPendingInternalResponse(pending) && pending.toolContext?.sent === false) {
+        this.prepareQueuedToolContext(id, pending);
+      }
+    }
   }
 
   private async prepareToolContext(pending: PendingInternalResponse) {
+    const signal = this.generation.signal;
     const context = pending.toolContext!;
     const { threadId, turnId, patch } = context;
     const read = await this.dispatchManagedProviderRequest({
       method: "thread/read", params: { threadId, includeTurns: false },
-    });
+    }, signal);
+    signal.throwIfAborted();
     if (read.error) throw new Error(getJsonRpcErrorMessage(read) ?? "Could not read the originating thread.");
     const thread = asRecord(read.result)?.thread as Thread | undefined;
     if (!thread || thread.id !== threadId) throw new Error("Passive context could not read its originating thread.");
@@ -1716,10 +1726,12 @@ export default class CodexStdioBridge {
         id: patch.itemId, type: "fileChange" as const, status: "failed" as const, changes: [],
       };
       const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex patch recovery" });
+      signal.throwIfAborted();
       const findings = await this.fileChanges.analyse({
         cwd: thread.cwd, roots: resolution?.project.roots.map((root) => root.rootPath) ?? [],
         threadId, turnId, item: { ...attempt, status: "failed", workbenchPolicy: "automaticEscalation" },
       });
+      signal.throwIfAborted();
       context.item = {
         ...context.item,
         output: findings.recoveryText + (attempt.changes.length ? "" : "\nAttempted changes were unavailable. Re-read all intended targets before repairing anything."),
@@ -1730,7 +1742,8 @@ export default class CodexStdioBridge {
     const turns = await this.dispatchManagedProviderRequest({
       method: "thread/turns/list",
       params: { threadId, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
-    });
+    }, signal);
+    signal.throwIfAborted();
     if (turns.error) throw new Error(getJsonRpcErrorMessage(turns) ?? "Could not read the active turn.");
     const data = asRecord(turns.result)?.data;
     const active = Array.isArray(data) ? this.readManagedActiveTurn(thread, data as Turn[]) : null;
@@ -1744,38 +1757,45 @@ export default class CodexStdioBridge {
       params: { threadId, items: [{ type: "function_call_output", id, name, namespace, output }] },
     };
     await this.captureTranscript("client-request:thread/inject_items", () => (
-      this.ensureTranscriptStore().recordClientRequest(pending.upstreamRequest, undefined, turnId)
+      this.persistTranscript(() => this.ensureTranscriptStore().recordClientRequest(pending.upstreamRequest, undefined, turnId))
     ), { propagateFailure: true });
+    signal.throwIfAborted();
     this.send(pending.upstreamRequest);
+    context.sent = true;
   }
 
   private async recordPatchFindings(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
     this.fileChanges.remember(threadId, turnId, item);
     this.onNotification({ method: "item/completed", params: { threadId, turnId, item } });
-    await this.captureTranscript("workbench:patch/findings", () => this.transcriptRecording.recordWorkbenchMutation({
+    await this.captureTranscript("workbench:patch/findings", () => this.persistTranscript(() => this.transcriptRecording.recordWorkbenchMutation({
       observations: [createCodexTranscriptProviderItemObservation({
         threadId, turnId, item, lifecycle: "completed", observedAt: Date.now(),
       })],
       recordLegacy: () => this.ensureTranscriptStore().recordWorkbenchFileChange(threadId, turnId, item),
-    }), { propagateFailure: true });
+    })), { propagateFailure: true });
   }
 
   private async analyseFailedPatch(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
+    const signal = this.generation.signal;
     try {
       const response = await this.dispatchManagedProviderRequest({
         method: "thread/read", params: { threadId, includeTurns: false },
-      });
+      }, signal);
+      signal.throwIfAborted();
       const thread = asRecord(response.result)?.thread as Thread | undefined;
       if (response.error || thread?.id !== threadId) {
         throw new Error(getJsonRpcErrorMessage(response) ?? "Failed patch has no readable originating thread.");
       }
       const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex patch findings" });
+      signal.throwIfAborted();
       const findings = await this.fileChanges.analyse({
         cwd: thread.cwd, roots: resolution?.project.roots.map((root) => root.rootPath) ?? [],
         threadId, turnId, item,
       });
+      signal.throwIfAborted();
       await this.recordPatchFindings(threadId, turnId, findings.item);
     } catch (failure) {
+      if (signal.aborted) return;
       const detail = sanitizeTranscriptErrorMessage(failure);
       logError("codex-patch-findings", detail);
       await this.recordPatchFindings(threadId, turnId, {
@@ -1806,17 +1826,17 @@ export default class CodexStdioBridge {
       const patchRecording = finding ? this.recordPatchFindings(threadId, turnId, finding) : null;
       const contextRecording = this.captureTranscript("upstream-response:thread/inject_items", async () => {
         const store = this.ensureTranscriptStore();
-        await store.recordUpstreamResponse(pending.upstreamRequest, response, turnId);
+        await this.persistTranscript(() => store.recordUpstreamResponse(pending.upstreamRequest, response, turnId));
         if (error || patch) return;
-        const accepted = (await store.externalizeInlineImages(threadId, {
+        const accepted = (await this.persistTranscript(() => store.externalizeInlineImages(threadId, {
           ...item, workbenchInjectionAcceptedAt: acceptedAt,
-        })).value;
-        await this.transcriptRecording.recordWorkbenchMutation({
+        }))).value;
+        await this.persistTranscript(() => this.transcriptRecording.recordWorkbenchMutation({
           observations: [createCodexTranscriptProviderItemObservation({
             threadId, turnId, item: accepted, lifecycle: "completed", observedAt: acceptedAt,
           })],
           recordLegacy: async () => { await store.recordWorkbenchToolContext(threadId, turnId, accepted); },
-        });
+        }));
         this.onNotification({ method: "item/completed", params: { threadId, turnId, item: accepted } });
       }, { propagateFailure: true });
       await Promise.all([patchRecording, contextRecording]);
@@ -1854,7 +1874,7 @@ export default class CodexStdioBridge {
       client,
       clientRequestId,
       internal = false,
-      signal,
+      signal: callerSignal,
     }: {
       client?: BridgeClient;
       clientRequestId?: number | string;
@@ -1862,6 +1882,8 @@ export default class CodexStdioBridge {
       signal?: AbortSignal;
     },
   ) {
+    const signal = AbortSignal.any([this.generation.signal, ...(callerSignal ? [callerSignal] : [])]);
+    signal.throwIfAborted();
     const upstreamRequestId = this.nextUpstreamRequestId();
     const requestSource: WorkbenchRequestSource = internal
       ? message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh"
@@ -1871,6 +1893,7 @@ export default class CodexStdioBridge {
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
     const upstreamMessage = createUpstreamRequest(await this.instructions.augment(message, method), upstreamRequestId);
+    signal.throwIfAborted();
 
     if (internal) {
       if (signal?.aborted) throw signal.reason;
@@ -1887,6 +1910,8 @@ export default class CodexStdioBridge {
           upstreamRequest: upstreamMessage,
         });
       });
+      // Cancellation can settle this before transcript admission returns it to the caller.
+      void responsePromise.catch(() => undefined);
       const abortPendingResponse = () => {
         if (!this.pendingResponses.delete(upstreamRequestId)) return;
         rejectResponse(signal?.reason instanceof Error ? signal.reason : new Error("Codex internal request was cancelled."));
@@ -1900,6 +1925,7 @@ export default class CodexStdioBridge {
         else void capture;
       }
       try {
+        signal.throwIfAborted();
         this.send(upstreamMessage);
       } catch (error) {
         this.pendingResponses.delete(upstreamRequestId);
@@ -1933,6 +1959,7 @@ export default class CodexStdioBridge {
       else void capture;
     }
     try {
+      signal.throwIfAborted();
       this.send(upstreamMessage);
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
@@ -1955,14 +1982,33 @@ export default class CodexStdioBridge {
   }
 
   private async enqueueCommand<TValue>(task: () => TValue | Promise<TValue>) {
-    const nextCommand = this.commandQueue
+    const signal = AbortSignal.any([this.generation.signal]);
+    signal.throwIfAborted();
+    let onAbort!: () => void;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    const work = this.commandQueue
       .catch(() => undefined)
-      .then(task);
+      .then(() => {
+        signal.throwIfAborted();
+        return task();
+      }).catch((error: unknown) => {
+        if (signal.aborted && error !== signal.reason) logError("codex-command", sanitizeTranscriptErrorMessage(error));
+        throw error;
+      });
+    const nextCommand = Promise.race([work, cancellation]).finally(() => signal.removeEventListener("abort", onAbort));
     this.commandQueue = nextCommand.catch(() => undefined);
     return await nextCommand;
   }
 
   async waitForIdle() {
+    if (this.generation.signal.aborted) {
+      await this.transcriptQueue;
+      await this.waitForTranscriptPersistence();
+      return;
+    }
     while (true) {
       const currentQueue = this.commandQueue;
       await currentQueue.catch(() => undefined);
@@ -1972,6 +2018,19 @@ export default class CodexStdioBridge {
     }
     await Promise.allSettled(Array.from(this.transcriptTasks));
     await this.transcriptQueue.catch(() => undefined);
+    await this.waitForTranscriptPersistence();
+  }
+
+  private async persistTranscript<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    const persistence = operation();
+    this.transcriptPersistence.add(persistence);
+    try { return await persistence; }
+    finally { this.transcriptPersistence.delete(persistence); }
+  }
+
+  private async waitForTranscriptPersistence() {
+    while (this.transcriptPersistence.size) await Promise.allSettled([...this.transcriptPersistence]);
   }
 
   private createTranscriptStore({ reload = false }: { reload?: boolean } = {}) {
@@ -2021,6 +2080,7 @@ export default class CodexStdioBridge {
   }
 
   private async settleUpstreamResponse(pending: PendingResponse, message: JsonRpcResponse) {
+    const signal = this.generation.signal;
     if (isPendingInternalResponse(pending) && pending.toolContext) {
       const response = await this.settleToolContext(pending, message);
       pending.resolve(response);
@@ -2043,11 +2103,12 @@ export default class CodexStdioBridge {
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
     if (shouldHydrateThreadResponse(pending.upstreamRequest, pending.threadHydration)) {
       try {
-        hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
+        hydratedMessage = await this.persistTranscript(() => this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
           hydration: pending.threadHydration,
           touchThread: shouldCaptureTranscript,
-        });
+        }), signal);
       } catch (error) {
+        signal.throwIfAborted();
         this.transcriptShadowLog?.write({
           event: "hydration-failed",
           fields: {
@@ -2061,26 +2122,26 @@ export default class CodexStdioBridge {
     }
     if (this.identities && !hydratedMessage.error) {
       const thread = asRecord(hydratedMessage.result)?.thread as Thread | undefined;
-      if (thread?.id && Array.isArray(thread.turns)) await this.resolveTranscriptThreadContext(thread);
+      if (thread?.id && Array.isArray(thread.turns)) await this.resolveTranscriptThreadContext(thread, true, signal);
       if (pending.method === "thread/list") {
         const data = asRecord(hydratedMessage.result)?.data;
         if (Array.isArray(data)) {
           const catalog = await Promise.all((data as Thread[]).map(async (entry) => {
-            const context = await this.resolveTranscriptThreadContext(entry, false);
+            const context = await this.resolveTranscriptThreadContext(entry, false, signal);
             this.transcriptThreadContexts.set(entry.id, context);
             return { thread: entry, metadata: {
               ...context,
               native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: entry.id },
             } };
           }));
-          await admitProviderThreads(this.identities, catalog);
+          await this.persistTranscript(() => admitProviderThreads(this.identities!, catalog), signal);
         }
       }
       if (pending.method === "turn/start") {
         const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId);
         const turn = asRecord(hydratedMessage.result)?.turn as Turn | undefined;
         if (threadId && turn?.id) {
-          await admitNativeTranscriptObservations(this.identities, this.createSqliteProviderStartedTurnObservations(threadId, turn));
+          await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, this.createSqliteProviderStartedTurnObservations(threadId, turn)), signal);
         }
       }
       // Recovery admits its chronological catalogue before newest-first body pages.
@@ -2091,12 +2152,13 @@ export default class CodexStdioBridge {
         if (threadId && Array.isArray(data)) {
           const native = this.identities.threads.knownNativeBinding("codex", threadId);
           const turns = params?.sortDirection === "asc" ? data : [...data].reverse();
-          await admitProviderNotifications(this.identities, native, turns.map((turn) => ({
+          await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, turns.map((turn) => ({
             method: "turn/started" as const, params: { threadId, turn },
-          })));
+          }))), signal);
         }
       }
     }
+    signal.throwIfAborted();
     if (shouldCaptureTranscript) {
       void this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
@@ -2104,14 +2166,14 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
           ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
         const normalisedMessage = threadId
-          ? (await transcriptStore.externalizeInlineImages(threadId, message)).value
+          ? (await this.persistTranscript(() => transcriptStore.externalizeInlineImages(threadId, message))).value
           : message;
         const providerObservations = await this.createSqliteProviderResponseObservations(
           pending.upstreamRequest,
           normalisedMessage,
           Boolean(pending.threadHydration),
         );
-        await this.transcriptRecording.recordProviderFact({
+        await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
           observations: providerObservations,
           recordLegacy: async () => {
             await transcriptStore.recordUpstreamResponse(pending.upstreamRequest, responseToRecord);
@@ -2129,7 +2191,14 @@ export default class CodexStdioBridge {
               observedAt: entry.resolvedAt!,
             }));
           },
-        });
+        }));
+      }, {
+        prepare: this.sqliteTranscriptEnabled && !this.identities && !hydratedMessage.error
+          ? async signal => {
+            const thread = asRecord(hydratedMessage.result)?.thread as Thread | undefined;
+            if (thread?.id && Array.isArray(thread.turns)) await this.resolveTranscriptThreadContext(thread, true, signal);
+          }
+          : undefined,
       });
     }
     const presentedMessage = this.fileChanges.present(hydratedMessage);
@@ -2145,9 +2214,11 @@ export default class CodexStdioBridge {
   }
 
   private async handleUpstreamNonResponseMessage(message: unknown) {
+    const signal = this.generation.signal;
     if (isJsonRpcServerRequest(message)) {
       const observation = createCodexTranscriptProviderDynamicToolObservation(message, Date.now());
-      if (observation && this.identities) await admitNativeTranscriptObservations(this.identities, [observation]);
+      if (observation && this.identities) await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, [observation]), signal);
+      signal.throwIfAborted();
       if (this.identities) {
         const params = asRecord(message.params);
         const threadId = asString(params?.threadId);
@@ -2157,16 +2228,17 @@ export default class CodexStdioBridge {
           const native = this.identities.threads.knownNativeBinding("codex", threadId);
           const canonicalThreadId = this.identities.threads.workbenchIdForNative(native);
           const turnId = this.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
-          await this.identities.items.admit([{
+          await this.persistTranscript(() => this.identities!.items.admit([{
             threadId: canonicalThreadId, sources: [{ turnId, kind: "stable", sourceId: itemId }], legacyAliases: [],
-          }]);
+          }]), signal);
         }
       }
+      signal.throwIfAborted();
       void this.captureTranscript(`upstream-server-request:${message.method}`, async () => {
-        await this.transcriptRecording.recordProviderFact({
+        await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
           observations: observation ? [observation] : [],
           recordLegacy: () => this.ensureTranscriptStore().recordUpstreamServerRequest(message),
-        });
+        }));
       });
       switch (message.method) {
         case "item/tool/requestUserInput":
@@ -2192,6 +2264,11 @@ export default class CodexStdioBridge {
     }
 
     if (isJsonRpcNotification(message)) {
+      if (this.identities && message.method === "thread/started") {
+        const thread = asRecord(message.params)?.thread as Thread | undefined;
+        if (thread?.id) await this.resolveTranscriptThreadContext(thread, true, signal);
+      }
+      signal.throwIfAborted();
       let syntheticFileChangeNotification: Extract<ServerNotification, { method: "item/completed" }> | null = null;
       if (message.method === "turn/started") {
         const threadId = asString(asRecord(message.params)?.threadId)?.trim();
@@ -2255,19 +2332,22 @@ export default class CodexStdioBridge {
         const threadId = asString(params?.threadId);
         if (threadId && typeof params?.turnId === "string") {
           const native = this.identities.threads.knownNativeBinding("codex", threadId);
-          await admitProviderNotifications(this.identities, native, [message as ServerNotification]);
+          await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, [message as ServerNotification]), signal);
         }
         if (syntheticFileChangeNotification) {
           const native = this.identities.threads.knownNativeBinding("codex", syntheticFileChangeNotification.params.threadId);
-          await admitProviderNotifications(this.identities, native, [syntheticFileChangeNotification]);
+          await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, [syntheticFileChangeNotification!]), signal);
         }
       }
       if (this.identities && ["thread/started", "turn/started", "turn/completed", "item/started", "item/completed"].includes(message.method!)) {
-        await admitNativeTranscriptObservations(this.identities, await this.createSqliteProviderNotificationObservations(message));
+        const observations = await this.createSqliteProviderNotificationObservations(message);
+        await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, observations), signal);
       }
       if (this.identities && syntheticFileChangeNotification) {
-        await admitNativeTranscriptObservations(this.identities, await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification));
+        const observations = await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification);
+        await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, observations), signal);
       }
+      signal.throwIfAborted();
       this.onNotification(this.fileChanges.present(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
       if (!shouldRecordDurableTranscriptNotification(message.method)) {
@@ -2285,7 +2365,7 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(message.params)?.threadId)
           ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
         const normalisedMessage = threadId
-          ? (await transcriptStore.externalizeInlineImages(threadId, message)).value
+          ? (await this.persistTranscript(() => transcriptStore.externalizeInlineImages(threadId, message))).value
           : message;
         const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage, settingsTurnId);
         if (syntheticFileChangeNotification) {
@@ -2293,7 +2373,7 @@ export default class CodexStdioBridge {
             ...await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification),
           );
         }
-        await this.transcriptRecording.recordProviderFact({
+        await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
           observations: providerObservations,
           recordLegacy: () => transcriptStore.recordUpstreamNotification(message),
           recordCrossedWorkbenchFacts: async () => {
@@ -2306,7 +2386,14 @@ export default class CodexStdioBridge {
               observedAt: entry.resolvedAt!,
             }));
           },
-        });
+        }));
+      }, {
+        prepare: this.sqliteTranscriptEnabled && !this.identities && message.method === "thread/started"
+          ? async signal => {
+            const thread = asRecord(message.params)?.thread as Thread | undefined;
+            if (thread?.id) await this.resolveTranscriptThreadContext(thread, true, signal);
+          }
+          : undefined,
       });
     }
   }
@@ -2372,12 +2459,12 @@ export default class CodexStdioBridge {
           admittedSteer,
         );
       }
-      await this.transcriptRecording.recordWorkbenchMutation({
+      await this.persistTranscript(() => this.transcriptRecording.recordWorkbenchMutation({
         observations: admittedSteer
           ? [{ kind: "steer", entry: admittedSteer, observedAt: admittedSteer.attemptedAt }]
           : [],
         recordLegacy: () => this.ensureTranscriptStore().recordClientRequest(request, admittedSteer),
-      });
+      }));
     }, options);
   }
 
@@ -2391,7 +2478,7 @@ export default class CodexStdioBridge {
       const settledSteer = admittedSteer
         ? updateSteerEntryStatus(admittedSteer, "failed", Date.now(), { error: errorMessage })
         : null;
-      await this.transcriptRecording.recordCrossedWorkbenchMutation({
+      await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
         observations: settledSteer
           ? [{ kind: "steer", entry: settledSteer, observedAt: settledSteer.resolvedAt! }]
           : [],
@@ -2400,7 +2487,7 @@ export default class CodexStdioBridge {
           await transcriptStore.recordClientRequestFailure(request, errorMessage);
           if (settledSteer) await transcriptStore.recordSteerSettlements([settledSteer]);
         },
-      });
+      }));
       if (key && settledSteer) this.transcriptSteers.delete(key);
     });
   }
@@ -2408,8 +2495,13 @@ export default class CodexStdioBridge {
   private async captureTranscript(
     label: string,
     task: () => Promise<unknown>,
-    options: { propagateFailure?: boolean; requireSqlite?: boolean } = {},
+    options: {
+      propagateFailure?: boolean;
+      requireSqlite?: boolean;
+      prepare?: (signal: AbortSignal) => Promise<void>;
+    } = {},
   ) {
+    const signal = this.generation.signal;
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
     this.transcriptPendingTasks.set(taskId, { label, startedAt: Date.now() });
@@ -2417,8 +2509,26 @@ export default class CodexStdioBridge {
       .catch(() => undefined)
       .then(async () => {
         try {
-          await task();
+          if (options.prepare) {
+            signal.throwIfAborted();
+            let onAbort!: () => void;
+            const cancelled = new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(signal.reason);
+              signal.addEventListener("abort", onAbort, { once: true });
+            });
+            try {
+              await Promise.race([options.prepare(signal), cancelled]);
+              signal.throwIfAborted();
+            } finally {
+              signal.removeEventListener("abort", onAbort);
+            }
+          }
+          await this.persistTranscript(task);
         } catch (error) {
+          if (options.prepare && error === signal.reason) {
+            if (options.requireSqlite || options.propagateFailure) throw error;
+            return;
+          }
           const message = error instanceof Error ? error.message : String(error);
           const reportFailure = !(error instanceof CodexTranscriptSqliteRecordingFailure)
             || !this.transcriptSqliteFailureReported;
@@ -2672,7 +2782,7 @@ export default class CodexStdioBridge {
     const transcriptStore = this.ensureTranscriptStore();
     await this.captureTranscript("workbench-questionnaire-settlement", async () => {
       try {
-        await this.transcriptRecording.recordCrossedWorkbenchMutation({
+        await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
           observations: [{
             kind: "questionnaire",
             entry: historyEntry,
@@ -2693,7 +2803,7 @@ export default class CodexStdioBridge {
               throw error;
             }
           },
-        });
+        }));
       } catch (error) {
         if (error instanceof CodexTranscriptSqliteRecordingFailure) {
           warning = "Your response was sent, but Workbench could not save it to SQLite transcript history.";
@@ -2728,7 +2838,8 @@ export default class CodexStdioBridge {
     };
   }
 
-  private async readThreadContext(message: JsonRpcRequest): Promise<WorkbenchThreadContextReadResponse> {
+  private async readThreadContext(message: JsonRpcRequest, signal = this.generation.signal): Promise<WorkbenchThreadContextReadResponse> {
+    signal.throwIfAborted();
     const record = asRecord(message.params);
     const threadId = asString(record?.threadId)?.trim() ?? "";
     if (!threadId) {
@@ -2748,14 +2859,16 @@ export default class CodexStdioBridge {
           threadId,
         },
       };
-      const preflightDispatch = await this.dispatchRequest(preflightRequest, { internal: true });
+      const preflightDispatch = await this.dispatchRequest(preflightRequest, { internal: true, signal });
       if (!preflightDispatch.response) throw new Error("Thread Recall preflight did not create an internal response.");
       const preflightResponse = await preflightDispatch.response;
+      signal.throwIfAborted();
       if (preflightResponse.error) throw new Error(preflightResponse.error.message);
       const preflightThread = asRecord(asRecord(preflightResponse.result)?.thread);
       const threadCwd = asString(preflightThread?.cwd)?.trim() ?? "";
       if (!threadCwd) throw new Error("Thread Recall preflight did not receive a readable thread CWD.");
       await this.resolveProjectFromCwd(threadCwd, { endpointName: "Thread Recall" });
+      signal.throwIfAborted();
     }
     const readParams = {
       ...upstreamParams,
@@ -2772,16 +2885,18 @@ export default class CodexStdioBridge {
         ? { [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration }
         : {}),
     };
-    const dispatch = await this.dispatchRequest(readRequest, { internal: true });
+    const dispatch = await this.dispatchRequest(readRequest, { internal: true, signal });
     if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
     const upstreamReadResponse = await dispatch.response;
+    signal.throwIfAborted();
     const transcriptStore = this.ensureTranscriptStore();
     let readResponse = isSubagentBackgroundRead || (readParams.includeTurns === false && hydration !== null)
-      ? await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
+      ? await this.persistTranscript(() => transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
         hydration,
         touchThread: !isSubagentBackgroundRead,
-      })
+      }), signal)
       : upstreamReadResponse;
+    signal.throwIfAborted();
     if (readParams.includeTurns === false && hydration && !readResponse.error) {
       const metadataThread = asRecord(asRecord(upstreamReadResponse.result)?.thread) as Thread | null;
       const hydratedThread = asRecord(asRecord(readResponse.result)?.thread) as Thread | null;
@@ -2789,13 +2904,17 @@ export default class CodexStdioBridge {
         throw new Error("Bounded thread/context/read did not receive a readable thread.");
       }
       const threadWindowStore = this.createThreadWindowStore(transcriptStore);
-      const providerWindow = await this.threadWindowLoader.ensureWindow(
+      const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
+        ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
+      }, signal));
+      const providerWindow = await loader.ensureWindow(
         threadWindowStore,
         metadataThread,
         hydratedThread,
         hydration,
         { recoveryOnly: isSubagentBackgroundRead },
       );
+      signal.throwIfAborted();
       if (providerWindow) {
         const providerWindowResponse: JsonRpcResponse = {
           ...upstreamReadResponse,
@@ -2805,13 +2924,14 @@ export default class CodexStdioBridge {
           },
         };
         try {
-          readResponse = await transcriptStore.hydrateThreadResponse(readRequest, providerWindowResponse, {
+          readResponse = await this.persistTranscript(() => transcriptStore.hydrateThreadResponse(readRequest, providerWindowResponse, {
             hydration,
             touchThread: false,
-          });
+          }), signal);
         } finally {
-          threadWindowStore.recordProviderWindow(providerWindow.recording);
+          if (!signal.aborted) threadWindowStore.recordProviderWindow(providerWindow.recording);
         }
+        signal.throwIfAborted();
       }
     }
     if (readResponse.error) {
@@ -2823,7 +2943,10 @@ export default class CodexStdioBridge {
     if (!thread?.id) {
       throw new Error("thread/context/read did not receive a readable thread.");
     }
-    if (this.identities) await this.resolveTranscriptThreadContext(thread);
+    if (this.identities) {
+      await this.resolveTranscriptThreadContext(thread, true, signal);
+    }
+    signal.throwIfAborted();
     if (!isSubagentBackgroundRead && hydration && thread.turns.length) {
       this.scheduleSqliteCompatibilityWindowImport(thread, transcriptStore);
     }
@@ -2839,6 +2962,7 @@ export default class CodexStdioBridge {
         thread.id,
         turnIds ? { turnIds } : {},
       );
+      signal.throwIfAborted();
       browseResultEntries = entries.browseResultEntries;
       questionnaireEntries = entries.questionnaireEntries;
       steerEntries = entries.steerEntries;
@@ -2848,11 +2972,12 @@ export default class CodexStdioBridge {
     }
 
     if (this.identities) {
-      await admitNativeTranscriptObservations(this.identities, [
+      await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, [
         ...questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry, observedAt: entry.resolvedAt })),
         ...steerEntries.map((entry) => ({ kind: "steer" as const, entry, observedAt: entry.resolvedAt ?? entry.attemptedAt })),
-      ]);
+      ]), signal);
     }
+    signal.throwIfAborted();
     return {
       browseResultEntries,
       ...(entryScope ? { entryScope } : {}),
@@ -2921,6 +3046,7 @@ export default class CodexStdioBridge {
     const threadCwd = thread.cwd?.trim() ?? "";
     if (!threadCwd) throw new Error(`${endpointName} compatibility transcript has no readable CWD.`);
     await this.resolveProjectFromCwd(threadCwd, { endpointName });
+    await this.resolveTranscriptThreadContext(thread);
     await this.captureTranscript(source, () => (
       this.importSqliteCompatibilityWindow(thread, transcriptStore)
     ), { propagateFailure: true, requireSqlite: true });
@@ -2930,7 +3056,7 @@ export default class CodexStdioBridge {
     };
   }
 
-  private async readThreadPage(message: JsonRpcRequest): Promise<WorkbenchThreadPageResponse> {
+  private async readThreadPage(message: JsonRpcRequest, signal: AbortSignal): Promise<WorkbenchThreadPageResponse> {
     const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
     const hydration: WorkbenchThreadHydrationRequest = params.cursor === null
       ? { mode: "latest" }
@@ -2944,10 +3070,12 @@ export default class CodexStdioBridge {
       },
       [WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD]: { mode: "hydratedTurns" },
       [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration,
-    });
+    }, signal);
+    signal.throwIfAborted();
     const usage = params.cursor === null && params.readScope !== "subagentBackground"
-      ? await this.readThreadContextUsage(context.thread.id)
+      ? await this.readThreadContextUsage(context.thread.id, signal)
       : undefined;
+    signal.throwIfAborted();
 
     return {
       ...context,
@@ -2956,25 +3084,59 @@ export default class CodexStdioBridge {
     };
   }
 
-  private async readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | undefined> {
+  async settleRestartedResponses() {
+    const reason = "Codex app-server restarted before the upstream response arrived.";
+    const settlements = [...this.retiringResponses].map(async ([id, pending]) => {
+      this.retiringResponses.delete(id);
+      const response: JsonRpcResponse = { id, error: { code: -32000, message: reason } };
+      if (isPendingInternalResponse(pending)) {
+        if (pending.toolContext) {
+          const toolContext = structuredClone(pending.toolContext);
+          if (toolContext.patch) toolContext.patch.approvalId = null;
+          pending.resolve(await this.settleToolContext({ ...pending, toolContext }, response));
+        } else {
+          pending.reject(new Error(reason));
+        }
+      } else {
+        this.sendToClient(pending.client, { ...response, id: pending.clientRequestId });
+      }
+    });
+    await Promise.all(settlements);
+  }
+
+  async retireAfterHandoff(_options: CodexStdioBridgeReloadOptions = {}) {
+    this.acceptingWork = false;
+    if (this.transcriptInstrumentationTimer) clearInterval(this.transcriptInstrumentationTimer);
+    this.transcriptInstrumentationTimer = null;
+    await this.waitForIdle();
+    await this.transcriptStore?.dispose();
+    this.transcriptStore = null;
+    this.pendingResponses.clear();
+    this.pendingUserInputRequests.clear();
+  }
+
+  private async readThreadContextUsage(threadId: string, signal = this.generation.signal): Promise<ThreadContextUsageSnapshot | undefined> {
     if (!this.readSqliteContextUsage) return undefined;
     try {
       const stored = await this.readSqliteContextUsage(threadId);
+      signal.throwIfAborted();
       if (stored) return stored;
       if (!this.sqliteTranscriptEnabled) return undefined;
       const evidence = await this.ensureTranscriptStore().readStoredUsageEvidence(threadId);
+      signal.throwIfAborted();
       if (evidence && evidence.thread.id !== threadId) throw new Error("Context evidence changed thread owner.");
       let invalidEvidence = false;
       const tokenUsage = recoverCodexContextUsage(threadId, evidence?.events ?? [], () => { invalidEvidence = true; });
       if (invalidEvidence) logError("codex-context-usage", "Ignored malformed or foreign retained context measurements.");
       await this.captureTranscript("context-usage-initialisation", () => (
-        this.transcriptRecording.importCompatibilityWindow(async () => [{
+        this.persistTranscript(() => this.transcriptRecording.importCompatibilityWindow(async () => [{
           kind: "threadContextUsage", threadId, snapshot: { tokenUsage }, initialise: true,
-        }])
+        }]), signal)
       ), { requireSqlite: true });
       // Read back the winner: a live event may have arrived while historical evidence was being read.
       return await this.readSqliteContextUsage(threadId) ?? undefined;
     } catch {
+      signal.throwIfAborted();
       logError("codex-context-usage", "Unable to restore context usage; thread content remains available.");
       return undefined;
     }
@@ -3031,10 +3193,10 @@ export default class CodexStdioBridge {
     let recordingError: unknown = null;
     await this.captureTranscript("workbench-browse-settlement", async () => {
       try {
-        await this.transcriptRecording.recordCrossedWorkbenchMutation({
+        await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
           observations: [{ kind: "browse", entry, ...(asset ? { asset } : {}) }],
           recordLegacy: () => transcriptStore.recordBrowseResultEntry(entry),
-        });
+        }));
       } catch (error) {
         if (!(error instanceof CodexTranscriptSqliteRecordingFailure)) recordingError = error;
         throw error;
@@ -3254,6 +3416,7 @@ export default class CodexStdioBridge {
         transcriptStore.readProviderPreviousCursor(threadId, beforeTurnId)
       ),
       recordProviderWindow: (recording) => {
+        let context: CodexTranscriptThreadContext | undefined;
         const labelTurnId = recording.page?.turn.id
           ?? recording.catalog?.turns.at(-1)?.id
           ?? "empty";
@@ -3262,8 +3425,8 @@ export default class CodexStdioBridge {
             ...recording.thread,
             turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
           };
-          const observations = await this.createSqliteProviderWindowObservations(providerThread);
-          await this.transcriptRecording.recordProviderFact({
+          const observations = this.createSqliteProviderWindowObservations(providerThread, context);
+          await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
             observations,
             recordLegacy: async () => {
               if (recording.catalog) {
@@ -3281,7 +3444,11 @@ export default class CodexStdioBridge {
                 );
               }
             },
-          });
+          }));
+        }, {
+          prepare: this.sqliteTranscriptEnabled
+            ? async signal => { context = await this.resolveTranscriptThreadContext(recording.thread, true, signal); }
+            : undefined,
         });
       },
     };
@@ -3325,6 +3492,7 @@ export default class CodexStdioBridge {
     startRequest: JsonRpcRequest;
     steerRequest: JsonRpcRequest | null;
   }): Promise<JsonRpcResponse> {
+    const signal = this.generation.signal;
     const threadId = asString(asRecord(startRequest.params)?.threadId)?.trim();
     if (!threadId) {
       return { id: requestId, error: { code: -32602, message: "Codex turn start requires a thread id." } };
@@ -3334,7 +3502,8 @@ export default class CodexStdioBridge {
       id: `workbench:admission-read:${String(requestId ?? Date.now())}`,
       method: "thread/read",
       params: { includeTurns: false, threadId },
-    });
+    }, signal);
+    signal.throwIfAborted();
     if (readResponse.error) return { id: requestId, error: readResponse.error };
     const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
     if (!readThread || readThread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the requested thread." } };
@@ -3352,6 +3521,7 @@ export default class CodexStdioBridge {
           threadId,
         },
       });
+      signal.throwIfAborted();
       if (activeTurnResponse.error) return { id: requestId, error: activeTurnResponse.error };
       const activeTurns = asRecord(activeTurnResponse.result)?.data;
       if (!Array.isArray(activeTurns)) {
@@ -3374,7 +3544,8 @@ export default class CodexStdioBridge {
     }
 
     if (this.prepareThreadConfiguration) {
-      ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }));
+      ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }, signal));
+      signal.throwIfAborted();
       this.assertAcceptingWork();
     }
     // Fresh threads still need stored configuration, but have no rollout to resume.
@@ -3386,12 +3557,14 @@ export default class CodexStdioBridge {
       method: "thread/unsubscribe",
       params: { threadId },
     });
+    signal.throwIfAborted();
     if (unsubscribeResponse.error) return { id: requestId, error: unsubscribeResponse.error };
 
     const resumeResponse = await this.dispatchManagedProviderRequest({
       ...resumeRequest,
       id: `workbench:admission-resume:${String(requestId ?? Date.now())}`,
     });
+    signal.throwIfAborted();
     if (resumeResponse.error) {
       return { id: requestId, error: resumeResponse.error };
     } else {
@@ -3442,10 +3615,13 @@ export default class CodexStdioBridge {
     requestId: number | string | null,
     startRequest: JsonRpcRequest,
   ): Promise<JsonRpcResponse> {
+    const signal = this.generation.signal;
     await this.prepareTurnStart(
       startRequest,
-      (request) => this.dispatchManagedProviderRequest(request),
+      (request) => this.dispatchManagedProviderRequest(request, signal),
+      signal,
     );
+    signal.throwIfAborted();
     return await this.dispatchAdmittedTurnStart(requestId, startRequest);
   }
 
@@ -3513,11 +3689,12 @@ export default class CodexStdioBridge {
     return { id: requestId, result: { kind: "steered", turnId } };
   }
 
-  private async createSqliteProviderWindowObservations(
+  private createSqliteProviderWindowObservations(
     thread: Thread,
-  ): Promise<WorkbenchTranscriptObservation[]> {
+    context?: CodexTranscriptThreadContext,
+  ): WorkbenchTranscriptObservation[] {
     if (!this.sqliteTranscriptEnabled) return [];
-    const context = await this.resolveTranscriptThreadContext(thread);
+    if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
     return [createCodexTranscriptProviderThreadScopeObservation(thread, context)];
   }
 
@@ -3561,7 +3738,8 @@ export default class CodexStdioBridge {
     }
     const thread = asRecord(response.result)?.thread as Thread | undefined;
     if (!thread?.id || !Array.isArray(thread.turns)) return [];
-    const context = await this.resolveTranscriptThreadContext(thread);
+    const context = this.transcriptThreadContexts.get(thread.id);
+    if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
     if (request.method === "thread/start" || request.method === "thread/resume" || request.method === "thread/fork") {
       context.usageContext = readCodexUsageContext(response.result);
     }
@@ -3599,7 +3777,8 @@ export default class CodexStdioBridge {
     if (notification.method === "thread/started") {
       const thread = asRecord(notification.params)?.thread as Thread | undefined;
       if (!thread?.id) return [];
-      const context = await this.resolveTranscriptThreadContext(thread);
+      const context = this.transcriptThreadContexts.get(thread.id);
+      if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
       return createCodexTranscriptProviderThreadObservations(thread, context);
     }
     if (notification.method === "thread/tokenUsage/updated") {
@@ -3716,7 +3895,11 @@ export default class CodexStdioBridge {
     this.pendingCompatibilityWindowImports.set(key, pending);
     void this.captureTranscript("sqlite-compatibility-window", () => (
       this.importSqliteCompatibilityWindow(pending.thread, transcriptStore)
-    )).finally(() => {
+    ), {
+      prepare: this.sqliteTranscriptEnabled
+        ? async signal => { await this.resolveTranscriptThreadContext(pending.thread, true, signal); }
+        : undefined,
+    }).finally(() => {
       if (this.pendingCompatibilityWindowImports.get(key) === pending) {
         this.pendingCompatibilityWindowImports.delete(key);
       }
@@ -3726,8 +3909,11 @@ export default class CodexStdioBridge {
   private async resolveTranscriptThreadContext(
     thread: Thread,
     remember = true,
+    signal = this.generation.signal,
   ): Promise<CodexTranscriptThreadContext> {
+    signal.throwIfAborted();
     const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
+    signal.throwIfAborted();
     const context: CodexTranscriptThreadContext = {
       ...(this.transcriptThreadContexts.get(thread.id)?.usageContext
         ? { usageContext: this.transcriptThreadContexts.get(thread.id)!.usageContext } : {}),
@@ -3741,11 +3927,12 @@ export default class CodexStdioBridge {
     };
     if (remember) this.transcriptThreadContexts.set(thread.id, context);
     if (this.identities && remember) {
-      await admitProviderThreads(this.identities, [{ metadata: {
+      await this.persistTranscript(() => admitProviderThreads(this.identities!, [{ metadata: {
         ...context,
         native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: thread.id },
-      }, thread }]);
+      }, thread }]), signal);
     }
+    signal.throwIfAborted();
     return context;
   }
 
@@ -3817,7 +4004,8 @@ export default class CodexStdioBridge {
     thread: Thread,
     transcriptStore: CodexTranscriptStoreInstance,
   ): Promise<WorkbenchTranscriptObservation> {
-    const context = await this.resolveTranscriptThreadContext(thread);
+    const context = this.transcriptThreadContexts.get(thread.id);
+    if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
     const materializedTurnIds = thread.turns.map(({ id }) => id);
     const entries = await transcriptStore.readThreadContextEntries(thread.id, { turnIds: materializedTurnIds });
     const browseAssets = new Map<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>();

@@ -11,27 +11,35 @@ import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestCont
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
   children: [],
-  create: (_context, build) => {
+  create: (context, build) => {
     const controller = new WorkbenchWebSocketRequestController({
       harnesses: build.get("harnesses"),
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
       initialState: build.handoffState as WorkbenchWebSocketRequestControllerState | undefined,
       reload: build.get("reloadController"),
+      reportDelivery: context.reportWebSocketDelivery,
       stats: build.get("stats"),
       threadState: build.get("threadState").controller,
       transcript: build.get("transcript"),
       transcriptShadowLog: build.get("transcriptShadowLog"),
     });
-    let detached = false;
+    controller.suspend();
     return {
-      detachForReload: () => {
-        detached = true;
-        return controller.detachForReload();
+      afterCommit: () => {
+        void controller.resumeAfterFailedReload().catch((error: unknown) => controller.reportSendFailure({ method: "WebSocket startup" }, error));
       },
-      dispose: () => { if (!detached) controller.dispose(); },
+      beginHandoff: () => ({
+        waitForIdle: async () => {},
+        expire: () => controller.suspend(),
+        detach: () => controller.detachForReload(),
+        resume: () => controller.resumeAfterFailedReload(),
+        commit: () => controller.dispose(),
+      }),
+      detachForReload: () => controller.detachForReload(),
+      dispose: () => controller.dispose(),
       registrations: { webSocketRequests: controller },
-      start: async () => await controller.start(),
+      start: async () => {},
     };
   },
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",

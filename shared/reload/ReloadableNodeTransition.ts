@@ -1,8 +1,8 @@
 /*
- * Keywords: reload, deadline, lifecycle, fencing, failure.
+ * Keywords: reload, grace, lifecycle, phase, diagnostics.
  * Exports:
- * - ReloadableNodeTransitionDeadline: cancellable process-owned reload deadline.
- * - default ReloadableNodeTransition: own one transition budget, phase, failure, and graph availability.
+ * - ReloadableNodeTransitionDeadline: cancellable process-owned old-work grace deadline.
+ * - default ReloadableNodeTransition: own one grace budget and generation-fenced phase diagnostics.
  */
 export interface ReloadableNodeTransitionDeadline {
   cancel(): void;
@@ -10,13 +10,9 @@ export interface ReloadableNodeTransitionDeadline {
 }
 
 export default class ReloadableNodeTransition {
-  readonly affectedScopes = new Set<string>();
-  // Only the host can establish whether detach/publication has made live work unsafe.
-  liveGraphUsable = true;
-  private failureValue: Error | null = null;
-  private interrupt!: (error: Error) => void;
-  private readonly interrupted = new Promise<Error>((resolve) => { this.interrupt = resolve; });
+  private expired = false;
   private phase = "load graph";
+  private phaseOwner: symbol | null = null;
   private finished = false;
 
   constructor(
@@ -27,68 +23,55 @@ export default class ReloadableNodeTransition {
   ) {
     void deadline.expired.then(() => {
       if (this.finished) return;
+      this.expired = true;
       let details: string;
-      let cause: unknown;
       try {
         details = describePending().slice(0, 2_000);
-      } catch (error) {
+      } catch {
         details = "Pending-work diagnostics failed.";
-        cause = error;
       }
-      this.fail(new Error(`Reload transition exceeded ${timeoutMs}ms during ${this.phase}. ${details}`, { cause }));
+      this.logError(`Reload grace expired after ${timeoutMs}ms during ${this.phase}; forcing old work to retire. ${details}`);
+    }).catch((error: unknown) => {
+      console.error(`[reload] Grace diagnostics failed (${error instanceof Error ? error.name : "non-Error rejection"}).`);
     });
   }
 
-  get failure() { return this.failureValue; }
-
-  fail(error: unknown) {
-    if (this.failureValue) return;
-    this.failureValue = error instanceof Error ? error : new Error("Reload transition failed.");
-    this.interrupt(this.failureValue);
-  }
-
-  assertActive() {
-    if (this.failureValue) throw this.failureValue;
-  }
-
-  async waitFor<T>(operation: Promise<T>): Promise<T> {
-    this.assertActive();
-    return await Promise.race([
-      operation,
-      this.interrupted.then((error) => { throw error; }),
+  async drain(phase: string, wait: () => Promise<void>, expire: () => void) {
+    if (this.expired) {
+      expire();
+      return;
+    }
+    const waiting = this.step(phase, wait);
+    const completed = await Promise.race([
+      waiting.then(() => true),
+      this.deadline.expired.then(() => false),
     ]);
-  }
-
-  async execute(operation: () => Promise<void>) {
-    const running = Promise.resolve().then(operation);
-    void running.catch((error: unknown) => {
-      if (this.failureValue && error !== this.failureValue) {
-        this.logError(`A stopped reload later failed during ${this.phase} (${error instanceof Error ? error.name : "non-Error rejection"}).`);
-      }
+    if (completed) return;
+    this.phaseOwner = null;
+    expire();
+    void waiting.catch((error: unknown) => {
+      this.logError(`Retired reload work later failed during ${phase.slice(0, 200)} (${error instanceof Error ? error.name : "non-Error rejection"}).`);
     });
-    await this.waitFor(running);
   }
 
   async step<T>(phase: string, operation: (reportPhase: (phase: string) => void) => Promise<T> | T): Promise<T> {
-    this.assertActive();
+    const owner = Symbol("reload phase");
     const label = phase.replace(/\s+/gu, " ").slice(0, 200);
     this.phase = label;
-    let reporting = true;
+    this.phaseOwner = owner;
     try {
-      const result = await operation((detail) => {
-        if (!reporting || this.finished || this.failureValue) return;
+      return await operation((detail) => {
+        if (this.finished || this.phaseOwner !== owner) return;
         this.phase = `${label}: ${detail.replace(/\s+/gu, " ").trim().slice(0, 200)}`;
       });
-      // A deadline does not cancel arbitrary node code. Fence the host's continuation.
-      this.assertActive();
-      return result;
     } finally {
-      reporting = false;
+      if (this.phaseOwner === owner) this.phaseOwner = null;
     }
   }
 
   finish() {
     this.finished = true;
+    this.phaseOwner = null;
     this.deadline.cancel();
   }
 }

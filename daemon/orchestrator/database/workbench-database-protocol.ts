@@ -53,7 +53,7 @@ import type {
   WorkbenchStatsUsageImportSettlement,
 } from "./stats/WorkbenchStatsImportRepository.ts";
 
-export type WorkbenchDatabaseControllerState = "starting" | "ready" | "failed" | "closed";
+export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
 
 export interface WorkbenchDatabaseInventory {
   tableNames: string[];
@@ -65,7 +65,10 @@ export interface WorkbenchDatabaseMutationResult {
 }
 
 export type WorkbenchDatabaseRequestPayload =
-  | { type: "initialize"; databasePath: string }
+  | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean }
+  | { type: "acknowledgeMigration" }
+  | { type: "suspend" }
+  | { type: "resume"; restoreBackupPath?: string }
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
@@ -105,6 +108,8 @@ export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: n
 
 export type WorkbenchDatabaseResponse =
   | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory }
+  | { id: number; type: "migrationCheckpoint"; backupPath: string }
+  | { id: number; type: "suspended" }
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }

@@ -41,12 +41,15 @@ function fromRow(value: SelectRow<typeof composerProfiles>): WorkbenchComposerPr
 
 export default class WorkbenchComposerProfileStore {
   private closed = false;
+  private readonly closedError = new Error("Composer profile store is closed.");
   private pending: Promise<unknown> | null = null;
+  private pendingWrite: Promise<{ changes: number }> | null = null;
   private startup: Promise<void> | null = null;
 
   constructor(private readonly storageRoot: string, private readonly database: WorkbenchComposerProfileDatabase) {}
 
   start(): Promise<void> {
+    if (this.closed) return Promise.reject(this.closedError);
     this.startup ??= this.enqueue(() => this.importLegacy());
     return this.startup;
   }
@@ -66,9 +69,14 @@ export default class WorkbenchComposerProfileStore {
       await ready;
       const mutation = normalizeComposerProfileMutation(value);
       if (!mutation) throw new Error("A valid composer profile mutation is required.");
-      const profiles = applyComposerProfileMutation(await this.readProfiles(), mutation);
+      const previous = await this.readProfiles();
+      const profiles = applyComposerProfileMutation(previous, mutation).map((profile) => {
+        const stored = previous.find((entry) => entry.id === profile.id);
+        // The upsert deliberately preserves the original creation time.
+        return stored ? { ...profile, createdAt: stored.createdAt } : profile;
+      }).sort((left, right) => left.createdAt - right.createdAt || Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
       const profile = mutation.kind === "upsert" ? profiles.find((entry) => entry.id === mutation.profile.id) : null;
-      await this.database.executeTransaction([
+      await this.write([
         mutation.kind === "delete"
           ? deleteRows(composerProfiles, { id: mutation.profileId })
           : upsertRow(composerProfiles, row(profile!), {
@@ -76,24 +84,28 @@ export default class WorkbenchComposerProfileStore {
             updateColumns: ["name", "description", "agent_path", "agent_source", "harness", "model", "reasoning_effort", "service_tier", "scope_kind", "scope_project_id", "created_at", "updated_at"],
           }),
       ]);
-      return { profiles: await this.readProfiles() };
+      return { profiles };
     });
     return Promise.all([ready, result]).then(([, payload]) => payload);
   }
 
   async dispose() {
     this.closed = true;
-    await this.pending;
+    await this.pendingWrite;
   }
 
   private async readProfiles() {
-    return (await this.database.query(selectRows(composerProfiles, {
+    const profiles = await this.database.query(selectRows(composerProfiles, {
       orderBy: [{ column: "created_at" }, { column: "id" }],
-    }))).map(fromRow);
+    }));
+    this.assertOpen();
+    return profiles.map(fromRow);
   }
 
   private async importLegacy() {
-    if ((await this.database.query(selectRows(composerProfileImports, { where: { id: "legacy-json" } }))).length) return;
+    const imported = await this.database.query(selectRows(composerProfileImports, { where: { id: "legacy-json" } }));
+    this.assertOpen();
+    if (imported.length) return;
     let source: string;
     try {
       source = await readFile(path.join(this.storageRoot, ".workbench", "runtime", "composer-profiles.json"), "utf8");
@@ -101,6 +113,7 @@ export default class WorkbenchComposerProfileStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       source = '{"version":1,"profiles":{}}';
     }
+    this.assertOpen();
     const raw: unknown = JSON.parse(source);
     if (!raw || typeof raw !== "object" || !("profiles" in raw) || !raw.profiles || typeof raw.profiles !== "object" || Array.isArray(raw.profiles)) {
       throw new Error("Legacy composer profile catalogue is invalid.");
@@ -112,17 +125,32 @@ export default class WorkbenchComposerProfileStore {
       }
       return profile;
     });
-    await this.database.executeTransaction([
+    await this.write([
       ...profiles.map((profile) => insertRow(composerProfiles, row(profile))),
       insertRow(composerProfileImports, { id: "legacy-json" }),
     ]);
   }
 
   private enqueue<Result>(operation: () => Promise<Result>, requirePriorSuccess = false): Promise<Result> {
-    if (this.closed) return Promise.reject(new Error("Composer profile store is closed."));
+    if (this.closed) return Promise.reject(this.closedError);
     const previous = this.pending ?? Promise.resolve();
-    const result = (requirePriorSuccess ? previous : previous.catch(() => undefined)).then(operation);
+    const result = (requirePriorSuccess ? previous : previous.catch(() => undefined)).then(() => {
+      this.assertOpen();
+      return operation();
+    });
     this.pending = result;
     return result.finally(() => { if (this.pending === result) this.pending = null; });
+  }
+
+  private async write(statements: readonly WorkbenchDatabaseMutation[]) {
+    this.assertOpen();
+    const pending = this.database.executeTransaction(statements);
+    this.pendingWrite = pending;
+    try { return await pending; }
+    finally { if (this.pendingWrite === pending) this.pendingWrite = null; }
+  }
+
+  private assertOpen() {
+    if (this.closed) throw this.closedError;
   }
 }

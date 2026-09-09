@@ -88,6 +88,10 @@ export default class WorkbenchAppReloadController {
     return this.state;
   }
 
+  resumeAfterFailedReload() {
+    this.attached = true;
+  }
+
   completeTransferredBatchIfPresent(appliedScopes: readonly WorkbenchReloadScope[]) {
     const scopes = this.state.activeScopes;
     if (!scopes) return;

@@ -329,6 +329,8 @@ export default class WorkbenchThreadStateController {
   private readonly pinnedLayout: WorkbenchPinnedThreadLayoutStore;
   private readonly projects = new Map<string, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
+  private readonly persistenceWrites = new Set<Promise<void>>();
+  private readonly retiredError = new Error("Thread-state controller is retired.");
   private readonly pinnedEntries = new Map<string, ThreadDisplayLayoutEntry>();
   private readonly reconciliationPromises = new Set<Promise<void>>();
   private readonly summaryHydrationPromises = new Set<Promise<void>>();
@@ -337,7 +339,15 @@ export default class WorkbenchThreadStateController {
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
 
   constructor(options: WorkbenchThreadStateControllerOptions) {
-    this.options = options;
+    const persistence = options.threadStateStore;
+    const ownedPersistence: WorkbenchThreadStatePersistence = {
+      readGlobal: id => this.readPersistence(() => persistence.readGlobal(id)),
+      readProject: projectId => this.readPersistence(() => persistence.readProject(projectId)),
+      readTitleHistories: projectId => this.readPersistence(() => persistence.readTitleHistories(projectId)),
+      writeGlobal: (id, document) => this.writePersistence(() => persistence.writeGlobal(id, document)),
+      writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
+    };
+    this.options = { ...options, threadStateStore: ownedPersistence };
     this.now = options.now ?? Date.now;
     this.archives = new WorkbenchThreadArchiveController({
       now: this.now,
@@ -364,10 +374,10 @@ export default class WorkbenchThreadStateController {
       },
       onError: error => this.options.log?.(`Thread archival failed: ${sanitizeError(error)}`),
     });
-    this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(options.threadStateStore, {
+    this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(ownedPersistence, {
       reportRepairs: (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
     });
-    this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(options.threadStateStore, {
+    this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(ownedPersistence, {
       reportRepairs: (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
     });
     this.stopReloadDirtSubscription = options.subscribeReloadDirt?.(() => this.publishReloadDirt()) ?? null;
@@ -379,6 +389,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async handleRequest(connectionId: string, input: WorkbenchThreadStateRequest | object) {
+    this.assertActive();
     return await this.handleRequestOwned(connectionId, input);
   }
 
@@ -1079,7 +1090,6 @@ export default class WorkbenchThreadStateController {
 
   async dispose() {
     this.active = false;
-    await this.archives.dispose();
     this.stopReloadDirtSubscription?.();
     this.waitingByThreadKey.clear();
     for (const state of this.projects.values()) {
@@ -1088,18 +1098,37 @@ export default class WorkbenchThreadStateController {
       state.stopProjectObservation?.();
       state.stopProjectObservation = null;
     }
-    await Promise.allSettled(this.operationQueues.values());
-    await Promise.allSettled(this.summaryHydrationPromises);
-    await this.homeDisplayOrder.waitForIdle();
-    await this.pinnedLayout.waitForIdle();
+    await this.archives.dispose();
+    while (this.persistenceWrites.size) await Promise.allSettled([...this.persistenceWrites]);
+  }
+
+  private assertActive() {
+    if (!this.active) throw this.retiredError;
+  }
+
+  private async readPersistence<T>(read: () => Promise<T>) {
+    this.assertActive();
+    const value = await read();
+    this.assertActive();
+    return value;
+  }
+
+  private async writePersistence(write: () => Promise<void>) {
+    this.assertActive();
+    const operation = write();
+    this.persistenceWrites.add(operation);
+    try { await operation; }
+    finally { this.persistenceWrites.delete(operation); }
   }
 
   private async getProject(projectId: string) {
+    this.assertActive();
     const current = this.projects.get(projectId);
     if (current) return current;
     await this.enqueue(`${projectId}:project:load`, async () => {
       if (this.projects.has(projectId)) return;
       const stored = await this.loadProjectStorage(projectId);
+      this.assertActive();
       const drafts = new Map<string, WorkbenchThreadDraft>();
       const entries = new Map<string, WorkbenchThreadStateEntry>();
       for (const storedDraft of stored.drafts) {
@@ -1129,6 +1158,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private startProjectObservation(projectId: string, state: ProjectState) {
+    this.assertActive();
     if (state.stopProjectObservation) return;
     state.stopProjectObservation = this.options.projectState.observe(
       projectId,
@@ -2002,7 +2032,10 @@ export default class WorkbenchThreadStateController {
 
   private enqueue<TValue>(key: string, operation: () => Promise<TValue>) {
     const previous = this.operationQueues.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(operation);
+    const next = previous.catch(() => undefined).then(() => {
+      this.assertActive();
+      return operation();
+    });
     this.operationQueues.set(key, next);
     return next.finally(() => { if (this.operationQueues.get(key) === next) this.operationQueues.delete(key); });
   }
@@ -2438,6 +2471,7 @@ export default class WorkbenchThreadStateController {
     // uses that same queue. Revalidate the captured question after the await.
     const interruptedQuestionnaire = snoozeQuestionnaire ?? completionQuestionnaire;
     if (interruptedQuestionnaire) {
+      this.assertActive();
       if (!this.options.interruptQuestionnaire) throw new Error("Questionnaire interruption is unavailable.");
       if (!await this.options.interruptQuestionnaire(request.projectId, request.identity.harness, request.identity.threadId, interruptedQuestionnaire)) {
         return { accepted: false, revision: state.revision };

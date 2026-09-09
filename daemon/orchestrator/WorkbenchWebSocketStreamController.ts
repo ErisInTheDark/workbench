@@ -202,7 +202,7 @@ export default class WorkbenchWebSocketStreamController {
   private behindStartedAt: number | null = null;
   private readonly cancel: NonNullable<WorkbenchWebSocketStreamControllerOptions["clearTimeout"]>;
   private readonly connections = new Map<BridgeClient, ConnectionState>();
-  private detached = false;
+  private state: "active" | "suspended" | "disposed" = "active";
   private incident: StreamIncident | null = null;
   private lastMemorySample: WorkbenchWebSocketRuntimeMemorySample | null = null;
   private lastMemorySampleAt: number | null = null;
@@ -392,10 +392,8 @@ export default class WorkbenchWebSocketStreamController {
   }
 
   detachForReload(): WorkbenchWebSocketStreamControllerState {
-    this.assertActive();
-    this.detached = true;
-    if (this.warningTimer !== null) this.cancel(this.warningTimer);
-    this.warningTimer = null;
+    if (this.state === "disposed") throw new Error("Workbench WebSocket stream controller is disposed.");
+    this.suspend();
     return {
       activityBytes: this.activityBytes,
       activityByLabel: [...this.activityByLabel.entries()].map(([label, total]) => [label, { ...total }]),
@@ -430,11 +428,24 @@ export default class WorkbenchWebSocketStreamController {
   }
 
   dispose() {
-    if (this.detached) return;
-    this.detached = true;
+    if (this.state === "disposed") return;
+    this.state = "disposed";
     if (this.warningTimer !== null) this.cancel(this.warningTimer);
     this.warningTimer = null;
     this.connections.clear();
+  }
+
+  suspend() {
+    if (this.state === "disposed") throw new Error("WebSocket stream controller is disposed.");
+    this.state = "suspended";
+    if (this.warningTimer !== null) this.cancel(this.warningTimer);
+    this.warningTimer = null;
+  }
+
+  resumeAfterFailedReload() {
+    if (this.state === "disposed") throw new Error("WebSocket stream controller is disposed.");
+    this.state = "active";
+    this.scheduleWarning();
   }
 
   private connection(client: BridgeClient) {
@@ -451,6 +462,7 @@ export default class WorkbenchWebSocketStreamController {
   }
 
   private scheduleWarning() {
+    if (this.state !== "active") return;
     const nextWarningAt = this.nextScheduledWarningAt();
     if (nextWarningAt === null) {
       if (this.warningTimer !== null) this.cancel(this.warningTimer);
@@ -465,14 +477,15 @@ export default class WorkbenchWebSocketStreamController {
     ) return;
     if (this.warningTimer !== null) this.cancel(this.warningTimer);
     this.nextWarningAt = nextWarningAt;
-    this.warningTimer = this.schedule(() => {
+    const timer = this.schedule(() => {
+      if (this.warningTimer !== timer || this.state !== "active") return;
       const callbackAt = this.now();
       this.warningTimer = null;
       this.nextWarningAt = null;
-      if (this.detached) return;
       this.sampleRuntimePressure(callbackAt, nextWarningAt);
       this.updateHealthTransition(true);
     }, Math.max(0, nextWarningAt - this.now()));
+    this.warningTimer = timer;
   }
 
   private nextScheduledWarningAt() {
@@ -783,6 +796,6 @@ export default class WorkbenchWebSocketStreamController {
   }
 
   private assertActive() {
-    if (this.detached) throw new Error("Workbench WebSocket stream controller is detached.");
+    if (this.state !== "active") throw new Error("Workbench WebSocket stream controller is detached.");
   }
 }

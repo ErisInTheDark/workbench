@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 
 import type { WorkbenchDatabaseInventory, WorkbenchDatabaseRequest, WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
 import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
-import migrateWorkbenchDatabase from "workbench-shared/database/workbench-database-migration";
+import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import {
   compileWorkbenchDatabaseStatement,
   type WorkbenchDatabaseRow,
@@ -33,6 +33,21 @@ let searchRepository: WorkbenchSearchRepository | null = null;
 let statsRepository: WorkbenchStatsRepository | null = null;
 let statsImportRepository: WorkbenchStatsImportRepository | null = null;
 let statsAttributionRepository: WorkbenchStatsAttributionRepository | null = null;
+let migrationAcknowledgement: { id: number; acknowledge(): void } | null = null;
+let suspendedDatabase: { path: string; version: number } | null = null;
+
+function initializeRepositories() {
+  if (!database) throw new Error("Workbench database is not initialized");
+  proveReadWrite();
+  threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
+  transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
+  transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
+  threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository, transcriptIdentityRepository);
+  searchRepository = new WorkbenchSearchRepository(database);
+  statsRepository = new WorkbenchStatsRepository(database);
+  statsImportRepository = new WorkbenchStatsImportRepository(database);
+  statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
+}
 
 function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -75,10 +90,10 @@ function closeDatabase() {
   statsImportRepository = null;
   statsAttributionRepository = null;
   const activeDatabase = database;
-  database = null;
   if (!activeDatabase) return null;
   try {
     activeDatabase.close();
+    database = null;
     return null;
   } catch (error) {
     return boundedError(error);
@@ -121,7 +136,7 @@ function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "
   })();
 }
 
-function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" }>) {
+function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" | "acknowledgeMigration" | "suspend" | "resume" }>) {
   if (request.type === "observeTurnIdentities") {
     if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
     post({ id: request.id, type: "turnIdentities", identities: threadIdentityRepository.observeTurns(request.inputs) });
@@ -313,21 +328,62 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress(request.state, request.revision, request.unsupportedClaimCheckpoints) });
     return;
   }
-  if (!database) throw new Error("Workbench database is not initialized");
-  database.close();
-  threadIdentityRepository = null;
-  transcriptIdentityRepository = null;
-  transcriptRepository = null;
-  threadStateShadowRepository = null;
-  searchRepository = null;
-  statsRepository = null;
-  statsImportRepository = null;
-  database = null;
+  const closeFailure = closeDatabase();
+  if (closeFailure) throw new Error(closeFailure);
+  suspendedDatabase = null;
   post({ id: request.id, type: "closed" });
   parentPort!.close();
 }
 
 parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
+  if (request.type === "suspend" || request.type === "resume") {
+    try {
+      if (request.type === "suspend") {
+        if (!database || suspendedDatabase) throw new Error("Database cannot suspend from its current state.");
+        suspendedDatabase = { path: database.name, version: inventory().schemaVersion };
+        const closeFailure = closeDatabase();
+        if (closeFailure) throw new Error(closeFailure);
+        post({ id: request.id, type: "suspended" });
+      } else {
+        const suspended = suspendedDatabase;
+        if (!suspended || database) throw new Error("Database has no suspended connection to resume.");
+        if (request.restoreBackupPath) await restoreWorkbenchDatabaseBackup(request.restoreBackupPath, suspended.path);
+        database = new Database(suspended.path, { fileMustExist: true });
+        database.pragma("foreign_keys = ON");
+        database.pragma("journal_mode = WAL");
+        if (inventory().schemaVersion !== suspended.version) throw new Error("Database rollback did not restore the old worker's schema.");
+        initializeRepositories();
+        suspendedDatabase = null;
+        post({ id: request.id, type: "ready", inventory: inventory() });
+      }
+    } catch (error) {
+      if (request.type === "resume" && suspendedDatabase) {
+        const closeFailure = closeDatabase();
+        if (closeFailure) {
+          postFatalFailure(request, error, `Database rollback connection close failed: ${closeFailure}`);
+        } else {
+          post({
+            id: request.id,
+            type: "requestFailure",
+            message: `Workbench database rollback failed: ${boundedError(error)}`.slice(0, 1_000),
+          });
+        }
+      } else {
+        postFatalFailure(request, error, "Workbench database handoff failed.");
+      }
+    }
+    return;
+  }
+  if (request.type === "acknowledgeMigration") {
+    const pending = migrationAcknowledgement;
+    if (!pending || pending.id !== request.id) {
+      postFatalFailure(request, new Error("Unexpected database migration acknowledgement."));
+      return;
+    }
+    migrationAcknowledgement = null;
+    pending.acknowledge();
+    return;
+  }
   if (request.type === "initialize") {
     try {
       if (database) throw new Error("Workbench database is already initialized");
@@ -335,16 +391,15 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       database = new Database(request.databasePath);
       database.pragma("foreign_keys = ON");
       database.pragma("journal_mode = WAL");
-      await migrateWorkbenchDatabase(database, workbenchDatabaseSchema);
-      proveReadWrite();
-      threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
-      transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
-      transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
-      threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository, transcriptIdentityRepository);
-      searchRepository = new WorkbenchSearchRepository(database);
-      statsRepository = new WorkbenchStatsRepository(database);
-      statsImportRepository = new WorkbenchStatsImportRepository(database);
-      statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
+      await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
+        beforeMigration: request.acknowledgeMigration
+          ? (backupPath) => new Promise<void>((acknowledge) => {
+            migrationAcknowledgement = { id: request.id, acknowledge };
+            post({ id: request.id, type: "migrationCheckpoint", backupPath });
+          })
+          : undefined,
+      });
+      initializeRepositories();
       post({ id: request.id, type: "ready", inventory: inventory() });
     } catch (error) {
       postFatalFailure(request, error, "Workbench database initialization failed.");

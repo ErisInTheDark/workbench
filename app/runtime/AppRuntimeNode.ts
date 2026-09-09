@@ -33,11 +33,23 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       processScope: "client:process",
     }, state?.reload);
     let detached = false;
+    const detach = () => {
+      detached = true;
+      return { dirt: dirt.detachForReload(), reload: reload.detachForReload() } satisfies AppRuntimeNodeState;
+    };
     return {
-      detachForReload: () => {
-        detached = true;
-        return { dirt: dirt.detachForReload(), reload: reload.detachForReload() } satisfies AppRuntimeNodeState;
-      },
+      beginHandoff: () => ({
+        waitForIdle: async () => {},
+        expire: () => {},
+        detach,
+        resume: () => {
+          dirt.resumeAfterFailedReload();
+          reload.resumeAfterFailedReload();
+          detached = false;
+        },
+        commit: () => { reload.dispose(); },
+      }),
+      detachForReload: detach,
       dispose: () => {
         if (detached) return;
         reload.dispose();

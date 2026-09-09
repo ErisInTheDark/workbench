@@ -46,9 +46,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       );
       commandExecutorActive = true;
     };
-    const stopWaitObservation = requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
-      threadState.controller.setThreadWaitState("codex", threadId, toolNames);
-    });
+    let stopWaitObservation: (() => void) | null = null;
     const mcp = new WorkbenchAgentMcpController({
       resolveThreadId: async (threadId, cwd) => {
         const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench MCP" });
@@ -77,15 +75,18 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       transcriptAssets: new WorkbenchTranscriptAssetController(context.legacyMigrationProjectRoot, build.get("threadIdentity")),
     });
     return {
-      activate: () => {
-        if (build.mode === "initial") return;
+      afterCommit: () => {
         activateCommandExecutor();
+        stopWaitObservation ??= requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
+          threadState.controller.setThreadWaitState("codex", threadId, toolNames);
+        });
         if (build.mode === "replacement") codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
       dispose: () => {
         requestRegistry.releaseCommandExecutor(commandExecutorOwner);
-        stopWaitObservation();
+        stopWaitObservation?.();
+        stopWaitObservation = null;
         mcp.releaseRuntimeOwner();
       },
       expireRuntimeDrain: () => { mcp.expireRuntimeDrain(); },
@@ -95,8 +96,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       })),
       registrations: { mcp, orchestratorHttp },
       start: async () => {
-        if (build.mode === "initial") activateCommandExecutor();
-        else if (build.mode === "replacement") await context.refreshWorkbenchPromptFiles();
+        if (build.mode === "replacement") await context.refreshWorkbenchPromptFiles();
       },
     };
   },

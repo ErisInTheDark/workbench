@@ -357,6 +357,9 @@ export class OpenCodeBridge {
   private readonly projectRoot: string;
   private readonly identities: OpenCodeBridgeOptions["identities"];
   private readonly resolveProject: OpenCodeBridgeOptions["resolveProject"];
+  private readonly reconnectOnStart: boolean;
+  private generation = new AbortController();
+  private readonly persistence = new Set<Promise<unknown>>();
   private client: OpencodeClient | null = null;
   private eventAbortController: AbortController | null = null;
   private eventPumpPromise: Promise<void> | null = null;
@@ -375,6 +378,8 @@ export class OpenCodeBridge {
     this.projectRoot = projectRoot;
     this.identities = identities;
     this.resolveProject = resolveProject;
+    this.reconnectOnStart = initialState?.hadClient ?? false;
+    initialState = initialState ? structuredClone(initialState) : undefined;
     this.client = null;
     this.liveThreadState = initialState?.liveThreadState
       ?? getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
@@ -382,7 +387,10 @@ export class OpenCodeBridge {
     this.pendingQuestions = initialState?.pendingQuestions ?? new Map();
     this.sessionDirectories = initialState?.sessionDirectories ?? new Map();
     this.sessionStatuses = initialState?.sessionStatuses ?? new Map();
-    if (initialState?.hadClient) {
+  }
+
+  start() {
+    if (this.reconnectOnStart) {
       void this.ensureClient().catch((error) => {
         logError("opencode-bridge", error instanceof Error ? error.message : String(error));
       });
@@ -394,10 +402,8 @@ export class OpenCodeBridge {
   }
 
   async stop() {
-    this.eventAbortController?.abort();
-    this.eventAbortController = null;
-    await this.eventPumpPromise?.catch(() => undefined);
-    this.eventPumpPromise = null;
+    this.expireRuntimeDrain();
+    await Promise.all(this.persistence);
     this.pendingPermissions.clear();
     this.pendingQuestions.clear();
     this.liveThreadState = this.getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
@@ -411,17 +417,13 @@ export class OpenCodeBridge {
   }
 
   async detachForReload(): Promise<OpenCodeBridgeState> {
-    await this.startPromise?.catch(() => undefined);
-    this.startPromise = null;
-    this.eventAbortController?.abort();
-    this.eventAbortController = null;
-    await this.eventPumpPromise?.catch(() => undefined);
-    this.eventPumpPromise = null;
+    this.expireRuntimeDrain();
+    await Promise.all(this.persistence);
     for (const timer of this.snapshotRefreshTimers.values()) {
       clearTimeout(timer);
     }
     this.snapshotRefreshTimers.clear();
-    const hadClient = Boolean(this.client);
+    const hadClient = Boolean(this.client || this.startPromise || this.reconnectOnStart);
 
     const state: OpenCodeBridgeState = {
       hadClient,
@@ -432,14 +434,34 @@ export class OpenCodeBridge {
       sessionStatuses: this.sessionStatuses,
     };
 
-    this.client = null;
-    this.liveThreadState = this.getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
-    this.pendingPermissions = new Map();
-    this.pendingQuestions = new Map();
-    this.sessionDirectories = new Map();
-    this.sessionStatuses = new Map();
+    return structuredClone(state);
+  }
 
-    return state;
+  async waitForIdle() {
+    if (!this.generation.signal.aborted) await this.startPromise;
+    await Promise.all(this.persistence);
+  }
+
+  expireRuntimeDrain() {
+    this.generation.abort(new Error("OpenCode bridge generation was retired."));
+    this.eventAbortController?.abort(this.generation.signal.reason);
+    for (const timer of this.snapshotRefreshTimers.values()) clearTimeout(timer);
+    this.snapshotRefreshTimers.clear();
+  }
+
+  resumeAfterFailedReload() {
+    if (!this.generation.signal.aborted) return;
+    const reconnect = Boolean(this.client || this.startPromise || this.reconnectOnStart);
+    this.generation = new AbortController();
+    this.client = null;
+    this.startPromise = null;
+    this.eventAbortController = null;
+    this.eventPumpPromise = null;
+    if (reconnect) {
+      void this.ensureClient().catch((error) => {
+        logError("opencode-bridge", `rollback reconnect failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
   }
 
   async handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -450,6 +472,7 @@ export class OpenCodeBridge {
     }
 
     try {
+      this.generation.signal.throwIfAborted();
       if (isPassiveOpenCodeAvailabilityMethod(method) && this.appServer.isDisabled()) {
         return okResponse(requestId, emptyPassiveOpenCodeAvailabilityResult());
       }
@@ -530,9 +553,14 @@ export class OpenCodeBridge {
     }
   }
 
-  async recoverInterruptedTurn(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
+  get retirementSignal() { return this.generation.signal; }
+
+  async recoverInterruptedTurn(candidate: WorkbenchTurnRecoveryHandoffCandidate, callerSignal?: AbortSignal) {
+    const signal = AbortSignal.any([this.generation.signal, ...(callerSignal ? [callerSignal] : [])]);
+    signal.throwIfAborted();
     const directory = requestDirectory(candidate.request.params, this.projectRoot);
     const snapshot = await this.readThread(candidate.threadId, directory);
+    signal.throwIfAborted();
     const disposition = getOpenCodeRecoveryDisposition(snapshot.thread, candidate);
     if (disposition !== "prompt") return disposition;
     await this.startTurn(createOpenCodeRecoveryStartRequest(candidate));
@@ -540,6 +568,8 @@ export class OpenCodeBridge {
   }
 
   private async ensureClient(_directory = this.projectRoot) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     if (this.client) {
       return this.client;
     }
@@ -548,9 +578,11 @@ export class OpenCodeBridge {
       return await this.startPromise;
     }
 
-    this.startPromise = (async () => {
+    const starting = (async () => {
       const { createOpencodeClient } = await loadOpenCodeSdk();
+      signal.throwIfAborted();
       const baseUrl = await this.appServer.getBaseUrl();
+      signal.throwIfAborted();
       const headers: Record<string, string> = {};
       if (process.env.OPENCODE_SERVER_USERNAME || process.env.OPENCODE_SERVER_PASSWORD) {
         const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
@@ -560,22 +592,31 @@ export class OpenCodeBridge {
       const client = createOpencodeClient({
         baseUrl,
         headers,
+        fetch: (input, init) => {
+          signal.throwIfAborted();
+          const request = new Request(input, init);
+          return fetch(request, { signal: AbortSignal.any([request.signal, signal]) });
+        },
       });
       await this.restoreLiveIdentities();
+      signal.throwIfAborted();
       this.client = client;
       this.startEventPump(client);
       log("opencode-bridge", `connected to ${baseUrl}`);
       return this.client;
     })();
+    this.startPromise = starting;
 
     try {
-      return await this.startPromise;
+      return await starting;
     } finally {
-      this.startPromise = null;
+      if (this.startPromise === starting) this.startPromise = null;
     }
   }
 
   private startEventPump(client: OpencodeClient) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     if (this.eventPumpPromise) {
       return;
     }
@@ -586,9 +627,11 @@ export class OpenCodeBridge {
       try {
         const events = await client.v2.event.subscribe({ signal: abortController.signal });
         for await (const event of events.stream) {
+          if (signal.aborted || abortController.signal.aborted) break;
           try {
             await this.handleEvent(event);
           } catch (error) {
+            if (signal.aborted && error === signal.reason) break;
             logError("opencode-bridge", `event admission failed: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
@@ -601,10 +644,13 @@ export class OpenCodeBridge {
   }
 
   private async handleEvent(streamEvent: OpenCodeStreamEvent) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     const event = normalizeOpenCodeStreamEvent(streamEvent);
     try {
       await this.applyEvent(event);
     } catch (error) {
+      if (signal.aborted) throw error;
       const threadId = eventThreadId(event);
       if (threadId) this.onNotification({ method: "thread/status/changed", params: { threadId, status: { type: "systemError" } } });
       throw error;
@@ -612,6 +658,8 @@ export class OpenCodeBridge {
   }
 
   private async applyEvent(event: V2Event) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     switch (event.type) {
       case "session.created":
       case "session.updated": {
@@ -620,6 +668,7 @@ export class OpenCodeBridge {
           messages: [], session: event.data.info, status: this.sessionStatuses.get(event.data.sessionID),
         });
         await this.admitThreads([thread]);
+        signal.throwIfAborted();
         this.onNotification({
           method: event.type === "session.created" ? "thread/started" : "thread/name/updated",
           params: event.type === "session.created"
@@ -641,6 +690,7 @@ export class OpenCodeBridge {
       case "session.idle":
         this.sessionStatuses.set(event.data.sessionID, { type: "idle" });
         await this.publishLiveEvent(event);
+        signal.throwIfAborted();
         this.onNotification({
           method: "thread/status/changed",
           params: {
@@ -708,6 +758,7 @@ export class OpenCodeBridge {
         }
         if (event.type === "message.updated" || event.type === "message.part.updated") {
           await this.publishLiveEvent(event);
+          signal.throwIfAborted();
         }
         this.onNotification({
           method: "thread/status/changed",
@@ -725,6 +776,8 @@ export class OpenCodeBridge {
   }
 
   private async admitThreads(threads: readonly Thread[]) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     if (!this.identities) return;
     const resolveProject = this.resolveProject;
     if (!resolveProject) throw new Error("OpenCode identity admission requires the project owner.");
@@ -737,19 +790,25 @@ export class OpenCodeBridge {
         updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
       },
     })));
-    await admitProviderThreads(this.identities, inputs);
+    signal.throwIfAborted();
+    await this.persist(() => admitProviderThreads(this.identities!, inputs));
+    signal.throwIfAborted();
   }
 
   private async restoreLiveIdentities() {
+    const signal = this.generation.signal;
     if (!this.identities) return;
     for (const [nativeThreadId, session] of this.liveThreadState.sessions) {
+      signal.throwIfAborted();
       const native = this.identities.threads.knownNativeBinding("opencode", nativeThreadId);
       const threadId = this.identities.threads.workbenchIdForNative(native);
       if (session.currentTurnId && !await this.identities.threads.resolveTurn({ threadId, turnId: session.currentTurnId })) {
         throw new Error("OpenCode live turn has no retained identity.");
       }
       for (const item of session.startedItems.values()) {
+        signal.throwIfAborted();
         const turn = await this.identities.threads.resolveTurn({ threadId, turnId: item.turnId });
+        signal.throwIfAborted();
         if (!turn || !await this.identities.items.resolve({ threadId, turnId: turn.turnId, itemId: item.itemId })) {
           throw new Error("OpenCode live item has no retained identity.");
         }
@@ -758,16 +817,21 @@ export class OpenCodeBridge {
   }
 
   private async publishLiveEvent(event: V2Event) {
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
     const notifications: JsonRpcNotification[] = [];
+    const nextState = structuredClone(this.liveThreadState);
     this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(
-      this.liveThreadState, event, (notification) => notifications.push(notification),
+      nextState, event, (notification) => notifications.push(notification),
     );
     if (this.identities && notifications.length) {
       const threadId = eventThreadId(event);
       if (!threadId) throw new Error("OpenCode live event has no thread identity.");
       const native = this.identities.threads.knownNativeBinding("opencode", threadId);
-      await admitProviderNotifications(this.identities, native, notifications as ServerNotification[]);
+      await this.persist(() => admitProviderNotifications(this.identities!, native, notifications as ServerNotification[]));
     }
+    signal.throwIfAborted();
+    this.liveThreadState = nextState;
     for (const notification of notifications) this.onNotification(notification);
   }
 
@@ -778,12 +842,15 @@ export class OpenCodeBridge {
   }
 
   private scheduleThreadSnapshotRefresh(threadId: string, delayMs = OPENCODE_EVENT_SNAPSHOT_REFRESH_DELAY_MS) {
+    const signal = this.generation.signal;
+    if (signal.aborted) return;
     const existingTimer = this.snapshotRefreshTimers.get(threadId);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
 
     const timer = setTimeout(() => {
+      if (signal.aborted) return;
       this.snapshotRefreshTimers.delete(threadId);
       void this.emitThreadSnapshot(threadId).catch((error) => {
         logError("opencode-bridge", error instanceof Error ? error.message : String(error));
@@ -793,8 +860,10 @@ export class OpenCodeBridge {
   }
 
   private async emitThreadSnapshot(threadId: string) {
+    const signal = this.generation.signal;
     const directory = this.sessionDirectories.get(threadId) ?? this.projectRoot;
     const { thread } = await this.readThread(threadId, directory);
+    signal.throwIfAborted();
     const latestTurn = thread.turns.at(-1);
     this.onNotification({
       method: "thread/status/changed",
@@ -825,11 +894,14 @@ export class OpenCodeBridge {
   }
 
   private async listThreads(directories: string[]) {
+    const signal = this.generation.signal;
     const [primaryDirectory = this.projectRoot] = directories;
     const client = await this.ensureClient(primaryDirectory);
+    signal.throwIfAborted();
     const sessionsById = new Map<string, Session>();
     for (const directory of directories) {
       const sessions = unwrapResponse(await client.session.list({ directory }));
+      signal.throwIfAborted();
       for (const session of sessions) {
         sessionsById.set(session.id, session);
       }
@@ -847,16 +919,24 @@ export class OpenCodeBridge {
         status: this.sessionStatuses.get(session.id),
       }));
     await this.admitThreads(data);
+    signal.throwIfAborted();
     return { data };
   }
 
   private async readThread(threadId: string, directory: string, includeTurns = true): Promise<OpenCodeSessionResponse> {
+    const signal = this.generation.signal;
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     const [session, messages, statuses] = await Promise.all([
       client.session.get({ directory, sessionID: threadId }).then(unwrapResponse),
       includeTurns ? client.session.messages({ directory, limit: 100, sessionID: threadId }).then(unwrapResponse) : Promise.resolve([]),
-      client.session.status({ directory }).then(unwrapResponse).catch(() => ({} as Record<string, SessionStatus>)),
+      client.session.status({ directory }).then(unwrapResponse).catch((error) => {
+        signal.throwIfAborted();
+        logError("opencode-bridge", `session status read failed: ${String(error instanceof Error ? error.message : error).slice(0, 1_000)}`);
+        return {} as Record<string, SessionStatus>;
+      }),
     ]);
+    signal.throwIfAborted();
     const status = statuses[threadId] ?? this.sessionStatuses.get(threadId) ?? null;
     if (status) {
       this.sessionStatuses.set(threadId, status);
@@ -864,6 +944,7 @@ export class OpenCodeBridge {
     this.rememberSessionDirectory(session.id, session.directory);
     const thread = this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({ messages, session, status });
     await this.admitThreads([thread]);
+    signal.throwIfAborted();
     return {
       model: (thread as Thread & { model?: string | null }).model ?? null,
       modelProvider: thread.modelProvider,
@@ -874,8 +955,10 @@ export class OpenCodeBridge {
   }
 
   private async startThread(params: unknown): Promise<OpenCodeSessionResponse> {
+    const signal = this.generation.signal;
     const directory = requestDirectory(params, this.projectRoot);
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     const model = modelParts(requestModel(params));
     const reasoningConfig = createOpenCodeReasoningConfig(requestReasoningEffort(params));
     const session = unwrapResponse(await client.session.create({
@@ -883,6 +966,7 @@ export class OpenCodeBridge {
       ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...reasoningConfig } } : {}),
       title: DEFAULT_OPENCODE_THREAD_TITLE,
     }));
+    signal.throwIfAborted();
     this.rememberSessionDirectory(session.id, session.directory);
     const thread = this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
       messages: [],
@@ -890,6 +974,7 @@ export class OpenCodeBridge {
       status: this.sessionStatuses.get(session.id),
     });
     await this.admitThreads([thread]);
+    signal.throwIfAborted();
     return {
       model: requestModel(params),
       modelProvider: requestModel(params)?.split("/")[0] ?? "opencode",
@@ -900,12 +985,15 @@ export class OpenCodeBridge {
   }
 
   private async setThreadName(threadId: string, name: string, directory: string) {
+    const signal = this.generation.signal;
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     const session = unwrapResponse(await client.session.update({
       directory,
       sessionID: threadId,
       title: name,
     }));
+    signal.throwIfAborted();
     this.onNotification({
       method: "thread/name/updated",
       params: {
@@ -917,6 +1005,7 @@ export class OpenCodeBridge {
   }
 
   private async updateDefaultThreadTitleFromPrompt(client: OpencodeClient, threadId: string, directory: string, prompt: string) {
+    const signal = this.generation.signal;
     const title = this.getReloadableModules().threadBootstrap.normalizeThreadTitle(prompt);
     if (!title) {
       return;
@@ -924,6 +1013,7 @@ export class OpenCodeBridge {
 
     try {
       const session = unwrapResponse(await client.session.get({ directory, sessionID: threadId }));
+      signal.throwIfAborted();
       if (!isDefaultOpenCodeThreadTitle(session.title)) {
         return;
       }
@@ -933,6 +1023,7 @@ export class OpenCodeBridge {
         sessionID: threadId,
         title,
       }));
+      signal.throwIfAborted();
       this.onNotification({
         method: "thread/name/updated",
         params: {
@@ -941,11 +1032,13 @@ export class OpenCodeBridge {
         },
       });
     } catch (error) {
+      if (error === signal.reason && signal.aborted) throw error;
       logError("opencode-bridge", `failed to set default thread title: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   private async buildTurnSystemPrompt(message: JsonRpcRequest, threadId: string, params: unknown) {
+    const signal = this.generation.signal;
     const untrustedPromptContext = readWorkbenchPromptContext(message);
     const publicThreadId = this.identities ? this.identities.threads.workbenchIdForNative(
       this.identities.threads.knownNativeBinding("opencode", threadId),
@@ -960,18 +1053,21 @@ export class OpenCodeBridge {
       };
       if (resolvedPromptContext.instructionScope === "threadUtilities") {
         const developerInstructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(resolvedPromptContext);
+        signal.throwIfAborted();
         systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt({
           baseInstructions: null,
           developerInstructions,
         });
       } else {
         const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions(resolvedPromptContext);
+        signal.throwIfAborted();
         systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(instructions);
       }
     } else {
       systemPrompt = null;
     }
     const available = await this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
+    signal.throwIfAborted();
     const filtered = this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(systemPrompt, {
       available,
       field: "opencode.systemPrompt",
@@ -985,6 +1081,7 @@ export class OpenCodeBridge {
   }
 
   private async startTurn(message: JsonRpcRequest) {
+    const signal = this.generation.signal;
     const params = message.params;
     const threadId = requestThreadId(params);
     const input = requestInput(params);
@@ -1000,11 +1097,14 @@ export class OpenCodeBridge {
     }
 
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     const model = modelParts(requestModel(params));
     const reasoningConfig = createOpenCodeReasoningConfig(requestReasoningEffort(params));
     const agent = requestAgent(params);
     const system = await this.buildTurnSystemPrompt(message, threadId, params);
+    signal.throwIfAborted();
     await this.updateDefaultThreadTitleFromPrompt(client, threadId, directory, prompt);
+    signal.throwIfAborted();
     this.rememberSessionDirectory(threadId, directory);
     const turn = createSyntheticTurn(threadId, input, clientUserMessageId);
     this.onNotification({
@@ -1030,8 +1130,10 @@ export class OpenCodeBridge {
       sessionID: threadId,
       ...(system ? { system } : {}),
       });
+      signal.throwIfAborted();
       this.scheduleThreadSnapshotRefresh(threadId);
     } catch (error) {
+      if (signal.aborted) throw error;
       logError("opencode-bridge", error instanceof Error ? error.message : String(error));
       this.onNotification({
         method: "thread/status/changed",
@@ -1046,18 +1148,28 @@ export class OpenCodeBridge {
   }
 
   private async abortThread(threadId: string, directory: string) {
+    const signal = this.generation.signal;
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     await client.session.abort({ directory, sessionID: threadId });
+    signal.throwIfAborted();
     this.clearPendingUserInputForThread(threadId);
     return { ok: true };
   }
 
   private async listModels(directory: string) {
+    const signal = this.generation.signal;
     const client = await this.ensureClient(directory);
+    signal.throwIfAborted();
     const [models, providers] = await Promise.all([
       client.v2.model.list({ location: { directory } }).then(unwrapResponse),
-      client.v2.provider.list({ location: { directory } }).then(unwrapResponse).catch(() => ({ data: [] })),
+      client.v2.provider.list({ location: { directory } }).then(unwrapResponse).catch((error) => {
+        signal.throwIfAborted();
+        logError("opencode-bridge", `provider catalogue read failed: ${String(error instanceof Error ? error.message : error).slice(0, 1_000)}`);
+        return { data: [] };
+      }),
     ]);
+    signal.throwIfAborted();
     return {
       data: this.getReloadableModules().opencodeThreadState.mapOpenCodeModelsToWorkbenchOptions(
         models.data,
@@ -1209,17 +1321,22 @@ export class OpenCodeBridge {
   }
 
   private async hydratePendingQuestions() {
+    const signal = this.generation.signal;
     const client = await this.ensureClient(this.projectRoot);
+    signal.throwIfAborted();
     const questions = unwrapResponse(await client.question.list({ directory: this.projectRoot }));
+    signal.throwIfAborted();
     for (const question of questions) {
       this.upsertQuestion("legacy", question, { notify: false });
     }
   }
 
   private async listPendingPermissions() {
+    const signal = this.generation.signal;
     await this.hydratePendingQuestions().catch((error) => {
       logError("opencode-bridge", error instanceof Error ? error.message : String(error));
     });
+    signal.throwIfAborted();
 
     return {
       data: [
@@ -1259,18 +1376,21 @@ export class OpenCodeBridge {
   }
 
   private async respondToPermission(params: unknown) {
+    const signal = this.generation.signal;
     const record = asRecord(params);
     const requestKey = asString(record?.requestKey);
     const pendingPermission = requestKey ? this.pendingPermissions.get(requestKey) : null;
     if (pendingPermission) {
       const response = this.readPermissionResponse(record?.response);
       const client = await this.ensureClient(this.projectRoot);
+      signal.throwIfAborted();
       if (pendingPermission.v2) {
         await client.v2.session.permission.reply({
           reply: response,
           requestID: pendingPermission.v2.id,
           sessionID: pendingPermission.v2.sessionID,
         });
+        signal.throwIfAborted();
         this.resolvePermission(pendingPermission.v2.sessionID, pendingPermission.v2.id);
       } else if (pendingPermission.legacy) {
         await client.permission.reply({
@@ -1278,6 +1398,7 @@ export class OpenCodeBridge {
           reply: response,
           requestID: pendingPermission.legacy.id,
         });
+        signal.throwIfAborted();
         this.resolvePermission(pendingPermission.legacy.sessionID, pendingPermission.legacy.id);
       }
       return { ok: true };
@@ -1295,6 +1416,7 @@ export class OpenCodeBridge {
 
     const response = this.readQuestionResponse(replyQuestion, record?.response);
     const client = await this.ensureClient(this.projectRoot);
+    signal.throwIfAborted();
     if (pendingQuestion.v2) {
       await client.v2.session.question.reply({
         questionV2Reply: response,
@@ -1308,6 +1430,7 @@ export class OpenCodeBridge {
         requestID: replyQuestion.id,
       });
     }
+    signal.throwIfAborted();
     this.resolveQuestion(replyQuestion.sessionID, replyQuestion.id);
     return { ok: true };
   }
@@ -1323,6 +1446,12 @@ export class OpenCodeBridge {
       return "reject";
     }
     return "once";
+  }
+
+  private persist<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = operation().finally(() => { this.persistence.delete(pending); });
+    this.persistence.add(pending);
+    return pending;
   }
 
   private readQuestionResponse(question: QuestionRequest | QuestionV2Request, response: unknown) {

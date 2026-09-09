@@ -15,6 +15,7 @@ import ReloadableNodeTransition, { type ReloadableNodeTransitionDeadline } from 
 import type {
   ReloadableNodeBuild,
   ReloadableNodeGraph,
+  ReloadableNodeHandoff,
   ReloadableNodeInstance,
   ReloadableNodeLifecycle,
 } from "./ReloadableNode.ts";
@@ -68,6 +69,14 @@ interface ActiveNode<TContext, TFeatures extends object, TNotification> {
   releaseGate: (() => void) | null;
   runtimeDrainStartedAt: number | null;
   token: symbol;
+  startController: AbortController;
+  drainExpired: boolean;
+}
+
+interface PendingRollback<TContext, TFeatures extends object, TNotification> {
+  nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[];
+  handoffs: Map<string, ReloadableNodeHandoff>;
+  error: Error;
 }
 
 interface Retirement<TContext, TFeatures extends object, TNotification> {
@@ -116,11 +125,13 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly requiredRegistrations: readonly PropertyKey[];
   private readonly requiredScopes: readonly OrchestratorReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
+  private readonly candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private reloadTail = Promise.resolve();
-  private transition: ReloadableNodeTransition | null = null;
+  private readonly pendingRollbacks = new Set<PendingRollback<TContext, TFeatures, TNotification>>();
   private readonly retirements = new Set<Retirement<TContext, TFeatures, TNotification>>();
   private readonly runtimeDrainTimeoutMs: number;
   private started = false;
+  private starting: Promise<void> | null = null;
   private topology: readonly OrchestratorReloadScope[] = [];
   private readonly topologyScope: OrchestratorReloadScope;
 
@@ -212,16 +223,36 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     }
   }
 
-  async start() {
-    if (this.started) return;
+  start() {
+    this.assertAcceptingWork();
+    if (this.started) return Promise.resolve();
+    if (this.starting) return this.starting;
+    const starting = this.startGraph();
+    this.starting = starting;
+    void starting.then(
+      () => { if (this.starting === starting) this.starting = null; },
+      () => { if (this.starting === starting) this.starting = null; },
+    );
+    return starting;
+  }
+
+  private async startGraph() {
     const started: ActiveNode<TContext, TFeatures, TNotification>[] = [];
     try {
       for (const nodeId of this.topology) {
+        this.assertAcceptingWork();
         const node = this.requireNode(nodeId);
-        await node.instance.start();
         started.push(node);
+        await node.instance.start(undefined, node.startController.signal);
+        node.startController.signal.throwIfAborted();
       }
+      for (const node of started) {
+        this.assertAcceptingWork();
+        await node.instance.activate?.();
+      }
+      this.assertAcceptingWork();
       this.started = true;
+      for (const node of started) node.instance.afterCommit?.();
     } catch (error) {
       await this.disposeNodesAfterFailure([...started].reverse(), error, "Feature graph startup and cleanup both failed.");
     }
@@ -235,9 +266,6 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     this.assertAcceptingWork();
     const operation = this.reloadTail.then(async () => {
       this.assertAcceptingWork();
-      if (this.transition?.failure) {
-        throw new Error(`A previous reload left an unsafe lifecycle; a process restart is required. ${this.transition.failure.message}`);
-      }
       const transition = new ReloadableNodeTransition(
         this.createDeadline(this.runtimeDrainTimeoutMs),
         this.runtimeDrainTimeoutMs,
@@ -247,46 +275,19 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         ], "Pending reload work"),
         this.logError,
       );
-      this.transition = transition;
       try {
-        await transition.execute(async () => {
-          const fresh = await transition.step("load graph", () => this.validateGraph(this.flattenGraph(this.loader.reload())));
-          if (this.hasTopologyChanged(fresh.definitions, fresh.topology)) {
-            if (!scopes.includes(this.topologyScope)) {
-              throw new Error(`Reloadable node topology changed outside a ${this.topologyScope} reload. The current runtime was not changed.`);
-            }
-            for (const scope of this.changedTopologyClosure(fresh.definitions, scopes)) transition.affectedScopes.add(scope);
-            await this.reloadChangedTopology(fresh.definitions, fresh.topology, scopes);
-            return;
-          }
-          const selected = this.selectDependants(scopes, fresh.definitions);
-          for (const scope of selected) transition.affectedScopes.add(scope);
-          if (!selected.size) return;
-          const ordered = fresh.topology.filter((nodeId) => selected.has(nodeId));
-          if (ordered.some((nodeId) => fresh.definitions.get(nodeId)?.lifecycle === "handoff")) {
-            await this.reloadWithHandoff(fresh.definitions, ordered);
-          } else {
-            await this.reloadAtomically(fresh.definitions, ordered);
-          }
-        });
-      } catch (error) {
-        if (transition.failure || !transition.liveGraphUsable) {
-          transition.fail(error);
-          if (transition.liveGraphUsable) {
-            for (const scope of transition.affectedScopes) {
-              const node = this.nodes.get(scope);
-              if (node) this.openGate(node);
-            }
-          }
-          for (const retirement of this.retirements) {
-            for (const node of retirement.nodes) node.instance.expireRuntimeDrain?.();
-          }
-          this.logError(transition.failure!.message.slice(0, 2_000));
+        const fresh = await transition.step("load graph", () => this.validateGraph(this.flattenGraph(this.loader.reload())));
+        const topologyChanged = this.hasTopologyChanged(fresh.definitions, fresh.topology);
+        if (topologyChanged && !scopes.includes(this.topologyScope)) {
+          throw new Error(`Reloadable node topology changed outside a ${this.topologyScope} reload. The current runtime was not changed.`);
         }
-        throw error;
+        const selected = topologyChanged
+          ? this.changedTopologyClosure(fresh.definitions, scopes)
+          : this.selectDependants(scopes, fresh.definitions);
+        await this.retryRollbacks(selected, transition);
+        if (selected.size) await this.replaceGraph(fresh.definitions, fresh.topology, selected, transition);
       } finally {
         transition.finish();
-        if (!transition.failure) this.transition = null;
       }
     });
     this.reloadTail = operation.catch(() => undefined);
@@ -314,346 +315,207 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     }
   }
 
-  async dispose() {
-    await this.reloadTail;
-    this.transition?.assertActive();
-    const nodes = [...this.topology].reverse().map((nodeId) => this.requireNode(nodeId));
-    for (const node of nodes) this.beginDrain(node);
-    await Promise.all(nodes.map(async (node) => await this.waitForDrain(node)));
-    await this.disposeNodes(nodes);
+  dispose() {
+    return this.beginHardShutdown();
   }
 
   beginHardShutdown() {
     if (this.hardShutdownPromise) return this.hardShutdownPromise;
     this.hardShutdownStarted = true;
-    this.hardShutdownPromise = (async () => {
-      const blocking = new Set([
-        ...this.nodes.values(),
-        ...Array.from(this.retirements).flatMap((retirement) => retirement.nodes),
-      ]);
-      for (const node of blocking) {
-        this.beginDrain(node);
-        node.instance.expireRuntimeDrain?.();
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    this.hardShutdownPromise = new Promise<void>((accept, fail) => { resolve = accept; reject = fail; });
+    const reason = new Error("Reloadable graph is shutting down.");
+    const notified = new Set<ActiveNode<TContext, TFeatures, TNotification>>();
+    const shutdowns: Promise<void>[] = [];
+    const notify = (node: ActiveNode<TContext, TFeatures, TNotification>) => {
+      if (notified.has(node)) return;
+      notified.add(node);
+      node.startController.abort(reason);
+      this.openGate(node);
+      for (const operation of [
+        () => this.beginDrain(node),
+        () => node.instance.expireRuntimeDrain?.(),
+        () => node.instance.shutdown?.(),
+      ]) {
+        try { shutdowns.push(Promise.resolve(operation())); }
+        catch (error) { shutdowns.push(Promise.reject(error)); }
       }
-
+    };
+    for (const node of this.nodes.values()) notify(node);
+    for (const node of this.candidates.values()) notify(node);
+    for (const retirement of this.retirements) for (const node of retirement.nodes) notify(node);
+    // Observe early failures immediately, while all owners receive their stop intent.
+    const early = Promise.allSettled(shutdowns);
+    const starting = this.starting;
+    void (async () => {
+      const errors: unknown[] = [];
+      if (starting) {
+        try { await starting; }
+        catch (error) {
+          if (error !== reason) this.reportLifecycleFailure("feature graph", "startup while closing", error);
+        }
+      }
       await this.reloadTail;
-      this.transition?.assertActive();
-
+      const earlyResults = await early;
+      const earlyCount = shutdowns.length;
       const nodes = [...this.topology].reverse().map((nodeId) => this.requireNode(nodeId));
-      const retirements = Array.from(this.retirements);
-      const finalDraining = new Set([
-        ...nodes,
-        ...retirements.flatMap((retirement) => retirement.nodes),
-      ]);
-      for (const node of finalDraining) {
-        this.beginDrain(node);
-        node.instance.expireRuntimeDrain?.();
-      }
-      await Promise.all([
-        ...retirements.map((retirement) => retirement.promise),
-        Promise.all(nodes.map(async (node) => await this.waitForDrain(node))).then(async () => await this.disposeNodes(nodes)),
-      ]);
-    })();
+      const retirements = [...this.retirements];
+      for (const node of nodes) notify(node);
+      for (const retirement of retirements) for (const node of retirement.nodes) notify(node);
+      for (const result of [
+        ...earlyResults,
+        ...await Promise.allSettled(shutdowns.slice(earlyCount)),
+        ...await Promise.allSettled(retirements.map(retirement => retirement.promise)),
+      ]) if (result.status === "rejected") errors.push(result.reason);
+      try { await this.disposeNodes(nodes); }
+      catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, "Feature graph shutdown failed.");
+    })().then(resolve, reject);
     return this.hardShutdownPromise;
   }
 
-  private async reloadAtomically(
-    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    ordered: readonly string[],
-  ) {
-    const selected = new Set(ordered);
-    const candidates = this.createNodes(definitions, ordered, this.nodes, new Map(), selected, "replacement");
-    try {
-      if (this.started) {
-        for (const nodeId of ordered) {
-          this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
-        }
-      }
-      this.assertAcceptingWork();
-    } catch (error) {
-      this.transition?.assertActive();
-      await this.disposeNodesAfterFailure([...candidates.values()].reverse(), error, "Atomic feature replacement startup and cleanup both failed.");
-    }
-    const previous = ordered.map((nodeId) => this.requireNode(nodeId));
-    this.transition!.liveGraphUsable = false;
-    for (const nodeId of ordered) this.nodes.set(nodeId, candidates.get(nodeId)!);
-    this.definitions = definitions;
-    this.featureOwners = this.validateFeatureOwnership(this.nodes);
-    let activationError: unknown = null;
-    try {
-      for (const nodeId of ordered) await this.lifecycle(nodeId, "activate", () => candidates.get(nodeId)!.instance.activate?.());
-      this.transition!.liveGraphUsable = true;
-      await this.lifecycle("feature graph", "publish notification", () => this.onSwap(ordered));
-    } catch (error) {
-      this.transition?.assertActive();
-      activationError = error;
-    }
-    await this.retireNodes([...previous].reverse());
-    if (activationError) throw activationError;
-  }
-
-  private async reloadWithHandoff(
-    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    ordered: readonly string[],
-  ) {
-    const selected = new Set(ordered);
-    const handoffIds = ordered.filter((nodeId) => definitions.get(nodeId)?.lifecycle === "handoff");
-    const atomicIds = ordered.filter((nodeId) => (
-      definitions.get(nodeId)?.lifecycle === "atomic"
-      && !this.hasSelectedHandoffDependency(nodeId, selected, definitions)
-    ));
-    const delayedIds = ordered.filter((nodeId) => !atomicIds.includes(nodeId));
-    const candidates = this.createNodes(definitions, atomicIds, this.nodes, new Map(), selected, "replacement");
-    try {
-      if (this.started) {
-        for (const nodeId of atomicIds) {
-          this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
-        }
-      }
-      this.assertAcceptingWork();
-    } catch (error) {
-      this.transition?.assertActive();
-      await this.disposeNodesAfterFailure([...candidates.values()].reverse(), error, "Handoff feature replacement startup and cleanup both failed.");
-    }
-
-    const previous = ordered.map((nodeId) => this.requireNode(nodeId));
-    for (const node of previous) this.closeGate(node);
-    try {
-      await this.waitForNodesDrain(previous);
-      this.assertAcceptingWork();
-    } catch (error) {
-      this.transition?.assertActive();
-      for (const node of previous) this.openGate(node);
-      await this.disposeNodesAfterFailure([...candidates.values()].reverse(), error, "Handoff feature drain and candidate cleanup both failed.");
-    }
-
-    const handoffStates = new Map<string, unknown>();
-    const detachedHandoffIds: string[] = [];
-    let committed = false;
-    try {
-      for (const nodeId of [...handoffIds].reverse()) {
-        const node = this.requireNode(nodeId);
-        if (!node.instance.detachForReload) throw new Error(`Handoff feature node ${nodeId} does not implement detachForReload.`);
-        this.transition!.liveGraphUsable = false;
-        handoffStates.set(nodeId, await this.lifecycle(nodeId, "detach", () => node.instance.detachForReload!({ isReplacing: (candidateId) => selected.has(candidateId) })));
-        detachedHandoffIds.push(nodeId);
-        this.assertAcceptingWork();
-      }
-      const built = this.createNodes(definitions, delayedIds, new Map([...this.nodes, ...candidates]), handoffStates, selected, "replacement");
-      for (const [nodeId, node] of built) candidates.set(nodeId, node);
-      if (this.started) {
-        for (const nodeId of delayedIds) {
-          this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
-        }
-      }
-      this.assertAcceptingWork();
-      for (const nodeId of ordered) this.nodes.set(nodeId, candidates.get(nodeId)!);
-      this.definitions = definitions;
-      this.featureOwners = this.validateFeatureOwnership(this.nodes);
-      for (const node of previous) this.openGate(node);
-      committed = true;
-      let activationError: unknown = null;
-      try {
-        for (const nodeId of ordered) await this.lifecycle(nodeId, "activate", () => candidates.get(nodeId)!.instance.activate?.());
-        this.transition!.liveGraphUsable = true;
-        await this.lifecycle("feature graph", "publish notification", () => this.onSwap(ordered));
-      } catch (error) {
-        this.transition?.assertActive();
-        activationError = error;
-      }
-      await this.retireNodes([...previous].reverse());
-      if (activationError) throw activationError;
-    } catch (error) {
-      this.transition?.assertActive();
-      if (committed) throw error;
-      const rollbackErrors: unknown[] = [];
-      try {
-        await this.disposeNodes([...candidates.values()].reverse());
-      } catch (disposeError) {
-        this.transition?.assertActive();
-        rollbackErrors.push(disposeError);
-      }
-      if (detachedHandoffIds.length) {
-        try {
-          await this.restoreHandoffNodes(detachedHandoffIds, handoffStates);
-        } catch (restoreError) {
-          this.transition?.assertActive();
-          rollbackErrors.push(restoreError);
-        }
-      }
-      for (const node of previous) this.openGate(node);
-      if (rollbackErrors.length) {
-        for (const rollbackError of rollbackErrors) {
-          this.logError(`Feature graph rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
-        }
-        throw new AggregateError([error, ...rollbackErrors], "Feature graph replacement and rollback both failed.");
-      }
-      this.transition!.liveGraphUsable = true;
-      throw error;
-    }
-  }
-
-  private async restoreHandoffNodes(handoffIds: readonly string[], states: ReadonlyMap<string, unknown>) {
-    const restored = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
-    const dependencies = new Map(this.nodes);
-    try {
-      for (const nodeId of this.topology.filter((candidate) => handoffIds.includes(candidate))) {
-        const built = this.createNodes(this.definitions, [nodeId], new Map([...dependencies, ...restored]), new Map([[nodeId, states.get(nodeId)]]), new Set(handoffIds), "restore");
-        const node = built.get(nodeId)!;
-        restored.set(nodeId, node);
-        if (this.started) await this.lifecycle(nodeId, "restore start", (reportPhase) => node.instance.start(reportPhase));
-      }
-    } catch (error) {
-      this.transition?.assertActive();
-      await this.disposeNodesAfterFailure([...restored.values()].reverse(), error, "Feature graph restore startup and cleanup both failed.");
-    }
-    for (const [nodeId, node] of restored) this.nodes.set(nodeId, node);
-    this.featureOwners = this.validateFeatureOwnership(this.nodes);
-    for (const nodeId of this.topology.filter((candidate) => restored.has(candidate))) {
-      await this.lifecycle(nodeId, "restore activate", () => restored.get(nodeId)!.instance.activate?.());
-    }
-  }
-
-  private async reloadChangedTopology(
+  private async replaceGraph(
     definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
     topology: readonly OrchestratorReloadScope[],
-    scopes: readonly OrchestratorReloadScope[],
+    selected: ReadonlySet<string>,
+    transition: ReloadableNodeTransition,
   ) {
+    const previousGraph = this.nodes;
     const previousDefinitions = this.definitions;
     const previousTopology = this.topology;
-    const selected = this.changedTopologyClosure(definitions, scopes);
-    const previousIds = previousTopology.filter((scope) => selected.has(scope));
-    const candidateIds = topology.filter((scope) => selected.has(scope));
-    const previous = previousIds.map((scope) => this.requireNode(scope));
-    for (const node of previous) this.closeGate(node);
-    try {
-      await this.waitForNodesDrain(previous);
-      this.assertAcceptingWork();
-    } catch (error) {
-      this.transition?.assertActive();
-      for (const node of previous) this.openGate(node);
-      throw error;
+    const previousOwners = this.featureOwners;
+    const previous = previousTopology.filter((id) => selected.has(id)).map((id) => this.requireNode(id));
+    const ordered = topology.filter((id) => selected.has(id));
+    const retained = new Map(previousGraph);
+    const handoffs = new Map<string, ReloadableNodeHandoff>();
+    const states = new Map<string, unknown>();
+    for (const node of previous) {
+      const id = node.definition.id;
+      retained.delete(id);
+      if (node.definition.lifecycle === "handoff" && !node.instance.beginHandoff) {
+        throw new Error(`Reloadable node ${id} does not support reversible handoff; the current branch was not changed.`);
+      }
     }
-
-    const handoffStates = new Map<string, unknown>();
-    const detachedPreviousHandoffIds: string[] = [];
-    let candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
-    let candidatesPublished = false;
-    let activated = false;
+    const candidates = this.candidates;
+    const activated: ActiveNode<TContext, TFeatures, TNotification>[] = [];
     try {
-      for (const scope of [...previousIds].reverse()) {
-        const node = this.requireNode(scope);
+      for (const node of previous) {
+        const id = node.definition.id;
+        node.drainExpired = false;
+        if (this.started) states.set(id, node.instance.captureReloadState?.());
         if (node.definition.lifecycle === "handoff") {
-          if (!node.instance.detachForReload) throw new Error(`Handoff reloadable node ${scope} does not implement detachForReload.`);
-          this.transition!.liveGraphUsable = false;
-          handoffStates.set(scope, await this.lifecycle(scope, "detach", () => node.instance.detachForReload!({ isReplacing: (candidate) => selected.has(candidate) })));
-          detachedPreviousHandoffIds.push(scope);
+          handoffs.set(id, node.instance.beginHandoff!({ isReplacing: (scope) => selected.has(scope) }));
         }
       }
-
-      const retained = new Map(this.nodes);
-      for (const scope of previousIds) retained.delete(scope);
-      candidates = this.createNodes(definitions, candidateIds, retained, handoffStates, selected, "replacement");
-      this.publishGraph(new Map([...retained, ...candidates]), definitions, topology, candidateIds);
-      candidatesPublished = true;
-      await this.startPublishedNodes(candidates, candidateIds);
-      for (const scope of candidateIds) await this.lifecycle(scope, "activate", () => candidates.get(scope)!.instance.activate?.());
-      this.transition!.liveGraphUsable = true;
-      activated = true;
-      for (const node of previous) this.openGate(node);
-      await this.lifecycle("feature graph", "publish notification", () => this.onSwap(candidateIds));
+      if (handoffs.size) {
+        for (const node of previous) this.closeGate(node);
+        await transition.drain("feature graph: drain", async () => {
+          await Promise.all([
+            ...previous.map((node) => this.waitForDrain(node)),
+            ...[...handoffs.values()].map((handoff) => handoff.waitForIdle()),
+          ]);
+        }, () => {
+          for (const node of previous) {
+            const handoff = handoffs.get(node.definition.id);
+            if (handoff) this.expireDrain(node, handoff);
+          }
+        });
+        for (const node of [...previous].reverse()) {
+          const handoff = handoffs.get(node.definition.id);
+          if (handoff) states.set(node.definition.id, await transition.step(`${node.definition.id}: detach`, () => handoff.detach()));
+        }
+      }
+      this.assertAcceptingWork();
+      this.createNodes(definitions, ordered, retained, states, selected, "replacement", candidates);
+      if (this.started) {
+        for (const id of ordered) {
+          const node = candidates.get(id)!;
+          await transition.step(`${id}: start`, (reportPhase) => node.instance.start(reportPhase, node.startController.signal));
+          this.assertAcceptingWork();
+        }
+      }
+      const nextGraph = new Map([...retained, ...candidates]);
+      const nextOwners = this.validateFeatureOwnership(nextGraph);
+      for (const node of candidates.values()) this.closeGate(node);
+      this.nodes = nextGraph;
+      this.definitions = definitions;
+      this.topology = topology;
+      this.featureOwners = nextOwners;
+      for (const id of ordered) {
+        const node = candidates.get(id)!;
+        activated.push(node);
+        await transition.step(`${id}: activate`, () => node.instance.activate?.());
+        this.assertAcceptingWork();
+      }
     } catch (error) {
-      this.transition?.assertActive();
-      if (activated) throw error;
-      const rollbackErrors: unknown[] = [];
-
-      if (!candidatesPublished) {
-        try {
-          await this.detachHandoffNodes(candidates, candidateIds, definitions, selected, handoffStates);
-          await this.disposeNodes([...candidates.values()].reverse());
-          if (detachedPreviousHandoffIds.length) await this.restoreHandoffNodes(detachedPreviousHandoffIds, handoffStates);
-        } catch (restoreError) {
-          this.transition?.assertActive();
-          rollbackErrors.push(restoreError);
-        }
-        for (const node of previous) this.openGate(node);
-      } else {
-        const candidateNodes = [...candidates.values()];
-        for (const node of candidateNodes) this.closeGate(node);
-        try {
-          await this.waitForNodesDrain(candidateNodes);
-          for (const node of candidateNodes) if (node.definition.lifecycle === "atomic") this.beginDrain(node);
-          await this.detachHandoffNodes(candidates, candidateIds, definitions, selected, handoffStates);
-
-          const retained = new Map(this.nodes);
-          for (const scope of new Set([...previousIds, ...candidateIds])) retained.delete(scope);
-          const restored = this.createNodes(previousDefinitions, previousIds, retained, handoffStates, selected, "restore");
-          this.publishGraph(new Map([...retained, ...restored]), previousDefinitions, previousTopology, previousIds);
-          await this.startPublishedNodes(restored, previousIds);
-          for (const scope of previousIds) await this.lifecycle(scope, "restore activate", () => restored.get(scope)!.instance.activate?.());
-          this.transition!.liveGraphUsable = true;
-          for (const node of candidateNodes) this.openGate(node);
-          for (const node of previous) this.openGate(node);
-          await this.retireNodes([...candidateNodes].reverse());
-          await this.retireNodes([...previous].reverse());
-        } catch (restoreError) {
-          this.transition?.assertActive();
-          rollbackErrors.push(restoreError);
+      this.nodes = previousGraph;
+      this.definitions = previousDefinitions;
+      this.topology = previousTopology;
+      this.featureOwners = previousOwners;
+      for (const node of candidates.values()) node.startController.abort(error);
+      const failures: unknown[] = [error];
+      for (const node of activated.reverse()) {
+        try { await transition.step(`${node.definition.id}: deactivate`, () => node.instance.deactivate?.()); }
+        catch (failure) { failures.push(failure); }
+      }
+      for (const node of [...candidates.values()].reverse()) {
+        try { await transition.step(`${node.definition.id}: discard`, (reportPhase) => node.instance.dispose(reportPhase)); }
+        catch (failure) { failures.push(failure); }
+        this.openGate(node);
+      }
+      const failedHandoffs = new Map<string, ReloadableNodeHandoff>();
+      for (const [id, handoff] of handoffs) {
+        try { await transition.step(`${id}: resume`, () => handoff.resume()); }
+        catch (failure) {
+          failures.push(failure);
+          failedHandoffs.set(id, handoff);
         }
       }
-
-      if (rollbackErrors.length) {
-        throw new AggregateError([error, ...rollbackErrors], "Reloadable topology replacement and rollback both failed.");
+      const failure = failures.length === 1 ? error : new AggregateError(failures, "Branch replacement failed during rollback.");
+      if (failedHandoffs.size) {
+        this.pendingRollbacks.add({
+          nodes: previous,
+          handoffs: failedHandoffs,
+          error: failure instanceof Error ? failure : new Error("Branch rollback requires resource recovery."),
+        });
       }
-      this.transition!.liveGraphUsable = true;
-      throw error;
+      for (const node of previous) this.openGate(node);
+      candidates.clear();
+      throw failure;
     }
-    await this.retireNodes([...previous].reverse());
+    for (const node of [...previous, ...candidates.values()]) this.openGate(node);
+    for (const node of candidates.values()) {
+      try { node.instance.afterCommit?.(); }
+      catch (error) { this.reportLifecycleFailure(node.definition.id, "post-commit startup", error); }
+    }
+    candidates.clear();
+    try { await this.onSwap(ordered); }
+    catch (error) { this.reportLifecycleFailure("feature graph", "swap notification", error); }
+    await this.retireNodes([...previous].reverse(), handoffs, transition);
   }
 
-  private publishGraph(
-    nodes: Map<string, ActiveNode<TContext, TFeatures, TNotification>>,
-    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    topology: readonly OrchestratorReloadScope[],
-    gatedIds: readonly string[],
-  ) {
-    const featureOwners = this.validateFeatureOwnership(nodes);
-    this.transition!.liveGraphUsable = false;
-    for (const nodeId of gatedIds) this.closeGate(nodes.get(nodeId)!);
-    this.nodes = nodes;
-    this.definitions = definitions;
-    this.topology = topology;
-    this.featureOwners = featureOwners;
-  }
-
-  private async startPublishedNodes(
-    nodes: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
-    ordered: readonly string[],
-  ) {
-    for (const nodeId of ordered) {
-      const node = nodes.get(nodeId)!;
-      if (this.started) await this.lifecycle(nodeId, "start", (reportPhase) => node.instance.start(reportPhase));
-      this.openGate(node);
+  private async retryRollbacks(selected: ReadonlySet<string>, transition: ReloadableNodeTransition) {
+    for (const rollback of this.pendingRollbacks) {
+      if (!rollback.nodes.some((node) => selected.has(node.definition.id))) continue;
+      const failures: unknown[] = [];
+      for (const [id, handoff] of rollback.handoffs) {
+        try {
+          await transition.step(`${id}: retry rollback`, () => handoff.resume());
+          rollback.handoffs.delete(id);
+        } catch (error) { failures.push(error); }
+      }
+      if (failures.length) {
+        rollback.error = new AggregateError(failures, "Retained branch resources are still unavailable.");
+        throw rollback.error;
+      }
+      for (const node of rollback.nodes) this.openGate(node);
+      this.pendingRollbacks.delete(rollback);
     }
   }
 
-  private async detachHandoffNodes(
-    nodes: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
-    ordered: readonly string[],
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    selected: ReadonlySet<string>,
-    handoffStates: Map<string, unknown>,
-  ) {
-    for (const nodeId of [...ordered].reverse()) {
-      if (definitions.get(nodeId)?.lifecycle !== "handoff") continue;
-      const node = nodes.get(nodeId);
-      if (!node) continue;
-      if (!node.instance.detachForReload) throw new Error(`Handoff reloadable node ${nodeId} does not implement detachForReload.`);
-      handoffStates.set(nodeId, await this.lifecycle(nodeId, "detach", () => node.instance.detachForReload!({ isReplacing: (candidate) => selected.has(candidate) })));
-    }
+  private reportLifecycleFailure(scope: string, phase: string, error: unknown) {
+    this.logError(`${scope}: ${phase} failed: ${error instanceof Error ? error.message.replace(/\s+/gu, " ").slice(0, 500) : "non-Error rejection"}`);
   }
 
   private createNodes(
@@ -663,8 +525,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     handoffStates: ReadonlyMap<string, unknown>,
     selected: ReadonlySet<string>,
     mode: ReloadableNodeBuild<TFeatures>["mode"],
+    created = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>(),
   ) {
-    const created = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
     for (const nodeId of ordered) {
       const definition = definitions.get(nodeId)!;
       const token = Symbol(`workbench-feature-node:${nodeId}`);
@@ -679,14 +541,14 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         lease: { isCurrent: () => !this.hardShutdownStarted && !this.isUnavailable(nodeId) && this.nodes.get(nodeId)?.token === token },
         mode,
       });
+      created.set(nodeId, {
+        activeOperations: new Map(), definition, disposalPhase: null, drainWaiters: [], gate: null,
+        instance, releaseGate: null, runtimeDrainStartedAt: null, token, startController: new AbortController(), drainExpired: false,
+      });
       const actualKeys = Object.keys(instance.registrations) as (keyof TFeatures)[];
       if (actualKeys.length !== definition.featureKeys.length || actualKeys.some((key) => !definition.featureKeys.includes(key))) {
         throw new Error(`Feature node ${nodeId} did not create exactly its declared feature keys.`);
       }
-      created.set(nodeId, {
-        activeOperations: new Map(), definition, disposalPhase: null, drainWaiters: [], gate: null,
-        instance, releaseGate: null, runtimeDrainStartedAt: null, token,
-      });
     }
     return created;
   }
@@ -871,21 +733,6 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return [...result];
   }
 
-  private hasSelectedHandoffDependency(
-    nodeId: string,
-    selected: ReadonlySet<string>,
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    visited = new Set<string>(),
-  ): boolean {
-    if (visited.has(nodeId)) return false;
-    visited.add(nodeId);
-    for (const dependency of definitions.get(nodeId)?.dependencies ?? []) {
-      if (!selected.has(dependency)) continue;
-      if (definitions.get(dependency)?.lifecycle === "handoff" || this.hasSelectedHandoffDependency(dependency, selected, definitions, visited)) return true;
-    }
-    return false;
-  }
-
   private requireNode(nodeId: string) {
     const node = this.nodes.get(nodeId);
     if (!node) throw new Error(`Feature node ${nodeId} is unavailable.`);
@@ -914,28 +761,23 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private isUnavailable(nodeId: string) {
-    return this.transition?.failure && !this.transition.liveGraphUsable
-      && this.transition.affectedScopes.has(nodeId);
-  }
-
-  private async lifecycle<T>(nodeId: string, phase: string, operation: (reportPhase: (phase: string) => void) => Promise<T> | T) {
-    return this.transition
-      ? await this.transition.step(`${nodeId}: ${phase}`, operation)
-      : await operation(() => undefined);
+    for (const rollback of this.pendingRollbacks) {
+      if (rollback.nodes.some((node) => node.definition.id === nodeId)) return rollback.error;
+    }
+    return null;
   }
 
   private async waitForOpenDependencyChain(nodeId: string) {
     for (const dependencyId of this.dependencyClosure(nodeId)) {
-      if (this.isUnavailable(dependencyId)) throw this.transition!.failure;
+      const failure = this.isUnavailable(dependencyId);
+      if (failure) throw failure;
       const node = this.nodes.get(dependencyId);
       // The caller must resolve the current owner/chain again after a topology swap.
       if (!node) return;
       const gate = node.gate;
-      if (gate) {
-        if (this.transition) await this.transition.waitFor(gate);
-        else await gate;
-      }
-      if (this.isUnavailable(dependencyId)) throw this.transition!.failure;
+      if (gate) await gate;
+      const currentFailure = this.isUnavailable(dependencyId);
+      if (currentFailure) throw currentFailure;
     }
   }
 
@@ -966,41 +808,73 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     await new Promise<void>((resolve) => node.drainWaiters.push(resolve));
   }
 
-  private async waitForNodesDrain(nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[]) {
-    await this.lifecycle("feature graph", "drain", () => Promise.all(nodes.map((node) => this.waitForDrain(node))));
+  private expireDrain(node: ActiveNode<TContext, TFeatures, TNotification>, handoff?: ReloadableNodeHandoff) {
+    if (node.drainExpired) return;
+    if (handoff) handoff.expire();
+    else node.instance.expireRuntimeDrain?.();
+    node.drainExpired = true;
   }
 
-  private async retireNodes(nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[]) {
-    for (const node of nodes) this.beginDrain(node);
+  private async retireNodes(
+    nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[],
+    handoffs: ReadonlyMap<string, ReloadableNodeHandoff>,
+    transition: ReloadableNodeTransition,
+  ) {
+    for (const node of nodes) {
+        node.startController.abort(new Error("Reloadable node was retired."));
+        try { this.beginDrain(node); }
+        catch (error) { this.reportLifecycleFailure(node.definition.id, "begin retirement", error); }
+    }
+    const expire = () => {
+        for (const node of nodes) {
+          try { this.expireDrain(node, handoffs.get(node.definition.id)); }
+          catch (error) { this.reportLifecycleFailure(node.definition.id, "expire retirement", error); }
+        }
+    };
+    try {
+        await transition.drain("feature graph: drain", async () => {
+          await Promise.all(nodes.map((node) => this.waitForDrain(node)));
+        }, expire);
+    } catch (error) {
+        this.reportLifecycleFailure("feature graph", "retirement drain", error);
+        expire();
+    }
     const retirement: Retirement<TContext, TFeatures, TNotification> = { nodes, promise: Promise.resolve() };
-    const transition = this.transition;
-    retirement.promise = this.waitForNodesDrain(nodes).then(async () => await this.disposeNodes(nodes));
+    retirement.promise = (async () => {
+      const errors: unknown[] = [];
+      for (const node of nodes) {
+        const id = node.definition.id;
+        const handoff = handoffs.get(id);
+        try {
+          if (handoff) await handoff.commit();
+          else await node.instance.dispose((phase) => {
+              node.disposalPhase = boundedLabel(phase);
+            });
+        } catch (error) {
+          this.reportLifecycleFailure(id, "retirement", error);
+          errors.push(error);
+        }
+        finally { node.disposalPhase = null; }
+      }
+      if (errors.length) throw new AggregateError(errors, "Retired node cleanup failed.");
+    })();
     this.retirements.add(retirement);
     void retirement.promise.then(
       () => { this.retirements.delete(retirement); },
-      (error: unknown) => {
-        this.retirements.delete(retirement);
-        if (transition?.failure && error !== transition.failure) this.logError("A stopped reload's retired node later failed to dispose.");
-      },
+      () => { /* Failed owners stay retained for terminal shutdown and diagnostics. */ },
     );
-    try {
-      await retirement.promise;
-    } catch (error) {
-      transition?.fail(error);
-      throw error;
-    }
   }
 
   private async disposeNodes(nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[]) {
     const errors: unknown[] = [];
     for (const node of nodes) {
+      node.startController.abort(new Error("Reloadable node was disposed."));
       node.disposalPhase = "feature node disposal";
       try {
-        await this.lifecycle(node.definition.id, "dispose", () => node.instance.dispose((phase) => {
+        await node.instance.dispose((phase) => {
           node.disposalPhase = boundedLabel(phase);
-        }));
+        });
       } catch (error) {
-        this.transition?.assertActive();
         errors.push(error);
       } finally {
         node.disposalPhase = null;
@@ -1015,11 +889,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     failure: unknown,
     message: string,
   ): Promise<never> {
-    this.transition?.assertActive();
     try {
       await this.disposeNodes(nodes);
     } catch (disposeError) {
-      this.transition?.assertActive();
       throw new AggregateError([failure, disposeError], message);
     }
     throw failure;

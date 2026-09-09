@@ -55,6 +55,18 @@ async function main() {
     onAddressChange: (address) => protocol?.announceReady(address.url, false),
     onDiagnostic: (message) => processLogger.error("app", message),
   });
+  let closing: Promise<void> | null = null;
+  const close = () => {
+    closing ??= app.close()
+      .then(() => protocol?.dispose())
+      .catch((error) => {
+        processLogger.error("app", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      });
+    return closing;
+  };
+  process.once("SIGINT", () => void close());
+  process.once("SIGTERM", () => void close());
   const result = await app.start();
   if (result.kind === "already-running") {
     processLogger.line("app", "already running");
@@ -67,16 +79,6 @@ async function main() {
   }
   processLogger.line("app", `listening at ${result.address.url}`);
 
-  let closing: Promise<void> | null = null;
-  const close = () => {
-    closing ??= app.close()
-      .then(() => protocol?.dispose())
-      .catch((error) => {
-        processLogger.error("app", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
-        process.exitCode = 1;
-      });
-    return closing;
-  };
   if (desktopProtocolEnabled) {
     protocol = new WorkbenchAppProcessProtocol({
       onDiagnostic: (message) => processLogger.error("app", message),
@@ -85,8 +87,6 @@ async function main() {
     protocol.start();
     protocol.announceReady(result.address.url, result.portSource === "random");
   }
-  process.once("SIGINT", () => void close());
-  process.once("SIGTERM", () => void close());
 }
 
 void main().catch((error) => {

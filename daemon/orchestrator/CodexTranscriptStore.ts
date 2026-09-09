@@ -708,7 +708,7 @@ export default class CodexTranscriptStore {
   private readonly getProtectedThreadIds: () => Iterable<string>;
   private lastPrunedAt = 0;
   private readonly json = new AtomicJsonStore();
-  private readonly pruneTimer: NodeJS.Timeout;
+  private pruneTimer: NodeJS.Timeout | null = null;
   private readonly readyPromise: Promise<void>;
   private readonly throttledThreadTouches = new Map<string, number>();
   private readonly threadsDirectoryPath: string;
@@ -726,10 +726,7 @@ export default class CodexTranscriptStore {
       this.json,
       transcriptShadowLog,
     );
-    this.pruneTimer = setInterval(() => {
-      void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch(() => undefined);
-    }, PRUNE_INTERVAL_MS);
-    this.pruneTimer.unref();
+    this.resumeAfterFailedReload();
     void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch(() => undefined);
     void this.readyPromise
       .then(async () => {
@@ -740,9 +737,22 @@ export default class CodexTranscriptStore {
   }
 
   async dispose() {
-    clearInterval(this.pruneTimer);
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.pruneTimer = null;
     await this.readyPromise;
-    await this.json.waitForIdle();
+    await this.json.waitForIdle(path.dirname(this.threadsDirectoryPath));
+  }
+
+  resumeAfterFailedReload() {
+    if (this.pruneTimer) return;
+    const timer = setInterval(() => {
+      if (this.pruneTimer !== timer) return;
+      void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch((error: unknown) => {
+        console.warn(`[codex-transcript] pruning failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+      });
+    }, PRUNE_INTERVAL_MS);
+    this.pruneTimer = timer;
+    timer.unref();
   }
 
   async recordClientRequest(

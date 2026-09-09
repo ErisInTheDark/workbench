@@ -4,6 +4,7 @@
  * - AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles. Keywords: app, compiler, handoff.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
+import type { WorkbenchFrontendGeneration } from "workbench-shared/frontend-generation";
 
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
@@ -18,19 +19,32 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       logger,
       () => state.readGlobalPreference("reactDevelopmentMode") === true,
     );
-    let detached = false;
-    const close = async () => {
-      await compiler.close();
-      detached = true;
+    const previous = build.handoffState as { generation: WorkbenchFrontendGeneration | null } | undefined;
+    if (previous) compiler.retainPublishedGeneration(previous.generation);
+    const detach = async () => {
+      await compiler.suspend();
+      return { generation: compiler.getFrontendGeneration() };
     };
     return {
-      detachForReload: async () => {
-        await close();
-        return undefined;
+      afterCommit: () => {
+        if (build.mode === "initial") return;
+        void compiler.startWatching().catch((error: unknown) => {
+          if (compiler.isRetirement(error)) return;
+          logger.error("app", `replacement build failed; last successful frontend remains available: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+        });
       },
-      dispose: async () => { if (!detached) await compiler.close(); },
+      beginHandoff: () => ({
+        waitForIdle: () => compiler.suspend(),
+        expire: () => {},
+        detach,
+        resume: () => compiler.resumeAfterFailedReload(),
+        commit: () => compiler.close(),
+      }),
+      detachForReload: detach,
+      dispose: () => compiler.close(),
+      shutdown: () => compiler.shutdown(),
       registrations: { compiler },
-      start: async () => { await compiler.startWatching(); },
+      start: async () => { if (build.mode === "initial") await compiler.startWatching(); },
     };
   },
   description: "Reload esbuild and Tailwind compiler configuration and watch lifecycles.",

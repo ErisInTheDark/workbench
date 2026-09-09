@@ -36,7 +36,6 @@ import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorRel
 import WorkbenchOrchestratorControlIngress from "./WorkbenchOrchestratorControlIngress";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
-import { formatWebSocketSendFailure } from "./websocket-log-format";
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
@@ -123,7 +122,7 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
     (controller) => controller.sendJsonToClient(client, message),
     "browser WebSocket send",
   ).catch((error) => {
-    process.stderr.write(`${formatWebSocketSendFailure(message, error)}\n`);
+    featureHost.get("webSocketRequests").reportSendFailure(message, error);
   });
 }
 
@@ -213,7 +212,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
-  await featureHost.dispose();
+  const closures = [featureHost.dispose(), copilotBridge.stop()];
 
   for (const client of bridgeConnections) {
     client.close();
@@ -229,6 +228,9 @@ async function stopAllChildren() {
     bridgeServer.close();
     bridgeServer = null;
   }
+  const results = await Promise.allSettled(closures);
+  const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+  if (failures.length) throw new AggregateError(failures, "Orchestrator child shutdown failed.");
 }
 
 function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
@@ -336,13 +338,7 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     },
     onCodexBridgeReady: async (bridge) => {
       await ensureWorkbenchPromptFiles();
-      try {
-        await ensureCodexReady(bridge);
-      } catch (error) {
-        bridge.beginStopping();
-        codexRecoverySupervisor.requestRecovery("Codex bridge replacement could not restore app-server readiness.");
-        throw error;
-      }
+      await ensureCodexReady(bridge);
     },
     onCodexBridgeUnavailable: (restartingAppServer) => {
       if (!restartingAppServer) return;
@@ -352,6 +348,11 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
       getReloadableModules: () => featureHost.get("modules"),
     },
     publishThreadState,
+    reportWebSocketDelivery: (delivery) => {
+      // Do not hold physical send completion behind the reload admission gate.
+      void featureHost.run("webSocketRequests", (controller) => controller.completeDelivery(delivery), "WebSocket delivery receipt")
+        .catch((error: unknown) => logError("websocket", `delivery receipt failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+    },
     reportTurnRecoveryFailure: async (cwd, harness, threadId) => {
       const project = await featureHost.run(
         "projectCatalog",
@@ -485,10 +486,12 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
         });
       },
       readThread: async (threadId) => await runAfterCodexBridgeReload((bridge) => bridge.readThreadForBrowse(threadId)),
-      request: async (request) => {
+      request: async (request, signal) => {
         requireHarnessAdmission();
         return await runAfterCodexBridgeReload(async (bridge) => {
+          signal?.throwIfAborted();
           await ensureCodexReady(bridge);
+          signal?.throwIfAborted();
           return await bridge.handleServerRequest(request);
         });
       },
@@ -519,7 +522,10 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
         requireHarnessAdmission();
         return await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(request));
       },
-      recoverInterruptedTurn: async (candidate) => await runAfterOpenCodeBridgeReload((bridge) => bridge.recoverInterruptedTurn(candidate)),
+      recoverInterruptedTurn: async (candidate, signal) => await runAfterOpenCodeBridgeReload((bridge) => {
+        signal?.throwIfAborted();
+        return bridge.recoverInterruptedTurn(candidate, signal);
+      }),
       steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("opencode", threadId, expectedTurnId, input),
     },
   };
@@ -750,7 +756,10 @@ function startBridgeServer() {
 
     bridgeClient.once("close", () => {
       bridgeClientsByConnectionId.delete(connectionId);
-      void featureHost.run("webSocketRequests", (controller) => controller.disconnect(bridgeClient, connectionId), "browser WebSocket disconnect");
+      if (!shuttingDown) {
+        void featureHost.run("webSocketRequests", (controller) => controller.disconnect(bridgeClient, connectionId), "browser WebSocket disconnect")
+          .catch(error => logError("codex-bridge", `disconnect failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+      }
       bridgeConnections.delete(bridgeClient);
       log("codex-bridge", `client disconnected (${bridgeConnections.size} active)`);
     });
@@ -774,7 +783,6 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     if (error) {
       logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
     }
-    process.exit(exitCode);
     return;
   }
 
@@ -783,9 +791,13 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
   }
 
-  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => {
-    process.exit(exitCode);
-  });
+  void stopAllChildren().then(
+    () => process.exit(exitCode),
+    (failure: unknown) => {
+      logError("orchestrator", `shutdown failed: ${(failure instanceof Error ? failure.stack ?? failure.message : String(failure)).slice(0, 4000)}`);
+      process.exit(1);
+    },
+  );
 }
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {

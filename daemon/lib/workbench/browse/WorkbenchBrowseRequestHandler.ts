@@ -1,4 +1,5 @@
 /*
+ * Keywords: browse, browsemd, screenshots, cancellation, durable assets, reload.
  * Exports:
  * - default WorkbenchBrowseRequestHandler: execute typed Browse actions, BrowseMD scripts, sessions, streaming sequences, screenshots, and transcript recording for the orchestrator-owned Browse lifecycle. Keywords: browse, browsemd, orchestrator, request, streaming.
  * - WorkbenchBrowseSerializedRunner: orchestrator-owned FIFO callback used to serialize command producers only. Keywords: browse, queue, serialization, streaming.
@@ -73,6 +74,7 @@ const BROWSE_MARKDOWN_VARIABLE_REFERENCE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*
 export type WorkbenchBrowseSerializedRunner = <TValue>(task: () => Promise<TValue>) => Promise<TValue>;
 
 interface WorkbenchBrowseExecutionContext {
+  persistScreenshot: (threadId: string, image: ScreenshotImagePayload) => Promise<string>;
   publicThreadId: (nativeThreadId: string) => Promise<string>;
   rawCli: WorkbenchBrowseRawCli;
   results: WorkbenchBrowseResultSink;
@@ -726,6 +728,7 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
       : assignment
         ? await runBrowseMarkdownPipeline(context, assignment.command, index, statement.lineNumber)
         : await runBrowseMarkdownPipeline(context, statement.text, index, statement.lineNumber);
+    execution.signal.throwIfAborted();
     stderr += result.stderr;
     if (result.browseResultAction) {
       execution.results.record(createAutomaticBrowseResult({
@@ -913,13 +916,14 @@ async function captureBrowseSessionScreenshotAsset(
     timeoutMs: request.timeoutMs ?? null,
   };
   const screenshotResult = await runBrowseCommand(execution, screenshotRequest, normalized.command, projectExecution);
+  execution.signal.throwIfAborted();
   if (!screenshotResult.ok) {
     return null;
   }
 
   const image = parseScreenshotBase64(screenshotResult.stdout);
   return {
-    assetUrl: await writeScreenshotTranscriptAsset(request.threadId, image, await execution.publicThreadId(request.threadId)),
+    assetUrl: await execution.persistScreenshot(request.threadId, image),
   };
 }
 
@@ -934,12 +938,14 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
     ? { ...payload, args: normalizeScreenshotDeliveryArgs(payload.args) }
     : payload;
   const result = await runBrowseCommand(execution, commandPayload, typedCommand, projectExecution);
+  execution.signal.throwIfAborted();
   if (!shouldDeliver || !result.ok) {
     return result;
   }
 
   const image = parseScreenshotBase64(result.stdout);
-  await writeScreenshotTranscriptAsset(payload.threadId, image, await execution.publicThreadId(payload.threadId));
+  await execution.persistScreenshot(payload.threadId, image);
+  execution.signal.throwIfAborted();
   const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image));
   const deliveryFields = delivery.kind === "injected"
     ? { injected: true, injectionAcceptedAt: delivery.acceptedAt, injectionTurnId: delivery.turnId }
@@ -1102,6 +1108,7 @@ async function runBrowseAgentCommand(
   if (normalized.command.action === "forget") {
     const command = normalized.command;
     const result = await execution.sessions.forgetPersistentSession(command, execution.signal);
+    execution.signal.throwIfAborted();
     execution.results.record(createAutomaticBrowseResult({
       action: "forget",
       actionIndex,
@@ -1115,8 +1122,10 @@ async function runBrowseAgentCommand(
 
   const command = normalized.command;
   const executionContext = projectExecution ?? await execution.runtime.resolveExecutionContext(command.commandRequest);
+  execution.signal.throwIfAborted();
   const result = await runBrowseCommandAndMaybeDeliverScreenshot(execution, command.commandRequest, command, executionContext);
   const recordResult = (assetUrl: string | null) => {
+    if (execution.signal.aborted) return;
     execution.results.record(createAutomaticBrowseResult({
       action: command.action,
       actionIndex,
@@ -1129,7 +1138,12 @@ async function runBrowseAgentCommand(
   if (result.ok && command.session && shouldAutoCaptureScreenshot(command.action)) {
     execution.trackBackground(captureBrowseSessionScreenshotAsset(execution, command.commandRequest, executionContext)
       .then((screenshot) => recordResult(screenshot?.assetUrl ?? null))
-      .catch(() => recordResult(null)));
+      .catch((error: unknown) => {
+        if (error !== execution.signal.reason) {
+          console.warn(`[browse] screenshot capture failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+        }
+        recordResult(null);
+      }));
   } else {
     recordResult(null);
   }
@@ -1220,7 +1234,8 @@ async function runBrowseAgentCommandSequence(
 }
 
 export default class WorkbenchBrowseRequestHandler {
-  private readonly backgroundTasks = new Set<Promise<void>>();
+  private readonly backgroundTasks = new Map<Promise<void>, AbortSignal>();
+  private readonly assetWrites = new Set<Promise<string>>();
   private readonly rawCli: WorkbenchBrowseRawCli;
   private readonly results: WorkbenchBrowseResultSink;
   private readonly runtime: WorkbenchBrowseRuntime;
@@ -1240,13 +1255,22 @@ export default class WorkbenchBrowseRequestHandler {
   async handle(body: Buffer, signal: AbortSignal, runSerialized: WorkbenchBrowseSerializedRunner) {
     const startedAt = Date.now();
     const execution: WorkbenchBrowseExecutionContext = {
+      persistScreenshot: async (threadId, image) => {
+        signal.throwIfAborted();
+        const publicThreadId = await this.publicThreadId(threadId);
+        signal.throwIfAborted();
+        const write = writeScreenshotTranscriptAsset(threadId, image, publicThreadId);
+        this.assetWrites.add(write);
+        try { return await write; }
+        finally { this.assetWrites.delete(write); }
+      },
       publicThreadId: this.publicThreadId,
       rawCli: this.rawCli,
       results: this.results,
       runtime: this.runtime,
       sessions: this.sessions,
       signal,
-      trackBackground: (task) => this.trackBackground(task),
+      trackBackground: (task) => this.trackBackground(task, signal),
     };
     try {
     const requestBody = (() => {
@@ -1389,7 +1413,8 @@ export default class WorkbenchBrowseRequestHandler {
   }
 
   async waitForIdle() {
-    await Promise.allSettled([...this.backgroundTasks]);
+    await Promise.allSettled([...this.backgroundTasks].filter(([, signal]) => !signal.aborted).map(([task]) => task));
+    await Promise.allSettled([...this.assetWrites]);
   }
 
   async listSessions(request: WorkbenchBrowseSessionListRequest, signal?: AbortSignal): Promise<WorkbenchBrowseSessionListResponse> {
@@ -1402,8 +1427,8 @@ export default class WorkbenchBrowseRequestHandler {
       : await this.sessions.stopSession(request, signal);
   }
 
-  private trackBackground(task: Promise<void>) {
-    this.backgroundTasks.add(task);
+  private trackBackground(task: Promise<void>, signal: AbortSignal) {
+    this.backgroundTasks.set(task, signal);
     void task.then(
       () => this.backgroundTasks.delete(task),
       () => this.backgroundTasks.delete(task),

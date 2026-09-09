@@ -4,8 +4,9 @@
  * - log/logError: tagged stdout and stderr logging for orchestrator modules. Keywords: logging, orchestrator.
  * - appendCopilotEventLog: persist raw Copilot session events as JSONL for bridge debugging. Keywords: copilot, debug, events, jsonl.
  * - pipeChildStream/getSpawnDescriptor/createSpawnOptions/killProcessTree/killProcessTreeAsync: platform-safe process helpers for spawned child processes. Keywords: windows, spawn, shutdown, async, timeout.
+ * - ProcessTreeRetirementOptions: platform and termination-command ports for owned process retirement.
  */
-import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -145,45 +146,65 @@ export function killProcessTree(pid: number | undefined) {
   }
 }
 
-export async function killProcessTreeAsync(pid: number | undefined) {
+export interface ProcessTreeRetirementOptions {
+  platform?: NodeJS.Platform;
+  spawnProcess?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+}
+
+export async function killProcessTreeAsync(pid: number | undefined, options: ProcessTreeRetirementOptions = {}) {
   if (!pid) return;
-  if (process.platform === "linux") {
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("A valid owned process is required.");
+  const platform = options.platform ?? process.platform;
+  if (platform === "linux") {
     await new LinuxProcessGroupRetirement().retire(pid);
     return;
   }
-  if (process.platform !== "win32") {
+  if (platform !== "win32") {
     try {
-      process.kill(-pid, "SIGTERM");
-    } catch {
-      // Best effort during runtime recovery.
+      process.kill(-pid, "SIGKILL");
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
     }
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    const child = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-      stdio: "ignore",
+  await new Promise<void>((resolve, reject) => {
+    const child = (options.spawnProcess ?? spawn)("pwsh", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `$ErrorActionPreference = 'Stop'; $owned = [System.Diagnostics.Process]::GetProcessById(${pid}); $owned.Kill($true); $owned.WaitForExit()`,
+    ], {
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    let output = "";
+    const capture = (chunk: Buffer) => { output = (output + chunk.toString()).slice(-1000); };
+    child.stdout?.on("data", capture);
+    child.stderr?.on("data", capture);
     let settled = false;
-    const finish = () => {
+    const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.removeListener("error", finish);
-      child.removeListener("exit", finish);
-      resolve();
+      child.removeListener("error", failed);
+      child.removeListener("exit", exited);
+      child.stdout?.removeListener("data", capture);
+      child.stderr?.removeListener("data", capture);
+      if (error) reject(error);
+      else resolve();
+    };
+    const failed = (error: Error) => finish(error);
+    const exited = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(code === 0 ? undefined : new Error(`Owned process termination failed (exit ${code}, signal ${signal}): ${output.replace(/\s+/gu, " ").trim()}`));
     };
     const timer = setTimeout(() => {
-      child.kill();
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // The daemon may already be gone even when taskkill did not exit cleanly.
+      try { child.kill(); }
+      catch (error) {
+        finish(new AggregateError([error], "Owned process termination command could not be stopped."));
+        return;
       }
-      finish();
+      finish(new Error(`Owned process termination did not finish within ${ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS}ms.`));
     }, ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS);
-    child.once("error", finish);
-    child.once("exit", finish);
+    child.once("error", failed);
+    child.once("exit", exited);
   });
 }

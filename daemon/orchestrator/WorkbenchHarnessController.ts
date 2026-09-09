@@ -23,7 +23,7 @@ import type { WorkbenchThreadIdentityLookup } from "./database/thread-identity/w
 
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
-  request(request: JsonRpcRequest): Promise<JsonRpcResponse>;
+  request(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse>;
   readThread(threadId: string): Promise<ThreadReadResponse>;
   steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<string | null>;
   recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
@@ -41,7 +41,7 @@ type WorkbenchHarnessRecoveryCapability =
       kind: "turn";
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
-      recoverAvailable?(): Promise<void>;
+      recoverAvailable?(signal?: AbortSignal): Promise<void>;
       resumeThread(threadId: string): Promise<void>;
     };
 
@@ -249,9 +249,9 @@ export default class WorkbenchHarnessController {
     if (recovery.kind !== "none") recovery.observeNotification(notification);
   }
 
-  async recoverAvailable(harness: WorkbenchHarness) {
+  async recoverAvailable(harness: WorkbenchHarness, signal?: AbortSignal) {
     const recovery = this.getAdapter(harness).recovery;
-    if (recovery.kind === "turn") await recovery.recoverAvailable?.();
+    if (recovery.kind === "turn") await recovery.recoverAvailable?.(signal);
   }
 
   async resumeThread(harness: WorkbenchHarness, threadId: string) {

@@ -2,6 +2,7 @@
  * Keywords: websocket, request, reload, stream, handoff, event logs, diagnostics.
  * Exports:
  * - WorkbenchWebSocketPendingRequestState: transferable browser request timing.
+ * - WorkbenchWebSocketDelivery: physical send receipt for the current graph owner.
  * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
  * - WorkbenchWebSocketRequestControllerState: request, observer, and stream handoff.
  * - WorkbenchWebSocketRequestControllerOptions: routing, clock, scheduler, and logging ports.
@@ -47,7 +48,7 @@ import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
-import { dimWebSocketDetail, formatWebSocketBytes as formatBytes, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
+import { dimWebSocketDetail, formatWebSocketBytes as formatBytes, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -67,6 +68,7 @@ type Timer = ReturnType<typeof setTimeout>;
 type CompletionOutcome = "closed" | "error" | "ok" | "replaced" | "send-error";
 
 export interface WorkbenchWebSocketPendingRequestState {
+  identity?: object;
   client: BridgeClient;
   id: RequestId;
   inBytes: number;
@@ -76,12 +78,27 @@ export interface WorkbenchWebSocketPendingRequestState {
   provider?: { harness: WorkbenchHarness; request: JsonRpcRequest };
 }
 
+export interface WorkbenchWebSocketDelivery {
+  client: BridgeClient;
+  request?: { id: RequestId; identity: object };
+  streamEvent: ReturnType<WorkbenchWebSocketStreamController["prepareDelivery"]>;
+  eventMethod: string | null;
+  eventHarness: WorkbenchHarness | "workbench" | "unknown";
+  outcome: CompletionOutcome;
+  processMs: number;
+  jsonMs: number;
+  sendMs: number;
+  outBytes: number;
+  errorMessage: string | null;
+}
+
 export interface WorkbenchWebSocketRequestControllerState {
   pending: WorkbenchWebSocketPendingRequestState[];
   reloadDirtObservers?: WorkbenchWebSocketReloadDirtObserverState[];
   reloadDirtRevision?: number;
   stream?: WorkbenchWebSocketStreamControllerState;
   statsObservers?: Array<{ client: BridgeClient; connectionId: string }>;
+  transcriptSubscriptions?: WorkbenchWebSocketTranscriptSubscriptionState[];
 }
 
 export interface WorkbenchWebSocketReloadDirtObserverState {
@@ -100,10 +117,12 @@ interface WorkbenchWebSocketTranscriptSubscriptionState {
 }
 
 interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
+  identity: object;
   timer: Timer | null;
 }
 
 export interface WorkbenchWebSocketRequestControllerOptions {
+  reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
   harnesses: Pick<WorkbenchHarnessController, "handleNativeBrowserMessage" | "resolvePublicRequest" | "request" | "resolveHarness">
@@ -162,7 +181,10 @@ function readResponseErrorMessage(message: unknown) {
 }
 
 export default class WorkbenchWebSocketRequestController {
-  private detached = false;
+  private lifecycle: "active" | "suspended" | "disposed" = "active";
+  private get detached() { return this.lifecycle !== "active"; }
+  private generation = new AbortController();
+  private readonly reportDelivery: WorkbenchWebSocketRequestControllerOptions["reportDelivery"];
   private readonly eventLog: WorkbenchWebSocketEventLog;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
@@ -184,6 +206,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly transcriptCapabilitiesAnnounced = new WeakSet<BridgeClient>();
   private readonly statsObservers = new Map<string, { client: BridgeClient; connectionId: string }>();
   private unsubscribeStats: (() => void) | null = null;
+  private readonly stats: WorkbenchWebSocketRequestControllerOptions["stats"];
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
@@ -197,6 +220,7 @@ export default class WorkbenchWebSocketRequestController {
     initialState,
     now = Date.now,
     reload,
+    reportDelivery,
     setTimeout: schedule = setTimeout,
     stats,
     threadState,
@@ -216,6 +240,7 @@ export default class WorkbenchWebSocketRequestController {
     } : undefined;
     this.now = now;
     this.reload = reload;
+    this.reportDelivery = reportDelivery;
     this.reloadDirtRevision = initialState?.reloadDirtRevision ?? 0;
     for (const observer of initialState?.reloadDirtObservers ?? []) {
       this.reloadDirtObservers.set(observer.connectionId, observer);
@@ -232,9 +257,20 @@ export default class WorkbenchWebSocketRequestController {
     this.transcript = transcript;
     this.transcriptShadowLog = transcriptShadowLog;
     this.writeLine = writeLine;
+    this.stats = stats;
     for (const state of initialState?.pending ?? []) this.restorePending(state);
     for (const observer of initialState?.statsObservers ?? []) this.statsObservers.set(observer.connectionId, observer);
-    if (stats) this.unsubscribeStats = stats.subscribeImportProgress((progress) => {
+    for (const subscription of initialState?.transcriptSubscriptions ?? []) {
+      this.transcriptSubscriptions.set(this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId), { ...subscription });
+    }
+    this.observeStats();
+  }
+
+  private observeStats() {
+    if (this.unsubscribeStats || !this.stats) return;
+    const signal = this.generation.signal;
+    this.unsubscribeStats = this.stats.subscribeImportProgress((progress) => {
+      if (signal.aborted) return;
       for (const observer of this.statsObservers.values()) {
         void this.sendJsonToClient(observer.client, {
           method: WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
@@ -247,12 +283,19 @@ export default class WorkbenchWebSocketRequestController {
   }
 
   async start() {
-    this.unsubscribeReloadDirt = this.reload.subscribeReloadDirt(() => this.publishReloadDirt());
+    this.assertActive();
+    if (this.unsubscribeReloadDirt) return;
+    const signal = this.generation.signal;
+    this.unsubscribeReloadDirt = this.reload.subscribeReloadDirt(() => {
+      if (!signal.aborted) this.publishReloadDirt();
+    });
+    this.observeStats();
     if (this.reloadDirtObservers.size) this.publishReloadDirt();
   }
 
   async handleMessage(client: BridgeClient, connectionId: string, data: Buffer, hardReloadPending: boolean) {
     this.assertActive();
+    const signal = this.generation.signal;
     let message: JsonRpcRequest;
     try {
       message = JSON.parse(data.toString()) as JsonRpcRequest;
@@ -307,6 +350,7 @@ export default class WorkbenchWebSocketRequestController {
     }
 
     await this.announceTranscriptCapabilities(client);
+    signal.throwIfAborted();
 
     if (workbenchRequest && isRequest) {
       if (daemonRequest) {
@@ -355,10 +399,12 @@ export default class WorkbenchWebSocketRequestController {
           const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
           if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
           const mapped = this.identities ? await mapWorkbenchProviderRequest(this.identities.threads, acceptedHarness, { params: { threadId, turnId } }) : null;
+          signal.throwIfAborted();
           const native = mapped?.request.params as { threadId: string; turnId: string } | undefined;
           const result = await this.threadState.acceptIntent(connectionId, { harness: mapped?.harness ?? acceptedHarness, projectId, threadId: native?.threadId ?? threadId, turnId: native?.turnId ?? turnId });
           await this.sendJsonToClient(client, { id: requestId, result });
         } catch (error) {
+          signal.throwIfAborted();
           await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
         }
         return;
@@ -367,11 +413,13 @@ export default class WorkbenchWebSocketRequestController {
         const input = { method, ...(asRecord(message.params) ?? {}) };
         const parsed = WorkbenchThreadStateRequestSchema.safeParse(input);
         const request = this.identities && parsed.success ? await mapWorkbenchThreadStateRequest(this.identities, parsed.data) : input;
+        signal.throwIfAborted();
         const result = await this.threadState.handleRequest(connectionId, request);
         await this.sendJsonToClient(client, { id: requestId, ...result,
           ...("result" in result && this.threadStateIdentities ? { result: await mapNativeThreadStateResult(this.threadStateIdentities, result.result) } : {}),
         });
       } catch (error) {
+        signal.throwIfAborted();
         await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Thread state identity projection failed." } });
       }
       return;
@@ -381,17 +429,36 @@ export default class WorkbenchWebSocketRequestController {
     delete strippedMessage[WORKBENCH_HARNESS_FIELD];
     try {
       const resolved = await this.harnesses.resolvePublicRequest(harness, strippedMessage);
+      signal.throwIfAborted();
       const pending = isRequest ? this.pending.get(client)?.get(requestId) : undefined;
       if (pending) pending.provider = resolved;
       await this.harnesses.handleNativeBrowserMessage(resolved.harness, resolved.request, client);
     } catch (error) {
+      signal.throwIfAborted();
       if (!isRequest) throw error;
       await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Harness bridge request failed." } });
     }
   }
 
+  reportSendFailure(message: unknown, error: unknown) {
+    process.stderr.write(`${formatWebSocketSendFailure(message, error)}\n`);
+  }
+
+  completeDelivery(delivery: WorkbenchWebSocketDelivery) {
+    this.assertActive();
+    if (delivery.outcome === "send-error" && delivery.streamEvent) this.stream.failDelivery(delivery.streamEvent);
+    if (delivery.outcome !== "send-error" && delivery.eventMethod) {
+      this.eventLog.record("out", delivery.eventHarness, delivery.eventMethod, delivery.outBytes);
+    }
+    const pending = delivery.request ? this.pending.get(delivery.client)?.get(delivery.request.id) : undefined;
+    if (pending && pending.identity === delivery.request?.identity) {
+      this.complete(pending, delivery.outcome, delivery.processMs, delivery.jsonMs, delivery.sendMs, delivery.outBytes, delivery.errorMessage);
+    }
+  }
+
   async sendJsonToClient(client: BridgeClient, message: unknown) {
     this.assertActive();
+    const signal = this.generation.signal;
     const envelope = asRecord(message);
     const eventMethod = typeof envelope?.method === "string" ? envelope.method : null;
     const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
@@ -401,8 +468,9 @@ export default class WorkbenchWebSocketRequestController {
       if (pending?.provider) {
         try {
           message = await mapNativeProviderResponse(this.identities, pending.provider.harness, pending.provider.request, message as JsonRpcResponse);
-          this.assertActive();
+          signal.throwIfAborted();
         } catch (error) {
+          signal.throwIfAborted();
           const detail = (error instanceof Error ? error.message : "Public transcript identity projection failed.").slice(0, 500);
           this.writeLine(`[workbench-identity] ${detail}`);
           message = { id: pending.id, error: { code: -32000, message: detail } };
@@ -410,7 +478,7 @@ export default class WorkbenchWebSocketRequestController {
       } else {
         if (envelope?.method === "workbench/thread-state/updated") {
           message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot) };
-          this.assertActive();
+          signal.throwIfAborted();
         } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
           const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);
           const params = asRecord(envelope.params);
@@ -449,27 +517,27 @@ export default class WorkbenchWebSocketRequestController {
 
     await new Promise<void>((resolve, reject) => {
       const sentAt = this.now();
+      let finished = false;
       const finish = (error?: Error) => {
-        if (error && streamEvent) this.stream.failDelivery(streamEvent);
-        if (!error && eventMethod) {
-          this.eventLog.record(
-            "out",
-            eventHarness === "codex" || eventHarness === "copilot" || eventHarness === "opencode"
-              ? eventHarness : eventMethod.startsWith("workbench/") ? "workbench" : "unknown",
+        if (finished) return;
+        finished = true;
+        try {
+          this.reportDelivery({
+            client,
+            request: pending ? { id: pending.id, identity: pending.identity } : undefined,
+            streamEvent,
             eventMethod,
-            outBytes,
-          );
-        }
-        if (pending) {
-          this.complete(
-            pending,
-            error ? "send-error" : responseIsError(message) ? "error" : "ok",
+            eventHarness: eventHarness === "codex" || eventHarness === "copilot" || eventHarness === "opencode"
+              ? eventHarness : eventMethod?.startsWith("workbench/") ? "workbench" : "unknown",
+            outcome: error ? "send-error" : responseIsError(message) ? "error" : "ok",
             processMs,
             jsonMs,
-            this.now() - sentAt,
+            sendMs: this.now() - sentAt,
             outBytes,
-            error ? null : responseErrorMessage,
-          );
+            errorMessage: error ? null : responseErrorMessage,
+          });
+        } catch (receiptError) {
+          this.reportSendFailure({ method: "WebSocket delivery receipt" }, receiptError);
         }
         if (error) reject(error);
         else resolve();
@@ -500,43 +568,65 @@ export default class WorkbenchWebSocketRequestController {
   }
 
   detachForReload(): WorkbenchWebSocketRequestControllerState {
-    this.assertActive();
-    this.detached = true;
-    this.eventLog.dispose();
+    this.suspend();
     const pending = [...this.pending.values()].flatMap((requests) => [...requests.values()].map((request) => {
-      if (request.timer) this.cancel(request.timer);
       const { timer: _timer, ...state } = request;
       return state;
     }));
-    this.pending.clear();
-    for (const { connectionId, subscriptionId } of this.transcriptSubscriptions.values()) {
-      this.transcript.unsubscribe(this.transcriptSubscriptionKey(connectionId, subscriptionId));
-    }
-    this.transcriptSubscriptions.clear();
-    this.unsubscribeReloadDirt?.();
-    this.unsubscribeReloadDirt = null;
-    this.unsubscribeStats?.();
-    this.unsubscribeStats = null;
     return {
       pending,
       reloadDirtObservers: [...this.reloadDirtObservers.values()],
       reloadDirtRevision: this.reloadDirtRevision,
       stream: this.stream.detachForReload(),
       statsObservers: [...this.statsObservers.values()],
+      transcriptSubscriptions: [...this.transcriptSubscriptions.values()].map((subscription) => ({ ...subscription })),
     };
   }
 
+  suspend() {
+    if (this.lifecycle !== "active") return;
+    this.lifecycle = "suspended";
+    this.generation.abort(new Error("Workbench WebSocket request generation retired."));
+    this.eventLog.suspend();
+    this.stream.suspend();
+    for (const requests of this.pending.values()) for (const request of requests.values()) {
+      if (request.timer) this.cancel(request.timer);
+      request.timer = null;
+    }
+    for (const { connectionId, subscriptionId } of this.transcriptSubscriptions.values()) {
+      this.transcript.unsubscribe(this.transcriptSubscriptionKey(connectionId, subscriptionId));
+    }
+    this.unsubscribeReloadDirt?.();
+    this.unsubscribeReloadDirt = null;
+    this.unsubscribeStats?.();
+    this.unsubscribeStats = null;
+  }
+
+  async resumeAfterFailedReload() {
+    if (this.lifecycle === "disposed") throw new Error("Workbench WebSocket request controller is disposed.");
+    if (this.lifecycle === "active") return;
+    this.lifecycle = "active";
+    this.generation = new AbortController();
+    this.eventLog.resumeAfterFailedReload();
+    this.stream.resumeAfterFailedReload();
+    for (const requests of this.pending.values()) for (const request of requests.values()) this.scheduleWarning(request);
+    for (const subscription of this.transcriptSubscriptions.values()) {
+      void this.subscribeTranscript(subscription, false).catch((error: unknown) => {
+        this.writeLine(`[transcript] restore subscription failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+      });
+    }
+    await this.start();
+  }
+
   dispose() {
-    if (this.detached) return;
-    this.detached = true;
+    if (this.lifecycle === "disposed") return;
+    this.suspend();
+    this.lifecycle = "disposed";
     this.eventLog.dispose();
     for (const requests of this.pending.values()) {
       for (const request of requests.values()) if (request.timer) this.cancel(request.timer);
     }
     this.pending.clear();
-    for (const { connectionId, subscriptionId } of this.transcriptSubscriptions.values()) {
-      this.transcript.unsubscribe(this.transcriptSubscriptionKey(connectionId, subscriptionId));
-    }
     this.transcriptSubscriptions.clear();
     this.unsubscribeReloadDirt?.();
     this.unsubscribeReloadDirt = null;
@@ -616,18 +706,21 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptCapabilitiesAnnounced.add(client);
   }
 
-  private async subscribeTranscript(subscription: WorkbenchWebSocketTranscriptSubscriptionState) {
+  private async subscribeTranscript(subscription: WorkbenchWebSocketTranscriptSubscriptionState, materialise = true) {
+    const signal = this.generation.signal;
     const key = this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId);
     this.transcriptSubscriptions.set(key, subscription);
     try {
-      if (subscription.turnIds) {
+      if (materialise && subscription.turnIds) {
         const requests: JsonRpcRequest[] = [];
         if (this.identities) {
           const thread = await this.identities.threads.resolve({ threadId: subscription.threadId });
+          signal.throwIfAborted();
           if (!thread) throw new Error("Transcript thread identity has not been admitted.");
           const groups = new Map<string, { threadId: string; turnIds: string[] }>();
           for (const turnId of subscription.turnIds) {
             const turn = await this.identities.threads.resolveTurn({ threadId: thread.threadId, turnId });
+            signal.throwIfAborted();
             if (!turn?.native.nativeTurnId || turn.native.harness !== "codex") throw new Error("Transcript turn has no Codex materialisation source.");
             const native = turn.native;
             const group = groups.get(native.nativeThreadId) ?? { threadId: native.nativeThreadId, turnIds: [] };
@@ -647,12 +740,15 @@ export default class WorkbenchWebSocketRequestController {
           },
         });
         for (const request of requests) {
+          signal.throwIfAborted();
           const response = await this.harnesses.request("codex", request);
+          signal.throwIfAborted();
           if (response.error) throw new Error(response.error.message);
           if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
         }
         if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
       }
+      signal.throwIfAborted();
       await this.transcript.subscribe({
         id: key,
         request: {
@@ -661,7 +757,7 @@ export default class WorkbenchWebSocketRequestController {
           turnLimit: subscription.turnLimit,
         },
         publish: async (snapshot) => {
-          if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
+          if (signal.aborted || this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
           await this.sendJsonToClient(subscription.client, {
             method: workbenchTranscriptNotifications.updated.method,
             params: {
@@ -673,7 +769,7 @@ export default class WorkbenchWebSocketRequestController {
         },
       });
     } catch (error) {
-      if (this.transcriptSubscriptions.get(key) === subscription) {
+      if (!signal.aborted && this.transcriptSubscriptions.get(key) === subscription) {
         this.transcriptSubscriptions.delete(key);
         this.transcript.unsubscribe(key);
       }
@@ -719,6 +815,7 @@ export default class WorkbenchWebSocketRequestController {
     if (existing) this.complete(existing, "replaced", this.now() - existing.startedAt, 0, 0, 0);
     const startedAt = this.now();
     const request: PendingRequest = {
+      identity: {},
       client,
       id,
       inBytes,
@@ -737,13 +834,14 @@ export default class WorkbenchWebSocketRequestController {
       requests = new Map();
       this.pending.set(state.client, requests);
     }
-    const request = { ...state, timer: null } satisfies PendingRequest;
+    const request = { ...state, identity: state.identity ?? {}, timer: null } satisfies PendingRequest;
     requests.set(state.id, request);
     this.scheduleWarning(request);
   }
 
   private scheduleWarning(request: PendingRequest) {
-    request.timer = this.schedule(() => {
+    const timer = this.schedule(() => {
+      if (request.timer !== timer) return;
       request.timer = null;
       if (this.detached || this.pending.get(request.client)?.get(request.id) !== request) return;
       const now = this.now();
@@ -751,6 +849,7 @@ export default class WorkbenchWebSocketRequestController {
       request.nextWarningAt = now + PENDING_WARNING_INTERVAL_MS;
       this.scheduleWarning(request);
     }, Math.max(0, request.nextWarningAt - this.now()));
+    request.timer = timer;
   }
 
   private complete(

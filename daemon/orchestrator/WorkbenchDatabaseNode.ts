@@ -29,8 +29,15 @@ import WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscr
 import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
-  options: { databasePath: string },
-) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase;
+  options: { databasePath: string; beforeMigration?(backupPath: string): void },
+) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & Pick<
+  import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission"
+>;
+
+interface DatabaseReloadState {
+  checkpointPath: string | null;
+  releaseCandidate?(): Promise<void>;
+}
 
 type ThreadIdentityControllerConstructor = new (
   database: OrchestratorDatabaseRegistration,
@@ -94,7 +101,7 @@ export default new ReloadableNode<
     "shared/database/**",
   ].join("\n"),
   children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
-  create: (context) => {
+  create: (context, build) => {
     const {
       CaptureGapController,
       CodexSandboxNetworkController,
@@ -110,7 +117,12 @@ export default new ReloadableNode<
       "workbench-transcript-capture-gap.json",
     );
     const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
-    const database = new DatabaseController({ databasePath });
+    const handoffState = build.handoffState as DatabaseReloadState | undefined;
+    const database = new DatabaseController({
+      databasePath,
+      beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
+    });
+    if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();
     const threadIdentity = new ThreadIdentityController(database);
     const transcriptIdentity = new TranscriptIdentityController(database);
     const codexSandboxNetwork = new CodexSandboxNetworkController(database);
@@ -130,23 +142,58 @@ export default new ReloadableNode<
       logError("workbench-transcript-shadow", `internal diagnostic log failed: ${error.message}`);
     });
     let shutdownPromise: Promise<void> | null = null;
+    let committed = build.mode !== "replacement";
     const shutdown = () => {
       shutdownPromise ??= (async () => {
-        transcript.dispose();
-        threadIdentity.dispose();
-        transcriptIdentity.dispose();
-        await transcriptShadowLog.flush();
-        await database.close();
+        const failures: unknown[] = [];
+        for (const close of [
+          () => transcript.dispose(),
+          () => threadIdentity.dispose(),
+          () => transcriptIdentity.dispose(),
+          () => transcriptShadowLog.flush(),
+          () => committed ? database.close() : database.abortPreparation(),
+        ]) {
+          try { await close(); }
+          catch (error) { failures.push(error); }
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length) throw new AggregateError(failures, "Database node retirement failed.");
       })();
       return shutdownPromise;
     };
     return {
+      activate: () => { committed = true; },
+      deactivate: () => { committed = false; },
+      // Retirement begins after commit (or terminal shutdown), before dependant disposal.
+      beginRuntimeDrain: () => database.retireSuspendedAdmission(),
+      beginHandoff: () => {
+        const state: DatabaseReloadState = { checkpointPath: null };
+        return {
+          waitForIdle: () => Promise.resolve(),
+          expire: () => undefined,
+          detach: async () => {
+            await transcriptShadowLog.flush();
+            await database.suspend();
+            return state;
+          },
+          resume: async () => {
+            await state.releaseCandidate?.();
+            await database.resume(state.checkpointPath ?? undefined);
+          },
+          commit: shutdown,
+        };
+      },
       registrations: { codexSandboxNetwork, database, threadIdentity, transcriptIdentity, transcript, transcriptShadowLog },
-      start: async () => {
+      start: async (_reportPhase, signal) => {
+        signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
+        signal?.throwIfAborted();
         await transcriptShadowLog.start();
+        signal?.throwIfAborted();
         await transcript.start();
+        signal?.throwIfAborted();
         await threadIdentity.start();
+        signal?.throwIfAborted();
       },
       detachForReload: shutdown,
       dispose: shutdown,

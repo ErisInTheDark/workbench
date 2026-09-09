@@ -44,6 +44,8 @@ export default class HttpServer {
   private readonly onError: (error: Error) => void;
   private readonly port: number;
   private server: Server | null = null;
+  private readonly listenController = new AbortController();
+  private closing: Promise<void> | null = null;
 
   constructor(options: HttpServerOptions) {
     this.displayHostname = options.displayHostname?.trim() || undefined;
@@ -54,6 +56,7 @@ export default class HttpServer {
   }
 
   async start(): Promise<HttpServerAddress> {
+    if (this.closing) throw new Error("HTTP server has closed.");
     if (this.server) throw new Error("HTTP server is already running.");
     const server = createServer((request, response) => {
       void Promise.resolve(this.handle(request, response)).catch((error: unknown) => {
@@ -72,15 +75,19 @@ export default class HttpServer {
       await new Promise<void>((resolve, reject) => {
         const onError = (error: Error) => {
           server.off("listening", onListening);
+          server.off("close", onClose);
           reject(error);
         };
         const onListening = () => {
           server.off("error", onError);
+          server.off("close", onClose);
           resolve();
         };
+        const onClose = () => onError(new Error("HTTP server closed before listening."));
         server.once("error", onError);
         server.once("listening", onListening);
-        server.listen(this.port, this.hostname);
+        server.once("close", onClose);
+        server.listen({ port: this.port, host: this.hostname, signal: this.listenController.signal });
       });
     } catch (error) {
       this.server = null;
@@ -95,13 +102,21 @@ export default class HttpServer {
     return { hostname, port: address.port, url: `http://${formatHost(hostname)}:${address.port}` };
   }
 
-  async close() {
+  close(options: { force?: boolean } = {}) {
     const server = this.server;
-    this.server = null;
-    if (!server) return;
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
+    if (!server) return this.closing ?? Promise.resolve();
+    if (!this.closing) {
+      this.closing = new Promise<void>(resolve => {
+        server.once("close", () => {
+          if (this.server === server) this.server = null;
+          resolve();
+        });
+      });
+      // The same native cancellation covers an in-progress bind and a live listener.
+      this.listenController.abort();
       server.closeIdleConnections();
-    });
+    }
+    if (options.force) server.closeAllConnections();
+    return this.closing;
   }
 }

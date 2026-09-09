@@ -89,6 +89,17 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const turnRecovery = build.get("turnRecovery");
     let bridge!: CodexStdioBridge;
     let recovery: { controller: AbortController; completion: Promise<void> } | null = null;
+    let generation = new AbortController();
+    const persistence = new Set<Promise<unknown>>();
+    const persist = async <T>(operation: () => Promise<T>) => {
+      const write = operation();
+      persistence.add(write);
+      try { return await write; }
+      finally { persistence.delete(write); }
+    };
+    const waitForPersistence = async () => {
+      while (persistence.size) await Promise.allSettled([...persistence]);
+    };
     const reportRecoveryFailure = (threadId: string | null, error: unknown) => {
       build.get("transcriptShadowLog").write({
         event: "capture-recovery-failed",
@@ -106,9 +117,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         await recoverCodexSqliteTranscripts(
           bridge, transcript, reportRecoveryFailure,
           // Process startup already owns persisted turn recovery. Replacement has no such callback.
-          build.mode === "initial" ? async () => undefined : () => harnesses.recoverAvailable("codex"),
+          build.mode === "initial" ? async () => undefined : () => harnesses.recoverAvailable("codex", controller.signal),
           build.isReplacing("server:database") ? {
-            captureGap: (threadId, error) => transcript.captureProviderGap(threadId, error),
+            captureGap: (threadId, error) => persist(() => transcript.captureProviderGap(threadId, error)),
             readThread: (threadId, signal) => bridge.baselineSqliteTranscriptThread(threadId, signal),
             threadIds: bridge.activeSqliteTranscriptThreadIds,
           } : undefined,
@@ -119,21 +130,24 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       });
       recovery = { controller, completion };
     };
-    const stopRecovery = async () => {
+    const stopRecovery = () => {
       recovery?.controller.abort(new Error("Codex transcript recovery retired with its bridge."));
-      await recovery?.completion;
+      recovery = null;
     };
     const prepareTurnStart = async (
       request: JsonRpcRequest,
       requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+      signal: AbortSignal,
     ) => {
       const threadId = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
       if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
       const state = await threadState.getCodexMcpState(threadId, requestProvider);
+      signal.throwIfAborted();
       const [project, networkAccess] = await Promise.all([
         projectCatalog.resolveProjectById(state.projectId),
         codexSandboxNetwork.resolve(state.projectId),
       ]);
+      signal.throwIfAborted();
       const generation = await codexMcpGeneration.prepare(state.generation, async () => {
         const response = await requestProvider({
           id: `workbench:mcp-refresh:${codexMcpGeneration.generation}`,
@@ -142,7 +156,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         });
         if (response.error) throw new Error(response.error.message);
       });
-      await threadState.setManagedCodexMcpGeneration(state.projectId, threadId, generation);
+      signal.throwIfAborted();
+      await persist(() => threadState.setManagedCodexMcpGeneration(state.projectId, threadId, generation));
+      signal.throwIfAborted();
       applyServerCodexSandboxPolicy(
         request,
         project.roots.map((root) => root.rootPath),
@@ -154,9 +170,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       onInitialized: build.mode === "initial" ? startRecovery : undefined,
       instructions: codexInstructions,
-      prepareThreadConfiguration: async (thread, requests) => {
+      prepareThreadConfiguration: async (thread, requests, signal) => {
         const profile = await threadState.prepareCodexProfile(thread);
+        signal.throwIfAborted();
         const project = await projectCatalog.resolveProjectById(profile.projectId);
+        signal.throwIfAborted();
         const configuration = {
           cwd: profile.cwd, projectId: profile.projectId,
           roots: project.roots.map((root, index) => ({
@@ -190,37 +208,67 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       restartingAppServer: build.isReplacing("harness:codex"),
       transcriptShadowLog: build.get("transcriptShadowLog"),
     });
-    parent.attachBridge(bridge);
-    let activated = build.mode === "initial";
-    let detached = false;
     return {
       activate: () => {
-        if (build.mode === "replacement") codexMcpGeneration.bump();
-        activated = true;
-        startRecovery();
+        parent.attachBridge(bridge, { publish: false });
       },
-      detachForReload: async (replacement) => {
-        await stopRecovery();
+      deactivate: () => parent.deactivateBridge(bridge),
+      afterCommit: () => {
+        if (build.isReplacing("harness:codex")) {
+          turnRecovery.captureForReload(["codex"]);
+          context.onCodexBridgeUnavailable(true);
+        }
+        parent.attachBridge(bridge);
+        if (build.mode === "replacement") codexMcpGeneration.bump();
+        bridge.resumePendingToolContexts();
+        void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
+        build.get("codexHealth").start({ armed: true });
+        if (build.mode === "initial") return;
+        const signal = generation.signal;
+        void parent.appServer.retirePrevious().then(async () => {
+          if (!signal.aborted) await context.onCodexBridgeReady(bridge);
+        }).then(() => {
+          if (!signal.aborted) startRecovery();
+        }).catch(error => {
+          if (!signal.aborted) reportRecoveryFailure(null, error);
+        });
+      },
+      beginHandoff: (replacement) => {
         const restartingAppServer = replacement.isReplacing("harness:codex");
-        if (restartingAppServer) turnRecovery.captureForReload(["codex"]);
-        context.onCodexBridgeUnavailable(restartingAppServer);
-        const state = await parent.detachBridge(bridge, { restartingAppServer });
-        detached = true;
-        return state;
+        const handoff = parent.beginBridgeHandoff(bridge, { restartingAppServer });
+        const suspend = () => {
+          generation.abort(new Error("Codex bridge node retired."));
+          stopRecovery();
+        };
+        return {
+          waitForIdle: async () => {
+            suspend();
+            await handoff.waitForIdle();
+            await waitForPersistence();
+          },
+          expire: () => { suspend(); handoff.expire(); },
+          detach: async () => {
+            suspend();
+            await waitForPersistence();
+            return await handoff.detach();
+          },
+          resume: async () => {
+            generation = new AbortController();
+            await handoff.resume();
+            startRecovery();
+          },
+          commit: () => handoff.commit(),
+        };
       },
       dispose: async () => {
-        await stopRecovery();
-        if (detached) return;
-        if (activated) await bridge.dispose();
-        else await bridge.detachForReload();
+        generation.abort(new Error("Codex bridge node disposed."));
+        stopRecovery();
+        bridge.expireForReload();
+        await waitForPersistence();
+        await bridge.retireAfterHandoff();
       },
       registrations: { codexBridge: bridge },
-      start: async () => {
-        if (build.mode !== "initial") {
-          await context.onCodexBridgeReady(bridge);
-        }
-        build.get("codexHealth").start({ armed: true });
-      },
+      start: () => undefined,
     };
   },
   description: "Reload Codex bridge code without restarting the Codex app-server.",

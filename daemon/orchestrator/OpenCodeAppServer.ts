@@ -1,17 +1,23 @@
 /*
  * Exports:
- * - OpenCodeAppServerOptions: injected SDK, environment, clock, config, and logging ports. Keywords: opencode, server, test.
+ * - OpenCodeAppServerOptions: process factory, environment, clock, config, and logging ports. Keywords: opencode, server, test.
  * - default OpenCodeAppServer: own external selection, managed startup, cooldown, disabled state, restart, and shutdown. Keywords: provider, lifecycle, ownership.
  */
-import type { createOpencodeServer as createOpenCodeServer } from "@opencode-ai/sdk/v2";
+import OpenCodeServerProcess, { type OpenCodeManagedProcess, type OpenCodeServerProcessOptions } from "./OpenCodeServerProcess";
 
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import { log, logError } from "./process-helpers";
 
 type OpenCodeServerHandle = {
-  close: () => void;
-  url: string;
+  process: OpenCodeManagedProcess;
+  url: string | null;
 };
+
+interface ManagedServerStart {
+  controller: AbortController;
+  promise: Promise<string>;
+  restoreEnvironment(): void;
+}
 
 type ManagedServerFailure = {
   failedAt: number;
@@ -21,13 +27,14 @@ type ManagedServerFailure = {
 };
 
 export interface OpenCodeAppServerOptions {
-  createServer?: typeof createOpenCodeServer;
+  createServer?: (options: OpenCodeServerProcessOptions) => OpenCodeManagedProcess;
   ensureConfig?: OrchestratorReloadableModules["opencodeWorkbenchInstructions"]["ensureOpenCodeWorkbenchConfigDirectory"];
   environment?: NodeJS.ProcessEnv;
   getReloadableModules: () => OrchestratorReloadableModules;
   log?: (name: string, message: string) => void;
   logError?: (name: string, message: string) => void;
   now?: () => number;
+  previousAppServer?: OpenCodeAppServer;
   retryCooldownMs?: number;
   suppressionLogMs?: number;
 }
@@ -76,7 +83,7 @@ function describeConfigMetadata(metadata: {
 }
 
 export default class OpenCodeAppServer {
-  private readonly createServer: typeof createOpenCodeServer;
+  private readonly createServer: NonNullable<OpenCodeAppServerOptions["createServer"]>;
   private readonly ensureConfig: OpenCodeAppServerOptions["ensureConfig"];
   private readonly environment: NodeJS.ProcessEnv;
   private readonly externalServerUrl: string | null;
@@ -86,13 +93,16 @@ export default class OpenCodeAppServer {
   private readonly logError: NonNullable<OpenCodeAppServerOptions["logError"]>;
   private readonly now: NonNullable<OpenCodeAppServerOptions["now"]>;
   private readonly port: number;
+  private previousAppServer: OpenCodeAppServer | undefined;
   private readonly retryCooldownMs: number;
   private server: OpenCodeServerHandle | null = null;
-  private startPromise: Promise<string> | null = null;
+  private closing: Promise<void> | null = null;
+  private startAttempt: ManagedServerStart | null = null;
   private readonly suppressionLogMs: number;
   private readonly timeoutMs: number;
 
   constructor(private readonly options: OpenCodeAppServerOptions) {
+    this.previousAppServer = options.previousAppServer;
     this.environment = options.environment ?? process.env;
     this.externalServerUrl = this.environment.OPENCODE_SERVER_URL?.trim() || null;
     this.hostname = this.environment.OPENCODE_SERVER_HOSTNAME?.trim() || "127.0.0.1";
@@ -104,10 +114,7 @@ export default class OpenCodeAppServer {
     this.logError = options.logError ?? logError;
     this.now = options.now ?? Date.now;
     this.ensureConfig = options.ensureConfig;
-    this.createServer = options.createServer ?? ((async (serverOptions) => {
-      const sdk = await import("@opencode-ai/sdk/v2");
-      return await sdk.createOpencodeServer(serverOptions);
-    }) as typeof createOpenCodeServer);
+    this.createServer = options.createServer ?? ((serverOptions) => new OpenCodeServerProcess(serverOptions));
   }
 
   isDisabled() {
@@ -116,29 +123,67 @@ export default class OpenCodeAppServer {
 
   async getBaseUrl() {
     if (this.externalServerUrl) return normalizeBaseUrl(this.externalServerUrl);
-    if (this.server) return normalizeBaseUrl(this.server.url);
-    if (this.startPromise) return await this.startPromise;
-    this.startPromise = this.startManagedServer();
+    if (this.closing) await this.closing;
+    if (this.server?.url) return normalizeBaseUrl(this.server.url);
+    if (this.startAttempt) return await this.startAttempt.promise;
+    if (this.server) await this.stop();
+    const attempt: ManagedServerStart = {
+      controller: new AbortController(),
+      promise: Promise.resolve().then(() => this.startManagedServer(attempt)),
+      restoreEnvironment: () => {},
+    };
+    const signal = attempt.controller.signal;
+    let abort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    attempt.promise = Promise.race([attempt.promise, cancelled]).finally(() => {
+      signal.removeEventListener("abort", abort);
+    });
+    this.startAttempt = attempt;
     try {
-      return await this.startPromise;
+      return await attempt.promise;
     } finally {
-      this.startPromise = null;
+      if (this.startAttempt === attempt) this.startAttempt = null;
     }
   }
 
   async restart() {
-    await this.startPromise?.catch(() => undefined);
-    this.startPromise = null;
-    if (!this.externalServerUrl) this.server?.close();
-    this.server = null;
+    await this.stop();
     this.failure = null;
   }
 
-  async stop() {
-    await this.startPromise?.catch(() => undefined);
-    this.startPromise = null;
-    if (!this.externalServerUrl) this.server?.close();
-    this.server = null;
+  async retirePrevious() {
+    const previous = this.previousAppServer;
+    if (!previous) return;
+    await previous.stop();
+    if (this.previousAppServer === previous) this.previousAppServer = undefined;
+  }
+
+  stop() {
+    if (this.closing) return this.closing;
+    const attempt = this.startAttempt;
+    this.startAttempt = null;
+    attempt?.controller.abort(new Error("OpenCode startup attempt was retired."));
+    attempt?.restoreEnvironment();
+    const server = this.server;
+    const closing = Promise.allSettled([
+      this.retirePrevious(),
+      Promise.resolve().then(() => server?.process.close()).then(() => {
+        if (this.server === server) this.server = null;
+      }),
+    ]).then(results => {
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "OpenCode generations failed to shut down.");
+    });
+    this.closing = closing;
+    void closing.then(
+      () => { if (this.closing === closing) this.closing = null; },
+      () => { if (this.closing === closing) this.closing = null; },
+    );
+    return closing;
   }
 
   private readCooldownError() {
@@ -164,27 +209,54 @@ export default class OpenCodeAppServer {
     this.logError("opencode-server", `${prefix}: ${this.failure.message}`);
   }
 
-  private async startManagedServer() {
+  private async startManagedServer(attempt: ManagedServerStart) {
+    const signal = attempt.controller.signal;
+    signal.throwIfAborted();
+    await this.retirePrevious();
+    signal.throwIfAborted();
     const cooldownError = this.readCooldownError();
     if (cooldownError) throw new Error(cooldownError);
     const previousConfigDirectory = this.environment.OPENCODE_CONFIG_DIR;
     const ensureConfig = this.ensureConfig ?? this.options.getReloadableModules().opencodeWorkbenchInstructions.ensureOpenCodeWorkbenchConfigDirectory;
-    const workbenchConfig = await ensureConfig({ baseConfigDirectory: previousConfigDirectory });
-    this.environment.OPENCODE_CONFIG_DIR = workbenchConfig.configDirectory;
-    this.log(
-      "opencode-server",
-      workbenchConfig.copiedBaseConfig
-        ? `using Workbench OpenCode config overlay from ${workbenchConfig.baseConfigDirectory}`
-        : `using Workbench OpenCode config without base config; ${workbenchConfig.baseConfigDirectory} was unavailable (${workbenchConfig.unavailableBaseConfigReason ?? "unknown"})`,
-    );
-    if (workbenchConfig.copiedBaseConfig) this.log("opencode-server", `copied OpenCode base config metadata: ${describeConfigMetadata(workbenchConfig.baseConfigMetadata)}`);
     try {
-      const server = await this.createServer({ hostname: this.hostname, port: this.port, timeout: this.timeoutMs });
-      if (!server) throw new Error("OpenCode managed server startup failed without an error.");
+      const workbenchConfig = await ensureConfig({ baseConfigDirectory: previousConfigDirectory });
+      signal.throwIfAborted();
+      this.environment.OPENCODE_CONFIG_DIR = workbenchConfig.configDirectory;
+      attempt.restoreEnvironment = () => {
+        if (previousConfigDirectory === undefined) delete this.environment.OPENCODE_CONFIG_DIR;
+        else this.environment.OPENCODE_CONFIG_DIR = previousConfigDirectory;
+        attempt.restoreEnvironment = () => {};
+      };
+      this.log(
+        "opencode-server",
+        workbenchConfig.copiedBaseConfig
+          ? `using Workbench OpenCode config overlay from ${workbenchConfig.baseConfigDirectory}`
+          : `using Workbench OpenCode config without base config; ${workbenchConfig.baseConfigDirectory} was unavailable (${workbenchConfig.unavailableBaseConfigReason ?? "unknown"})`,
+      );
+      if (workbenchConfig.copiedBaseConfig) this.log("opencode-server", `copied OpenCode base config metadata: ${describeConfigMetadata(workbenchConfig.baseConfigMetadata)}`);
+      const server: OpenCodeServerHandle = {
+        process: this.createServer({
+          hostname: this.hostname, port: this.port, timeout: this.timeoutMs, signal,
+          environment: { ...this.environment },
+        }),
+        url: null,
+      };
       this.server = server;
+      const url = await server.process.start();
+      if (signal.aborted) {
+        await server.process.close();
+        throw signal.reason;
+      }
+      server.url = url;
       this.failure = null;
-      return normalizeBaseUrl(server.url);
+      return normalizeBaseUrl(url);
     } catch (error) {
+      if (signal.aborted) {
+        if (error !== signal.reason) {
+          this.logError("opencode-server", `retired startup failed: ${formatStartupError(error).slice(0, 1_000)}`);
+        }
+        throw signal.reason;
+      }
       const message = formatStartupError(error);
       this.failure = {
         failedAt: this.now(),
@@ -195,8 +267,7 @@ export default class OpenCodeAppServer {
       this.logError("opencode-server", `managed server startup failed: ${message}`);
       throw new Error(message);
     } finally {
-      if (previousConfigDirectory === undefined) delete this.environment.OPENCODE_CONFIG_DIR;
-      else this.environment.OPENCODE_CONFIG_DIR = previousConfigDirectory;
+      attempt.restoreEnvironment();
     }
   }
 }

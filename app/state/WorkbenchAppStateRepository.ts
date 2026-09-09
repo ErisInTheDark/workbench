@@ -19,7 +19,7 @@ import {
     type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 
-import migrateWorkbenchDatabase from "workbench-shared/database/workbench-database-migration";
+import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import {
     appStateSchema,
     appStateTableInventory,
@@ -41,6 +41,8 @@ export default class WorkbenchAppStateRepository {
   #database: Database.Database | null = null;
   #daemonRegistrationId: string | null = null;
   #opening: Promise<string> | null = null;
+  #closing: Promise<void> | null = null;
+  readonly #backups = new Set<Promise<void>>();
 
   constructor(options: WorkbenchAppStateRepositoryOptions = {}) {
     const runtimeRoot = resolveWorkbenchRuntimeRoot(options.repositoryRootPath);
@@ -53,21 +55,21 @@ export default class WorkbenchAppStateRepository {
     return this.#daemonRegistrationId;
   }
 
-  async start() {
+  async start(beforeMigration?: (backupPath: string) => void) {
     if (this.#database || this.#opening) throw new Error("Workbench app state repository has already started.");
-    const opening = this.#open();
+    const opening = this.#open(beforeMigration);
     this.#opening = opening;
     try { return await opening; }
     finally { this.#opening = null; }
   }
 
-  async #open() {
+  async #open(beforeMigration?: (backupPath: string) => void) {
     assertSchemaReleaseManifest(appStateSchema, appStateReleases, "app");
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
     const database = new Database(this.databasePath);
     try {
       database.pragma("foreign_keys = ON");
-      await migrateWorkbenchDatabase(database, appStateSchema);
+      await migrateWorkbenchDatabase(database, appStateSchema, { beforeMigration });
       this.#database = database;
       this.#ensureMetadataAndRegistration();
       return this.daemonRegistrationId;
@@ -78,18 +80,39 @@ export default class WorkbenchAppStateRepository {
     }
   }
 
-  async close() {
-    try { await this.#opening; }
-    finally {
+  close() {
+    if (this.#closing) return this.#closing;
+    const closing = (async () => {
+      const failures: unknown[] = [];
+      try { await this.#opening; } catch (error) { failures.push(error); }
+      for (const result of await Promise.allSettled([...this.#backups])) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
       const database = this.#database;
-      this.#database = null;
-      this.#daemonRegistrationId = null;
-      database?.close();
-    }
+      try {
+        database?.close();
+        this.#database = null;
+        this.#daemonRegistrationId = null;
+      } catch (error) { failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, "App database closure failed.");
+    })().finally(() => { if (this.#closing === closing) this.#closing = null; });
+    this.#closing = closing;
+    return closing;
   }
 
-  async backupTo(destinationPath: string) {
-    await this.#requireDatabase().backup(destinationPath);
+  async resume(backupPath?: string) {
+    if (this.#closing) await this.#closing;
+    if (this.#database) return this.daemonRegistrationId;
+    if (backupPath) await restoreWorkbenchDatabaseBackup(backupPath, this.databasePath);
+    return await this.start();
+  }
+
+  async backupTo(destinationPath: string): Promise<void> {
+    if (this.#closing) throw new Error("Workbench app state repository is closing.");
+    const backup = this.#requireDatabase().backup(destinationPath).then(() => undefined)
+      .finally(() => { this.#backups.delete(backup); });
+    this.#backups.add(backup);
+    await backup;
   }
 
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]) {

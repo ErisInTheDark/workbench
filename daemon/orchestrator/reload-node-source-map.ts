@@ -155,11 +155,9 @@ export function observeReloadNodeGraphSources<TContext, TObjects extends object,
     if (sourcePath) add("server:instructions", sourcePath);
   }
 
-  const graphModules = walkModules(rootModule, new Set()).modules;
   if (require.main) {
     const processWalk = walkModules(require.main, new Set([rootModule]));
     for (const loaded of processWalk.modules) {
-      if (graphModules.has(loaded)) continue;
       const sourcePath = workspacePath(loaded.filename);
       if (sourcePath) add("server:process", sourcePath);
     }

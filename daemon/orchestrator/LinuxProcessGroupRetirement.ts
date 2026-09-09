@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 export interface LinuxProcessGroupRetirementOptions {
   listProcessIds?: () => Promise<number[]>;
   readProcessStat?: (pid: number) => Promise<string>;
-  signalGroup?: (pid: number) => void;
+  signalGroup?: (pid: number, signal: NodeJS.Signals) => void;
   waitForNextCheck?: () => Promise<void>;
 }
 
@@ -37,7 +37,7 @@ export default class LinuxProcessGroupRetirement {
   async retire(pid: number) {
     if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("A valid owned Linux process group is required.");
     try {
-      (this.options.signalGroup ?? ((group) => { process.kill(-group, "SIGTERM"); }))(pid);
+      (this.options.signalGroup ?? ((group, signal) => { process.kill(-group, signal); }))(pid, "SIGKILL");
     } catch (error) {
       if (hasCode(error, "ESRCH")) return;
       throw error;

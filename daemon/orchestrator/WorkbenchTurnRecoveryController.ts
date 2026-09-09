@@ -20,7 +20,7 @@ import type {
 } from "./WorkbenchTurnRecoveryHandoffStore";
 
 export type WorkbenchTurnRecoveryResult = "busy" | "completed" | "recovered";
-export type WorkbenchTurnRecoveryPort = (candidate: WorkbenchTurnRecoveryHandoffCandidate) => Promise<WorkbenchTurnRecoveryResult>;
+export type WorkbenchTurnRecoveryPort = (candidate: WorkbenchTurnRecoveryHandoffCandidate, signal?: AbortSignal) => Promise<WorkbenchTurnRecoveryResult>;
 export type WorkbenchUnfinishedTurnPort = (candidate: WorkbenchObservedTurnCandidate, request: JsonRpcRequest) => Promise<void>;
 
 export const MAX_AUTOMATIC_RECOVERY_THREADS = 10;
@@ -52,9 +52,11 @@ export default class WorkbenchTurnRecoveryController {
   private readonly candidates = new Map<string, WorkbenchObservedTurnCandidate>();
   private readonly generationId: string;
   private readonly goalOwnedThreads = new Set<string>();
-  private readonly recoveryTasks = new Map<Promise<void>, { label: string; startedAt: number }>();
+  private readonly recoveryTasks = new Map<Promise<void>, { label: string; signal: AbortSignal; startedAt: number }>();
   private readonly resumeRequests = new Map<string, JsonRpcRequest>();
   private acceptingRecovery = true;
+  private recoveryGeneration = new AbortController();
+  private readonly persistence = new Set<Promise<unknown>>();
   private pendingHandoff: WorkbenchTurnRecoveryHandoff | null = null;
   private reloadCandidates: WorkbenchTurnRecoveryHandoffCandidate[] = [];
 
@@ -152,6 +154,8 @@ export default class WorkbenchTurnRecoveryController {
     lifecycle: WorkbenchThreadLifecycle | null,
     port: WorkbenchUnfinishedTurnPort,
   ) {
+    const signal = this.recoveryGeneration.signal;
+    if (signal.aborted) return false;
     if (notification.method !== "turn/completed") return false;
     const params = record(notification.params);
     const threadId = threadIdFrom(notification.params);
@@ -183,11 +187,15 @@ export default class WorkbenchTurnRecoveryController {
     };
     try {
       await port(structuredClone(candidate), request);
-      return true;
+      return !signal.aborted;
     } catch (error) {
+      if (signal.aborted) {
+        this.log(`Retired unfinished-turn continuation failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
       const replacement = this.candidates.get(key);
       if (replacement?.request.id === continuationId) this.candidates.delete(key);
-      await this.reportFailure(candidate, error);
+      await this.persist(() => this.reportFailure(candidate, error));
       this.log(`Unfinished-turn continuation failed for ${harness}:${threadId}: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
@@ -215,9 +223,24 @@ export default class WorkbenchTurnRecoveryController {
     this.acceptingRecovery = false;
   }
 
+  expireRuntimeDrain() {
+    this.beginRuntimeDrain();
+    this.recoveryGeneration.abort(new Error("Turn recovery generation was retired."));
+  }
+
+  resumeAfterFailedReload() {
+    if (this.recoveryGeneration.signal.aborted) this.recoveryGeneration = new AbortController();
+    this.acceptingRecovery = true;
+  }
+
+  async waitForIdle() {
+    await Promise.allSettled([...this.recoveryTasks].filter(([, task]) => !task.signal.aborted).map(([task]) => task));
+    await Promise.all(this.persistence);
+  }
+
   async detachForReload(): Promise<WorkbenchTurnRecoveryControllerState> {
     this.beginRuntimeDrain();
-    await Promise.allSettled(this.recoveryTasks.keys());
+    await this.waitForIdle();
     return {
       candidates: structuredClone([...this.candidates.values()]),
       generationId: this.generationId,
@@ -229,12 +252,14 @@ export default class WorkbenchTurnRecoveryController {
   }
 
   listRuntimeDrainPending(now = Date.now()) {
-    return [...this.recoveryTasks.values()].map(({ label, startedAt }) => ({ ageMs: Math.max(0, now - startedAt), label }));
+    return [...this.recoveryTasks.values()].filter(({ signal }) => !signal.aborted)
+      .map(({ label, startedAt }) => ({ ageMs: Math.max(0, now - startedAt), label }));
   }
 
   async loadPersistedHandoff() {
+    const signal = this.recoveryGeneration.signal;
     const handoff = await this.store.load();
-    if (!handoff) return;
+    if (!handoff || signal.aborted) return;
     this.pendingHandoff = handoff;
     this.loadCandidates(handoff.candidates);
   }
@@ -243,16 +268,22 @@ export default class WorkbenchTurnRecoveryController {
     harness: WorkbenchRecoveryHarness,
     port: WorkbenchTurnRecoveryPort = this.requireRecoveryPort(harness),
     reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void> = this.reportFailure,
+    callerSignal?: AbortSignal,
   ) {
+    const signal = AbortSignal.any([this.recoveryGeneration.signal, ...(callerSignal ? [callerSignal] : [])]);
+    if (signal.aborted || !this.acceptingRecovery) return;
     const captured = this.reloadCandidates.filter((candidate) => candidate.harness === harness);
+    await this.recover(captured, port, undefined, reportFailure, signal);
+    if (signal.aborted) return;
     this.reloadCandidates = this.reloadCandidates.filter((candidate) => candidate.harness !== harness);
-    await this.recover(captured, port, undefined, reportFailure);
     const handoff = this.pendingHandoff;
     if (!handoff) return;
     const candidates = handoff.candidates.filter((candidate) => candidate.harness === harness);
     if (!candidates.length) return;
-    await this.recover(candidates, port, handoff, reportFailure);
-    this.pendingHandoff = await this.store.load();
+    await this.recover(candidates, port, handoff, reportFailure, signal);
+    if (signal.aborted) return;
+    const nextHandoff = await this.store.load();
+    if (!signal.aborted) this.pendingHandoff = nextHandoff;
   }
 
   async requestResume(
@@ -262,16 +293,19 @@ export default class WorkbenchTurnRecoveryController {
     reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void> = this.reportFailure,
   ) {
     if (!this.acceptingRecovery) throw new Error("Turn recovery is draining; manual resume is temporarily unavailable.");
+    const signal = this.recoveryGeneration.signal;
     const { candidate, handoff } = await this.persistManualResume(harness, threadId);
+    if (signal.aborted) return;
     const label = `manual resume ${harness}:${threadId}`;
     let task!: Promise<void>;
     task = this.runRecoveryTask(label, async () => {
       await new Promise<void>((resolve) => { setImmediate(resolve); });
+      if (signal.aborted) return;
       await this.recover([candidate], port, handoff, reportFailure);
     }).catch((error) => {
       this.log(`Manual resume failed outside the recovery boundary: ${error instanceof Error ? error.message : String(error)}`);
     }).finally(() => { this.recoveryTasks.delete(task); });
-    this.recoveryTasks.set(task, { label, startedAt: Date.now() });
+    this.recoveryTasks.set(task, { label, signal, startedAt: Date.now() });
   }
 
   async persistManualResume(harness: WorkbenchRecoveryHarness, threadId: string) {
@@ -288,7 +322,7 @@ export default class WorkbenchTurnRecoveryController {
       kind: "manual-resume",
       schemaVersion: 2,
     };
-    await this.store.write(handoff);
+    await this.persist(() => this.store.write(handoff));
     return { candidate: captured, handoff };
   }
 
@@ -297,32 +331,61 @@ export default class WorkbenchTurnRecoveryController {
     port: WorkbenchTurnRecoveryPort,
     handoff?: WorkbenchTurnRecoveryHandoff,
     reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void> = this.reportFailure,
+    callerSignal?: AbortSignal,
+  ) {
+    const signal = AbortSignal.any([this.recoveryGeneration.signal, ...(callerSignal ? [callerSignal] : [])]);
+    if (signal.aborted || !this.acceptingRecovery) return;
+    const task = this.recoverCurrent(candidates, port, signal, handoff, reportFailure);
+    this.recoveryTasks.set(task, { label: "provider turn recovery", signal, startedAt: Date.now() });
+    try { await task; }
+    finally { this.recoveryTasks.delete(task); }
+  }
+
+  private async recoverCurrent(
+    candidates: WorkbenchTurnRecoveryHandoffCandidate[],
+    port: WorkbenchTurnRecoveryPort,
+    signal: AbortSignal,
+    handoff: WorkbenchTurnRecoveryHandoff | undefined,
+    reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void>,
   ) {
     let remaining = [...candidates];
     for (const candidate of candidates) {
+      if (signal.aborted) return;
       let result: WorkbenchTurnRecoveryResult;
       try {
-        result = await port(candidate);
+        result = await port(candidate, signal);
       } catch (error) {
-        await reportFailure(candidate, error);
+        if (signal.aborted) {
+          if (error !== signal.reason) this.log(`Retired turn recovery failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+          return;
+        }
+        await this.persist(() => reportFailure(candidate, error));
+        if (signal.aborted) return;
         const currentCandidate = this.candidates.get(candidate.key);
         if (currentCandidate?.recoveryId === candidate.recoveryId) this.candidates.delete(candidate.key);
         remaining = remaining.filter((entry) => entry.key !== candidate.key);
-        if (handoff) await this.store.updateCandidates(handoff, remaining);
+        if (handoff) await this.persist(() => this.store.updateCandidates(handoff, remaining));
         this.log(`Recovery failed for ${candidate.harness}:${candidate.threadId}; moved the thread to Needs attention.`);
         continue;
       }
+      if (signal.aborted) return;
       const currentCandidate = this.candidates.get(candidate.key);
       if (result !== "busy" && currentCandidate?.recoveryId === candidate.recoveryId) {
         this.candidates.delete(candidate.key);
       }
       remaining = remaining.filter((entry) => entry.key !== candidate.key);
-      if (handoff) await this.store.updateCandidates(handoff, remaining);
+      if (handoff) await this.persist(() => this.store.updateCandidates(handoff, remaining));
     }
   }
 
   loadCandidates(candidates: WorkbenchTurnRecoveryHandoffCandidate[]) {
     for (const candidate of candidates) this.candidates.set(candidate.key, structuredClone(candidate));
+  }
+
+  private persist<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = operation().finally(() => { this.persistence.delete(pending); });
+    this.persistence.add(pending);
+    return pending;
   }
 
   private requireRecoveryPort(harness: WorkbenchRecoveryHarness) {

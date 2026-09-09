@@ -7,19 +7,41 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import OpenCodeAppServer from "./OpenCodeAppServer";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import ReloadableNode from "./ReloadableNode";
+import { logError } from "./process-helpers";
+
+interface OpenCodeServerHandoff {
+  appServer: OpenCodeAppServer;
+}
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "cli",
   children: [OpenCodeBridgeNode],
-  create: (context) => {
-    const appServer = new OpenCodeAppServer(context.openCodeAppServerOptions);
+  create: (context, build) => {
+    const previous = build.handoffState as OpenCodeServerHandoff | undefined;
+    const appServer = new OpenCodeAppServer({
+      ...context.openCodeAppServerOptions, previousAppServer: previous?.appServer,
+    });
     let detached = false;
     return {
+      afterCommit: () => {
+        // The process owner also gates replacement startup on this retirement.
+        void appServer.retirePrevious().catch((error) => {
+          logError("opencode-server", `previous server retirement failed: ${String(error instanceof Error ? error.message : error).slice(0, 1_000)}`);
+        });
+      },
+      beginHandoff: () => ({
+        waitForIdle: async () => {},
+        expire: () => {},
+        detach: () => ({ appServer } satisfies OpenCodeServerHandoff),
+        resume: () => {},
+        commit: () => appServer.stop(),
+      }),
       detachForReload: async () => {
         await appServer.stop();
         detached = true;
       },
       dispose: async () => { if (!detached) await appServer.stop(); },
+      shutdown: () => appServer.stop(),
       registrations: { openCodeAppServer: appServer },
       start: () => undefined,
     };
@@ -33,5 +55,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   sources: [
     "daemon/orchestrator/OpenCodeAppServerNode.ts",
     "daemon/orchestrator/OpenCodeAppServer.ts",
+    "daemon/orchestrator/OpenCodeServerProcess.ts",
   ].join("\n"),
 });

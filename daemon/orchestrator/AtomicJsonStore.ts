@@ -1,5 +1,7 @@
 /*
+ * Keywords: atomic JSON, per-file ordering, scoped persistence barriers.
  * Exports:
+ * - AtomicJsonUpdateResult: distinguish logical changes from completed writes.
  * - AtomicJsonStoreState/createAtomicJsonStoreState: plain reload-stable queue state shared by fresh store wrappers. Keywords: orchestrator, reload, queue, state.
  * - AtomicJsonStore: queue atomic JSON file mutations through temp-file rename writes and bounded journal compaction. Keywords: orchestrator, disk, json, atomic writes.
  */
@@ -271,7 +273,13 @@ export default class AtomicJsonStore {
     }
   }
 
-  async waitForIdle() {
-    await Promise.allSettled(Array.from(this.state.queues.values()));
+  async waitForIdle(directoryPath?: string) {
+    const pending = directoryPath === undefined
+      ? [...this.state.queues.values()]
+      : [...this.state.queues].filter(([filePath]) => {
+        const relative = path.relative(path.resolve(directoryPath), path.resolve(filePath));
+        return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      }).map(([, operation]) => operation);
+    await Promise.allSettled(pending);
   }
 }

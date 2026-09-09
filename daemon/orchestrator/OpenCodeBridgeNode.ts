@@ -6,6 +6,7 @@ import { OpenCodeBridge, type OpenCodeBridgeState } from "./opencode-bridge";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
+import { logError } from "./process-helpers";
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
@@ -24,13 +25,28 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         return { projectId: project.id, projectRoot: project.rootPath };
       },
     });
-    let activated = build.mode === "initial";
     let detached = false;
     return {
-      activate: async () => {
-        activated = true;
-        await harnesses.recoverAvailable("opencode");
+      afterCommit: () => {
+        bridge.start();
+        void harnesses.recoverAvailable("opencode", bridge.retirementSignal).catch((error) => {
+          logError("opencode-bridge", `post-reload recovery failed: ${String(error instanceof Error ? error.message : error).slice(0, 1_000)}`);
+        });
       },
+      beginHandoff: () => ({
+        waitForIdle: () => bridge.waitForIdle(),
+        expire: () => bridge.expireRuntimeDrain(),
+        detach: async () => {
+          const state = await bridge.detachForReload();
+          detached = true;
+          return state;
+        },
+        resume: () => {
+          bridge.resumeAfterFailedReload();
+          detached = false;
+        },
+        commit: () => bridge.stop(),
+      }),
       detachForReload: async () => {
         const state = await bridge.detachForReload();
         detached = true;
@@ -38,8 +54,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       dispose: async () => {
         if (detached) return;
-        if (activated) await bridge.stop();
-        else await bridge.detachForReload();
+        await bridge.stop();
       },
       registrations: { openCodeBridge: bridge },
       start: () => undefined,

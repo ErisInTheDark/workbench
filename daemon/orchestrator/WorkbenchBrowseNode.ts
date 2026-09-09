@@ -1,4 +1,5 @@
 /*
+ * Keywords: browse, reversible handoff, registration, results, cancellation.
  * Exports:
  * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement. Keywords: browse, drain, reload.
  */
@@ -18,9 +19,9 @@ class BrowseExecution implements OrchestratorBrowseExecution {
 
   constructor(
     context: OrchestratorProcessContext,
-    private resultCallbacks: WorkbenchBrowseResultCallbacks,
-    private identity: WorkbenchBrowseIdentityPort,
-    private publicTurnId: (threadId: string, turnId: string) => Promise<string>,
+    private readonly resultCallbacks: WorkbenchBrowseResultCallbacks,
+    private readonly identity: WorkbenchBrowseIdentityPort,
+    private readonly publicTurnId: (threadId: string, turnId: string) => Promise<string>,
   ) {
     this.runtime = new WorkbenchBrowseRuntime(context.browseProjectResolvers);
   }
@@ -60,12 +61,7 @@ class BrowseExecution implements OrchestratorBrowseExecution {
   async detach() {
     if (!this.controller) return;
     this.beginDrain();
-    try {
-      await this.controller.waitForIdle();
-    } catch (error) {
-      this.controller.resume();
-      throw error;
-    }
+    await this.controller.waitForIdle();
   }
 
   resume() {
@@ -73,25 +69,19 @@ class BrowseExecution implements OrchestratorBrowseExecution {
   }
 
   beginDrain() {
-    this.controller?.beginDrain();
+    this.getController().beginDrain();
   }
 
-  restoreDependencies(
-    callbacks: WorkbenchBrowseResultCallbacks,
-    identity: WorkbenchBrowseIdentityPort,
-    publicTurnId: (threadId: string, turnId: string) => Promise<string>,
-  ) {
-    // The old controller has drained. Keep browser sessions, not disposed database/bridge ports.
-    this.controller = null;
-    this.resultCallbacks = callbacks;
-    this.identity = identity;
-    this.publicTurnId = publicTurnId;
+  expire() {
+    this.controller?.expire();
   }
 
   private getController() {
     if (!this.controller) {
       const nativeResults = new WorkbenchBrowseResultController(this.resultCallbacks);
       const results = {
+        expire: nativeResults.expire.bind(nativeResults),
+        resume: nativeResults.resume.bind(nativeResults),
         record: nativeResults.record.bind(nativeResults),
         waitForIdle: nativeResults.waitForIdle.bind(nativeResults),
         deliverScreenshot: async (threadId: string, imageUrl: string) => {
@@ -146,31 +136,42 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         return WorkbenchToolContextResponseSchema.parse(response.result);
       },
     };
-    const execution = build.mode === "restore"
-      ? (build.handoffState as { execution: BrowseExecution }).execution
-      : new BrowseExecution(context, callbacks, identity, publicTurnId);
-    if (build.mode === "restore") execution.restoreDependencies(callbacks, identity, publicTurnId);
-    let detached = false;
-    const unregisterBrowse = build.get("daemonRequests").registerBrowse({
-      controlSession: async (request) => await execution.controlSession(request),
-      listSessions: async (request) => await execution.listSessions(request),
-    });
+    const execution = new BrowseExecution(context, callbacks, identity, publicTurnId);
+    let unregisterBrowse: (() => void) | null = null;
     return {
+      afterCommit: () => {
+        unregisterBrowse = build.get("daemonRequests").registerBrowse({
+          controlSession: async (request) => await execution.controlSession(request),
+          listSessions: async (request) => await execution.listSessions(request),
+        });
+        void execution.initialize().catch((error: unknown) => callbacks.logError(`Browse initialisation failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+      },
       beginRuntimeDrain: () => { execution.beginDrain(); },
+      expireRuntimeDrain: () => execution.expire(),
+      beginHandoff: () => {
+        execution.beginDrain();
+        return {
+          waitForIdle: () => execution.detach(),
+          expire: () => execution.expire(),
+          detach: async () => { await execution.detach(); },
+          resume: () => execution.resume(),
+          commit: async () => {
+            unregisterBrowse?.();
+            execution.expire();
+            await execution.detach();
+          },
+        };
+      },
       detachForReload: async () => {
         await execution.detach();
-        detached = true;
-        return { execution };
       },
       dispose: async () => {
-        unregisterBrowse();
-        if (!detached) await execution.detach();
+        unregisterBrowse?.();
+        execution.expire();
+        await execution.detach();
       },
       registrations: { browseExecution: execution },
-      start: async () => {
-        if (build.mode === "restore") execution.resume();
-        else await execution.initialize();
-      },
+      start: async () => {},
     };
   },
   description: "Reload orchestrator-owned Browse execution without restarting browser sessions.",

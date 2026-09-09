@@ -22,6 +22,7 @@ export type CodexAppServerOptions = {
   onFatalExit: (reason: string) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
+  previousAppServer?: CodexAppServer;
   terminateChildAsync?: (child: ChildProcess) => Promise<void>;
 };
 
@@ -70,15 +71,17 @@ export default class CodexAppServer {
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
+  private previousAppServer: CodexAppServer | undefined;
   private readonly terminateChildAsync: (child: ChildProcess) => Promise<void>;
 
-  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
+  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, previousAppServer, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
     this.log = lifecycleLog ?? log;
     this.logError = lifecycleLogError ?? logError;
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
+    this.previousAppServer = previousAppServer;
     this.terminateChildAsync = terminateChildAsync ?? (async (child) => await killProcessTreeAsync(child.pid));
   }
 
@@ -95,6 +98,20 @@ export default class CodexAppServer {
     return this.stopAsync();
   }
 
+  async retirePrevious() {
+    const previous = this.previousAppServer;
+    if (!previous) return;
+    const results = await Promise.allSettled([previous.retirePrevious(), previous.stopAsync()]);
+    const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, "Previous Codex generations failed to retire.");
+    if (this.previousAppServer === previous) this.previousAppServer = undefined;
+  }
+
+  private assertRetired() {
+    this.previousAppServer?.assertRetired();
+    if (this.state.kind !== "idle") throw new Error("The previous Codex process has not retired.");
+  }
+
   stopAsync(): Promise<void> {
     if (this.state.kind === "idle") return Promise.resolve();
     if (this.state.kind === "retiring") return this.state.completion;
@@ -107,7 +124,7 @@ export default class CodexAppServer {
         this.log("codex-stdio", "process retirement completed");
       }, (error: unknown) => {
         this.state = { kind: "retirement-failed", child, error };
-        this.logError("codex-stdio", "process retirement failed; replacement remains blocked");
+        this.logError("codex-stdio", `process retirement failed; replacement remains blocked: ${error instanceof Error ? error.message.replace(/\s+/gu, " ").slice(0, 500) : "non-Error rejection"}`);
         throw error;
       });
     this.state = { kind: "retiring", child, completion };
@@ -132,6 +149,7 @@ export default class CodexAppServer {
   }
 
   private ensureProcess() {
+    this.previousAppServer?.assertRetired();
     if (this.state.kind === "retiring") throw new Error("Codex process is retiring; replacement is blocked.");
     if (this.state.kind === "retirement-failed") {
       throw new Error("Codex process retirement failed; retry stop before replacement.", { cause: this.state.error });

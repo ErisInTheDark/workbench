@@ -100,7 +100,9 @@ export interface OrchestratorProviderNotification { harness: HarnessKind; notifi
 
 export interface OrchestratorCodexAppServerRuntime {
   appServer: CodexAppServer;
-  attachBridge(bridge: CodexStdioBridge): void;
+  attachBridge(bridge: CodexStdioBridge, options?: { publish?: boolean }): void;
+  deactivateBridge(bridge: CodexStdioBridge): void;
+  beginBridgeHandoff(bridge: CodexStdioBridge, options?: Parameters<CodexStdioBridge["detachForReload"]>[0]): import("../../shared/reload/ReloadableNode").ReloadableNodeHandoff;
   detachBridge(bridge: CodexStdioBridge, options?: Parameters<CodexStdioBridge["detachForReload"]>[0]): Promise<CodexStdioBridgeReloadState>;
   isAvailable(): boolean;
   isTransitioning(): boolean;
@@ -141,7 +143,7 @@ export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentit
   recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
   search(request: WorkbenchSearchRequest): Promise<WorkbenchSearchResponse>;
   start(): Promise<object>;
-  readonly state: "starting" | "ready" | "failed" | "closed";
+  readonly state: import("./database/workbench-database-protocol").WorkbenchDatabaseControllerState;
 }
 
 export interface OrchestratorTranscriptRegistration {

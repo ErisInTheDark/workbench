@@ -68,14 +68,17 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       state?.turnRecovery,
       {
-        codex: async (candidate) => await recoverCodexTurn(candidate, {
+        codex: async (candidate, signal) => await recoverCodexTurn(candidate, {
           request: async (request) => {
+            signal?.throwIfAborted();
             if (request.method === "turn/start") turnRecovery.observeRequest("codex", request);
             if (request.method === "workbench/codex/message/admit") {
               const startRequest = record(record(request.params)?.startRequest);
               if (startRequest?.method === "turn/start") turnRecovery.observeRequest("codex", startRequest as import("./bridge-types").JsonRpcRequest);
             }
-            return await context.harnessPorts.codex.request(request);
+            const response = await context.harnessPorts.codex.request(request, signal);
+            signal?.throwIfAborted();
+            return response;
           },
         }),
         opencode: recoverOpenCodeTurn,
@@ -94,7 +97,27 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       } satisfies WorkbenchTurnLifecycleState;
     };
     return {
+      beginHandoff: () => ({
+        waitForIdle: async () => {
+          turnRecovery.beginRuntimeDrain();
+          await turnRecovery.waitForIdle();
+        },
+        expire: () => { turnRecovery.expireRuntimeDrain(); },
+        detach: async () => {
+          const nextState = await drain();
+          detached = true;
+          return nextState;
+        },
+        resume: () => {
+          reloadDirt.resumeAfterFailedReload();
+          reloadController.resumeAfterFailedReload();
+          turnRecovery.resumeAfterFailedReload();
+          detached = false;
+        },
+        commit: () => { turnRecovery.expireRuntimeDrain(); },
+      }),
       beginRuntimeDrain: () => { turnRecovery.beginRuntimeDrain(); },
+      expireRuntimeDrain: () => { turnRecovery.expireRuntimeDrain(); },
       detachForReload: async () => {
         const nextState = await drain();
         detached = true;
@@ -105,7 +128,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       registrations: { codexMcpGeneration, reloadController, reloadDirt, turnRecovery },
       start: async () => {
         await reloadDirt.start();
-        await turnRecovery.loadPersistedHandoff();
+        if (!state) await turnRecovery.loadPersistedHandoff();
       },
     };
   },

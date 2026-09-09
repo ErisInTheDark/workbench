@@ -1,8 +1,9 @@
 /*
  * Keywords: SQLite, migration, backup, retention.
  * Exports:
- * - WorkbenchDatabaseMigrationOptions: target version and retention clock.
+ * - WorkbenchDatabaseMigrationOptions: target version, rollback checkpoint acknowledgement, and retention clock.
  * - preserveWorkbenchDatabaseBackup: publish a verified complete snapshot without migrating the source.
+ * - restoreWorkbenchDatabaseBackup: restore a verified checkpoint after every destination connection is closed.
  * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune expired backups.
  */
 import { randomUUID } from "node:crypto";
@@ -14,8 +15,37 @@ import {
 } from "./schema/schema-history.ts";
 
 export interface WorkbenchDatabaseMigrationOptions {
+  beforeMigration?(backupPath: string): Promise<void> | void;
   targetVersion?: number;
   now?: () => number;
+}
+
+export async function restoreWorkbenchDatabaseBackup(backupPath: string, databasePath: string) {
+  if (path.resolve(backupPath) === path.resolve(databasePath)) {
+    throw new Error("Database rollback checkpoint cannot be its own destination.");
+  }
+  const backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+  let version: number;
+  try {
+    const integrity = backup.pragma("quick_check") as { quick_check: string }[];
+    if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok") {
+      throw new Error("Database rollback checkpoint integrity verification failed.");
+    }
+    version = backup.pragma("user_version", { simple: true }) as number;
+    await backup.backup(databasePath);
+  } finally {
+    backup.close();
+  }
+  const restored = new Database(databasePath, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = restored.pragma("quick_check") as { quick_check: string }[];
+    if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok"
+      || restored.pragma("user_version", { simple: true }) !== version) {
+      throw new Error("Restored database differs from its verified rollback checkpoint.");
+    }
+  } finally {
+    restored.close();
+  }
 }
 
 const completedBackupName = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.sqlite3$/i;
@@ -105,7 +135,8 @@ export default async function migrateWorkbenchDatabase(
     : path.join(path.dirname(path.resolve(database.name)), "backups", path.basename(database.name));
   if (directory && installedVersion < targetVersion
     && database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
-    await preserveWorkbenchDatabaseBackup(database, directory);
+    const backupPath = await preserveWorkbenchDatabaseBackup(database, directory);
+    await options.beforeMigration?.(backupPath);
   }
   applyWorkbenchDatabaseSchema(database, schema, options);
   if (directory) await pruneBackups(directory, (options.now ?? Date.now)());

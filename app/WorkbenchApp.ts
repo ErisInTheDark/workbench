@@ -68,6 +68,8 @@ export default class WorkbenchApp {
   private readonly onDiagnostic: (message: string) => void;
   private address: HttpServerAddress | null = null;
   private closing = false;
+  private closeTask: Promise<void> | null = null;
+  private startup: Promise<WorkbenchAppStartResult> | null = null;
   private lease: WorkbenchAppLease | null = null;
   private portChangeQueue = Promise.resolve();
   private portSource: WorkbenchAppPortSnapshot["source"] = "random";
@@ -87,61 +89,69 @@ export default class WorkbenchApp {
   }
 
   async start(): Promise<WorkbenchAppStartResult> {
-    if (this.server || this.lease || this.runtime) throw new Error("Workbench app has already started.");
+    if (this.startup || this.server || this.lease || this.runtime) throw new Error("Workbench app has already started.");
     if (this.closing) throw new Error("Workbench app has already closed.");
     if (this.callerThreadId) throw new Error("Managed agent threads cannot start the Workbench app.");
-    const lease = await this.acquireLaunchLease();
-    if (!lease) return { kind: "already-running" };
-    const runtime = this.createRuntime({
-      read: () => this.readPort(),
-      update: async (port) => await this.updatePort(port),
-    });
-    let server: WorkbenchAppServer | null = null;
+    this.startup = this.startResources();
     try {
-      await runtime.start();
-      const savedPort = this.savedPort(runtime.readAppPort());
-      const initialPort = this.environmentPort ?? savedPort ?? 0;
-      server = this.createServer(runtime, initialPort);
-      const address = await server.start();
-      this.lease = lease;
-      this.runtime = runtime;
-      this.server = server;
-      this.address = address;
-      const portSource = this.environmentPort !== null
-        ? "environment"
-        : savedPort !== null
-          ? "setting"
-          : "random";
-      this.portSource = portSource;
-      return { address, kind: "started", portSource };
+      return await this.startup;
     } catch (error) {
       const failures = [error];
-      if (server) {
-        try { await server.close(); } catch (closeError) { failures.push(closeError); }
-      }
-      try { await runtime.close(); } catch (runtimeError) { failures.push(runtimeError); }
-      try { await lease.dispose(); } catch (leaseError) { failures.push(leaseError); }
+      try { await this.close(); } catch (closeError) { failures.push(closeError); }
       throwFailures("Workbench app startup and cleanup failed.", failures);
       throw error;
     }
   }
 
-  async close() {
+  private async startResources(): Promise<WorkbenchAppStartResult> {
+    const assertStarting = () => {
+      if (this.closing) throw new Error("Workbench app closed during startup.");
+    };
+    this.lease = await this.acquireLaunchLease();
+    assertStarting();
+    if (!this.lease) return { kind: "already-running" };
+    const runtime = this.createRuntime({
+      read: () => this.readPort(),
+      update: async (port) => await this.updatePort(port),
+    });
+    this.runtime = runtime;
+    await runtime.start();
+    assertStarting();
+    const savedPort = this.savedPort(runtime.readAppPort());
+    const initialPort = this.environmentPort ?? savedPort ?? 0;
+    this.server = this.createServer(runtime, initialPort);
+    const address = await this.server.start();
+    assertStarting();
+    this.address = address;
+    const portSource = this.environmentPort !== null ? "environment" : savedPort !== null ? "setting" : "random";
+    this.portSource = portSource;
+    return { address, kind: "started", portSource };
+  }
+
+  close() {
+    if (this.closeTask) return this.closeTask;
     this.closing = true;
-    await this.portChangeQueue;
-    const server = this.server;
-    const runtime = this.runtime;
-    const lease = this.lease;
-    if (!server || !runtime || !lease) return;
-    this.server = null;
-    this.runtime = null;
-    this.lease = null;
-    this.address = null;
-    const failures: unknown[] = [];
-    try { await server.close(); } catch (error) { failures.push(error); }
-    try { await runtime.close(); } catch (error) { failures.push(error); }
-    try { await lease.dispose(); } catch (error) { failures.push(error); }
-    throwFailures("Workbench app shutdown failed.", failures);
+    this.closeTask = (async () => {
+      await this.portChangeQueue;
+      const failures: unknown[] = [];
+      const closures: Promise<void>[] = [];
+      for (const owner of [this.server, this.runtime]) {
+        try { if (owner) closures.push(owner.close()); }
+        catch (error) { failures.push(error); }
+      }
+      for (const result of await Promise.allSettled(closures)) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
+      // Startup owns and propagates its error. Closure waits only to collect a late lease.
+      await this.startup?.then(() => undefined, () => undefined);
+      try { await this.lease?.dispose(); } catch (error) { failures.push(error); }
+      throwFailures("Workbench app shutdown failed.", failures);
+      this.server = null;
+      this.runtime = null;
+      this.lease = null;
+      this.address = null;
+    })();
+    return this.closeTask;
   }
 
   private readPort(): WorkbenchAppPortSnapshot {

@@ -20,6 +20,7 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import type { OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
+import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestController";
 
 export const ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS = [
   "browseExecution",
@@ -65,6 +66,7 @@ export interface OrchestratorProcessContext {
   openCodeAppServerOptions: OpenCodeAppServerOptions;
   openCodeBridgeOptions: Omit<OpenCodeBridgeOptions, "appServer" | "getReloadableModules" | "initialState">;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
+  reportWebSocketDelivery(delivery: WorkbenchWebSocketDelivery): void;
   reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;

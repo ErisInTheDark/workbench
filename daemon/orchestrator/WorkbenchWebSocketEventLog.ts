@@ -31,7 +31,7 @@ export interface WorkbenchWebSocketEventLogOptions {
 
 export default class WorkbenchWebSocketEventLog {
   private readonly cancel: NonNullable<WorkbenchWebSocketEventLogOptions["clearTimeout"]>;
-  private disposed = false;
+  private state: "active" | "suspended" | "disposed" = "active";
   private readonly now: NonNullable<WorkbenchWebSocketEventLogOptions["now"]>;
   private readonly schedule: NonNullable<WorkbenchWebSocketEventLogOptions["setTimeout"]>;
   private timer: Timer | null = null;
@@ -51,7 +51,7 @@ export default class WorkbenchWebSocketEventLog {
   }
 
   record(direction: "in" | "out", harness: WorkbenchHarness | "unknown" | "workbench", method: string, bytes: number) {
-    if (this.disposed) return;
+    if (this.state !== "active") return;
     const label = webSocketMethodLabel(harness, method);
     const key = `${direction}:${label}`;
     if (EXCLUDED_EVENTS.has(key)) return;
@@ -70,19 +70,33 @@ export default class WorkbenchWebSocketEventLog {
   }
 
   dispose() {
-    if (this.disposed) return;
-    this.disposed = true;
+    if (this.state === "disposed") return;
+    this.state = "disposed";
     if (this.timer !== null) this.cancel(this.timer);
     this.timer = null;
     for (const window of this.windows.values()) this.flush(window);
     this.windows.clear();
   }
 
+  suspend() {
+    if (this.state === "disposed") throw new Error("WebSocket event log is disposed.");
+    this.state = "suspended";
+    if (this.timer !== null) this.cancel(this.timer);
+    this.timer = null;
+  }
+
+  resumeAfterFailedReload() {
+    if (this.state === "disposed") throw new Error("WebSocket event log is disposed.");
+    this.state = "active";
+    this.scheduleNext();
+  }
+
   private scheduleNext() {
-    if (this.timer !== null || !this.windows.size || this.disposed) return;
+    if (this.timer !== null || !this.windows.size || this.state !== "active") return;
     let deadline = Infinity;
     for (const window of this.windows.values()) deadline = Math.min(deadline, window.deadline);
-    this.timer = this.schedule(() => {
+    const timer = this.schedule(() => {
+      if (this.timer !== timer || this.state !== "active") return;
       this.timer = null;
       const now = this.now();
       for (const [key, window] of this.windows) {
@@ -96,6 +110,7 @@ export default class WorkbenchWebSocketEventLog {
       }
       this.scheduleNext();
     }, Math.max(0, deadline - this.now()));
+    this.timer = timer;
   }
 
   private flush(window: EventWindow) {

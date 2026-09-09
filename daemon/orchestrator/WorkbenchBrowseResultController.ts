@@ -49,19 +49,28 @@ function findLatestBrowseCommandItemId(response: ThreadReadResponse) {
 export default class WorkbenchBrowseResultController implements WorkbenchBrowseResultSink {
   private readonly callbacks: WorkbenchBrowseResultCallbacks;
   private readonly tails = new Map<string, Promise<void>>();
+  private generation = new AbortController();
+  private readonly writes = new Set<Promise<void>>();
 
   constructor(callbacks: WorkbenchBrowseResultCallbacks) {
     this.callbacks = callbacks;
   }
 
   record(event: WorkbenchBrowseResultEvent) {
+    const signal = this.generation.signal;
+    if (signal.aborted) return;
     const previous = this.tails.get(event.threadId) ?? IDLE_TAIL;
     const current = previous.catch(() => undefined).then(async () => {
-      const activeThread = await this.readActiveThread(event.threadId, false);
+      signal.throwIfAborted();
+      const activeThread = await this.readActiveThread(event.threadId, false, signal);
+      signal.throwIfAborted();
       if (!activeThread) return;
-      await this.callbacks.recordResult(this.createEntry(event, activeThread));
+      const write = this.callbacks.recordResult(this.createEntry(event, activeThread));
+      this.writes.add(write);
+      try { await write; }
+      finally { this.writes.delete(write); }
     }).catch((error) => {
-      this.callbacks.logError(error instanceof Error ? error.message : String(error));
+      if (error !== signal.reason) this.callbacks.logError((error instanceof Error ? error.message : String(error)).slice(0, 500));
     }).finally(() => {
       if (this.tails.get(event.threadId) === current) this.tails.delete(event.threadId);
     });
@@ -69,7 +78,10 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
   }
 
   async deliverScreenshot(threadId: string, imageUrl: string): Promise<WorkbenchBrowseScreenshotDelivery> {
-    const activeThread = await this.readActiveThread(threadId, true);
+    const signal = this.generation.signal;
+    signal.throwIfAborted();
+    const activeThread = await this.readActiveThread(threadId, true, signal);
+    signal.throwIfAborted();
     if (!activeThread) throw new Error("Unable to deliver screenshot because the target thread has no active turn.");
     if (activeThread.harness === "codex") {
       if (!this.callbacks.injectToolContext) throw new Error("Codex screenshot context delivery is not configured.");
@@ -94,6 +106,16 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
 
   async waitForIdle() {
     await Promise.allSettled([...this.tails.values()]);
+    await Promise.allSettled([...this.writes]);
+  }
+
+  expire() {
+    this.generation.abort(new Error("Browse result generation retired."));
+    this.tails.clear();
+  }
+
+  resume() {
+    if (this.generation.signal.aborted) this.generation = new AbortController();
   }
 
   private createEntry(event: WorkbenchBrowseResultEvent, activeThread: WorkbenchBrowseActiveThread): WorkbenchBrowseResultEntry {
@@ -108,16 +130,19 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     };
   }
 
-  private async readActiveThread(threadId: string, requireInProgress: boolean): Promise<WorkbenchBrowseActiveThread | null> {
+  private async readActiveThread(threadId: string, requireInProgress: boolean, signal: AbortSignal): Promise<WorkbenchBrowseActiveThread | null> {
     let lastError: Error | null = null;
     let readSucceeded = false;
     for (const harness of this.callbacks.listHarnesses()) {
       try {
+        signal.throwIfAborted();
         const response = await this.callbacks.readThread(harness, threadId);
+        signal.throwIfAborted();
         readSucceeded = true;
         const turn = getCurrentInProgressTurn(response.thread) ?? (requireInProgress ? null : response.thread.turns.at(-1) ?? null);
         if (turn) return { commandItemId: findLatestBrowseCommandItemId(response), harness, turnId: turn.id };
       } catch (error) {
+        signal.throwIfAborted();
         lastError = error instanceof Error ? error : new Error(String(error));
       }
     }
