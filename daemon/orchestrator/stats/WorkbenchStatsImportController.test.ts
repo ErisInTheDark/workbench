@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import WorkbenchStatsImportController from "./WorkbenchStatsImportController.ts";
+import WorkbenchStatsImportController, { type WorkbenchStatsImportControllerOptions } from "./WorkbenchStatsImportController.ts";
 
 function progress(
   state: WorkbenchStatsImportProgress["state"],
@@ -37,6 +37,140 @@ const discovery = {
   threadId: "claim-thread",
   workspaceRoot: "C:/project",
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((complete, fail) => { resolve = complete; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function lifecycleFixture() {
+  const writes: string[] = [];
+  const failures: unknown[] = [];
+  const options: WorkbenchStatsImportControllerOptions = {
+    claims: {
+      reconcile: async () => undefined,
+      discover: async () => ({ candidates: [], unsupported: 0 }),
+      hydrate: async () => [],
+    },
+    database: {
+      beginStatsImport: async () => { writes.push("begin"); return progress("running"); },
+      repairStatsAttributions: async () => { writes.push("repair"); return {}; },
+      addStatsClaimDiscoveries: async () => { writes.push("discoveries"); return progress("running"); },
+      claimStatsClaimImport: async () => { writes.push("claim"); return null; },
+      claimStatsUsageImport: async () => { writes.push("usage"); return null; },
+      settleStatsClaimImport: async () => { writes.push("settle claim"); return progress("running"); },
+      settleStatsUsageImport: async () => { writes.push("settle usage"); return progress("running"); },
+      readStatsImportProgress: async () => progress("complete"),
+    },
+    harnesses: { hydrateUsage: async () => ({ state: "completed" }), listUsageHydrationHarnesses: () => ["codex"] },
+    reportFailure: (error) => { failures.push(error); },
+    yieldToEventLoop: async () => undefined,
+  };
+  return { options, writes, failures };
+}
+
+test("blocked reconciliation neither gates startup nor holds disposal", async () => {
+  const { options, writes } = lifecycleFixture();
+  const pending = deferred<void>();
+  let cancellation: AbortSignal | undefined;
+  options.claims.reconcile = async (signal) => { cancellation = signal; await pending.promise; };
+  const controller = new WorkbenchStatsImportController(options);
+  try {
+    await controller.start();
+    assert.ok(cancellation, "startup must launch claim reconciliation in its background run");
+    const before = [...writes];
+    await controller.dispose();
+    assert.equal(cancellation.aborted, true);
+    pending.resolve();
+    await pending.promise;
+    assert.deepEqual(writes, before);
+  } finally {
+    pending.resolve();
+    await controller.dispose();
+  }
+});
+
+for (const phase of ["discovery", "claim hydration", "usage hydration", "progress"] as const) {
+  for (const outcome of ["success", "failure"] as const) {
+    test(`retired ${phase} ${outcome} cannot write or publish`, async () => {
+      const { options, writes, failures } = lifecycleFixture();
+      const entered = deferred<void>();
+      const pending = deferred<void>();
+      const reported = deferred<void>();
+      options.reportFailure = (error) => { failures.push(error); reported.resolve(); };
+      let readFinished = Promise.resolve();
+      const block = <T,>(value: T) => {
+        const result = pending.promise.then(() => value);
+        readFinished = result.then(() => undefined, () => undefined);
+        entered.resolve();
+        return result;
+      };
+      if (phase === "discovery") options.claims.discover = () => block({ candidates: [discovery], unsupported: 0 });
+      if (phase === "claim hydration") {
+        options.database.claimStatsClaimImport = async () => ({ ...discovery, kind: "claims" });
+        options.claims.hydrate = () => block(["src/file.ts"]);
+      }
+      if (phase === "usage hydration") {
+        options.database.claimStatsUsageImport = async () => ({ harness: "codex", kind: "usage", projectId: "project", threadId: "thread" });
+        options.harnesses.hydrateUsage = () => block({ state: "completed" as const });
+      }
+      if (phase === "progress") options.database.readStatsImportProgress = () => block(progress("complete"));
+      const controller = new WorkbenchStatsImportController(options);
+      const published: WorkbenchStatsImportProgress[] = [];
+      controller.subscribe((value) => { published.push(value); });
+      await controller.start();
+      await entered.promise;
+      const before = [...writes];
+      const beforeProgress = controller.getProgress();
+      const disposal = controller.dispose();
+      if (outcome === "success") pending.resolve();
+      else pending.reject(new Error("retired source failed"));
+      await disposal;
+      await readFinished;
+      if (outcome === "failure") await reported.promise;
+      assert.deepEqual(writes, before);
+      assert.equal(controller.getProgress(), beforeProgress);
+      assert.equal(published.at(-1), beforeProgress);
+      if (outcome === "failure") assert.equal(failures.length, 1);
+    });
+  }
+}
+
+test("reconciliation failure is reported without stopping history discovery", async () => {
+  const { options, failures } = lifecycleFixture();
+  const failure = new Error("claim reconciliation failed");
+  let discovered = false;
+  options.claims.reconcile = async () => { throw failure; };
+  options.claims.discover = async () => { discovered = true; return { candidates: [], unsupported: 0 }; };
+  const controller = new WorkbenchStatsImportController(options);
+  const complete = deferred<void>();
+  controller.subscribe((value) => { if (value.state === "complete") complete.resolve(); });
+  await controller.start();
+  await complete.promise;
+  await controller.dispose();
+  assert.equal(discovered, true);
+  assert.ok(failures.includes(failure));
+});
+
+test("disposal preserves an issued database mutation but starts no follow-on work", async () => {
+  const { options, writes } = lifecycleFixture();
+  const entered = deferred<void>();
+  const pending = deferred<WorkbenchStatsImportProgress>();
+  options.database.addStatsClaimDiscoveries = async () => { entered.resolve(); return await pending.promise; };
+  const controller = new WorkbenchStatsImportController(options);
+  await controller.start();
+  await entered.promise;
+  const before = [...writes];
+  let disposed = false;
+  const disposal = controller.dispose().then(() => { disposed = true; });
+  await Promise.resolve();
+  assert.equal(disposed, false);
+  pending.resolve(progress("running"));
+  await disposal;
+  assert.deepEqual(writes, before);
+});
 
 test("importer alternates claim and usage work while isolating item failures", async () => {
   const order: string[] = [];

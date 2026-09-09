@@ -1,4 +1,5 @@
 /*
+ * Keywords: stats, import, reconciliation, cancellation, durable writes.
  * Exports:
  * - WorkbenchStatsImportControllerOptions: SQLite queues, usage hydration, Git hydration, clock, and scheduler ports. Keywords: stats, import, lifecycle.
  * - default WorkbenchStatsImportController: own one resumable background import run. Keywords: stats, import, controller, progress.
@@ -19,6 +20,7 @@ import type {
 
 export interface WorkbenchStatsImportControllerOptions {
   claims: {
+    reconcile?(signal: AbortSignal): Promise<void>;
     discover(): Promise<{ candidates: WorkbenchGitClaimImportDiscovery[]; unsupported: number }>;
     hydrate(candidate: WorkbenchGitClaimImportCandidate): Promise<string[]>;
   };
@@ -45,7 +47,8 @@ export interface WorkbenchStatsImportControllerOptions {
 const PUBLISH_BATCH_SIZE = 25;
 
 export default class WorkbenchStatsImportController {
-  private active = true;
+  private readonly lifetime = new AbortController();
+  private pendingWrite: Promise<unknown> | null = null;
   private readonly listeners = new Set<(progress: WorkbenchStatsImportProgress) => void>();
   private progress: WorkbenchStatsImportProgress = EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS;
   private revision = 0;
@@ -54,6 +57,8 @@ export default class WorkbenchStatsImportController {
   private worker: Promise<void> | null = null;
 
   constructor(private readonly options: WorkbenchStatsImportControllerOptions) {}
+
+  private get active() { return !this.lifetime.signal.aborted; }
 
   subscribe(listener: (progress: WorkbenchStatsImportProgress) => void) {
     this.listeners.add(listener);
@@ -77,18 +82,29 @@ export default class WorkbenchStatsImportController {
   }
 
   async dispose() {
-    this.active = false;
-    await this.starting;
-    await this.worker;
+    this.lifetime.abort();
     this.listeners.clear();
+    // The worker includes expendable reads. Only an issued mutation is a durability barrier.
+    await this.pendingWrite;
+  }
+
+  private async write<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = operation();
+    this.pendingWrite = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingWrite === pending) this.pendingWrite = null;
+    }
   }
 
   private async begin() {
     const runId = (this.options.createRunId ?? randomUUID)();
     const harnesses = this.options.harnesses.listUsageHydrationHarnesses();
-    const progress = await this.options.database.beginStatsImport(runId, harnesses, this.now());
+    const progress = await this.write(() => this.options.database.beginStatsImport(runId, harnesses, this.now()));
     if (!this.active) return this.progress;
     this.install(progress, "running");
+    if (!this.active) return this.progress;
     this.worker = this.run(runId, harnesses)
       .catch((error) => {
         this.options.reportFailure?.(error);
@@ -99,20 +115,31 @@ export default class WorkbenchStatsImportController {
   }
 
   private async run(runId: string, harnesses: WorkbenchHarness[]) {
-    await this.options.database.repairStatsAttributions(this.now());
+    try {
+      await this.options.claims.reconcile?.(this.lifetime.signal);
+    } catch (error) {
+      if (error !== this.lifetime.signal.reason) this.options.reportFailure?.(error);
+    }
+    if (!this.active) return;
+    await this.write(() => this.options.database.repairStatsAttributions(this.now()));
+    if (!this.active) return;
     try {
       const discovery = await this.options.claims.discover();
+      if (!this.active) return;
       this.unsupportedClaimCheckpoints = discovery.unsupported;
-      await this.options.database.addStatsClaimDiscoveries(runId, discovery.candidates, this.now());
+      await this.write(() => this.options.database.addStatsClaimDiscoveries(runId, discovery.candidates, this.now()));
     } catch (error) {
       this.options.reportFailure?.(new Error(`claim history discovery failed: ${error instanceof Error ? error.message : String(error)}`));
     }
     let preferClaims = true;
     let settled = 0;
     while (this.active) {
-      const claimCandidate = preferClaims ? await this.options.database.claimStatsClaimImport(runId, this.now()) : null;
-      const usageCandidate = claimCandidate ? null : await this.options.database.claimStatsUsageImport(runId, harnesses, this.now());
-      const fallbackClaim = claimCandidate || usageCandidate ? null : await this.options.database.claimStatsClaimImport(runId, this.now());
+      const claimCandidate = preferClaims ? await this.write(() => this.options.database.claimStatsClaimImport(runId, this.now())) : null;
+      if (!this.active) return;
+      const usageCandidate = claimCandidate ? null : await this.write(() => this.options.database.claimStatsUsageImport(runId, harnesses, this.now()));
+      if (!this.active) return;
+      const fallbackClaim = claimCandidate || usageCandidate ? null : await this.write(() => this.options.database.claimStatsClaimImport(runId, this.now()));
+      if (!this.active) return;
       const candidate = claimCandidate ?? usageCandidate ?? fallbackClaim;
       if (!candidate) break;
       let progress: WorkbenchStatsImportProgress;
@@ -121,19 +148,31 @@ export default class WorkbenchStatsImportController {
         try {
           settlement = { paths: await this.options.claims.hydrate(candidate), state: "completed" };
         } catch (error) {
+          if (!this.active) {
+            this.options.reportFailure?.(error);
+            return;
+          }
           settlement = { error: error instanceof Error ? error.message : String(error), state: "failed" };
         }
-        progress = await this.options.database.settleStatsClaimImport(runId, candidate, settlement, this.now());
+        if (!this.active) return;
+        progress = await this.write(() => this.options.database.settleStatsClaimImport(runId, candidate, settlement, this.now()));
       } else {
         let settlement: WorkbenchStatsUsageImportSettlement;
         try {
           settlement = await this.options.harnesses.hydrateUsage(candidate);
         } catch (error) {
+          if (!this.active) {
+            this.options.reportFailure?.(error);
+            return;
+          }
           settlement = { error: error instanceof Error ? error.message : String(error), state: "failed" };
         }
-        progress = await this.options.database.settleStatsUsageImport(runId, candidate, settlement, this.now());
-        if (settlement.state !== "failed") await this.options.database.repairStatsAttributions(this.now(), candidate.threadId);
+        if (!this.active) return;
+        progress = await this.write(() => this.options.database.settleStatsUsageImport(runId, candidate, settlement, this.now()));
+        if (!this.active) return;
+        if (settlement.state !== "failed") await this.write(() => this.options.database.repairStatsAttributions(this.now(), candidate.threadId));
       }
+      if (!this.active) return;
       settled += 1;
       preferClaims = !preferClaims;
       if (settled % PUBLISH_BATCH_SIZE === 0 || progress.recentFailures.length > this.progress.recentFailures.length) {
@@ -151,6 +190,7 @@ export default class WorkbenchStatsImportController {
   }
 
   private install(progress: WorkbenchStatsImportProgress, state: WorkbenchStatsImportProgress["state"]) {
+    if (!this.active) return;
     this.revision += 1;
     this.progress = {
       ...progress,

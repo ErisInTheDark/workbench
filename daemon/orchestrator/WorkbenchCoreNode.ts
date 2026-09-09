@@ -204,6 +204,16 @@ function createWorkbenchCoreFeature(
   });
   stats = new WorkbenchStatsController({
     claims: {
+      reconcile: async (signal) => {
+        for (const project of projectCatalog.getCurrentSnapshot().data) {
+          if (signal.aborted) return;
+          try {
+            await gitArc.reconcileClaimSnapshots(project.rootPath);
+          } catch (error) {
+            stats.reportCaptureFailure(null, `claim reconciliation for project ${project.id}`, error);
+          }
+        }
+      },
       discover: async () => {
         const catalog = await projectCatalog.readCatalog();
         const discoveries = await Promise.all(catalog.data.flatMap((project) => project.roots.map(async (root) => (
@@ -439,14 +449,6 @@ function createWorkbenchCoreFeature(
       await projectCatalog.ensureLoaded();
       reportPhase("loaded harness identity admission");
       await harnesses.restoreLoadedIdentities();
-      reportPhase("claim snapshot reconciliation");
-      for (const project of projectCatalog.getCurrentSnapshot().data) {
-        try {
-          await gitArc.reconcileClaimSnapshots(project.rootPath);
-        } catch (error) {
-          stats.reportCaptureFailure(null, `claim reconciliation for project ${project.id}`, error);
-        }
-      }
       reportPhase("stats startup");
       stats.start();
       reportPhase("subagent startup");
