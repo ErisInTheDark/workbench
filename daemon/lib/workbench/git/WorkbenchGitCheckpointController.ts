@@ -148,7 +148,7 @@ interface ReadCheckpointResult {
   checkpointCommit: string;
   checkpointRef: string;
   metadata: CheckpointMetadata | null;
-  parent: string;
+  parent: string | null;
 }
 
 function isArcMetadata(metadata: CheckpointMetadata | null): metadata is CheckpointMetadata {
@@ -205,7 +205,7 @@ async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId
 async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string) {
   const repository = new WorkbenchGitRepository(repoRoot);
   const checkpoint = await readCheckpoint(repoRoot, harness, threadId, rawCommit);
-  const currentHead = await repository.currentHead();
+  const currentHead = await repository.headOrNull();
   if (checkpoint.parent !== currentHead) throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
   return checkpoint;
 }
@@ -323,8 +323,9 @@ export default class WorkbenchGitCheckpointController {
   }
 
   private async assertClaimPathsClean(repository: WorkbenchGitRepository, paths: string[]) {
-    const currentTree = await repository.writeScopedWorktreeTree(paths);
-    const dirtyPaths = await repository.listChangedPaths("HEAD", currentTree, paths);
+    const head = await repository.headOrNull();
+    const currentTree = await repository.writeScopedWorktreeTree(paths, head);
+    const dirtyPaths = await repository.listChangedPaths(head, currentTree, paths);
     if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths, "Arc release");
   }
 
@@ -392,7 +393,7 @@ export default class WorkbenchGitCheckpointController {
     active: GitArcRegistryEntry;
     harness: GitArcHarness;
     metadata: CheckpointMetadata;
-    parent: string;
+    parent: string | null;
     registry: GitArcRegistry;
     repository: WorkbenchGitRepository;
     scopePaths: string[];

@@ -117,7 +117,7 @@ export default class GitArcLifecycleController {
       return { ...result, kind: "noop", noOp: true };
     }
     if (current.phase === "resolved" && !scopePaths.length) return result;
-    const head = await repository.currentHead();
+    const head = await repository.headOrNull();
     const retained = existing.filter((scope) => scopePaths.some((candidate) => covers(scope, candidate) || covers(candidate, scope)));
     const movement = await repository.classifyHeadMovement(checkpoint.parent, retained, checkpoint.checkpointCommit, head);
     if (current.phase !== "resolved" && movement.kind === "incompatible") {

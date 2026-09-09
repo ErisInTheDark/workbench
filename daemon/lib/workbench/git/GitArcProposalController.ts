@@ -43,7 +43,7 @@ interface ArcIdentityInput {
 const BRANCH_CHANGED_UNAVAILABLE_REASON = "The branch changed after this proposal was created, so it can no longer be committed as proposed.";
 
 export interface GitCheckpointProposalReceipt {
-  baseCommit: string;
+  baseCommit: string | null;
   description: string;
   intentName: string | null;
   paths: string[];
@@ -296,9 +296,9 @@ async function buildProposalFileChanges(
   target: string,
   harness: GitArcHarness,
   threadId: string,
-  options: { baseCommit?: string; paths?: string[] } = {},
+  options: { baseCommit?: string | null; paths?: string[] } = {},
 ) {
-  const baseCommit = options.baseCommit ?? metadata.baseCommit;
+  const baseCommit = options.baseCommit === undefined ? metadata.baseCommit : options.baseCommit;
   const paths = options.paths ?? metadata.paths;
   const [baseTree, targetTree] = await Promise.all([
     repository.resolveTree(baseCommit),
@@ -563,7 +563,7 @@ export default class GitArcProposalController {
 
   async logicalBaseline(input: ArcIdentityInput & {
     checkpointCommit: string;
-    fallbackHead: string;
+    fallbackHead: string | null;
     repository?: WorkbenchGitRepository;
   }) {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
@@ -735,6 +735,7 @@ export default class GitArcProposalController {
       throw new GitArcRejectionError({ reason: "baselineChanged", paths: headMovement.changedPaths }, `Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
     }
     const liveBaseCommit = headMovement.currentHead;
+    if (amend && liveBaseCommit === null) throw new Error("An amend requires an existing HEAD commit.");
     const amendTargetSha = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
     if (amendTargetSha) {
       if (amendTargetProposal) await new GitArcPublishState(repository).requireAmendableCommit(amendTargetSha);
@@ -899,7 +900,7 @@ export default class GitArcProposalController {
           oldOutcomeRef,
           ...(supersededPrior ? [supersededPrior.proposalRef] : []),
         ],
-        expectedHead: proposal.metadata.status === "proposed" ? proposal.metadata.liveBaseCommit : undefined,
+        expectedHead: proposal.metadata.status === "proposed" ? proposal.metadata.liveBaseCommit ?? undefined : undefined,
         message,
         messageOnly: true,
         paths: [],
@@ -1050,7 +1051,7 @@ export default class GitArcProposalController {
             oldOutcomeRef,
             ...(supersededPrior ? [supersededPrior.proposalRef] : []),
           ],
-          expectedHead: proposal.metadata.liveBaseCommit,
+          expectedHead: proposal.metadata.liveBaseCommit ?? undefined,
           message,
           paths: proposal.metadata.livePaths,
           target: proposal.metadata.amendTargetSha,
@@ -1189,7 +1190,7 @@ export default class GitArcProposalController {
         indexCommit: committedSha,
         paths: proposal.metadata.livePaths,
         updates: [
-          { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit, ref: headRef },
+          { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit ?? "0".repeat(committedSha.length), ref: headRef },
           { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
           outcomeUpdate,
           ...transition.updates,

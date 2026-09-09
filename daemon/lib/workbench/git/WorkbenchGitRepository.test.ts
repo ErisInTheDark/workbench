@@ -8,9 +8,38 @@ import test from "node:test";
 
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
-import { THREAD_GIT_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
+import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const fixtureCache = new GitTestFixtureCache();
+
+test("unborn snapshots preserve staged and untracked files without creating branch history", async (context) => {
+  const fixture = await fixtureCache.copy(UNBORN_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  await fs.writeFile(path.join(fixture.root, "staged.txt"), "staged\n");
+  await repository.run(["add", "staged.txt"]);
+  await fs.writeFile(path.join(fixture.root, "staged.txt"), "working\n");
+  await fs.writeFile(path.join(fixture.root, "untracked.txt"), "untracked\n");
+  const index = await repository.writeIndexTree();
+  const snapshot = await repository.writeWorktreeSnapshot();
+  assert.equal(snapshot.head, null);
+  assert.deepEqual(await repository.listTreePaths(snapshot.tree), ["staged.txt", "untracked.txt"]);
+  assert.equal(await repository.run(["show", `${snapshot.tree}:staged.txt`]), "working\n");
+  assert.equal(await repository.writeIndexTree(), index);
+  assert.equal(await repository.readRef("HEAD"), null);
+  const initial = await repository.createCommitFromTree(snapshot.tree, [], "external first\n");
+  const branch = await repository.symbolicHead();
+  assert.ok(branch);
+  await repository.updateRef(branch, initial);
+  const competing = await repository.createCommitFromTree(snapshot.tree, [], "competing first\n");
+  await assert.rejects(repository.publishRefsAfterIndexNormalization({
+    indexCommit: competing,
+    paths: ["staged.txt"],
+    updates: [{ ref: branch, newValue: competing, oldValue: "0".repeat(initial.length) }],
+  }), /reference|exists/u);
+  assert.equal(await repository.currentHead(), initial);
+  assert.equal(await repository.writeIndexTree(), index);
+});
 
 test("large ref pattern sets preserve filtering, overlap deduplication, and object types", async (context) => {
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);

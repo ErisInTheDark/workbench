@@ -312,7 +312,7 @@ export const GitCheckpointProposalSchema = z.object({
   ]).nullable().optional(),
   amendTargetMessage: GitCheckpointCommitMessageSchema.nullable().optional().default(null),
   amendTargetSha: checkpointSha.nullable(),
-  baseCommit: checkpointSha,
+  baseCommit: checkpointSha.nullable(),
   changes: z.array(GitCheckpointFileChangeSchema),
   committedSha: checkpointSha.nullable(),
   description: z.string(),

@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, fixture, cache, initialisation, test allocation.
  * Exports:
  * - default GitTestFixtureCache: build immutable content-addressed Git test bundles and copy fresh disposable repositories. Keywords: git, test, fixture, cache, bundle.
  * - GitTestFixtureSpec/GitTestFixtureCopy/GitTestFixturePrepareContext: describe deterministic commit graphs, prepared scenarios, and copied repositories. Keywords: git, fixture, scenario, cleanup.
@@ -77,7 +78,6 @@ interface FixtureDescriptor {
 function descriptor<State extends object>(spec: GitTestFixtureSpec<State>): FixtureDescriptor {
   const name = String(spec.name ?? "").trim();
   if (!name) throw new Error("A Git test fixture name is required.");
-  if (!spec.commits.length) throw new Error("A Git test fixture requires at least one commit.");
   const revision = spec.revision ?? 1;
   if (!Number.isSafeInteger(revision) || revision < 1) {
     throw new Error("A Git test fixture revision must be a positive integer.");

@@ -1,8 +1,19 @@
 /*
+ * Keywords: git, metadata, refs, checkpoints, proposals, outcomes, unborn.
  * Exports:
- * - CheckpointMetadata/ProposalMetadata/ArcOutcome: durable Git-backed arc metadata shapes and every stored commit identity. Keywords: git, arc, checkpoint, proposal, sha.
- * - checkpoint/proposal/outcome namespace helpers: own canonical and legacy Workbench ref naming. Keywords: git, ref, namespace, worktree.
- * - parse/format/remap helpers: validate marked metadata and rewrite every embedded commit identity. Keywords: git, metadata, rewrite, migration.
+ * - CHECKPOINT_METADATA_MARKER/PROPOSAL_METADATA_MARKER: identify stored metadata messages.
+ * - CheckpointKind: checkpoint lifecycle kind.
+ * - GitArcHarness: supported owning harness.
+ * - GitArcProposalStatus/GitArcProposalUnavailableReasonCode: proposal state and unavailability reason.
+ * - CheckpointMetadata/ProposalMetadata/ArcOutcome: durable arc metadata and nullable history bases.
+ * - normalizeArcOutcome: conform legacy acceptance receipts.
+ * - normalizeThreadId/normalizeCommit: validate ref identity inputs.
+ * - checkpointNamespace/legacyCheckpointNamespace: checkpoint ref namespaces.
+ * - proposalNamespace/legacyProposalNamespace: proposal ref namespaces.
+ * - outcomeRef: checkpoint-qualified outcome ref.
+ * - checkpointMessage/proposalMessage: serialise marked metadata.
+ * - parseMarkedMetadata: decode marked metadata messages.
+ * - remapCheckpointMetadata/remapProposalMetadata/remapArcOutcome: rewrite stored commit identities.
  */
 
 export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
@@ -28,14 +39,14 @@ export interface CheckpointMetadata {
 
 export interface ProposalMetadata {
   amendTargetSha: string | null;
-  baseCommit: string;
+  baseCommit: string | null;
   committedSha: string | null;
   description: string;
   freshCommitMessage?: {
     description: string;
     title: string;
   };
-  liveBaseCommit: string;
+  liveBaseCommit: string | null;
   livePaths: string[];
   messageOnly?: true;
   mode: "amend" | "commit";
@@ -136,9 +147,9 @@ export function remapProposalMetadata(metadata: ProposalMetadata, commits: Reado
   return {
     ...metadata,
     amendTargetSha: mapped(metadata.amendTargetSha, commits),
-    baseCommit: mapped(metadata.baseCommit, commits)!,
+    baseCommit: mapped(metadata.baseCommit, commits),
     committedSha: mapped(metadata.committedSha, commits),
-    liveBaseCommit: mapped(metadata.liveBaseCommit, commits)!,
+    liveBaseCommit: mapped(metadata.liveBaseCommit, commits),
     sourceCheckpoint: mapped(metadata.sourceCheckpoint, commits)!,
     supersededBySha: mapped(metadata.supersededBySha, commits),
   };

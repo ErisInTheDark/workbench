@@ -20,6 +20,7 @@ import {
   HISTORY_ARC_READY_FIXTURE,
   HISTORY_CONFLICT_READY_FIXTURE,
   HISTORY_LINEAR_FIXTURE,
+  UNBORN_FIXTURE,
 } from "./WorkbenchGitTestFixtures";
 import { type ArcOutcome, outcomeRef } from "workbench-shared/workbench/git/git-arc-storage";
 
@@ -335,6 +336,35 @@ historyTest("index locks leave targeted amendments unpublished and retryable", a
   });
   assert.notEqual(committed.commit, headBefore);
   assert.equal(await git(root, ["status", "--short", "--", "selected.txt"]), "");
+});
+
+historyTest("root amendments preserve parentless proposal history and accepted receipts", async (context) => {
+  const fixture = await fixtureCache.copy(UNBORN_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: fixture.root, threadId: "initial" };
+  await controller.createAndStartPlan({ ...identity, intentName: "initial", paths: ["one.txt"] });
+  await write(fixture.root, "one.txt", "first\n");
+  const proposal = await controller.createProposal({ ...identity, title: "first", description: "" });
+  const accepted = await controller.commitProposal({
+    ...identity, proposalId: proposal.proposalId, title: "first", description: "", includeNewer: false,
+  });
+  assert.ok(accepted.committedSha);
+  await controller.editArcClaims({ ...identity, inherit: true, addPaths: ["one.txt"] });
+  await write(fixture.root, "one.txt", "amended\n");
+  const amendment = await controller.createProposal({
+    ...identity, amend: true, title: "amended", description: "", freshTitle: "fresh",
+  });
+  const amended = await controller.commitProposal({
+    ...identity, proposalId: amendment.proposalId, title: "amended", description: "", includeNewer: false,
+  });
+  assert.ok(amended.committedSha);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  assert.deepEqual((await repository.readCommit(amended.committedSha)).parents, []);
+  assert.equal(await git(fixture.root, ["show", "HEAD:one.txt"]), "amended\n");
+  const prior = await controller.getProposal({ ...identity, proposalId: proposal.proposalId, includeNewer: false });
+  assert.notEqual(prior.committedSha, accepted.committedSha);
+  assert.equal(prior.committedSha, amended.committedSha);
 });
 
 test("Git history rewrites", { concurrency: 3 }, async (context) => {

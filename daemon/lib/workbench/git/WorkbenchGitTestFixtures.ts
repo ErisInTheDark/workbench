@@ -1,6 +1,7 @@
 /*
  * Keywords: git, fixtures, graph, lifecycle, test allocation, cleanup.
  * Exports:
+ * - UNBORN_FIXTURE: repository before its first commit.
  * - THREAD_GIT_BASE_FIXTURE: basic thread repository.
  * - CHECKPOINT_OPERATIONS_BASE_FIXTURE: checkpoint operation base.
  * - CHECKPOINT_ADDITIONS_READY_FIXTURE: active addition scenario.
@@ -65,6 +66,11 @@ const CONTROLLER_COMMITS = [{
   files: { "one.txt": "one\n", "two.txt": "two\n" },
   message: "base",
 }];
+
+export const UNBORN_FIXTURE = {
+  commits: [],
+  name: "unborn",
+} satisfies GitTestFixtureSpec;
 
 async function write(root: string, relativePath: string, contents: string) {
   const filePath = path.join(root, relativePath);
@@ -899,9 +905,11 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CHECKPOINT_RELEASE_READY_FIXTURE, 1),
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [
+    demand(UNBORN_FIXTURE, 1),
     demand(THREAD_GIT_BASE_FIXTURE, 5),
   ], nested: false }],
   ["WorkbenchGitHistoryRewriter.test.ts", { fixtures: [
+    demand(UNBORN_FIXTURE, 1),
     demand(HISTORY_LINEAR_FIXTURE, 3),
     demand(HISTORY_CONFLICT_READY_FIXTURE, 1),
     demand(HISTORY_ARC_READY_FIXTURE, 1),
@@ -914,6 +922,9 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(HISTORY_MERGE_READY_FIXTURE, 1),
     demand(HISTORY_SIGNED_READY_FIXTURE, 1),
   ], nested: false }],
+  ["WorkbenchGitCheckpointController.unborn.test.ts", { fixtures: [
+    demand(UNBORN_FIXTURE, 3),
+  ], nested: true }],
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
     demand(CONTROLLER_BASE_FIXTURE, 3),
     demand(CONTROLLER_START_READY_FIXTURE, 1),

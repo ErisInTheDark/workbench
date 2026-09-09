@@ -1,7 +1,11 @@
 /*
+ * Keywords: git, checkpoint, proposal, outcome, storage, unborn.
  * Exports:
  * - default GitCheckpointStore: own durable checkpoint outcome and batched proposal metadata reads for one repository. Keywords: git, checkpoint, proposal, outcome, batch.
  * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection. Keywords: git, proposal, summary, status.
+ * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
+ * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
+ * - StoredProposal: owned proposal identity, metadata, and tree.
  * - GitCheckpointMissingObjectError: preserve a requested checkpoint ref that Git cannot resolve. Keywords: git, checkpoint, missing, ref, error.
  */
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
@@ -42,7 +46,7 @@ export interface StoredCheckpoint {
   checkpointCommit: string;
   checkpointRef: string;
   metadata: CheckpointMetadata | null;
-  parent: string;
+  parent: string | null;
 }
 
 export interface StoredProposal {
@@ -138,13 +142,13 @@ export default class GitCheckpointStore {
     return `${checkpointNamespace(harness, threadId)}/${timestamp}-${normalizeCommit(commit)}`;
   }
 
-  async createCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string, metadata: CheckpointMetadata) {
+  async createCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string | null, metadata: CheckpointMetadata) {
     const prepared = await this.prepareCheckpoint(harness, threadId, tree, parent, metadata);
     await this.repository.updateRefs([prepared.update]);
     return { checkpointCommit: prepared.checkpointCommit, checkpointRef: prepared.checkpointRef };
   }
 
-  async prepareCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string, metadata: CheckpointMetadata) {
+  async prepareCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string | null, metadata: CheckpointMetadata) {
     const checkpointCommit = await this.repository.createCommitFromTree(tree, parent, checkpointMessage(metadata));
     const checkpointRef = this.checkpointRefName(harness, threadId, checkpointCommit);
     return {
@@ -167,12 +171,12 @@ export default class GitCheckpointStore {
       refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
     }
     if (!refs.length) throw new GitArcRejectionError({ reason: "wrongCheckpointOwnership" }, "Checkpoint commit is not in this thread/worktree checkpoint timeline.");
-    if (resolved.identity.parents.length !== 1) throw new Error("Checkpoint commit parent metadata is invalid.");
+    if (resolved.identity.parents.length > 1) throw new Error("Checkpoint commit parent metadata is invalid.");
     return {
       checkpointCommit,
       checkpointRef: refs[0]!,
       metadata: parseMarkedMetadata<CheckpointMetadata>(resolved.identity.message, CHECKPOINT_METADATA_MARKER),
-      parent: resolved.identity.parents[0]!,
+      parent: resolved.identity.parents[0] ?? null,
     };
   }
 

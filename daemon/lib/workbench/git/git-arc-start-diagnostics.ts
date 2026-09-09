@@ -26,10 +26,10 @@ export interface GitArcCollisionPresentation {
 
 interface GitArcStartDiagnosticInput {
   adoptedPaths: string[];
-  currentHead: string;
+  currentHead: string | null;
   currentTree: string;
   harness: GitArcHarness;
-  planBaseCommit: string;
+  planBaseCommit: string | null;
   planCheckpointCommit: string;
   planPaths: string[];
   registryEntries: GitArcRegistryEntry[];
@@ -130,7 +130,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     "New commits affecting planned files:",
   ];
   if (movement.kind === "incompatible") {
-    lines.push(`- HEAD moved incompatibly from ${code(planBaseCommit.slice(0, 8))} to ${code(currentHead.slice(0, 8))}`);
+    lines.push(`- HEAD moved incompatibly from ${code(planBaseCommit?.slice(0, 8) ?? "unborn")} to ${code(currentHead?.slice(0, 8) ?? "unborn")}`);
   } else if (!commitChanges.length) {
     lines.push("- none");
   } else {

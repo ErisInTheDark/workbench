@@ -23,7 +23,7 @@ export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generatio
 
 export interface GitHeadMovement {
   changedPaths: string[];
-  currentHead: string;
+  currentHead: string | null;
   kind: "fast-forward" | "incompatible" | "same";
 }
 
@@ -68,7 +68,7 @@ export interface GitResolvedCommit {
 }
 
 export interface GitWorktreeSnapshot {
-  head: string;
+  head: string | null;
   tree: string;
 }
 
@@ -298,6 +298,22 @@ export default class WorkbenchGitRepository {
     return (await this.run(["rev-parse", "HEAD"])).trim();
   }
 
+  async headOrNull(): Promise<string | null> {
+    const head = await this.readCommitAt("HEAD");
+    if (head) return head.commit;
+    const branch = (await this.run(["symbolic-ref", "-q", "HEAD"])).trim();
+    const refs = (await this.run(["for-each-ref", "--format=%(refname)", branch])).trim().split(/\r?\n/u);
+    if (!branch.startsWith("refs/heads/") || refs.includes(branch)) {
+      throw new Error("Git HEAD is missing but the repository is not on an unborn branch.");
+    }
+    return null;
+  }
+
+  private async contentBase(treeish: string | null): Promise<string> {
+    if (treeish === "HEAD") return await this.contentBase(await this.headOrNull());
+    return treeish ?? (await this.runWithInput(["mktree"], "")).trim();
+  }
+
   async symbolicHead() {
     try {
       return (await this.run(["symbolic-ref", "-q", "HEAD"])).trim() || null;
@@ -310,12 +326,12 @@ export default class WorkbenchGitRepository {
     return (await this.run(["rev-parse", "--verify", `${this.normalizeCommit(commit)}^{commit}`])).trim();
   }
 
-  async resolveTree(treeish: string) {
-    return (await this.run(["rev-parse", `${treeish}^{tree}`])).trim();
+  async resolveTree(treeish: string | null) {
+    return (await this.run(["rev-parse", `${await this.contentBase(treeish)}^{tree}`])).trim();
   }
 
   async resolveParent(commit: string) {
-    return (await this.run(["rev-parse", `${commit}^`])).trim();
+    return (await this.readCommit(commit)).parents[0] ?? null;
   }
 
   async isAncestor(ancestor: string, descendant: string) {
@@ -465,10 +481,10 @@ export default class WorkbenchGitRepository {
     }
   }
 
-  async writeWorktreeTree(baseTreeish = "HEAD", signal?: AbortSignal) {
+  async writeWorktreeTree(baseTreeish: string | null = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env, signal);
+      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
       const transcriptIsIgnored = await this.succeeds([
         "check-ignore", "-q", "--no-index", ".workbench/transcripts",
       ]);
@@ -480,7 +496,7 @@ export default class WorkbenchGitRepository {
   }
 
   async writeWorktreeSnapshot(signal?: AbortSignal): Promise<GitWorktreeSnapshot> {
-    const head = await this.currentHead();
+    const head = await this.headOrNull();
     return {
       head,
       tree: await this.writeWorktreeTree(head, signal),
@@ -499,13 +515,13 @@ export default class WorkbenchGitRepository {
   }
 
   async listWorktreeChangedPaths(
-    baseTreeish: string,
+    baseTreeish: string | null,
     scopes: readonly string[] = [],
     signal?: AbortSignal,
   ) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env, signal);
+      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
       const [tracked, untracked] = await Promise.all([
         this.run(["diff", "--name-only", "-z", "--no-renames", "--"], env, signal),
         this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
@@ -516,10 +532,10 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD", signal?: AbortSignal) {
+  async writeScopedWorktreeTree(paths: string[], baseTreeish: string | null = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env, signal);
+      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
       const matchedPaths = await this.listWorktreePaths(paths, env, signal);
       if (matchedPaths.length) {
         await this.runWithInput([
@@ -530,10 +546,10 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  async writeTreeWithPathsFromSource(baseTreeish: string, sourceTreeish: string, paths: string[]) {
+  async writeTreeWithPathsFromSource(baseTreeish: string | null, sourceTreeish: string, paths: string[]) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env);
+      await this.run(["read-tree", await this.contentBase(baseTreeish)], env);
       const changedPaths = await this.listChangedPaths(baseTreeish, sourceTreeish, paths);
       if (changedPaths.length) {
         await this.runWithInput([
@@ -547,11 +563,11 @@ export default class WorkbenchGitRepository {
 
   async createCommitFromTree(
     tree: string,
-    parent: string | string[],
+    parent: string | string[] | null,
     message: string,
     identity?: Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">,
   ) {
-    const parents = Array.isArray(parent) ? parent : [parent];
+    const parents = parent === null ? [] : Array.isArray(parent) ? parent : [parent];
     const env = identity ? {
       ...process.env,
       GIT_AUTHOR_DATE: identity.authorDate,
@@ -606,13 +622,13 @@ export default class WorkbenchGitRepository {
     return refs.map(({ ref, value }) => ({ objectType: types.get(value) ?? "missing", ref, value }));
   }
 
-  async listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal) {
+  async listChangedPaths(from: string | null, to: string | null, paths: string[], signal?: AbortSignal) {
     return filterPathsByScopes(await this.listAllChangedPaths(from, to, signal), paths);
   }
 
-  async listAllChangedPaths(from: string, to: string, signal?: AbortSignal) {
+  async listAllChangedPaths(from: string | null, to: string | null, signal?: AbortSignal) {
     return parseNullPaths(await this.run([
-      "diff", "--name-only", "-z", "--no-renames", from, to,
+      "diff", "--name-only", "-z", "--no-renames", await this.contentBase(from), await this.contentBase(to),
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
   }
 
@@ -632,17 +648,16 @@ export default class WorkbenchGitRepository {
     return matches.filter((candidate): candidate is string => candidate !== null);
   }
 
-  async listFirstParentCommitPathChanges(fromExclusive: string, toInclusive: string, paths: string[]): Promise<GitCommitPathChange[]> {
-    if (fromExclusive === toInclusive || !paths.length) return [];
+  async listFirstParentCommitPathChanges(fromExclusive: string | null, toInclusive: string | null, paths: string[]): Promise<GitCommitPathChange[]> {
+    if (fromExclusive === toInclusive || !toInclusive || !paths.length) return [];
     const commits = (await this.run([
-      "rev-list", "--reverse", "--first-parent", `${fromExclusive}..${toInclusive}`,
+      "rev-list", "--reverse", "--first-parent", fromExclusive ? `${fromExclusive}..${toInclusive}` : toInclusive,
     ])).split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
     const batch = await this.readCommits(commits);
     return (await Promise.all(commits.map(async (commit): Promise<GitCommitPathChange | null> => {
       const identity = batch.commits.get(commit);
       if (!identity) throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
-      const parent = identity.parents[0];
-      if (!parent) throw new Error(`Intervening Git commit ${commit} does not have a first parent.`);
+      const parent = identity.parents[0] ?? null;
       const changedPaths = await this.listChangedPaths(parent, commit, paths);
       if (!changedPaths.length) return null;
       return {
@@ -654,12 +669,12 @@ export default class WorkbenchGitRepository {
   }
 
   async classifyHeadMovement(
-    ancestryBaseCommit: string,
+    ancestryBaseCommit: string | null,
     paths: string[],
     contentBaseline = ancestryBaseCommit,
-    knownCurrentHead?: string,
+    knownCurrentHead?: string | null,
   ): Promise<GitHeadMovement> {
-    const currentHead = knownCurrentHead ?? await this.currentHead();
+    const currentHead = knownCurrentHead === undefined ? await this.headOrNull() : knownCurrentHead;
     if (currentHead === ancestryBaseCommit) {
       return {
         changedPaths: contentBaseline === currentHead ? [] : await this.listChangedPaths(contentBaseline, currentHead, paths),
@@ -667,8 +682,11 @@ export default class WorkbenchGitRepository {
         kind: "same",
       };
     }
-    const commitsOnlyOnBase = (await this.run(["rev-list", "--max-count=1", `${currentHead}..${ancestryBaseCommit}`])).trim();
-    if (commitsOnlyOnBase) return { changedPaths: [], currentHead, kind: "incompatible" };
+    if (currentHead === null) return { changedPaths: [], currentHead, kind: "incompatible" };
+    if (ancestryBaseCommit !== null) {
+      const commitsOnlyOnBase = (await this.run(["rev-list", "--max-count=1", `${currentHead}..${ancestryBaseCommit}`])).trim();
+      if (commitsOnlyOnBase) return { changedPaths: [], currentHead, kind: "incompatible" };
+    }
     return {
       changedPaths: await this.listChangedPaths(contentBaseline, currentHead, paths),
       currentHead,
@@ -676,7 +694,8 @@ export default class WorkbenchGitRepository {
     };
   }
 
-  async buildFileChanges(from: string, to: string, paths: string[]) {
+  async buildFileChanges(from: string | null, to: string, paths: string[]) {
+    from = await this.contentBase(from);
     const changedPaths = await this.listChangedPaths(from, to, paths);
     return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
       const pathspec = this.literalPathspec(filePath);
@@ -702,10 +721,10 @@ export default class WorkbenchGitRepository {
     }));
   }
 
-  async listTreePaths(treeish: string, paths?: string[]) {
+  async listTreePaths(treeish: string | null, paths?: string[]) {
     const scopes = paths?.length && !paths.includes(".") ? this.normalizePaths(paths) : [];
     return parseNullPaths(await this.run([
-      "ls-tree", "-r", "--name-only", "-z", treeish,
+      "ls-tree", "-r", "--name-only", "-z", await this.contentBase(treeish),
       ...(scopes.length ? ["--", ...scopes.map((scope) => this.literalPathspec(scope))] : []),
     ]));
   }
@@ -751,10 +770,10 @@ export default class WorkbenchGitRepository {
     }
   }
 
-  async restorePaths(source: string, paths: string[]) {
+  async restorePaths(source: string | null, paths: string[]) {
     if (!paths.length) return;
     await this.runWithInput([
-      "restore", "--source", source, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
+      "restore", "--source", await this.contentBase(source), "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
     ], pathspecInput(paths));
   }
 

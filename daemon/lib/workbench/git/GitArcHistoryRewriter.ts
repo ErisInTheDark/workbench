@@ -1,7 +1,10 @@
 /*
+ * Keywords: git, history, checkpoint, proposal, remap, unborn.
  * Exports:
  * - default GitArcHistoryRewriter: rebuild affected Git-backed arc objects and prepare one atomic ref remap. Keywords: git, arc, checkpoint, proposal, rewrite.
  * - GitArcHistoryRewritePlan: prepared ref updates, deletes, commit aliases, and bounded warnings. Keywords: git, transaction, sha, alias.
+ * - GitArcHistoryRewriteOptions: refs excluded from remapping.
+ * - COMMIT_REWRITE_MAP_REF: durable commit alias ref.
  */
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
@@ -92,7 +95,7 @@ export default class GitArcHistoryRewriter {
         warnings.push(`Skipped unreadable checkpoint ref ${entry.ref}: ${commitBatch.errors.get(entry.value) ?? "invalid commit object"}`);
         continue;
       }
-      if (oldCommit.parents.length !== 1) continue;
+      if (oldCommit.parents.length > 1) continue;
       pendingCheckpoints.push({
         entry,
         metadata: parseMarkedMetadata<CheckpointMetadata>(oldCommit.message, CHECKPOINT_METADATA_MARKER),
@@ -108,16 +111,17 @@ export default class GitArcHistoryRewriter {
       ));
       if (index < 0) break;
       const [{ entry, metadata, oldCommit }] = pendingCheckpoints.splice(index, 1);
-      const newParent = commits.get(oldCommit.parents[0]!);
+      const oldParent = oldCommit.parents[0] ?? null;
+      const newParent = oldParent === null ? undefined : commits.get(oldParent);
       const remappedMetadata = metadata ? remapCheckpointMetadata(metadata, commits) : null;
       const metadataChanged = Boolean(
         metadata && remappedMetadata && checkpointMessage(metadata) !== checkpointMessage(remappedMetadata),
       );
       if (!newParent && !metadataChanged) continue;
-      const parent = newParent ?? oldCommit.parents[0]!;
+      const parent = newParent ?? oldParent;
       let tree = oldCommit.tree;
-      if (newParent && !metadata) {
-        tree = await this.repository.mergeTree(oldCommit.parents[0]!, newParent, entry.value);
+      if (newParent && oldParent && !metadata) {
+        tree = await this.repository.mergeTree(oldParent, newParent, entry.value);
       } else if (newParent && metadata?.scopePaths.length) {
         tree = await this.repository.writeTreeWithPathsFromSource(newParent, entry.value, metadata.scopePaths);
       } else if (newParent) {
@@ -147,15 +151,16 @@ export default class GitArcHistoryRewriter {
         warnings.push(`Skipped unreadable proposal ref ${entry.ref}: ${commitBatch.errors.get(entry.value) ?? "invalid commit object"}`);
         continue;
       }
-      if (oldCommit.parents.length !== 1) continue;
-      const newParent = commits.get(oldCommit.parents[0]!);
+      if (oldCommit.parents.length > 1) continue;
+      const oldParent = oldCommit.parents[0] ?? null;
+      const newParent = oldParent === null ? undefined : commits.get(oldParent);
       const metadata = parseMarkedMetadata<ProposalMetadata>(oldCommit.message, PROPOSAL_METADATA_MARKER);
       if (!newParent && !metadata) continue;
       const remapped = metadata ? remapProposalMetadata(metadata, commits) : null;
       const metadataChanged = remapped && proposalMessage(remapped) !== proposalMessage(metadata!);
       if (!newParent && !metadataChanged) continue;
-      const parent = newParent ?? oldCommit.parents[0]!;
-      const tree = newParent ? await this.repository.mergeTree(oldCommit.parents[0]!, parent, entry.value) : oldCommit.tree;
+      const parent = newParent ?? oldParent;
+      const tree = newParent && oldParent ? await this.repository.mergeTree(oldParent, newParent, entry.value) : oldCommit.tree;
       const next = await this.repository.createCommitFromTree(tree, parent, remapped ? proposalMessage(remapped) : oldCommit.message, oldCommit);
       commits.set(entry.value, next);
       updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });

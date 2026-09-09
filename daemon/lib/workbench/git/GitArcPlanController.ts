@@ -407,7 +407,7 @@ export default class GitArcPlanController {
       if (metadata.version >= 3 && changes.length && current?.checkpointCommit !== plan.checkpointCommit) {
         throw await createGitArcStartDiagnosticError({
           adoptedPaths: [],
-          currentHead: await repository.currentHead(),
+          currentHead: await repository.headOrNull(),
           currentTree,
           harness,
           planBaseCommit: plan.parent,
@@ -456,7 +456,7 @@ export default class GitArcPlanController {
       : [];
     const currentTree = await repository.writeScopedWorktreeTree(paths);
     const snapshotDrift = await repository.listChangedPaths(plan.checkpointCommit, currentTree, paths);
-    const head = await repository.currentHead();
+    const head = await repository.headOrNull();
     const registryEntries = await registry.list();
     if (snapshotDrift.length) {
       throw await createGitArcStartDiagnosticError({
@@ -604,8 +604,8 @@ export default class GitArcPlanController {
     const exactAdoptedPaths = new Set(adoptPaths);
     const paths = requestedPaths.filter((candidate) => !exactAdoptedPaths.has(candidate));
     const scopePaths = collapseScopePaths([...paths, ...adoptPaths]);
-    const head = await repository.currentHead();
-    const worktreeTree = await repository.writeWorktreeTree();
+    const head = await repository.headOrNull();
+    const worktreeTree = await repository.writeWorktreeTree(head);
     const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, worktreeTree, scopePaths) : [];
     const entries = await registry.list();
     const liveOwners = entries.flatMap((entry) => liveClaims(entry));
