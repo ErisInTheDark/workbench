@@ -1,6 +1,7 @@
 /*
+ * Keywords: websocket, stream, reload, handoff, diagnostics.
  * Exports:
- * - default WorkbenchWebSocketNode: own reloadable browser WebSocket routing, request timing, and aggregate event-stream health with state handoff. Keywords: websocket, stream, reload, handoff, diagnostics.
+ * - default WorkbenchWebSocketNode: own reloadable browser WebSocket routing, traffic logs, request timing and stream health.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -45,6 +46,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchWebSocketNode.ts",
     "daemon/orchestrator/websocket-log-format.ts",
     "daemon/orchestrator/WorkbenchWebSocketRequestController.ts",
+    "daemon/orchestrator/WorkbenchWebSocketEventLog.ts",
     "daemon/orchestrator/thread-identity-provider-mapping.ts",
     "daemon/orchestrator/thread-identity-transcript-mapping.ts",
     "daemon/orchestrator/thread-identity-workbench-mapping.ts",

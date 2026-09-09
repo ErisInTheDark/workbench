@@ -1,5 +1,5 @@
 /*
- * Keywords: websocket, request, reload, stream, handoff, timer, diagnostics.
+ * Keywords: websocket, request, reload, stream, handoff, event logs, diagnostics.
  * Exports:
  * - WorkbenchWebSocketPendingRequestState: transferable browser request timing.
  * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
@@ -46,7 +46,8 @@ import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbenc
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
-import { dimWebSocketDetail, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
+import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
+import { dimWebSocketDetail, formatWebSocketBytes as formatBytes, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -128,12 +129,6 @@ function asRecord(value: unknown) {
     : null;
 }
 
-function formatBytes(value: number) {
-  if (value < 1_024) return `${Math.max(0, Math.round(value))}B`;
-  if (value < 1_024 * 1_024) return `${(value / 1_024).toFixed(1)}KB`;
-  return `${(value / 1_024 / 1_024).toFixed(1)}MB`;
-}
-
 function formatDuration(value: number) {
   const duration = Math.max(0, value);
   return duration < 1_000 ? `${Math.round(duration)}ms` : `${(duration / 1_000).toFixed(1)}s`;
@@ -168,6 +163,7 @@ function readResponseErrorMessage(message: unknown) {
 
 export default class WorkbenchWebSocketRequestController {
   private detached = false;
+  private readonly eventLog: WorkbenchWebSocketEventLog;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
   private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
@@ -209,6 +205,7 @@ export default class WorkbenchWebSocketRequestController {
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.cancel = cancel;
+    this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
     this.harnesses = harnesses;
     this.identities = identities;
@@ -268,6 +265,7 @@ export default class WorkbenchWebSocketRequestController {
     this.stream.connect(client);
 
     if (method === WORKBENCH_EVENT_STREAM_ACK_METHOD) {
+      this.eventLog.record("in", "workbench", method, data.length);
       const acknowledgement = WorkbenchEventStreamAckSchema.safeParse(message);
       if (acknowledgement.success) this.stream.acknowledge(client, acknowledgement.data.params.sequence);
       else this.stream.reportInvalidAcknowledgement();
@@ -296,6 +294,7 @@ export default class WorkbenchWebSocketRequestController {
       }
     }
     if (isRequest) this.beginRequest(client, requestId, data.length, methodLabel(harness, method), method);
+    else this.eventLog.record("in", harness, method, data.length);
 
     if (hardReloadPending) {
       if (isRequest) {
@@ -393,6 +392,9 @@ export default class WorkbenchWebSocketRequestController {
 
   async sendJsonToClient(client: BridgeClient, message: unknown) {
     this.assertActive();
+    const envelope = asRecord(message);
+    const eventMethod = typeof envelope?.method === "string" ? envelope.method : null;
+    const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
     if (this.identities) {
@@ -406,7 +408,6 @@ export default class WorkbenchWebSocketRequestController {
           message = { id: pending.id, error: { code: -32000, message: detail } };
         }
       } else {
-        const envelope = asRecord(message);
         if (envelope?.method === "workbench/thread-state/updated") {
           message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot) };
           this.assertActive();
@@ -450,6 +451,15 @@ export default class WorkbenchWebSocketRequestController {
       const sentAt = this.now();
       const finish = (error?: Error) => {
         if (error && streamEvent) this.stream.failDelivery(streamEvent);
+        if (!error && eventMethod) {
+          this.eventLog.record(
+            "out",
+            eventHarness === "codex" || eventHarness === "copilot" || eventHarness === "opencode"
+              ? eventHarness : eventMethod.startsWith("workbench/") ? "workbench" : "unknown",
+            eventMethod,
+            outBytes,
+          );
+        }
         if (pending) {
           this.complete(
             pending,
@@ -492,6 +502,7 @@ export default class WorkbenchWebSocketRequestController {
   detachForReload(): WorkbenchWebSocketRequestControllerState {
     this.assertActive();
     this.detached = true;
+    this.eventLog.dispose();
     const pending = [...this.pending.values()].flatMap((requests) => [...requests.values()].map((request) => {
       if (request.timer) this.cancel(request.timer);
       const { timer: _timer, ...state } = request;
@@ -518,6 +529,7 @@ export default class WorkbenchWebSocketRequestController {
   dispose() {
     if (this.detached) return;
     this.detached = true;
+    this.eventLog.dispose();
     for (const requests of this.pending.values()) {
       for (const request of requests.values()) if (request.timer) this.cancel(request.timer);
     }

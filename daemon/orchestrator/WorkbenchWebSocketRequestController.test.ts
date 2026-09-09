@@ -1,6 +1,6 @@
 /*
- * Exports:
- * - No production exports; Node tests protect WebSocket pending warnings, transcript materialisation, stream receipt routing, terminal completion, handoff, socket isolation, and send failures. Keywords: websocket, transcript, stream, latency, timer, handoff, test.
+ * Keywords: websocket, transcript, event logs, receipts, timing, handoff.
+ * No production exports. Tests protect routing, diagnostics, socket isolation and send failures.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -108,6 +108,46 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("traffic logs cover notifications in both directions without adding event logs for query replies", async () => {
+  const clock = new FakeClock();
+  const { controller, lines } = createController({ clock });
+  const sent: string[] = [];
+  const client = createClient((data, callback) => { sent.push(String(data)); callback?.(); });
+  const incoming = Buffer.from(JSON.stringify({ method: "initialized", workbenchHarness: "codex" }));
+  await controller.handleMessage(client, "connection", incoming, false);
+  await controller.sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
+  await controller.sendJsonToClient(client, { id: 300, result: {} });
+  clock.advance(2_000);
+  const traffic = lines.filter(line => / WS (in|out) /u.test(line));
+  assert.ok(traffic.some(line => line.includes("in codex:initialized") && line.includes(`in: ${incoming.length}B`)));
+  const reset = sent.find(data => JSON.parse(data).method === "workbench/thread-state/reset")!;
+  assert.ok(traffic.some(line => line.includes("out wb:thread-state/reset") && line.includes(`out: ${Buffer.byteLength(reset)}B`)));
+  assert.ok(!traffic.some(line => line.includes("response")));
+  controller.dispose();
+});
+
+test("outgoing traffic is counted only after a successful socket callback", async () => {
+  const clock = new FakeClock();
+  const { controller, lines } = createController({ clock });
+  let finish: ((error?: Error) => void) | undefined;
+  const client = createClient((_data, callback) => { finish = callback; });
+  const message = { method: "workbench/thread-state/reset", params: {} };
+  const sending = controller.sendJsonToClient(client, message);
+  clock.advance(3_000);
+  assert.ok(!lines.some(line => line.includes("out wb:thread-state/reset")));
+  finish?.();
+  await sending;
+  clock.advance(2_000);
+  assert.equal(lines.filter(line => line.includes("out wb:thread-state/reset")).length, 1);
+  const error = new Error("socket write failed");
+  const failing = controller.sendJsonToClient(client, message);
+  finish?.(error);
+  await assert.rejects(failing, caught => caught === error);
+  clock.advance(2_000);
+  assert.equal(lines.filter(line => line.includes("out wb:thread-state/reset")).length, 1);
+  controller.dispose();
+});
 
 test("read and subscription replies honour each client's transcript protocol", async () => {
   const parsed = conformWorkbenchTranscriptSnapshot({
@@ -224,24 +264,25 @@ function notificationFrame(method: string, params: Record<string, unknown>) {
 test("warns every two seconds until the matching response send completes", async () => {
   const clock = new FakeClock();
   const { controller, lines } = createController({ clock });
+  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
   const client = createClient();
   await controller.handleMessage(client, "connection-1", frame("thread/read", 7, { params: { secret: "never-log-me" } }), false);
 
   clock.advance(1_999);
-  assert.equal(lines.length, 0);
+  assert.equal(requestLines().length, 0);
   clock.advance(1);
-  assert.equal(lines.length, 1);
-  assert.match(lines[0] ?? "", /codex:thread\/read .*pending.* 2\.0s/u);
+  assert.equal(requestLines().length, 1);
+  assert.match(requestLines()[0] ?? "", /codex:thread\/read .*pending.* 2\.0s/u);
   clock.advance(2_000);
-  assert.equal(lines.length, 2);
+  assert.equal(requestLines().length, 2);
 
   await controller.sendJsonToClient(client, { id: 7, result: { ok: true } });
-  assert.equal(lines.length, 3);
-  assert.match(lines[2] ?? "", /codex:thread\/read .*ok.*process:.*json:.*send:.*in:.*out:/u);
-  assert.match(lines[2] ?? "", /in 4\.0s \u001b\[2m\(process:.*out:.*\)\u001b\[0m$/u);
+  assert.equal(requestLines().length, 3);
+  assert.match(requestLines()[2] ?? "", /codex:thread\/read .*ok.*process:.*json:.*send:.*in:.*out:/u);
+  assert.match(requestLines()[2] ?? "", /in 4\.0s \u001b\[2m\(process:.*out:.*\)\u001b\[0m$/u);
   assert.equal(lines.join("\n").includes("never-log-me"), false);
   clock.advance(10_000);
-  assert.equal(lines.length, 3);
+  assert.equal(requestLines().length, 3);
   controller.dispose();
 });
 
@@ -274,37 +315,38 @@ test("uses longer first-warning thresholds only for initialization and compactio
   const initialize = createController({ clock: initializeClock });
   await initialize.controller.handleMessage(createClient(), "initialize", frame("initialize", 1), false);
   initializeClock.advance(9_999);
-  assert.equal(initialize.lines.length, 0);
+  assert.equal(initialize.lines.filter(line => line.includes("codex:initialize")).length, 0);
   initializeClock.advance(1);
-  assert.equal(initialize.lines.length, 1);
+  assert.equal(initialize.lines.filter(line => line.includes("codex:initialize")).length, 1);
   initialize.controller.dispose();
 
   const compactClock = new FakeClock();
   const compact = createController({ clock: compactClock });
   await compact.controller.handleMessage(createClient(), "compact", frame("thread/compact/start", 2), false);
   compactClock.advance(29_999);
-  assert.equal(compact.lines.length, 0);
+  assert.equal(compact.lines.filter(line => line.includes("codex:thread/compact/start")).length, 0);
   compactClock.advance(1);
-  assert.equal(compact.lines.length, 1);
+  assert.equal(compact.lines.filter(line => line.includes("codex:thread/compact/start")).length, 1);
   compact.controller.dispose();
 });
 
 test("hands pending requests to one replacement warning schedule", async () => {
   const clock = new FakeClock();
   const lines: string[] = [];
+  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
   const client = createClient();
   const first = createController({ clock, lines });
   await first.controller.handleMessage(client, "connection-1", frame("thread/read", 4), false);
   clock.advance(2_000);
-  assert.equal(lines.length, 1);
+  assert.equal(requestLines().length, 1);
 
   const state = first.controller.detachForReload();
   const replacement = createController({ clock, initialState: state, lines });
   clock.advance(2_000);
-  assert.equal(lines.length, 2);
+  assert.equal(requestLines().length, 2);
   await replacement.controller.sendJsonToClient(client, { id: 4, result: {} });
   clock.advance(4_000);
-  assert.equal(lines.length, 3);
+  assert.equal(requestLines().length, 3);
   replacement.controller.dispose();
 });
 
@@ -355,11 +397,12 @@ test("disconnect and send failure terminate their request lifecycles", async () 
   const clock = new FakeClock();
   const disconnects: string[] = [];
   const { controller, lines } = createController({ clock, onDisconnect: (connectionId) => { disconnects.push(connectionId); } });
+  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
   const disconnectedClient = createClient();
   await controller.handleMessage(disconnectedClient, "connection-1", frame("thread/read", 1), false);
   await controller.disconnect(disconnectedClient, "connection-1");
   assert.deepEqual(disconnects, ["connection-1"]);
-  assert.match(lines[0] ?? "", /closed/u);
+  assert.match(requestLines()[0] ?? "", /closed/u);
 
   let sends = 0;
   const failedClient = createClient((_data, callback) => {
@@ -368,9 +411,9 @@ test("disconnect and send failure terminate their request lifecycles", async () 
   });
   await controller.handleMessage(failedClient, "connection-2", frame("thread/read", 2), false);
   await assert.rejects(controller.sendJsonToClient(failedClient, { id: 2, result: {} }), /socket write failed/u);
-  assert.match(lines[1] ?? "", /send-error/u);
+  assert.match(requestLines()[1] ?? "", /send-error/u);
   clock.advance(10_000);
-  assert.equal(lines.length, 2);
+  assert.equal(requestLines().length, 2);
   controller.dispose();
 });
 

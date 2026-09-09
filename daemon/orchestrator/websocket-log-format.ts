@@ -2,7 +2,9 @@
  * Keywords: websocket, diagnostics, routing, bounded logs, payload privacy.
  * Exports:
  * - dimWebSocketDetail: style secondary transport timing.
+ * - formatWebSocketBytes: use consistent byte units for requests and event traffic.
  * - webSocketMethodLabel: identify a provider or Workbench method consistently.
+ * - formatWebSocketEventSummary: render bounded event traffic without payloads or request timings.
  * - formatWebSocketSendFailure: report bounded send context without serialising payload bodies.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -17,6 +19,17 @@ export function dimWebSocketDetail(value: string) {
 export function webSocketMethodLabel(harness: WorkbenchHarness | "unknown" | "workbench", method: string) {
   if (harness !== "workbench") return `${harness}:${method}`;
   return `wb:${method.startsWith("workbench/") ? method.slice("workbench/".length) : method}`;
+}
+
+export function formatWebSocketBytes(value: number) {
+  if (value < 1_024) return `${Math.max(0, Math.round(value))}B`;
+  if (value < 1_024 * 1_024) return `${(value / 1_024).toFixed(1)}KB`;
+  return `${(value / 1_024 / 1_024).toFixed(1)}MB`;
+}
+
+export function formatWebSocketEventSummary(direction: "in" | "out", label: string, count: number, bytes: number) {
+  const bounded = label.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 160);
+  return ` WS ${direction} ${bounded} ${dimWebSocketDetail(`(count: ${count}, ${direction}: ${formatWebSocketBytes(bytes)})`)}`;
 }
 
 export function formatWebSocketSendFailure(message: unknown, error: unknown) {

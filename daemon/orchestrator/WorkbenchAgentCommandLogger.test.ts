@@ -1,4 +1,7 @@
-/* No production exports. Tests protect pending cadence and omission, questionnaire waits, terminal outcomes, cancellation, and timer cleanup for CLI/MCP timing logs. */
+/*
+ * Keywords: CLI, MCP, logging, exclusions, cancellation, cleanup.
+ * No production exports. Tests protect timing cadence, omission and unchanged command outcomes.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -35,7 +38,7 @@ test("logs repeated pending warnings and one successful completion", async () =>
   assert.equal(callback, null);
 });
 
-test("omits pending warnings for normal long waits while preserving completion logs", async () => {
+test("omits pending warnings for arc waits while preserving completion logs", async () => {
   let scheduled = 0;
   const lines: string[] = [];
   const logger = new WorkbenchAgentCommandLogger({
@@ -47,16 +50,31 @@ test("omits pending warnings for normal long waits while preserving completion l
     writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
   });
 
-  await logger.run("wb shell", new AbortController().signal, async () => "done");
   await logger.run("wb git arc wait", new AbortController().signal, async () => "done");
-  await logger.run("wb request user input", new AbortController().signal, async () => "done");
 
   assert.equal(scheduled, 0);
   assert.deepEqual(lines, [
-    " CLI wb shell ok in 0ms",
     " CLI wb git arc wait ok in 0ms",
-    " CLI wb request user input ok in 0ms",
   ]);
+});
+
+test("quiet commands preserve results and failures without timing logs or timers", async () => {
+  let scheduled = 0;
+  const lines: string[] = [];
+  const logger = new WorkbenchAgentCommandLogger({
+    schedule: () => { scheduled += 1; return scheduled as never; },
+    cancel: () => {},
+    writeLine: (line) => { lines.push(line); },
+  });
+  for (const label of ["wb shell", "wb rg", "wb request user input"]) {
+    const signal = new AbortController().signal;
+    const result = { done: true };
+    assert.equal(await logger.run(label, signal, async () => result), result);
+    const error = new Error("operation failed");
+    await assert.rejects(logger.run(label, signal, async () => { throw error; }), caught => caught === error);
+  }
+  assert.equal(scheduled, 0);
+  assert.deepEqual(lines, []);
 });
 
 test("reports failed responses and cancelled exceptions without leaking timers", async () => {
@@ -73,13 +91,13 @@ test("reports failed responses and cancelled exceptions without leaking timers",
 
   await logger.run("wb git arc diff", new AbortController().signal, async () => Response.json({}, { status: 400 }), (response) => response.ok);
   const cancellation = new AbortController();
-  await assert.rejects(logger.run("wb shell", cancellation.signal, async () => {
+  await assert.rejects(logger.run("wb git arc diff", cancellation.signal, async () => {
     cancellation.abort(new Error("cancelled"));
     throw cancellation.signal.reason;
   }), /cancelled/u);
 
   assert.match(lines[0] ?? "", /CLI wb git arc diff error in/u);
-  assert.match(lines[1] ?? "", /CLI wb shell cancelled in/u);
+  assert.match(lines[1] ?? "", /CLI wb git arc diff cancelled in/u);
   assert.equal(activeTimers, 0);
 });
 

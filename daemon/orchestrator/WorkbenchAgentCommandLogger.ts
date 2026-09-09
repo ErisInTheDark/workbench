@@ -1,14 +1,17 @@
 /*
+ * Keywords: CLI, MCP, logging, timing, exclusions, cancellation.
  * Exports:
- * - WorkbenchAgentCommandLogOutcome/WorkbenchAgentCommandLoggerOptions: define bounded command timing outcomes and injectable clock ports. Keywords: CLI, MCP, logging, timing, test.
- * - default WorkbenchAgentCommandLogger: own pending warnings and terminal timing logs for one CLI or MCP command lifecycle. Keywords: CLI, MCP, pending, completion, cancellation.
+ * - WorkbenchAgentCommandLogOutcome: terminal command timing outcomes.
+ * - WorkbenchAgentCommandLoggerOptions: injectable clock and logging ports.
+ * - default WorkbenchAgentCommandLogger: own pending warnings and terminal timing logs for CLI/MCP commands.
  */
 
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "../lib/workbench/commands/workbench-agent-command-definition";
 
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
 const PENDING_WARNING_INTERVAL_MS = 2_000;
-const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait", "wb request user input", "wb shell"]);
+const LOG_OMISSION_LABELS = new Set(["wb shell", "wb rg", "wb request user input"]);
+const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait"]);
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
@@ -68,13 +71,14 @@ export default class WorkbenchAgentCommandLogger {
     operation: () => Promise<TValue>,
     succeeded: (value: TValue) => boolean = () => true,
   ) {
+    const omitted = LOG_OMISSION_LABELS.has(label);
     const startedAt = this.now();
     let timer: Timer | null = null;
     const warn = () => {
       this.writeLine(` CLI ${label} ${pendingToken()} after ${formatDuration(this.now() - startedAt)}`);
       timer = this.schedule(warn, PENDING_WARNING_INTERVAL_MS);
     };
-    if (!PENDING_WARNING_OMISSION_LABELS.has(label)) {
+    if (!omitted && !PENDING_WARNING_OMISSION_LABELS.has(label)) {
       timer = this.schedule(warn, this.pendingThresholdMs);
     }
     let outcome: WorkbenchAgentCommandLogOutcome = "error";
@@ -93,8 +97,10 @@ export default class WorkbenchAgentCommandLogger {
     } finally {
       if (timer) this.cancel(timer);
       if (
-        !isWorkbenchAgentMcpRuntimeReloadInterruption(signal.reason)
-        || outcome === "ok"
+        !omitted && (
+          !isWorkbenchAgentMcpRuntimeReloadInterruption(signal.reason)
+          || outcome === "ok"
+        )
       ) {
         this.writeLine(` CLI ${label} ${completionToken(outcome)} in ${formatDuration(this.now() - startedAt)}`);
       }

@@ -4,7 +4,18 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatWebSocketSendFailure } from "./websocket-log-format";
+import { formatWebSocketEventSummary, formatWebSocketSendFailure } from "./websocket-log-format";
+
+test("event traffic bounds labels and prevents forged lines or terminal controls", () => {
+  const line = formatWebSocketEventSummary("out", `codex:item/delta\nforged\u001b[31m${"x".repeat(10_000)}`, 84, 512);
+  assert.ok(line.includes("codex:item/delta"));
+  assert.ok(line.includes("count: 84"));
+  assert.ok(line.includes("out: 512B"));
+  const plain = line.replace(/\u001b\[[0-9;]*m/gu, "");
+  assert.ok(!plain.includes("\n") && !plain.includes("\r"));
+  assert.ok(!line.includes("\u001b[31m"));
+  assert.ok(line.length < 400);
+});
 
 test("send failures retain routing context without serialising notification bodies", () => {
   const hidden = "private composer and transcript text";
