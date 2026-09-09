@@ -1,4 +1,5 @@
 /*
+ * Keywords: tokens, instructions, project, MCP, CLI.
  * Exports:
  * - WorkbenchTokenCountExecutionRequestSchema: validate direct text, Workbench-source, and cwd-owned project instruction token requests. Keywords: tokens, instructions, project, cwd, thread.
  * - WORKBENCH_TOKEN_COMMANDS: expose exact local GPT-5 text and instruction counting through CLI and typed MCP definitions. Keywords: tokens, GPT-5, project, MCP, CLI.
@@ -25,7 +26,7 @@ export const WorkbenchTokenCountExecutionRequestSchema = z.discriminatedUnion("k
 ]);
 
 const countText = defineWorkbenchAgentCommand({
-  description: "Count exact text locally with the GPT-5 o200k_base tokenizer.",
+  description: "Count standalone text locally.",
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   mcpCodeModeEligible: true,
@@ -43,7 +44,7 @@ const countText = defineWorkbenchAgentCommand({
 });
 
 const countInstructions = defineWorkbenchAgentCommand({
-  description: "Count stripped Workbench runtime instruction text locally with the GPT-5 o200k_base tokenizer.",
+  description: "Count actual tokens provided to agents in Workbench instructions. Strips HTML comments. Use over `tokens` when applicable. Count -> patch -> count",
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   managedThreadRootOnly: true,
@@ -61,7 +62,7 @@ const countInstructions = defineWorkbenchAgentCommand({
 });
 
 const countProjectInstructions = defineWorkbenchAgentCommand({
-  description: "Count the current cwd's resolved project AGENTS chain locally with the GPT-5 o200k_base tokenizer.",
+  description: "Count actual tokens provided to agents in the current project via the AGENTS.md and its imports. Strips HTML comments. Use over `tokens` when applicable. Count -> patch -> count",
   effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   mcpCodeModeEligible: true,
