@@ -95,6 +95,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
           role="listbox"
         >
           {snapshot.error ? <p className="px-4 py-5 text-sm text-red-500">{snapshot.error}</p> : null}
+          {snapshot.isLoading ? <p className="px-2 py-2 text-sm text-muted">Searching...</p> : null}
           {!snapshot.error && !snapshot.isLoading && snapshot.results.length === 0 ? (
             <p className="px-4 py-5 text-sm text-muted">No matching results.</p>
           ) : null}

@@ -1,7 +1,8 @@
 /*
+ * Keywords: search, controller, single-flight, freshness, lifecycle.
  * Exports:
  * - WorkbenchSearchSnapshot: complete dialog/query/result lifecycle state. Keywords: search, state, lifecycle.
- * - default WorkbenchSearchController: owns debounce, request freshness, selection, activation, and disposal. Keywords: search, controller, debounce.
+ * - default WorkbenchSearchController: owns coalescing, single-flight requests, freshness, selection, activation, and disposal.
  */
 import type {
   WorkbenchSearchResponse,
@@ -23,6 +24,7 @@ type SearchTimer = number | ReturnType<typeof setTimeout>;
 export default class WorkbenchSearchController {
   private disposed = false;
   private generation = 0;
+  private activeGeneration: number | null = null;
   private readonly listeners = new Set<() => void>();
   private timer: SearchTimer | null = null;
   private snapshot: WorkbenchSearchSnapshot = {
@@ -50,7 +52,8 @@ export default class WorkbenchSearchController {
 
   open() {
     if (this.disposed || this.snapshot.isOpen) return;
-    this.update({ isOpen: true });
+    this.generation += 1;
+    this.update({ error: null, isLoading: true, isOpen: true, results: [], selectedIndex: 0 });
     this.schedule();
   }
 
@@ -58,20 +61,20 @@ export default class WorkbenchSearchController {
     if (!this.snapshot.isOpen) return;
     this.generation += 1;
     this.cancelTimer();
-    this.update({ isLoading: false, isOpen: false });
+    this.update({ isLoading: false, isOpen: false, results: [], selectedIndex: 0 });
   }
 
   setQuery(query: string) {
     if (this.disposed || query === this.snapshot.query) return;
     this.generation += 1;
-    this.update({ error: null, query, selectedIndex: 0 });
+    this.update({ error: null, isLoading: this.snapshot.isOpen, query, results: [], selectedIndex: 0 });
     this.schedule();
   }
 
   setProjectId(projectId: string | null) {
     if (this.disposed || projectId === this.snapshot.projectId) return;
     this.generation += 1;
-    this.update({ projectId, selectedIndex: 0 });
+    this.update({ error: null, isLoading: this.snapshot.isOpen, projectId, results: [], selectedIndex: 0 });
     if (this.snapshot.isOpen) this.schedule();
   }
 
@@ -82,13 +85,13 @@ export default class WorkbenchSearchController {
 
   activateSelected() {
     const result = this.snapshot.results[this.snapshot.selectedIndex] ?? this.snapshot.results[0];
-    if (!result) return false;
-    this.close();
-    this.options.activate?.(result);
+    if (!result || !this.snapshot.isOpen || this.disposed) return false;
+    this.activate(result);
     return true;
   }
 
   activate(result: WorkbenchSearchResult) {
+    if (this.disposed || !this.snapshot.isOpen || !this.snapshot.results.includes(result)) return;
     this.close();
     this.options.activate?.(result);
   }
@@ -101,7 +104,7 @@ export default class WorkbenchSearchController {
   }
 
   private schedule() {
-    if (this.timer !== null) return;
+    if (this.disposed || !this.snapshot.isOpen || this.timer !== null || this.activeGeneration !== null) return;
     const schedule = this.options.setTimeout ?? setTimeout;
     this.timer = schedule(() => {
       this.timer = null;
@@ -110,8 +113,9 @@ export default class WorkbenchSearchController {
   }
 
   private async refresh() {
-    if (this.disposed || !this.snapshot.isOpen) return;
-    const generation = ++this.generation;
+    if (this.disposed || !this.snapshot.isOpen || this.activeGeneration !== null) return;
+    const generation = this.generation;
+    this.activeGeneration = generation;
     const request = { projectId: this.snapshot.projectId, query: this.snapshot.query };
     this.update({ error: null, isLoading: true });
     try {
@@ -126,6 +130,9 @@ export default class WorkbenchSearchController {
         results: [],
         selectedIndex: 0,
       });
+    } finally {
+      this.activeGeneration = null;
+      if (generation !== this.generation) this.schedule();
     }
   }
 

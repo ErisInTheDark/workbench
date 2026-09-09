@@ -1,4 +1,5 @@
 /*
+ * Keywords: search, sqlite, projection, query-local scoring.
  * Exports:
  * - default WorkbenchSearchRepository: owns SQLite search projections and relational transcript ranking. Keywords: search, sqlite, projection, fuzzy.
  */
@@ -7,7 +8,7 @@ import type Database from "better-sqlite3";
 import {
   WORKBENCH_SEARCH_ACTIONS,
   parseWorkbenchSearchQuery,
-  rankWorkbenchSearchFields,
+  createWorkbenchSearchMatcher,
   type WorkbenchSearchRequest,
   type WorkbenchSearchResponse,
   type WorkbenchSearchResult,
@@ -79,9 +80,10 @@ export default class WorkbenchSearchRepository {
 
   search(request: WorkbenchSearchRequest): WorkbenchSearchResponse {
     const clauses = parseWorkbenchSearchQuery(request.query);
+    const matchFields = createWorkbenchSearchMatcher(clauses);
     const ranked: RankedResult[] = [];
     for (const row of this.readDocuments(request.projectId)) {
-      const match = rankWorkbenchSearchFields(clauses, [{
+      const match = matchFields([{
         kind: row.kind === "file" ? "filePath" : "title",
         text: row.search_text,
       }]);
@@ -93,7 +95,7 @@ export default class WorkbenchSearchRepository {
     const bodies = new Map(this.readUnsettledBodies().map((row) => [row.thread_id, row]));
     for (const row of this.readThreadTitles()) {
       const body = bodies.get(row.id);
-      const match = rankWorkbenchSearchFields(clauses, [
+      const match = matchFields([
         { kind: "title", text: row.title },
         ...(body?.user_text ? [{ kind: "userMessage" as const, text: body.user_text }] : []),
         ...(body?.commentary_text ? [{ kind: "commentary" as const, text: body.commentary_text }] : []),
