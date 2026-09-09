@@ -118,7 +118,6 @@ test("traffic logs cover notifications in both directions without adding event l
   await controller.handleMessage(client, "connection", incoming, false);
   await controller.sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
   await controller.sendJsonToClient(client, { id: 300, result: {} });
-  clock.advance(2_000);
   const traffic = lines.filter(line => / WS (in|out) /u.test(line));
   assert.ok(traffic.some(line => line.includes("in codex:initialized") && line.includes(`in: ${incoming.length}B`)));
   const reset = sent.find(data => JSON.parse(data).method === "workbench/thread-state/reset")!;
@@ -138,7 +137,6 @@ test("outgoing traffic is counted only after a successful socket callback", asyn
   assert.ok(!lines.some(line => line.includes("out wb:thread-state/reset")));
   finish?.();
   await sending;
-  clock.advance(2_000);
   assert.equal(lines.filter(line => line.includes("out wb:thread-state/reset")).length, 1);
   const error = new Error("socket write failed");
   const failing = controller.sendJsonToClient(client, message);
@@ -248,8 +246,9 @@ test("labels daemon and compatible Workbench requests with the wb namespace", as
   await controller.handleMessage(client, "connection-1", frame("project/catalog/read", 1), false);
   await controller.handleMessage(client, "connection-1", frame("workbench/thread-state/read", 2), false);
 
-  assert.match(lines[0] ?? "", /WS wb:project\/catalog\/read .*ok/u);
-  assert.match(lines[1] ?? "", /WS wb:thread-state\/read .*ok/u);
+  const requests = lines.filter(line => line.includes(" WS wb:"));
+  assert.match(requests[0] ?? "", /WS wb:project\/catalog\/read .*ok/u);
+  assert.match(requests[1] ?? "", /WS wb:thread-state\/read .*ok/u);
   controller.dispose();
 });
 
@@ -302,10 +301,11 @@ test("error completions log the full multiline message in a red follow-up entry 
     id: 7,
   });
 
-  assert.equal(lines.length, 2);
-  assert.match(lines[0] ?? "", /codex:thread\/read .*error.*process:.*json:.*send:.*in:.*out:/u);
-  assert.equal(lines[0]?.includes("first line"), false);
-  assert.equal(lines[1], ` WS codex:thread/read \u001b[31mfirst line\nsecond line ${longTail}\u001b[0m`);
+  const requests = lines.filter(line => line.includes(" WS codex:thread/read"));
+  assert.equal(requests.length, 2);
+  assert.match(requests[0] ?? "", /codex:thread\/read .*error.*process:.*json:.*send:.*in:.*out:/u);
+  assert.equal(requests[0]?.includes("first line"), false);
+  assert.equal(requests[1], ` WS codex:thread/read \u001b[31mfirst line\nsecond line ${longTail}\u001b[0m`);
   assert.equal(lines.join("\n").includes("never-log-response-data"), false);
   controller.dispose();
 });
@@ -389,7 +389,8 @@ test("sequences provider events and consumes browser receipts without harness ro
   await controller.handleMessage(client, "connection-1", notificationFrame("workbench/event-stream/ack", { sequence: 1 }), false);
   assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 0);
   assert.deepEqual(harnessMessages, []);
-  assert.deepEqual(lines, []);
+  assert.ok(lines.some(line => line.includes("out codex:item/agentMessage/delta")));
+  assert.ok(!lines.some(line => line.includes("in wb:event-stream/ack") || line.includes("secret commentary")));
   controller.dispose();
 });
 

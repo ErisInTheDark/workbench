@@ -55,12 +55,17 @@ export default class WorkbenchWebSocketEventLog {
     const label = webSocketMethodLabel(harness, method);
     const key = `${direction}:${label}`;
     if (EXCLUDED_EVENTS.has(key)) return;
+    const now = this.now();
     const window = this.windows.get(key) ?? {
-      bytes: 0, count: 0, deadline: this.now() + WINDOW_MS, direction, label,
+      bytes: 0, count: 0, deadline: now, direction, label,
     };
     window.bytes += bytes;
     window.count += 1;
     this.windows.set(key, window);
+    if (window.deadline <= now) {
+      this.flush(window);
+      window.deadline = now + WINDOW_MS;
+    }
     this.scheduleNext();
   }
 
@@ -82,14 +87,21 @@ export default class WorkbenchWebSocketEventLog {
       const now = this.now();
       for (const [key, window] of this.windows) {
         if (window.deadline > now) continue;
-        this.windows.delete(key);
-        this.flush(window);
+        if (window.count === 0) {
+          this.windows.delete(key);
+        } else {
+          this.flush(window);
+          window.deadline = now + WINDOW_MS;
+        }
       }
       this.scheduleNext();
     }, Math.max(0, deadline - this.now()));
   }
 
   private flush(window: EventWindow) {
+    if (window.count === 0) return;
     this.writeLine(formatWebSocketEventSummary(window.direction, window.label, window.count, window.bytes));
+    window.count = 0;
+    window.bytes = 0;
   }
 }
