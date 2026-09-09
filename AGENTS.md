@@ -23,6 +23,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 - Add and maintain a start-of-file manifest comment in files containing multiple components, functions, types, or other exports. Include a list of high-signal keywords for the file, and separately list every export with a succinct one-line purpose; proactively fix nonconforming manifests in files you edit.
 - Keep files small, reusable, and conceptually coherent. Plan the nearby refactor when the requested change would otherwise deepen a monolith, duplicate ownership, or add helper soup.
 - Do not create file-specific duplicate components, utilities, or types when a shared owner already exists.
+- Tests should aim to test semantic or logic behaviour in a single file, and be located in a test file adjacent to the file being tested. When a test must cover behaviour from multiple files, place it in the test file equivalent of the narrowest owning file that makes sense.
 
 ## UI Constraints
 

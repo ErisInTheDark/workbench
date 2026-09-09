@@ -17,7 +17,7 @@
 | mosaic | A desktop-only Workbench route/view that renders a URL-encoded split tree of file and thread panels, separate from normal single file/thread routes so the single-route app shell and scroll behavior remain stable fallback paths |
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
-| transcripts | persisted transcript files under `.workbench/transcripts/`. For Codex threads, `thread.json`, `turns/*.json`, `turns/*.ndjson`, orphan-event files, and `assets/`, with `CodexTranscriptStore` as their owner |
+| transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
 | logs | The persisted Workbench runtime logs under `.workbench/logs/`. Includes both orchestrator/daemon logs, and app server logs. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |

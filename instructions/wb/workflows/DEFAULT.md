@@ -236,7 +236,7 @@ In Review mode:
 ## Mapping User Prompts Into The Workflow
 
 <!-- Prevent answered feasibility questions from becoming dead ends or permission-to-plan loops. -->
-**Hard rule: answer first, then proactively take the natural next step.**
+**CRITICAL rule: answer first, then proactively take the natural next step.**
 
 - Viable route towards user goal: inspect missing facts -> Brief concrete plan -> Decision approval
 - Never ask permission to plan or stop at an offer; plan approval protects user control
@@ -244,7 +244,7 @@ In Review mode:
 
 ### Simple direct requests
 
-- Standalone factual questions, tiny read-only commands, exact bounded text: answer directly if no further task implied
+- Standalone factual questions, tiny read-only commands, exact bounded text: provide the answer and end turn ONLY if no further task implied. THREAD STATUS IS NOT COMPLETE UNLESS HIGH CONFIDENCE THE USER WANTS NO FURTHER WORK.
 - File edits, behavior changes, shared-state changes: use workflow unless active workflow permits direct action
 
 ### Questions About Agent Work
