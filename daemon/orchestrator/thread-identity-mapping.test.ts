@@ -27,6 +27,8 @@ import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository";
+import WorkbenchThreadStateQuestionnaireRepository from "./database/thread-state/WorkbenchThreadStateQuestionnaireRepository";
 import type { NativeTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
 import { OpenCodeBridge } from "./opencode-bridge";
 import * as opencodeThreadState from "./opencode-thread-state";
@@ -245,9 +247,22 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
   });
   let listener: Parameters<WorkbenchThreadStateController["subscribe"]>[0] | undefined;
   const observed: Array<Parameters<WorkbenchThreadStateController["observeLifecycle"]>> = [];
-  const ports = createNativeQuestionnaireStatePorts(owners.threads, {
+  assert.ok(entry.entryKind === "thread");
+  new WorkbenchThreadStateRelationalRepository(database).writeRecords([{
+    ...entry, pendingQuestionnaire: null, providerObserved: true, mcpGeneration: null,
+    profile: null, settledAt: null, gitHistoryCleanedAt: null, snoozedUntil: null,
+  }]);
+  const questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);
+  const ports = createNativeQuestionnaireStatePorts(owners, {
     getSnapshot: async projectId => ({ projectId, entries: [entry], revision: 1, error: null, freshness: "fresh" }),
-    observeLifecycle: async (...args) => { observed.push(args); return null; },
+    observeLifecycle: async (...args) => {
+      const event = args[2];
+      questionnaires.replace(args[1], {
+        pending: event.kind === "pendingInput" ? event.questionnaire ?? null : null, history: [],
+      });
+      observed.push(args);
+      return null;
+    },
     subscribe: callback => { listener = callback; return () => { listener = undefined; return true; }; },
   }, async () => parent.projectId);
   try {
@@ -262,8 +277,21 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
     if (pending?.kind !== "pendingInput") throw new Error("Expected pending input.");
     assert.equal(pending.turnId, turn.turnId);
     assert.equal(pending.questionnaire?.turnId, turn.turnId);
+    assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
+    await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
+    assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM workbench_transcript_item_identities WHERE id = ?")
+      .get(questionnaire.itemId) as { count: number }).count, 1);
+    const published = observed.length;
+    owners.items.admit = async () => { throw new Error("item admission failed"); };
+    await assert.rejects(ports.publishPending(native.nativeThreadId, {
+      ...questionnaire, itemId: randomUUID(), turnId: native.nativeTurnId,
+    }), /item admission failed/);
+    assert.equal(observed.length, published);
+    assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
     await ports.clearPending(native.nativeThreadId, questionnaire.requestKey);
-    assert.equal(observed[1]?.[1], parent.threadId);
+    assert.equal(observed.at(-1)?.[1], parent.threadId);
+    assert.equal(questionnaires.read(parent.threadId).pending, null);
     const notices: Array<{ threadId: string; requestKey: string | null }> = [];
     const stop = ports.subscribePending(notice => notices.push(notice));
     listener?.(parent.projectId, entry);

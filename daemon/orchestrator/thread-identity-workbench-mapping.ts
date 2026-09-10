@@ -35,10 +35,11 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type { WorkbenchQuestionnaireControllerOptions } from "./WorkbenchQuestionnaireController";
 
 export function createNativeQuestionnaireStatePorts(
-  threads: WorkbenchThreadIdentityController,
+  owners: NativeTranscriptIdentityOwners,
   state: Pick<WorkbenchThreadStateController, "observeLifecycle" | "getSnapshot" | "subscribe">,
   resolveProject: (cwd: string) => Promise<ProjectId>,
 ): Pick<WorkbenchQuestionnaireControllerOptions, "clearPending" | "publishPending" | "resolveThread" | "subscribePending"> {
+  const { threads, items } = owners;
   const resolveThread = async (threadId: NativeThreadId, projectId?: ProjectId) => {
     const thread = await threads.resolve({ threadId, harness: "codex", ...(projectId ? { projectId } : {}) });
     if (!thread) throw new Error("The questionnaire caller has no admitted thread identity.");
@@ -60,7 +61,18 @@ export function createNativeQuestionnaireStatePorts(
       const thread = await resolveThread(threadId);
       const turn = questionnaire.turnId === null ? null : await threads.resolveTurn({ threadId: thread.threadId, turnId: questionnaire.turnId });
       if (questionnaire.turnId !== null && !turn) throw new Error("The questionnaire turn has no admitted identity.");
-      const canonical = { ...questionnaire, turnId: turn?.turnId ?? null };
+      // Workbench allocates this UUID before publishing the request. Commit its
+      // identity first so pending state can reference it without a transcript body.
+      let itemId = null;
+      if (questionnaire.itemId !== null) {
+        const [item] = await items.admit([{
+          itemId: WorkbenchItemIdSchema.parse(questionnaire.itemId), threadId: thread.threadId,
+          sources: [], legacyAliases: [],
+        }]);
+        if (!item) throw new Error("The questionnaire item identity was not admitted.");
+        itemId = item.itemId;
+      }
+      const canonical = { ...questionnaire, itemId, turnId: turn?.turnId ?? null };
       await state.observeLifecycle("codex", thread.threadId, {
         kind: "pendingInput", questionnaire: canonical, requestKey: questionnaire.requestKey, turnId: canonical.turnId,
       });

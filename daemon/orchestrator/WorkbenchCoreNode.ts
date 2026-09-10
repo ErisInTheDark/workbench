@@ -313,7 +313,7 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   const questionnaires = new WorkbenchQuestionnaireController({
-    ...createNativeQuestionnaireStatePorts(threadIdentity, threadState.controller, async cwd => {
+    ...createNativeQuestionnaireStatePorts({ threads: threadIdentity, items: transcriptIdentity }, threadState.controller, async cwd => {
       const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
       return ProjectIdSchema.parse(resolved.project.id);
     }),

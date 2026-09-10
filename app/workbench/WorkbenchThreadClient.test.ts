@@ -1910,6 +1910,35 @@ test("a mounted thread read survives unrelated shell project selection", async (
   release();
 }));
 
+for (const selection of ["create", "payload"] as const) {
+  test(`${selection} selects an uncached draft without provider admission`, async () => withClient(async (client, socket) => {
+    await client.openThread("thread", { harness: "codex" });
+    const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("aca7aafb-a768-4ab9-aab5-b885a84c650e");
+    const draft: ThreadPayload<typeof draftId> = { ...activeThread(), id: draftId, isDraft: true, turns: [], turnHistory: [] };
+    if (selection === "create") client.createThread("codex", draftId);
+    else client.selectThreadPayload(draft);
+    const owner = client.getThreadController("project", { kind: "draft", draftId });
+    const release = owner.acquire("view");
+    try {
+      await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "unused" });
+      assert.equal(socket.requests.some(request => (
+        request.method === "workbench/thread-state/observe"
+        && (request.params?.target as { threadId?: string } | undefined)?.threadId === draftId
+      )), false);
+      assert.equal(socket.requests.some(request => (
+        (request.method === "workbench/thread/page/read" || request.method === "thread/read")
+        && request.params?.threadId === draftId
+      )), false);
+      assert.equal(client.threadObservations.getObservations().length, 0);
+      assert.equal(owner.getSnapshot().status, "ready");
+      assert.equal(owner.getSnapshot().document?.id, draftId);
+      assert.equal(owner.getSnapshot().document?.isDraft, true);
+    } finally {
+      release();
+    }
+  }));
+}
+
 test("an unselected draft remains owned and changes provider without moving selection", async () => withClient(async client => {
   client.selectThreadPayload(activeThread("codex", "selected"));
   const draft = client.createThread("codex", fixtureIdentitySchemas.DraftIdSchema.parse("draft"), { select: false });

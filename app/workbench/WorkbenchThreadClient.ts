@@ -1090,13 +1090,13 @@ function WorkbenchThreadClient(
   }
 
   function installSelectedThreadProjectContext(
-    harness: WorkbenchHarness,
-    rootThreadId: string,
+    target: Exclude<ThreadControllerTarget, { kind: "subagent" }> & { harness: WorkbenchHarness },
     project: WorkbenchProjectOption | undefined,
   ) {
+    const { harness } = target;
+    const rootThreadId = target.kind === "draft" ? target.draftId : target.threadId;
     const projectId = project?.id ?? state.projectId;
-    const target = { kind: "provider" as const, harness, threadId: ThreadReferenceSchema.parse(rootThreadId) };
-    const observationKey = projectId && !isDraftThreadId(rootThreadId) ? getThreadObservationKey(projectId, target) : null;
+    const observationKey = projectId && target.kind === "provider" ? getThreadObservationKey(projectId, target) : null;
     if (selectedObservation?.key !== observationKey) {
       selectedObservation?.release();
       selectedObservation = observationKey ? { key: observationKey, release: getThreadController(projectId, target).acquire("summary") } : null;
@@ -4440,7 +4440,7 @@ function WorkbenchThreadClient(
       && state.currentThread.harness === resolvedHarness
       && nextProjectId === selectedProjectId
     );
-    installSelectedThreadProjectContext(resolvedHarness, threadId, project);
+    installSelectedThreadProjectContext({ kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) }, project);
 
     try {
       const owner = getThreadController(nextProjectId, { kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) });
@@ -4460,7 +4460,9 @@ function WorkbenchThreadClient(
   }
 
   function selectThreadPayload(thread: ThreadPayload) {
-    installSelectedThreadProjectContext(thread.harness, thread.id, undefined);
+    installSelectedThreadProjectContext(thread.isDraft
+      ? { kind: "draft", harness: thread.harness, draftId: thread.id }
+      : { kind: "provider", harness: thread.harness, threadId: thread.id }, undefined);
     messageAdmissionIntentRevision += 1;
     setCurrentThread(thread);
   }
@@ -5850,7 +5852,7 @@ function WorkbenchThreadClient(
       cwd: projectContext.projectRootPath || projectContext.projectRoot,
     };
     if (options.select !== false) {
-      installSelectedThreadProjectContext(harness, rootThreadId, options.project);
+      installSelectedThreadProjectContext({ kind: "draft", harness, draftId: rootThreadId }, options.project);
       messageAdmissionIntentRevision += 1;
       setCurrentThread(draftThread);
     } else upsertThreadDocument(draftThread, { emitChange: true });
