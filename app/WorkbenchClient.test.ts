@@ -8,7 +8,9 @@ import test from "node:test";
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
+import { WorkbenchClient, areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
+import { createHomeRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import type ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -85,6 +87,114 @@ const explorer = (): ExplorerSnapshot => ({
 const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
+
+for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
+  test(`route completion never reopens the winning route: ${order}`, async () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalWebSocket = globalThis.WebSocket;
+    const pages: Array<{ threadId: string; complete: () => void }> = [];
+    let pageReads = 0;
+    const firstPage = Promise.withResolvers<void>();
+    const secondPage = Promise.withResolvers<void>();
+    const rootPath = "C:/repo";
+    const firstId = crypto.randomUUID();
+    const secondId = crypto.randomUUID();
+    const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+    const roots = [{ id: "root", isPrimary: true, name: "repo", relativePath: ".", rootPath }];
+    const entries = [firstId, secondId].map(threadId => ({
+      entryKind: "thread", title: threadId, activityAt: 1,
+      identity: { harness: "codex", threadId },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    }));
+    class Socket extends EventTarget {
+      static OPEN = 1;
+      readyState = 1;
+      constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event("open"))); }
+      close() { this.readyState = 3; this.dispatchEvent(new Event("close")); }
+      send(raw: string) {
+        const request = JSON.parse(raw) as { id?: number; method: string; params?: Record<string, unknown> };
+        if (request.id === undefined) return;
+        const respond = (result: object) => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: request.id, result }) }));
+        const params = request.params ?? {};
+        const threadId = String(params.threadId ?? "");
+        let result: object;
+        switch (request.method) {
+          case "initialize": result = {}; break;
+          case "workbench/orchestrator/reload-dirt/read": result = { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }; break;
+          case "workbench/thread-state/open":
+            result = {
+              catalog: { data: [{ id: projectId, kind: "git", name: "repo", relativePath: ".", rootPath, roots, lastCommitTimeMs: null }], rootPath },
+              project: { projectId, revision: 1, updateKind: "project", snapshot: { projectId, root: "repo", rootPath, roots, changes: {}, tree: [], workbenchStorageRootPath: `${rootPath}/.workbench` } },
+              sidebar: { ...sidebar(), entries },
+            };
+            break;
+          case "thread/identity/resolve": result = { data: { threadId, harness: "codex", projectId } }; break;
+          case "workbench/thread-state/observe":
+            result = { observation: { ...params, entries: entries.filter(entry => entry.identity.threadId === (params.target as { threadId: string }).threadId), revision: 1, freshness: "fresh", error: null, updateKind: "threadObservation" } };
+            break;
+          case "workbench/thread/page/read":
+            pageReads++;
+            if (pages.length >= 2) {
+              this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: request.id, error: { code: -32000, message: "Unexpected repeated page read" } }) }));
+              return;
+            }
+            pages.push({ threadId, complete: () => respond({
+              thread: { ...thread(threadId, 1), cwd: rootPath, status: { type: "idle" }, turns: [] },
+              nextCursor: null, browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
+            }) });
+            (pages.length === 1 ? firstPage : secondPage).resolve();
+            return;
+          case "account/rateLimits/read": result = { rateLimits: null }; break;
+          default:
+            result = { accepted: true, data: [] };
+        }
+        queueMicrotask(() => respond(result));
+      }
+    }
+    globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+    globalThis.document = new EventTarget() as Document;
+    globalThis.window = {
+      setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+      requestAnimationFrame: (callback: FrameRequestCallback) => setImmediate(() => callback(performance.now())),
+      cancelAnimationFrame: clearImmediate,
+    } as unknown as Window & typeof globalThis;
+    let client: Awaited<ReturnType<typeof WorkbenchClient>> | undefined;
+    const route = (id: string): WorkbenchRoute => ({
+      ...createHomeRoute(), projectId, view: "thread", threadId: id,
+      threadTarget: { kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(id), harness: "codex" },
+    });
+    try {
+      client = await WorkbenchClient({ initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" } });
+      const first = client.controls.applyRoute(route(firstId));
+      await firstPage.promise;
+      if (order === "leave-thread") {
+        await client.controls.applyRoute({ ...createHomeRoute(), view: "invalid", error: "left" });
+        pages[0]!.complete();
+        await first;
+        assert.equal(client.threadRuntime.getSnapshot().currentThread, null);
+        assert.equal(pageReads, 1);
+      } else {
+        const second = client.controls.applyRoute(route(secondId));
+        await secondPage.promise;
+        const firstIndex = order === "stale-first" ? 0 : 1;
+        pages[firstIndex]!.complete();
+        await (firstIndex === 0 ? first : second);
+        pages[1 - firstIndex]!.complete();
+        await Promise.all([first, second]);
+        assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, secondId);
+        assert.equal(pageReads, 2);
+      }
+    } finally {
+      await (client?.threadSidebar as ThreadSidebarClient | undefined)?.close();
+      client?.dispose();
+      globalThis.window = originalWindow;
+      globalThis.document = originalDocument;
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+}
 
 test("thread-state open negotiates incremental delivery with a complete bootstrap", async () => {
   const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];

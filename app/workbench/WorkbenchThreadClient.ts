@@ -1,4 +1,5 @@
 /*
+ * Keywords: shared reads, selection ownership, observations, live transcript.
  * Exports:
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
@@ -235,7 +236,7 @@ interface WorkbenchThreadClient {
     activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
   }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
+  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: {
     method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
@@ -331,6 +332,7 @@ type ThreadProjectContext = {
   projectRoots: WorkbenchProjectRoot[];
 };
 type SelectedThreadProjectContext = {
+  isCurrent: () => boolean;
   projectId: ProjectId | "";
   harness: WorkbenchHarness;
   rootThreadId: string;
@@ -914,10 +916,10 @@ function WorkbenchThreadClient(
             : target.kind === "draft" ? "codex" : target.harness ?? getKnownThreadHarness(threadId) ?? "codex";
           const cwd = observed?.entryKind === "subagent" ? observed.cwd : options.getProjectById?.(projectId)?.rootPath;
           readOptions = { ...(cwd ? { cwd } : {}), ...readOptions };
-          const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId
+          const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId && selectedThreadProjectContext.isCurrent()
             ? (setCurrentThread(payload), state.currentThread)
             : upsertThreadDocument(payload, { emitChange: true }), {
-              selectionBound, beforeCommit, ownerIsCurrent: selectionBound ? undefined : controller!.captureLifetime(),
+              selectionBound, beforeCommit, ownerIsCurrent: controller!.captureLifetime(),
             });
           if (outcome.kind === "failure") throw new ThreadPayloadReadError(outcome.failure);
           return outcome.kind === "success" ? outcome.payload : null;
@@ -1092,6 +1094,7 @@ function WorkbenchThreadClient(
   function installSelectedThreadProjectContext(
     target: Exclude<ThreadControllerTarget, { kind: "subagent" }> & { harness: WorkbenchHarness },
     project: WorkbenchProjectOption | undefined,
+    isCurrent: () => boolean = () => true,
   ) {
     const { harness } = target;
     const rootThreadId = target.kind === "draft" ? target.draftId : target.threadId;
@@ -1104,7 +1107,7 @@ function WorkbenchThreadClient(
     if (selectedThreadProjectContext?.projectId !== projectId
       || selectedThreadProjectContext.harness !== harness
       || selectedThreadProjectContext.rootThreadId !== rootThreadId) threadProjectContextGeneration += 1;
-    selectedThreadProjectContext = { projectId, harness, rootThreadId };
+    selectedThreadProjectContext = { projectId, harness, rootThreadId, isCurrent };
     reconcileObservedSubagents();
   }
 
@@ -4413,14 +4416,15 @@ function WorkbenchThreadClient(
       harness,
       project,
       source = "open",
-    }: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" } = {},
+      isCurrent = () => true,
+    }: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean } = {},
   ) {
     if (source === "open") messageAdmissionIntentRevision += 1;
     const intentRevision = messageAdmissionIntentRevision;
     if (options.resolveThreadIdentity) {
       try {
         const identity = await options.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), harness, projectId: project?.id ?? ProjectIdSchema.parse(state.projectId) });
-        if (intentRevision !== messageAdmissionIntentRevision) return { kind: "superseded" } satisfies ThreadPayloadFetchOutcome;
+        if (!isCurrent() || intentRevision !== messageAdmissionIntentRevision) return { kind: "superseded" } satisfies ThreadPayloadFetchOutcome;
         if (!identity) throw new Error("Thread identity has not been observed in this project.");
         threadId = identity.threadId;
         harness = identity.harness;
@@ -4431,6 +4435,7 @@ function WorkbenchThreadClient(
         } } satisfies ThreadPayloadFetchOutcome;
       }
     }
+    if (!isCurrent()) return { kind: "superseded" } as const;
     const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? "codex";
     const nextProjectId = project?.id ?? state.projectId;
     const selectedProjectId = selectedThreadProjectContext?.projectId ?? state.projectId;
@@ -4440,16 +4445,21 @@ function WorkbenchThreadClient(
       && state.currentThread.harness === resolvedHarness
       && nextProjectId === selectedProjectId
     );
-    installSelectedThreadProjectContext({ kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) }, project);
+    installSelectedThreadProjectContext({ kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) }, project, isCurrent);
 
     try {
       const owner = getThreadController(nextProjectId, { kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) });
       if (reuseCurrent) {
         await owner.waitForAdmission();
-        if (intentRevision !== messageAdmissionIntentRevision || state.currentThread?.id !== threadId) return { kind: "superseded" } as const;
+        if (!isCurrent() || intentRevision !== messageAdmissionIntentRevision || state.currentThread?.id !== threadId) return { kind: "superseded" } as const;
         return { kind: "success", payload: state.currentThread } as const;
       }
       const payload = await owner.read({}, { selectionBound: source === "open" });
+      if (!isCurrent() || (source === "open" && (
+        selectedThreadProjectContext?.projectId !== nextProjectId
+        || selectedThreadProjectContext.harness !== resolvedHarness
+        || selectedThreadProjectContext.rootThreadId !== threadId
+      ))) return { kind: "superseded" } as const;
       return payload ? { kind: "success", payload } as const : { kind: "superseded" } as const;
     } catch (error) {
       return { kind: "failure", failure: error instanceof ThreadPayloadReadError ? error.failure : {

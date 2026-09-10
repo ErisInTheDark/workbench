@@ -1,4 +1,5 @@
 /*
+ * Keywords: navigation, route ownership, shared thread state, explorer.
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering.
  * - openWorkbenchThreadStateObservation: negotiate project sidebar bootstrap versions.
@@ -808,10 +809,12 @@ export async function WorkbenchClient(
       harness,
       project,
       source = "open",
+      isCurrent = () => true,
     }: {
       harness?: WorkbenchHarness;
       project?: WorkbenchProjectOption;
       source?: "open" | "reload";
+      isCurrent?: () => boolean;
     } = {},
   ): Promise<WorkbenchRouteLoadResult> {
     if (threadClient.isDraftThreadId(threadId)) {
@@ -821,7 +824,8 @@ export async function WorkbenchClient(
       return { ok: true };
     }
 
-    const outcome = await threadClient.openThread(threadId, { harness, project, source });
+    const outcome = await threadClient.openThread(threadId, { harness, project, source, isCurrent });
+    if (!isCurrent()) return { ok: false };
     if (outcome.kind === "failure") {
       return {
         error: `Unable to open ${outcome.failure.harness} thread ${threadId}: ${outcome.failure.message}`,
@@ -948,14 +952,6 @@ export async function WorkbenchClient(
       && areDeeplyEqual(activeRoute.threadTarget, route.threadTarget);
   }
 
-  function reapplyActiveRouteAfterStaleLoad(route: WorkbenchRoute, generation: number) {
-    if (isRouteGenerationActive(route, generation)) {
-      return;
-    }
-
-    void applyRoute(activeRoute);
-  }
-
   async function ensureRouteProject(route: WorkbenchRoute) {
     const previousProjectId = projectClient.getSnapshot().currentProjectId;
     if (!route.projectId) {
@@ -1050,7 +1046,6 @@ export async function WorkbenchClient(
       applyCurrentThreadSelection(null);
       void hydrateProjectSidebarData(route, routeGeneration);
       const didOpen = await openFile(route.filePath);
-      reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
         return { ok: false };
       }
@@ -1111,8 +1106,8 @@ export async function WorkbenchClient(
       const openResult = await openThread(rootThreadId, {
         harness: target.harness,
         project: ownerProject,
+        isCurrent: () => isRouteGenerationActive(route, routeGeneration),
       });
-      reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
         return { ok: false };
       }

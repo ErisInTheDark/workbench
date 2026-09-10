@@ -1,4 +1,6 @@
 /*
+ * Keywords: transcript, snapshot freshness, subscription, parity.
+ * Exports:
  * ThreadTranscriptProjectionSelection: selected JSON oracle and renderer-side Browse facts. Keywords: transcript, parity, selection.
  * ThreadTranscriptProjectionState: explicit SQLite transcript source lifecycle. Keywords: transcript, projection, source, lifecycle.
  * default ThreadTranscriptProjectionController: owns SQLite source publication, serialized subscription, and deferred parity reporting. Keywords: transcript, projection, subscription, parity, lifecycle.
@@ -82,7 +84,7 @@ export default class ThreadTranscriptProjectionController {
   #hasBeenAvailable = false;
   #lastDiagnostic: WorkbenchTranscriptParityDiagnostic | null = null;
   #lifecycle = Promise.resolve();
-  #projection: WorkbenchTranscriptProjection | null = null;
+  #projection: { value: WorkbenchTranscriptProjection | null; generation: number } | null = null;
   #reporting = Promise.resolve();
   #selection: ThreadTranscriptProjectionSelection | null = null;
 
@@ -218,13 +220,13 @@ export default class ThreadTranscriptProjectionController {
   }
 
   #reconcileCurrentProjection() {
-    if (!this.#selection || !this.#projection) return null;
+    if (!this.#selection || !this.#projection?.value) return null;
     let projection: WorkbenchTranscriptProjection;
     try {
-      projection = this.#reconcileProjection(this.#projection, this.#selection);
+      projection = this.#reconcileProjection(this.#projection.value, this.#selection);
     } catch (error) {
       const cause = error instanceof Error ? error : new Error(String(error));
-      this.#projection = null;
+      this.#projection = { value: null, generation: this.#projection.generation };
       this.#onStateChange({
         message: `SQLite transcript projection failed: ${cause.message}`.slice(0, 500),
         status: "failed",
@@ -241,7 +243,7 @@ export default class ThreadTranscriptProjectionController {
     if (!projection) return false;
     this.#onStateChange({
       projection,
-      status,
+      status: this.#projection?.generation === this.#generation ? status : "loading",
       threadId: projection.thread.id,
     });
     return true;
@@ -272,10 +274,13 @@ export default class ThreadTranscriptProjectionController {
   }
 
   #receiveSnapshot(generation: number, snapshot: WorkbenchTranscriptSnapshot | null) {
-    if (this.#disposed || generation !== this.#generation) return;
+    if (this.#disposed || !this.#available) return;
+    // A superseded window can reveal the same thread while its replacement loads,
+    // but cannot erase or overwrite content already accepted by this owner.
+    if (generation !== this.#generation && (this.#projection || !snapshot)) return;
     if (snapshot === null) {
       this.#cancelScheduledComparison();
-      this.#projection = null;
+      this.#projection = { value: null, generation };
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
         ? { status: "absent", threadId }
@@ -286,7 +291,8 @@ export default class ThreadTranscriptProjectionController {
     if (snapshot.thread.id !== this.#selection?.thread.id) return;
     const result = projectWorkbenchTranscript(snapshot);
     if ("issues" in result) {
-      this.#projection = null;
+      if (generation !== this.#generation) return;
+      this.#projection = { value: null, generation };
       this.#onStateChange({
         message: "SQLite transcript data could not be projected.",
         status: "failed",
@@ -295,8 +301,8 @@ export default class ThreadTranscriptProjectionController {
       this.#report(createWorkbenchTranscriptProjectionFailureDiagnostic(snapshot.thread.id, result.issues));
       return;
     }
-    this.#projection = result.data;
-    if (this.#publishProjection()) this.#scheduleCompare();
+    this.#projection = { value: result.data, generation };
+    if (this.#publishProjection() && generation === this.#generation) this.#scheduleCompare();
   }
 
   #reportError(stage: "report" | "subscription", error: unknown, generation = this.#generation) {
@@ -305,7 +311,7 @@ export default class ThreadTranscriptProjectionController {
     const threadId = this.#selection?.thread.id ?? "none";
     const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
     if (stage === "subscription" && generation === this.#generation && this.#selection) {
-      this.#projection = null;
+      this.#projection = { value: null, generation };
       this.#onStateChange({
         message: `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500),
         status: "failed",

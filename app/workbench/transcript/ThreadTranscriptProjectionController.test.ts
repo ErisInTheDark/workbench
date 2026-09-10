@@ -15,6 +15,7 @@ import {
   type WorkbenchTranscriptSubscribeParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import ThreadTranscriptProjectionController from "./ThreadTranscriptProjectionController";
+import type { ThreadTranscriptProjectionState } from "./ThreadTranscriptProjectionController";
 import reconcileTranscriptProjectionWithLiveThread from "./reconcile-transcript-projection-with-live-thread";
 
 function flush() {
@@ -99,6 +100,51 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
     turns: [],
   };
 }
+
+test("an initial same-thread snapshot remains usable while its replacement window loads", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  const pending: Array<{ publish: (snapshot: WorkbenchTranscriptSnapshot | null) => void; finish: () => void }> = [];
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 4,
+    onStateChange: state => { states.push(state); },
+    scheduleComparison: callback => callback as unknown as ReturnType<typeof setTimeout>,
+    cancelComparison: () => {},
+    transcripts: {
+      reportParity: async () => {},
+      unsubscribe: async () => {},
+      subscribe: async (_params, publish) => new Promise<void>(finish => { pending.push({ publish, finish }); }),
+    },
+  });
+  try {
+    controller.select({ thread: thread("one", ["first"]), browseResultEntries: [] });
+    await flush();
+    controller.select({ thread: thread("one", ["first", "second"]), browseResultEntries: [] });
+    pending[0]!.publish(emptySnapshot("one"));
+    const interim = states.at(-1)!;
+    assert.equal(interim.status, "loading");
+    assert.ok("projection" in interim && interim.projection);
+    controller.select({ thread: thread("one", ["first", "second"]), browseResultEntries: [] });
+    assert.equal(states.at(-1)!.status, "loading");
+    pending[0]!.finish();
+    await flush();
+    const newer: WorkbenchTranscriptSnapshot = { ...emptySnapshot("one"), thread: { ...emptySnapshot("one").thread, title: "Newer" } };
+    pending[1]!.publish(newer);
+    assert.equal(states.at(-1)!.status, "ready");
+    const accepted = states.at(-1);
+    pending[0]!.publish(emptySnapshot("one"));
+    assert.equal(states.at(-1), accepted);
+    controller.select({ thread: thread("two"), browseResultEntries: [] });
+    pending[1]!.publish(newer);
+    const switched = states.at(-1)!;
+    assert.ok("projection" in switched && switched.projection === null);
+    controller.setAvailable(false);
+    pending[1]!.publish(emptySnapshot("two"));
+    assert.equal(states.at(-1)!.status, "unavailable");
+  } finally {
+    for (const request of pending) request.finish();
+    await controller.dispose();
+  }
+});
 
 test("independent thread projections use distinct subscriptions and dispose only their own stream", async () => {
   const subscriptions: WorkbenchTranscriptSubscribeParams[] = [];

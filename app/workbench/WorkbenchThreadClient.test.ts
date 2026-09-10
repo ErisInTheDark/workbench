@@ -3405,6 +3405,23 @@ test("opening a thread does not publish its document before its durable state is
   assert.equal(client.getSnapshot().currentThread?.id, "thread");
 }));
 
+test("a stale route cannot select a shared read but the document remains cached", async () => withClient(async (client, socket) => {
+  const page = Promise.withResolvers<SocketRequest>();
+  FakeWebSocket.intercept = (_socket, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    page.resolve(request);
+    return true;
+  };
+  let current = true;
+  const opening = client.openThread("thread", { harness: "codex", isCurrent: () => current });
+  const request = await page.promise;
+  current = false;
+  socket.respond(request.id, { thread: wireThread("thread"), nextCursor: null, browseResultEntries: [], questionnaireEntries: [], steerEntries: [] });
+  assert.deepEqual(await opening, { kind: "superseded" });
+  assert.equal(client.getSnapshot().currentThread, null);
+  assert.ok(client.getThreadController("project", { kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread") }).getSnapshot().document);
+}));
+
 test("repeated opens of one identity share the pending read without invalidating it", async () => withClient(async (client, socket) => {
   FakeWebSocket.intercept = (_socket, request) => request.method === "workbench/thread/page/read";
   const first = client.openThread("thread", { harness: "codex" });

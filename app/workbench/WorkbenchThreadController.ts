@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread admission, shared reads, child hydration, failure lifecycle.
  * Exports:
  * - ThreadControllerTarget: project-qualified provider, subagent or draft identity.
  * - ThreadControllerSnapshot: one thread surface, with source-local SQLite state.
@@ -180,6 +181,9 @@ export default class WorkbenchThreadController {
     const task = this.ports.read(options, () => this.waitForAdmission(generation), selectionBound)
       .then(document => {
         if (generation !== this.generation || this.disposed) return null;
+        if (!document && !options.cursor && !this.ports.readNative().document && !this.snapshot.document) {
+          this.fail(new Error("Thread loading returned no content. Select the thread again to retry."));
+        }
         if (document && this.snapshot.error) this.publish({ ...this.snapshot, error: null, status: "loading" });
         this.reconcile();
         return document;

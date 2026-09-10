@@ -113,6 +113,87 @@ test("summary consumers share admission without loading a transcript", () => {
   f.owner.dispose();
 });
 
+test("an empty initial read settles as failed and a deliberate retry can admit content", async () => {
+  const f = fixture();
+  const release = f.owner.acquire("summary");
+  f.admit();
+  try {
+    const first = f.owner.read({}, { retain: false });
+    f.reads[0]!.resolve(null);
+    assert.equal(await first, null);
+    assert.equal(f.owner.getSnapshot().status, "failed");
+    assert.equal(f.errors.length, 1);
+    const retry = f.owner.read({}, { retain: false });
+    f.publish(f.document);
+    f.reads[1]!.resolve(f.document);
+    await retry;
+    assert.equal(f.owner.getSnapshot().status, "ready");
+    assert.equal(f.owner.getSnapshot().error, null);
+    const refresh = f.owner.read({}, { retain: false });
+    f.reads[2]!.resolve(null);
+    await refresh;
+    assert.equal(f.owner.getSnapshot().status, "ready");
+    assert.equal(f.owner.getSnapshot().document, f.document);
+  } finally {
+    release();
+    f.owner.dispose();
+  }
+});
+
+for (const outcome of ["empty", "rejected"] as const) {
+  test(`family hydration stops after an ${outcome} child read without blocking its parent`, async () => {
+    const f = fixture();
+    let reads = 0;
+    let available = false;
+    let childDocument: ThreadPayload | null = null;
+    const child = new WorkbenchThreadController("project", {
+      kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      threadId: fixtureIdentityValues.WorkbenchThreadId.child, harness: "codex",
+    }, {
+      ...f.ports,
+      getChild: () => child,
+      readNative: () => ({ document: childDocument, pendingQuestionnaire: null, rateLimits: null }),
+      read: async () => {
+        reads++;
+        if (available) return childDocument = { ...f.document, id: fixtureIdentityValues.WorkbenchThreadId.child };
+        if (outcome === "rejected") throw new Error("Child unavailable");
+        return null;
+      },
+    });
+    f.ports.getChild = () => child;
+    const release = f.owner.acquire("summary");
+    f.admit(0, [{
+      entryKind: "subagent", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId.child },
+      activityAt: 1, cwd: "C:/project", createdAt: 1, directSubagentIndex: 0,
+      name: "child", parentThreadId: fixtureIdentityValues.WorkbenchThreadId.thread, pinned: false,
+      profileId: "", profileName: "", projectId: fixtureIdentityValues.ProjectId.project,
+      title: "child", updatedAt: 1, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    }]);
+    f.publish(f.document);
+    const family = f.owner.acquireChildren(["child"]);
+    try {
+      const initial = child.read();
+      if (outcome === "rejected") await assert.rejects(initial, /Child unavailable/);
+      else await initial;
+      assert.equal(reads, 1);
+      assert.equal(child.getSnapshot().status, "failed");
+      assert.equal(f.owner.getSnapshot().status, "ready");
+      f.publish({ ...f.document, updatedAt: 2 });
+      assert.equal(reads, 1);
+      available = true;
+      await child.read();
+      assert.equal(reads, 2);
+      assert.equal(child.getSnapshot().status, "ready");
+      assert.ok(f.owner.getSnapshot().relatedDocuments.child);
+    } finally {
+      family();
+      release();
+      child.dispose();
+      f.owner.dispose();
+    }
+  });
+}
+
 test("a document alone cannot admit a view", () => {
   const f = fixture();
   f.publish(f.document);
