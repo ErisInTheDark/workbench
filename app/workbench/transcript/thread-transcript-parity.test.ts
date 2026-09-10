@@ -255,6 +255,45 @@ test("settled questionnaire projection equals the current synthetic renderer ite
     jsonThread: thread([jsonItem]),
     sqliteProjection: projection([sqliteItem]),
   }), { equal: true });
+
+  const hidden: ThreadItem = {
+    type: "mcpToolCall", id: "hidden-request", server: "wb", tool: "request_user_input",
+    status: "completed", arguments: {}, appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: 1,
+  };
+  const commentary: ThreadItem = { type: "plan", id: "commentary", text: "Choose the next step" };
+  const jsonThread = thread([commentary, jsonItem, hidden]);
+  const sqliteProjection = projection([commentary, hidden, sqliteItem]);
+  assert.deepEqual(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [], jsonThread, sqliteProjection,
+  }), { equal: true });
+  assert.deepEqual(planWorkbenchTranscriptItemComparison({ jsonThread, sqliteProjection }).map(row => [
+    row.json?.sourceItemId, row.sqlite?.sourceItemId,
+  ]), [[commentary.id, commentary.id], [jsonItem.id, sqliteItem.id]]);
+  const virtualProjection = projection([commentary, sqliteItem]);
+  virtualProjection.display = planCanonicalTranscriptDisplay({
+    items: virtualProjection.display.orderedItems,
+    turns: [{ turnId: "turn", turnIndex: 0 }],
+    virtualTail: [{ turnId: "turn", payload: hidden }],
+  });
+  assert.deepEqual(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [], jsonThread, sqliteProjection: virtualProjection,
+  }), { equal: true });
+  assert.equal(planWorkbenchTranscriptItemComparison({ jsonThread, sqliteProjection: virtualProjection }).length, 2);
+  for (const items of [
+    [commentary, hidden],
+    [commentary, hidden, { ...sqliteItem, response: { answers: { choice: { answers: ["two"] } } } }],
+    [sqliteItem, hidden, commentary],
+  ]) {
+    assert.equal(compareWorkbenchTranscriptParity({
+      jsonBrowseResultEntries: [], jsonThread, sqliteProjection: projection(items),
+    }).equal, false);
+  }
+  const foreign = { ...hidden, server: "another-server" };
+  assert.equal(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread: thread([commentary, jsonItem, foreign]),
+    sqliteProjection: projection([commentary, foreign, sqliteItem]),
+  }).equal, false);
 });
 
 test("parity keeps distinct questionnaire items when provider request keys repeat", () => {

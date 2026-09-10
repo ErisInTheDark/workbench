@@ -1,4 +1,6 @@
 /*
+ * Keywords: visible parity, hidden MCP calls, transcript alignment, timelines.
+ * Exports:
  * WorkbenchTranscriptComparisonItem: renderer-ready item and canonical identity. Keywords: transcript, comparison, item.
  * WorkbenchTranscriptComparisonRow: aligned JSON and SQLite item pair. Keywords: transcript, comparison, identity.
  * WorkbenchTranscriptParityResult: exact semantic equality result or one bounded diagnostic safe for orchestrator logs. Keywords: transcript, parity, diagnostic.
@@ -28,6 +30,7 @@ import type {
   WorkbenchTranscriptProjection,
   WorkbenchTranscriptProjectionIssue,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { getWorkbenchMcpCommandRoute } from "../thread/command-matchers/workbench-mcp";
 
 interface SemanticItem {
   id: string;
@@ -282,6 +285,12 @@ function contextEntry(
   return { ...entry, payloadSignature: payloadSignature(entry.payload) };
 }
 
+function isVisibleItem(item: ThreadItem | WorkbenchProjectedTranscriptItem) {
+  if (item.type !== "mcpToolCall") return true;
+  const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
+  return route?.kind !== "simple" || !route.rendering.result.omitFromDisplay;
+}
+
 function jsonDisplay(thread: ThreadPayload) {
   const turnOrder = new Map(thread.turnHistory.map((entry, index) => [entry.turnId, index]));
   const turns = [...thread.turns].sort((left, right) => (
@@ -289,7 +298,8 @@ function jsonDisplay(thread: ThreadPayload) {
   ));
   let itemIndex = 0;
   const semanticByOriginalId = new Map<string, SemanticItem>();
-  const items = turns.flatMap((turn) => turn.items.map((item) => {
+  const hiddenIds = new Set(turns.flatMap(turn => turn.items.filter(item => !isVisibleItem(item)).map(item => item.id)));
+  const items = turns.flatMap((turn) => turn.items.filter(isVisibleItem).map((item) => {
     const semantic = normalizeJsonItem(item);
     semanticByOriginalId.set(item.id, semantic);
     return { itemId: semantic.id, itemIndex: itemIndex++, payload: semantic, turnId: turn.id };
@@ -300,20 +310,22 @@ function jsonDisplay(thread: ThreadPayload) {
       turns: turns.map((turn, turnIndex) => ({ turnId: turn.id, turnIndex })),
     }),
     semanticByOriginalId,
+    hiddenIds,
     turns,
   };
 }
 
 function projectedDisplay(projection: WorkbenchTranscriptProjection) {
   const semanticByOriginalId = new Map<string, SemanticItem>();
-  const items = projection.display.orderedItems.map((entry) => {
+  const hiddenIds = new Set(projection.display.segments.flatMap(segment => segment.items.filter(item => !isVisibleItem(item)).map(item => item.id)));
+  const items = projection.display.orderedItems.filter(entry => isVisibleItem(entry.payload)).map((entry) => {
     const semantic = normalizeProjectedItem(entry.payload);
     semanticByOriginalId.set(entry.payload.id, semantic);
     return { ...entry, itemId: semantic.id, payload: semantic };
   });
   const virtualTail = projection.display.segments
     .filter(({ kind }) => kind === "virtual")
-    .flatMap((segment) => segment.items.map((item) => ({ payload: normalizeProjectedItem(item), turnId: segment.turnId })));
+    .flatMap((segment) => segment.items.filter(isVisibleItem).map((item) => ({ payload: normalizeProjectedItem(item), turnId: segment.turnId })));
   return {
     display: planCanonicalTranscriptDisplay({
       items,
@@ -321,6 +333,7 @@ function projectedDisplay(projection: WorkbenchTranscriptProjection) {
       virtualTail,
     }),
     semanticByOriginalId,
+    hiddenIds,
   };
 }
 
@@ -334,7 +347,7 @@ function jsonComparisonItems(
     .sort((left, right) => (
       (turnOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (turnOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
     ))
-    .flatMap((turn) => turn.items.map((item) => {
+    .flatMap((turn) => turn.items.filter(isVisibleItem).map((item) => {
       const semantic = normalizeJsonItem(item);
       return {
         identity: semantic.id,
@@ -352,7 +365,7 @@ function sqliteComparisonItems(
 ): WorkbenchTranscriptComparisonItem[] {
   return projection.display.segments
     .filter((segment) => !visibleTurnIds || visibleTurnIds.has(segment.turnId))
-    .flatMap((segment) => segment.items.map((item) => {
+    .flatMap((segment) => segment.items.filter(isVisibleItem).map((item) => {
       const semantic = normalizeProjectedItem(item);
       return {
         identity: semantic.id,
@@ -474,11 +487,12 @@ function turnEntriesFromProjection(projection: WorkbenchTranscriptProjection): C
 function timelineEntriesFromJson(
   thread: ThreadPayload,
   semanticByOriginalId: ReadonlyMap<string, SemanticItem>,
+  hiddenIds: ReadonlySet<string>,
 ): ComparedEntry[] {
   return thread.turns.flatMap((turn) => {
     const history = thread.turnHistory.find(({ turnId }) => turnId === turn.id);
     return (history?.itemTimeline ?? []).map((entry) => ({ entry, turnId: turn.id }));
-  }).map(({ entry, turnId }, index) => contextEntry({
+  }).filter(({ entry }) => !hiddenIds.has(entry.itemId)).map(({ entry, turnId }, index) => contextEntry({
     id: semanticByOriginalId.get(entry.itemId)?.id ?? entry.itemId,
     index,
     kind: "item",
@@ -495,8 +509,10 @@ function timelineEntriesFromJson(
 function timelineEntriesFromProjection(
   projection: WorkbenchTranscriptProjection,
   semanticByOriginalId: ReadonlyMap<string, SemanticItem>,
+  hiddenIds: ReadonlySet<string>,
 ): ComparedEntry[] {
   return projection.turns.flatMap((turn) => turn.itemTimeline.map((entry) => ({ entry, turnId: turn.id })))
+    .filter(({ entry }) => !hiddenIds.has(entry.itemId))
     .map(({ entry, turnId }, index) => contextEntry({
       id: semanticByOriginalId.get(entry.itemId)?.id ?? entry.itemId,
       index,
@@ -625,9 +641,9 @@ export function compareWorkbenchTranscriptParity({
     { jsonEntries: segmentEntries(json.display), scope: "display", sqliteEntries: segmentEntries(sqlite.display) },
     { jsonEntries: itemEntries(json.display), scope: "item", sqliteEntries: itemEntries(sqlite.display) },
     {
-      jsonEntries: timelineEntriesFromJson(jsonThread, json.semanticByOriginalId),
+      jsonEntries: timelineEntriesFromJson(jsonThread, json.semanticByOriginalId, json.hiddenIds),
       scope: "timeline",
-      sqliteEntries: timelineEntriesFromProjection(sqliteProjection, sqlite.semanticByOriginalId),
+      sqliteEntries: timelineEntriesFromProjection(sqliteProjection, sqlite.semanticByOriginalId, sqlite.hiddenIds),
     },
     { jsonEntries: browseEntries(jsonBrowseResultEntries), scope: "browse", sqliteEntries: browseEntries(sqliteProjection.browseResultEntries) },
   ];
