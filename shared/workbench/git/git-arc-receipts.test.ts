@@ -8,10 +8,22 @@ import { formatGitArcTextReceipt, parseGitArcReceipt } from "./git-arc-receipts"
 
 const ref = "a".repeat(40);
 
+test("compact scope counts round trip without inventing inventory", () => {
+  const output = `arc plan plan\nref ${ref}\nclaimed-count 100\nplanned-count 102\nadopted-count 2\nadded 1\nnew.ts\nend arc`;
+  const receipt = parseGitArcReceipt(output);
+  assert.ok(receipt);
+  const roundTrip = parseGitArcReceipt(formatGitArcTextReceipt(receipt));
+  assert.deepEqual(roundTrip, receipt);
+  assert.equal(roundTrip.fullScope, false);
+  assert.deepEqual(roundTrip.claimedPaths, []);
+  assert.equal(roundTrip.plannedPaths, undefined);
+  assert.match(formatGitArcTextReceipt(receipt), /planned-count 102\nadopted-count 2/u);
+});
+
 test("equal inventories are encoded once without losing either scope", () => {
   for (const paths of [[], ["two.ts", "one.ts"]]) {
     const output = formatGitArcTextReceipt({
-      action: "plan", claimedPaths: paths, plannedPaths: [...paths].reverse(),
+      action: "scope", claimedPaths: paths, plannedPaths: [...paths].reverse(),
       intentName: "same scope", ref, version: 1,
     });
     const parsed = parseGitArcReceipt(output);
@@ -36,7 +48,7 @@ test("plain scope output distinguishes planned inventory from retained live clai
 
 test("receipt round trips unusual paths and does not mistake values for output sections", () => {
   const receipt = {
-    action: "plan" as const, claimedPaths: ["line\nbreak.ts", '"quoted.ts', "end arc"],
+    action: "scope" as const, claimedPaths: ["line\nbreak.ts", '"quoted.ts', "end arc"],
     intentName: "a\nref forged", ref, version: 1 as const,
   };
   const parsed = parseGitArcReceipt(formatGitArcTextReceipt(receipt));

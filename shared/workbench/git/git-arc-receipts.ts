@@ -16,6 +16,8 @@ const GitArcReceiptSchema = z.object({
   additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
   claimedPathCount: z.number().int().nonnegative().optional(),
+  plannedPathCount: z.number().int().nonnegative().optional(),
+  adoptedPathCount: z.number().int().nonnegative().optional(),
   fullScope: z.boolean().optional(),
   phase: z.enum(["plan", "active", "resolved"]).optional(),
   plannedPaths: z.array(z.string().min(1)).optional(),
@@ -56,7 +58,7 @@ export function readGitArcValue(value: string): string {
 
 export function formatGitArcTextReceipt(input: GitArcReceipt) {
   const receipt = GitArcReceiptSchema.parse(input);
-  const fullScope = receipt.fullScope ?? ["plan", "claims", "scope"].includes(receipt.action);
+  const fullScope = receipt.fullScope ?? receipt.action === "scope";
   const lines = [`arc ${receipt.action} ${receipt.phase ?? (receipt.action === "plan" ? "plan" : "active")}`, `ref ${receipt.ref}`];
   const list = (name: string, values: string[] | undefined) => {
     if (values === undefined || (!values.length && !["claimed", "planned", "claimed+planned", "adopted"].includes(name))) return;
@@ -70,8 +72,15 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   if (sharedScope) list("claimed+planned", receipt.claimedPaths);
   else if (fullScope) list("claimed", receipt.claimedPaths);
   else lines.push(`claimed-count ${receipt.claimedPathCount ?? receipt.claimedPaths.length}`);
-  if (!sharedScope) list("planned", receipt.plannedPaths);
-  list("adopted", receipt.adoptedPaths);
+  if (fullScope) {
+    if (!sharedScope) list("planned", receipt.plannedPaths);
+    list("adopted", receipt.adoptedPaths);
+  } else {
+    const plannedCount = receipt.plannedPathCount ?? receipt.plannedPaths?.length;
+    const adoptedCount = receipt.adoptedPathCount ?? receipt.adoptedPaths?.length;
+    if (plannedCount !== undefined) lines.push(`planned-count ${plannedCount}`);
+    if (adoptedCount !== undefined) lines.push(`adopted-count ${adoptedCount}`);
+  }
   list("added", receipt.additionalClaims);
   list("removed", receipt.removedClaims);
   list("selected", receipt.selectedPaths);
@@ -156,9 +165,13 @@ function parseTextReceipt(output: string) {
     } else if (lists[key]) {
       result[lists[key]!] = take(count(value)).map(readGitArcValue);
       if (key === "claimed") result.fullScope = true;
-    } else if (key === "claimed-count" || key === "matched" || key === "remaining") {
+    } else if (key === "claimed-count" || key === "planned-count" || key === "adopted-count" || key === "matched" || key === "remaining") {
       if (!/^\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("Invalid arc count.");
-      result[key === "claimed-count" ? "claimedPathCount" : key === "matched" ? "matchedPathCount" : "remainingMatchCount"] = Number(value);
+      const counts = {
+        "claimed-count": "claimedPathCount", "planned-count": "plannedPathCount", "adopted-count": "adoptedPathCount",
+        matched: "matchedPathCount", remaining: "remainingMatchCount",
+      };
+      result[counts[key]] = Number(value);
     } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode") {
       result[key === "intent" ? "intentName" : key === "root" ? "rootId" : key === "proposal" ? "proposalId" : key] = readGitArcValue(value);
     } else if (key === "unchanged") result.unchanged = true;

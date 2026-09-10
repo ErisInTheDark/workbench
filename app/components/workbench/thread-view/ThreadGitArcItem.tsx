@@ -138,8 +138,10 @@ export default function ThreadGitArcItem ({
   const ref = receipt?.ref ?? commandIntent.ref;
   const memberRefs = receipt?.memberRefs ?? [];
   const claimedPaths = receipt?.claimedPaths ?? [];
-  const fullInventory = receipt?.fullScope === true;
-  const inventory = fullInventory ? [
+  const scopeUpdate = commandIntent.action === "plan" || commandIntent.action === "planStart" || commandIntent.action === "claims" || commandIntent.action === "start";
+  const fullInventory = Boolean(receipt && (receipt.fullScope === true || (receipt.fullScope === undefined && scopeUpdate)));
+  const showUpdateChanges = state === "completed" && scopeUpdate && receipt !== null;
+  const inventory = fullInventory && receipt ? [
     { label: "Planned", marker: "planned" as const, paths: receipt.plannedPaths ?? [] },
     { label: "Claimed", marker: "claimed" as const, paths: claimedPaths },
     { label: "Adopted", marker: "claimed" as const, paths: receipt.adoptedPaths ?? [] },
@@ -199,6 +201,18 @@ export default function ThreadGitArcItem ({
           : commandIntent.action === "restore" ? "Restored" : "Claimed";
   const primaryPathMarker = commandIntent.action === "plan" ? "planned" : "claimed";
   const showNestedClaims = receipt?.fullScope === undefined && commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
+  const inventoryLists = inventory.filter((entry) => entry.paths.length).map((entry) => (
+    <ThreadClaimedFileList
+      key={entry.label}
+      label={entry.label}
+      marker={entry.marker}
+      paths={entry.paths}
+      projectFilePaths={projectFilePaths}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      workspaceRoots={workspaceRoots}
+    />
+  ));
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
@@ -224,6 +238,8 @@ export default function ThreadGitArcItem ({
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-muted">{memberRefs.length} roots</span> : null}
             {receipt?.phase ? <span>{receipt.phase}</span> : null}
             {receipt?.claimedPathCount !== undefined ? <span>{receipt.claimedPathCount} claimed</span> : null}
+            {receipt?.plannedPathCount !== undefined ? <span>{receipt.plannedPathCount} planned</span> : null}
+            {receipt?.adoptedPathCount !== undefined && receipt.adoptedPathCount > 0 ? <span>{receipt.adoptedPathCount} adopted</span> : null}
             {receipt?.unchanged ? <span>unchanged</span> : null}
             {durationMs !== null ? durationPresentation === "waited" ? (
               <span className="text-muted" data-thread-git-arc-duration="waited">
@@ -253,7 +269,10 @@ export default function ThreadGitArcItem ({
             ))}
           </div>
         ) : null}
-        {inventory.filter((entry) => entry.paths.length).map((entry) => (
+        {showUpdateChanges ? ([
+          { label: commandIntent.action === "plan" ? "Added to plan" : "Claimed", marker: primaryPathMarker, paths: receipt.additionalClaims ?? [] },
+          { label: commandIntent.action === "plan" ? "Removed from plan" : "Released", marker: undefined, paths: receipt.removedClaims ?? [] },
+        ] as const).filter((entry) => entry.paths.length).map((entry) => (
           <ThreadClaimedFileList
             key={entry.label}
             label={entry.label}
@@ -264,7 +283,13 @@ export default function ThreadGitArcItem ({
             projectRootPath={projectRootPath}
             workspaceRoots={workspaceRoots}
           />
-        ))}
+        )) : null}
+        {inventoryLists.length ? scopeUpdate ? (
+          <ThreadDisclosure
+            summary="Full inventory"
+            renderContent={() => inventoryLists}
+          />
+        ) : inventoryLists : null}
         {receipt?.acceptedProposals?.map((accepted) => (
           <div key={`${accepted.proposalId}:${accepted.commitSha}`}>Accepted {accepted.proposalId} at {accepted.commitSha}</div>
         ))}
@@ -280,7 +305,7 @@ export default function ThreadGitArcItem ({
             />
           </div>
         ))}
-        {!fullInventory && primaryPaths.length ? (
+        {!fullInventory && !showUpdateChanges && primaryPaths.length ? (
           <ThreadClaimedFileList
             label={primaryPathLabel}
             marker={primaryPathMarker}
@@ -292,7 +317,7 @@ export default function ThreadGitArcItem ({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {!fullInventory && adoptPaths.length && !ignoredFailure ? (
+        {!fullInventory && !showUpdateChanges && adoptPaths.length && !ignoredFailure ? (
           <ThreadClaimedFileList
             label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
             marker={commandIntent.action === "plan" ? "planned" : "claimed"}
@@ -304,7 +329,7 @@ export default function ThreadGitArcItem ({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {showNestedClaims ? (
+        {!fullInventory && showNestedClaims ? (
           <ThreadDisclosure
             className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-1.5"
             contentClassName="pl-1"

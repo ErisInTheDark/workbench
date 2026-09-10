@@ -73,7 +73,7 @@ Never use claim expansion to excuse vague planning. Never restore, release, uncl
 
 Use `mcp__wbex__git_arc_release` to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
 
-Never mutate active arcs in Brief or Decision. `git_arc_scope` reads scope and current proposal IDs/statuses. Use for inventory or a lost proposal response before retrying, never as a preflight. Scope edits report full inventory; routine output reports phase, outcome and net deltas.
+Never mutate active arcs in Brief or Decision. Recover a lost proposal response with `git_arc_scope` before retrying, never as a preflight. Updates report phase, outcome, counts and net changes.
 
 Use `mcp__wbex__git_arc_mv` for approved path moves. Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Regex mode previews at most 200 sorted mappings. Confirm the preview, then preview again when more matches remain.
 

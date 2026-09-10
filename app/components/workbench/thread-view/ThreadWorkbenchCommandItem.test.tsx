@@ -22,6 +22,34 @@ import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
+test("compact claim updates show actual changes rather than attempted or unchanged paths", () => {
+  for (const tool of ["git_arc_claims", "git_plan_claims", "git_plan_start"]) {
+    const action = tool === "git_arc_claims" ? "claims" : tool === "git_plan_claims" ? "plan" : "start";
+    const output = `arc ${action} active\nref ${"a".repeat(40)}\nclaimed-count 40\nadded 1\nadded-evidence.ts\nremoved 1\nremoved-evidence.ts\nend arc`;
+    const html = renderSpecialized(makeItem(tool, { inherit: true, addPaths: ["attempted-evidence.ts"] }, output));
+    assert.match(html, /added-evidence\.ts/u);
+    assert.match(html, /removed-evidence\.ts/u);
+    assert.doesNotMatch(html, /attempted-evidence\.ts/u);
+    assert.match(html, /40 claimed/u);
+    const unchanged = renderSpecialized(makeItem(tool, { inherit: true, addPaths: ["attempted-evidence.ts"] },
+      `arc ${action} active\nref ${"a".repeat(40)}\nclaimed-count 40\nunchanged\nend arc`));
+    assert.doesNotMatch(unchanged, /attempted-evidence\.ts/u);
+    assert.match(unchanged, /40 claimed/u);
+  }
+});
+
+test("historical update inventories are folded away while explicit scope remains visible", () => {
+  for (const action of ["claims", "plan", "scope"]) {
+    const output = `arc ${action} active\nref ${"a".repeat(40)}\nclaimed 1\ninventory-evidence.ts\nadded 1\nadded-evidence.ts\nend arc`;
+    const html = renderSpecialized(makeItem(action === "plan" ? "git_plan_claims" : `git_arc_${action}`, { inherit: true }, output));
+    if (action === "scope") assert.match(html, /inventory-evidence\.ts/u);
+    else {
+      assert.doesNotMatch(html, /inventory-evidence\.ts/u);
+      assert.match(html, /added-evidence\.ts/u);
+    }
+  }
+});
+
 test("typed runtime failures render paths and partial workspace outcomes without diagnostics", () => {
   const failure = {
     ...createGitArcFailureFromError("arcClaims", new GitArcRejectionError({ reason: "unclaimedRemoval", paths: ["unclaimed-evidence.ts"] }, "agent-only-detail --inherit")),

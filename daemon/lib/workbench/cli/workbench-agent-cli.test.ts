@@ -1,4 +1,5 @@
 /*
+ * Keywords: workbench, cli, transport, receipts, scope, tests.
  * Exports:
  * - No production exports; Node tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims. Keywords: workbench, cli, questionnaire, git arc, test, output, shim, allowlist.
  */
@@ -41,6 +42,38 @@ function execFileWithInput(command: string, args: string[], input: string, optio
   });
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
+
+test("claim updates return only net changes while retaining counts and recovery facts", async () => {
+  for (const kind of ["plan", "arc"]) {
+    for (const changed of [false, true]) {
+      const parsed = await parseWorkbenchAgentCliCommand(["git", kind, "claims", "--inherit"], gitArcOptions);
+      assert.equal(parsed.kind, "request");
+      const acceptedProposals = [{ proposalId: "accepted", commitSha: "b".repeat(40) }];
+      const planningDrift = { previousRef: "c".repeat(40), paths: ["drift.ts"] };
+      const output = adaptWorkbenchAgentCliResponse({
+        httpOk: true, request: parsed.request,
+        text: JSON.stringify({
+          checkpointCommit: "a".repeat(40), phase: kind === "plan" ? "plan" : "active",
+          scopePaths: ["unchanged.ts", "new.ts"], claimedPaths: ["unchanged.ts"],
+          plannedPaths: ["unchanged.ts", "new.ts"], adoptedPaths: ["unchanged.ts"],
+          addedClaims: changed ? ["new.ts"] : [], removedClaims: changed ? ["old.ts"] : [],
+          acceptedProposals, planningDrift, unchanged: !changed,
+        }),
+      });
+      const receipt = parseGitArcReceipt(output.stdout);
+      assert.ok(receipt);
+      assert.equal(receipt.fullScope, false);
+      assert.equal(receipt.claimedPathCount, kind === "plan" ? 1 : 2);
+      assert.equal(receipt.plannedPathCount, kind === "plan" ? 2 : undefined);
+      assert.equal(receipt.adoptedPathCount, 1);
+      assert.deepEqual(receipt.additionalClaims ?? [], changed ? ["new.ts"] : []);
+      assert.deepEqual(receipt.removedClaims ?? [], changed ? ["old.ts"] : []);
+      assert.deepEqual(receipt.acceptedProposals, acceptedProposals);
+      assert.deepEqual(receipt.planningDrift, [planningDrift]);
+      assert.doesNotMatch(output.stdout, /unchanged\.ts/u);
+    }
+  }
+});
 
 test("Git argument refusals retain semantic facts before a request exists", async () => {
   for (const [args, reason] of [
@@ -1357,8 +1390,10 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     checkpointCommit: planRef,
     intentName: "Polish arc UI",
     scopePaths: ["src/one.ts"],
+    addedClaims: ["src/one.ts"],
   }, { action: "plan", paths: ["src/one.ts"] });
-  assert.deepEqual(parseGitArcReceipt(planResponse.stdout)?.plannedPaths, ["src/one.ts"]);
+  assert.equal(parseGitArcReceipt(planResponse.stdout)?.plannedPathCount, 1);
+  assert.deepEqual(parseGitArcReceipt(planResponse.stdout)?.additionalClaims, ["src/one.ts"]);
   assert.deepEqual(parseGitArcReceipt(planResponse.stdout)?.claimedPaths, []);
   const skippedPlanResponse = adapt("git-arc-plan", {
     checkpointCommit: planRef,

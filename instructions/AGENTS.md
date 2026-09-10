@@ -183,7 +183,7 @@ Plan creation permits dirt already owned by this thread's active arc only when t
 
 Preserve unrelated user or agent changes.
 
-Use `git_arc_scope` only when the complete planned/live/adopted inventory is needed. Scope edits already return it; routine commands report phase, outcome and counts.
+Updates report phase, outcome, counts and net changes.
 
 Acceptance releases clean claims and narrows the live set. Read every returned accepted proposal ID and commit SHA. Resolved continuation succeeds without claims. Approved follow-up can use `git_arc_claims` with explicit additions/adoptions and inherited intent; changed approval boundaries return to Brief.
 

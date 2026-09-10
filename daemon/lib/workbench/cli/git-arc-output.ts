@@ -1,7 +1,7 @@
 /*
  * Keywords: git, arc, CLI, scope, drift, pagination, receipts.
  * Exports:
- * - renderGitArcOutput: render one Git response with full edited scope or compact routine facts.
+ * - renderGitArcOutput: render compact changes and recovery facts, reserving full inventory for scope reads.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
 import { escapeGitArcValue, formatGitArcTextReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
@@ -22,7 +22,7 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   const sources = members.length ? members : [payload];
   const phase = payload.phase === "resolved" ? "resolved"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
-  const fullScope = action === "plan" || action === "claims" || action === "scope";
+  const fullScope = action === "scope";
   const claimedPaths = phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
   const plannedPaths = phase === "plan" ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths") : undefined;
   const additions = action === "start" ? paths(payload, "acquiredClaims")
@@ -44,7 +44,10 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
     const receipt: GitArcReceipt = {
       action, phase, fullScope, claimedPaths, claimedPathCount: claimedPaths.length, ref, version: 1,
       intentName: string(payload, "intentName") || null,
-      ...(fullScope ? { plannedPaths, adoptedPaths: paths(payload, "adoptedPaths") } : {}),
+      ...(fullScope ? { plannedPaths, adoptedPaths: paths(payload, "adoptedPaths") } : {
+        ...(plannedPaths ? { plannedPathCount: plannedPaths.length } : {}),
+        ...(action === "plan" || action === "claims" ? { adoptedPathCount: paths(payload, "adoptedPaths").length } : {}),
+      }),
       ...(payload.unchanged === true ? { unchanged: true } : {}),
       additionalClaims: additions.filter((path) => !removed.has(path)),
       removedClaims: removals.filter((path) => !added.has(path)),
