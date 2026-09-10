@@ -1,4 +1,5 @@
 /*
+ * Keywords: Codex lifecycle, compaction, instruction prefix, reload cancellation.
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
@@ -175,11 +176,11 @@ export type CodexStdioBridgeOptions = {
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   onInitialized?: () => void;
-  prepareThreadConfiguration?: (
+  prepareThreadConfiguration?: <T extends { resumeRequest: JsonRpcRequest; startRequest?: JsonRpcRequest }>(
     thread: Thread,
-    requests: { resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest },
+    requests: T,
     signal: AbortSignal,
-  ) => Promise<{ resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest }>;
+  ) => Promise<T>;
   prepareTurnStart?: (
     message: JsonRpcRequest,
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -1215,6 +1216,11 @@ export default class CodexStdioBridge {
   }
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
+    if (message.method === "thread/compact/start") {
+      const response = await this.enqueueCommand(() => this.compactThread(message));
+      this.sendToClient(client, { ...response, id: clientRequestId });
+      return;
+    }
     if (message.method === "turn/start") {
       const response = await this.enqueueCommand(async () => {
         this.assertAcceptingWork();
@@ -1605,6 +1611,8 @@ export default class CodexStdioBridge {
     try {
       this.assertAcceptingWork();
       switch (method) {
+        case "thread/compact/start":
+          return await this.compactThread(message);
         case "questionnaire/list":
           return {
             id: requestId,
@@ -3483,6 +3491,42 @@ export default class CodexStdioBridge {
       startRequest,
       steerRequest,
     });
+  }
+
+  private async compactThread(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const signal = this.generation.signal;
+    const requestId = message.id ?? null;
+    const threadId = asString(asRecord(message.params)?.threadId)?.trim();
+    if (!threadId) return { id: requestId, error: { code: -32602, message: "Compaction requires a thread id." } };
+    this.assertAcceptingWork();
+    const read = await this.dispatchManagedProviderRequest({
+      method: "thread/read", params: { threadId, includeTurns: false },
+    }, signal);
+    signal.throwIfAborted();
+    if (read.error) return { id: requestId, error: read.error };
+    const thread = asRecord(read.result)?.thread as ThreadReadResponse["thread"] | undefined;
+    if (!thread || thread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Unable to read the thread for compaction." } };
+    if (isThreadStatusActive(thread.status)) return {
+      id: requestId, error: { code: -32000, message: "Wait for the active turn to finish before compacting." },
+    };
+    if (thread.status.type === "notLoaded") {
+      let resumeRequest = this.instructions.createThreadResume(
+        { threadId, excludeTurns: true },
+        { kind: "cwd", cwd: thread.cwd },
+      );
+      if (this.prepareThreadConfiguration) {
+        ({ resumeRequest } = await this.prepareThreadConfiguration(thread, { resumeRequest }, signal));
+        signal.throwIfAborted();
+      }
+      const resumed = await this.dispatchManagedProviderRequest(resumeRequest, signal);
+      signal.throwIfAborted();
+      if (resumed.error) return { id: requestId, error: resumed.error };
+      const resumedThread = asRecord(resumed.result)?.thread as ThreadReadResponse["thread"] | undefined;
+      if (resumedThread && isThreadStatusActive(resumedThread.status)) return {
+        id: requestId, error: { code: -32000, message: "The thread became active before compaction. Wait for that turn to finish." },
+      };
+    }
+    return await this.dispatchManagedProviderRequest(message, signal);
   }
 
   private async admitCodexTurn({

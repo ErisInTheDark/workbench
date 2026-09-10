@@ -3299,6 +3299,110 @@ test("fresh first turn prepares its stored profile across reload and failed admi
   }
 });
 
+for (const route of ["server", "forward"] as const) {
+for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) {
+  test(`compaction prepares only a cold thread without admitting a turn: ${route} ${status}`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-"));
+    const requests: JsonRpcRequest[] = [];
+    const configured: string[][] = [];
+    const responses: JsonRpcResponse[] = [];
+    let bridge!: InstanceType<typeof CodexStdioBridge>;
+    const appServer = {
+      send(message: JsonRpcRequest) {
+        requests.push(message);
+        queueMicrotask(() => {
+          const result = message.method === "thread/read"
+            ? { thread: { ...bridgeThread(), status: { type: status === "resumeFailure" ? "notLoaded" : status }, turns: [] } }
+            : message.method === "thread/resume"
+              ? { thread: { ...bridgeThread(), status: { type: "idle" }, turns: [] } }
+              : {};
+          void bridge.handleUpstreamMessage(status === "resumeFailure" && message.method === "thread/resume"
+            ? { id: message.id ?? null, error: { code: -32000, message: "resume failed" } }
+            : { id: message.id ?? null, result });
+        });
+      },
+    } as unknown as CodexAppServer;
+    bridge = new CodexStdioBridge({
+      appServer, bridgeUrl: "ws://127.0.0.1:1", storageRoot: root,
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      instructions: {
+        augment: async request => request,
+        createThreadResume: params => ({ method: "thread/resume", params }),
+      },
+      prepareThreadConfiguration: async (_thread, pending) => {
+        configured.push(Object.values(pending).map(request => request.method!));
+        return { ...pending, resumeRequest: {
+          ...pending.resumeRequest,
+          params: { ...pending.resumeRequest.params as object, baseInstructions: "managed prefix", model: "saved-model" },
+        } };
+      },
+      onNotification() {}, sendToClient(_client, response) { responses.push(response as JsonRpcResponse); }, resolveProjectFromCwd: async () => null,
+    });
+    try {
+      const request = { id: 71, method: "thread/compact/start", params: { threadId: "thread" } };
+      const response = route === "server" ? await bridge.handleServerRequest(request)
+        : (await bridge.forwardRequest(request, {} as BridgeClient, 71), responses[0]!);
+      const methods = requests.map(request => request.method);
+      assert.deepEqual(methods, status === "notLoaded"
+        ? ["thread/read", "thread/resume", "thread/compact/start"]
+        : status === "idle" ? ["thread/read", "thread/compact/start"]
+          : status === "active" ? ["thread/read"] : ["thread/read", "thread/resume"]);
+      assert.equal(Boolean(response.error), status === "active" || status === "resumeFailure");
+      if (status === "notLoaded" || status === "resumeFailure") {
+        assert.deepEqual(configured, [["thread/resume"]]);
+        const resume = requests.find(request => request.method === "thread/resume")!;
+        assert.deepEqual(resume.params, { threadId: "thread", excludeTurns: true, baseInstructions: "managed prefix", model: "saved-model" });
+      } else assert.deepEqual(configured, []);
+      assert.ok(requests.every(request => (request.params as { threadId: string }).threadId === "thread"));
+      assert.equal((requests[0]!.params as { includeTurns: boolean }).includeTurns, false);
+    } finally {
+      await bridge.disposeImmediately();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
+}
+
+test("retired compaction preparation cannot resume or compact through a replacement generation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-cancel-"));
+  let markPrepared!: () => void;
+  const prepared = new Promise<void>(resolve => { markPrepared = resolve; });
+  let finishPreparation!: () => void;
+  const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+  const requests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    appServer: { send(request: JsonRpcRequest) {
+      requests.push(request);
+      queueMicrotask(() => { void bridge.handleUpstreamMessage({
+        id: request.id ?? null, result: { thread: { ...bridgeThread(), status: { type: "notLoaded" }, turns: [] } },
+      }); });
+    } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", storageRoot: root,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: { augment: async request => request, createThreadResume: params => ({ method: "thread/resume", params }) },
+    prepareThreadConfiguration: async (_thread, requests) => {
+      markPrepared();
+      await preparation;
+      return requests;
+    },
+    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null,
+  });
+  try {
+    const compact = bridge.handleServerRequest({ id: 1, method: "thread/compact/start", params: { threadId: "thread" } });
+    const cancelled = assert.rejects(compact);
+    await prepared;
+    bridge.expireForReload();
+    finishPreparation();
+    await cancelled;
+    assert.deepEqual(requests.map(request => request.method), ["thread/read"]);
+  } finally {
+    finishPreparation();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("managed unloaded turn start resolves when MCP preparation requests a provider reload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-start-"));
   const events: string[] = [];
@@ -3360,6 +3464,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
         },
       };
       return {
+        ...requests,
         resumeRequest: adapter.withThreadConfiguration(requests.resumeRequest, configuration),
         startRequest: adapter.withThreadConfiguration(requests.startRequest, configuration),
       };

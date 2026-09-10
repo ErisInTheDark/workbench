@@ -2,6 +2,7 @@
 - An existing inactive thread uses `thread/unsubscribe`, prefix-bearing `thread/resume`, MCP preparation, then native `turn/start`.
 - Only that owner sends `thread/unsubscribe`, `thread/resume`, or native `turn/start`.
 - Static reads never call `thread/resume`.
+- Explicit compaction loads a cold thread with its managed prefix before compacting; it never starts a turn.
 - Active-turn user input uses `turn/steer`, preserving the active prefix. Agent tool output uses the same admission owner and may start a turn. Passive tool context uses `thread/inject_items` and never starts a turn.
 - Message admission reads thread metadata without rollout turns. It reads only the newest item-free turn when active-turn steering needs its id.
 - Recovery and unfinished continuation use the same turn-start owner. They do not rebuild part of its lifecycle.

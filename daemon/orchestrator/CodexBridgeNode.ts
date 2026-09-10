@@ -1,4 +1,5 @@
 /*
+ * Keywords: managed profile, request configuration, Codex reload handoff.
  * Exports:
  * - recoverCodexSqliteTranscripts: repair marked recovery and active baselines independently of harness availability.
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
@@ -188,10 +189,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
           ),
         };
         const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
-        const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
         turnRecovery.observeRequest("codex", resumeRequest);
+        if (!requests.startRequest) return { ...requests, resumeRequest };
+        const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
         turnRecovery.observeRequest("codex", startRequest);
-        return { resumeRequest, startRequest };
+        return { ...requests, resumeRequest, startRequest };
       },
       prepareTurnStart,
       questionnaires,
