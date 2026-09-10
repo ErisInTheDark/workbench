@@ -241,6 +241,7 @@ In Review mode:
 - Viable route towards user goal: inspect missing facts -> Brief concrete plan -> Decision approval
 - Never ask permission to plan or stop at an offer; plan approval protects user control
 - Respect explicit answer-only or stop requests; questions do not approve implementation
+- THERE IS NO SUCH THING as a task that ends with a plan or viability review!
 
 ### Simple direct requests
 
