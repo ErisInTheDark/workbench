@@ -15,15 +15,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 - Keep emitted instructions concise. HTML comments are stripped from emitted instructions and this AGENTS.md; they add no runtime instruction tokens. Use comments freely for detailed rationale about agent failure patterns and why rules prevent them, not specific incidents. Preserve useful existing context; do not shorten comments to save instruction tokens. Count emitted instruction tokens before and after edits.
 
 ## Code Organization
-
-- Prefer reusable components. A reusable component should be the default export of a matching PascalCase file, such as `ThreadView.tsx`.
-- Prefer prominent controllers and state owners. A controller or state-owning function/class should be the default export of a matching PascalCase file, such as `WorkbenchClient.ts`.
-- Use kebab-case filenames for miscellaneous functions, types, and registries, such as `command-matchers.ts`.
-- Put related transformations in registries instead of hardcoded dispatch branches. Split large registries into a core registry that imports focused registry items or groups.
-- Add and maintain a start-of-file manifest comment in files containing multiple components, functions, types, or other exports. Include a list of high-signal keywords for the file, and separately list every export with a succinct one-line purpose; proactively fix nonconforming manifests in files you edit.
-- Keep files small, reusable, and conceptually coherent. Plan the nearby refactor when the requested change would otherwise deepen a monolith, duplicate ownership, or add helper soup.
-- Do not create file-specific duplicate components, utilities, or types when a shared owner already exists.
-- Tests should aim to test semantic or logic behaviour in a single file, and be located in a test file adjacent to the file being tested. When a test must cover behaviour from multiple files, place it in the test file equivalent of the narrowest owning file that makes sense.
+- Add and maintain start-of-file manifest comments — list every export with a succinct one-line purpose, to improve discoverability. Do not include a list of generic keywords.  Proactively fix nonconforming manifests in files you edit. 
 
 ## UI Constraints
 
