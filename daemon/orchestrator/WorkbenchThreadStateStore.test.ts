@@ -46,18 +46,24 @@ test("consumer objects retain thread facts, title replacement and project isolat
     }
     const first = records[0]!;
     const updated = [{ identity: first.identity, titles: [{ title: "renamed", usedAt: 3 }] }];
-    await store.writeProject(fixtureIdentityValues.ProjectId["first"], { version: 4, records: [{ ...first, title: "renamed" }], drafts: [] }, updated);
+    await store.writeChanges(fixtureIdentityValues.ProjectId["first"], { records: [{ ...first, title: "renamed", titleHistory: updated[0]!.titles }] });
     const before = await store.readProject(fixtureIdentityValues.ProjectId["first"]);
     await assert.rejects(store.writeProject(fixtureIdentityValues.ProjectId["first"], { version: 4, records: [records[1]], drafts: [] }), /project/i);
     assert.deepEqual(await store.readProject(fixtureIdentityValues.ProjectId["first"]), before);
     assert.deepEqual(await store.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
     assert.deepEqual(await store.readTitleHistories(fixtureIdentityValues.ProjectId["second"]), [{ identity: records[1]!.identity, titles: [{ title: "old", usedAt: 1 }] }]);
+    await assert.rejects(store.writeChanges(fixtureIdentityValues.ProjectId["first"], {
+      records: [{ ...first, title: "must roll back" }, records[1]!],
+    }), /project/i);
+    assert.deepEqual(await store.readProject(fixtureIdentityValues.ProjectId["first"]), before);
     await database.close();
     reopened = new WorkbenchDatabaseController({ databasePath });
     const cold = new WorkbenchThreadStateStore(reopened);
     assert.deepEqual(await cold.readProject(fixtureIdentityValues.ProjectId["first"]), before);
     assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
-    await cold.writeProject(fixtureIdentityValues.ProjectId["first"], before, []);
+    await cold.writeChanges(fixtureIdentityValues.ProjectId["first"], { records: [{ ...first, title: "renamed" }] });
+    assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
+    await cold.writeChanges(fixtureIdentityValues.ProjectId["first"], { records: [{ ...first, title: "renamed", titleHistory: [] }] });
     assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), []);
   } finally {
     await reopened?.close();
@@ -80,6 +86,7 @@ test("project-qualified draft replacement preserves a moved draft and removes de
     const document = (drafts: WorkbenchThreadDraft[]) => ({ version: 4, records: [], drafts: drafts.map(value => ({ ...value, pinned: true, snoozed: false })) });
     await store.writeProject(fixtureIdentityValues.ProjectId["first"], document([draft]));
     await store.writeProject(fixtureIdentityValues.ProjectId["second"], document([{ ...draft, projectId: fixtureIdentityValues.ProjectId["second"] }]));
+    await store.writeChanges(fixtureIdentityValues.ProjectId["first"], { deletedDraftIds: [draft.draftId] });
     await store.writeProject(fixtureIdentityValues.ProjectId["first"], document([]));
     assert.equal((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts[0]?.prompt, "kept");
     const key = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["second"], getThreadDisplayDraftKey(draft.draftId));
@@ -87,7 +94,7 @@ test("project-qualified draft replacement preserves a moved draft and removes de
       version: 1, revision: 2, importedProjectIds: ["second"],
       displayOrder: { pinned: { [key]: { above: [], below: [] } } },
     });
-    await store.writeProject(fixtureIdentityValues.ProjectId["second"], document([]));
+    await store.writeChanges(fixtureIdentityValues.ProjectId["second"], { deletedDraftIds: [draft.draftId] });
     const pinned = await store.readGlobal("pinnedLayout") as { displayOrder: { pinned?: object } };
     assert.deepEqual(pinned.displayOrder.pinned ?? {}, {});
     assert.deepEqual((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts, []);

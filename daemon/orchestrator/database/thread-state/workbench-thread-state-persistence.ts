@@ -45,6 +45,7 @@ export interface WorkbenchStoredThreadDraft {
 }
 
 export interface WorkbenchThreadStateCommit {
+  projectId?: ProjectId;
   records?: readonly WorkbenchThreadStateRecord[];
   deletedThreadIds?: readonly WorkbenchThreadId[];
   drafts?: readonly WorkbenchStoredThreadDraft[];

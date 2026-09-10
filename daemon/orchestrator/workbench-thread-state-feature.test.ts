@@ -557,6 +557,87 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
+for (const foreignPage of ["first", "last"] as const) {
+  test(`foreign provider rows on the ${foreignPage} page cannot poison Codex message preparation`, async () => {
+    const projectId = fixtureIdentityValues.ProjectId["project-a"];
+    const otherProjectId = fixtureIdentityValues.ProjectId["project-b"];
+    const database = createThreadStateDatabase();
+    const local = providerThread("C:/project-a", "local");
+    const neighbour = providerThread("C:/project-a", "copilot-neighbour");
+    const foreign = providerThread("C:/project-b", "foreign");
+    const releaseListing = deferred<void>();
+    const reconciled = deferred<void>();
+    const selection = {
+      kind: "custom" as const,
+      settings: {
+        agentPath: null, agentSource: null, harness: "codex" as const,
+        model: "selected-model", reasoningEffort: null, serviceTier: null,
+      },
+    };
+    const feature = createFeature({
+      database,
+      getProjectCatalog: () => ({ data: [], rootPath: "C:/" }),
+      gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+      harnesses: createHarnesses(async (harness, request) => {
+        if (request.method === "thread/read") return { id: request.id ?? null, result: { thread: local } };
+        await releaseListing.promise;
+        if (harness !== "copilot") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+        const last = Boolean((request.params as { cursor?: string }).cursor);
+        return { id: request.id ?? null, result: {
+          data: [...(!last ? [neighbour] : []), ...(last === (foreignPage === "last") ? [foreign] : [])],
+          nextCursor: last ? null : "last",
+        } };
+      }),
+      listSubagents: async () => ({ subagents: [] }),
+      projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
+      publish: (_connection, snapshot) => {
+        if ("freshness" in snapshot && (snapshot.freshness === "fresh" || snapshot.error)) reconciled.resolve();
+      },
+      resolveProjectById: async id => ({ id: fixtureIdentitySchemas.ProjectIdSchema.parse(id), rootPath: id === projectId ? local.cwd : foreign.cwd }),
+      resolveProjectFromCwd: async cwd => ({ cwd, project: {
+        id: cwd === local.cwd ? projectId : otherProjectId, rootPath: cwd,
+      } }),
+      transitions: { run: async (_key, operation) => operation() },
+    });
+    try {
+      await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId }, selection);
+      await feature.controller.open("observer", projectId);
+      releaseListing.resolve();
+      await reconciled.promise;
+      const neighbourIdentity = await database.identities.threads.resolve({
+        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(neighbour.id), harness: "copilot",
+      });
+      assert.ok(neighbourIdentity);
+      const neighbourBefore = database.repository.readRecords({ selection: "threads", threadIds: [neighbourIdentity.threadId] });
+      const commit = database.commitThreadState.bind(database);
+      database.commitThreadState = async changes => {
+        assert.ok(changes.records?.every(record => record.identity.threadId !== neighbourIdentity.threadId) ?? true);
+        await commit(changes);
+      };
+      assert.deepEqual(await feature.prepareCodexProfile(local), {
+        cwd: local.cwd, projectId, selection, subagentName: null,
+      });
+      const nativeId = fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id);
+      assert.deepEqual(await feature.getCodexMcpState(nativeId), { generation: null, projectId });
+      await feature.setManagedCodexMcpGeneration(projectId, nativeId, "generation");
+      assert.deepEqual(await feature.getCodexMcpState(nativeId), { generation: "generation", projectId });
+      const snapshot = await feature.controller.getSnapshot(projectId);
+      assert.equal(snapshot.error, null);
+      assert.equal(snapshot.entries.length, 2);
+      const foreignIdentity = await database.identities.threads.resolve({
+        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(foreign.id), harness: "copilot",
+      });
+      assert.equal(foreignIdentity?.projectId, otherProjectId);
+      assert.equal(database.repository.readProject(projectId).records.length, 2);
+      assert.deepEqual(database.repository.readRecords({ selection: "threads", threadIds: [neighbourIdentity.threadId] }), neighbourBefore);
+      assert.equal(database.repository.readProject(otherProjectId).records.length, 0);
+    } finally {
+      releaseListing.resolve();
+      await feature.dispose();
+    }
+  });
+}
+
 test("a relationship committed during provider pagination remains a subagent after final reconciliation", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-subagent-race-"));
   const secondPageStarted = deferred<void>();

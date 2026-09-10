@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadStateGlobalDocumentId: existing global layout document names.
  * - WorkbenchStoredThreadTitleHistory: distinct titles for one canonical thread.
- * - WorkbenchThreadStatePersistence: existing consumer document interface.
+ * - WorkbenchThreadStatePersistence: selected writes and existing read/repair interface.
  * - WorkbenchThreadStateStoreDatabase: typed relational worker operations.
  * - default WorkbenchThreadStateStore: adapt consumer objects to relational persistence.
  */
@@ -13,6 +13,7 @@ import { ThreadDisplayLayoutSchema } from "workbench-shared/workbench/thread/thr
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
 import type {
   WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+  WorkbenchThreadStateCommit,
 } from "./database/thread-state/workbench-thread-state-persistence";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -25,6 +26,7 @@ export interface WorkbenchStoredThreadTitleHistory {
 }
 
 export interface WorkbenchThreadStatePersistence {
+  writeChanges(projectId: ProjectId, changes: Omit<WorkbenchThreadStateCommit, "projectId">): Promise<void>;
   readNextArchiveEligibility(): Promise<number | null>;
   readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null>;
@@ -35,6 +37,7 @@ export interface WorkbenchThreadStatePersistence {
 }
 
 export interface WorkbenchThreadStateStoreDatabase {
+  commitThreadState(changes: WorkbenchThreadStateCommit): Promise<void>;
   readThreadStateArchiveDeadline(): Promise<number | null>;
   readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   readThreadStateProject(projectId: ProjectId): Promise<WorkbenchThreadStateProjectDocument>;
@@ -58,6 +61,10 @@ const GlobalDocumentSchema = z.discriminatedUnion("id", [
 
 export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePersistence {
   constructor(private readonly database: WorkbenchThreadStateStoreDatabase) {}
+
+  writeChanges(projectId: ProjectId, changes: Omit<WorkbenchThreadStateCommit, "projectId">) {
+    return this.database.commitThreadState({ ...changes, projectId });
+  }
 
   readNextArchiveEligibility() {
     return this.database.readThreadStateArchiveDeadline();

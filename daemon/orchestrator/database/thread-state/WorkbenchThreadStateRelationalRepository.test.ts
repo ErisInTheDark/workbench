@@ -129,7 +129,7 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
       CREATE TEMP TRIGGER reject_neighbour_rewrite BEFORE UPDATE ON workbench_thread_states
       WHEN OLD.thread_id = '${secondId}' BEGIN SELECT RAISE(ABORT, 'neighbour rewritten'); END
     `);
-    repository.writeRecords([{ ...first, title: "updated" }]);
+    repository.commit({ projectId: fixtureIdentityValues.ProjectId["project"], records: [{ ...first, title: "updated" }] });
     const loaded = repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]!;
     assert.equal(loaded.title, "updated");
     assert.deepEqual(loaded.gitArcPlan, first.gitArcPlan);
@@ -140,6 +140,13 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     ]), /neighbour rewritten/);
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]?.title, "updated");
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [secondId!] })[0]?.title, "second");
+    const [foreignId] = seedIdentities(database, "other", "foreign");
+    assert.throws(() => repository.commit({
+      projectId: fixtureIdentityValues.ProjectId["project"],
+      records: [{ ...first, title: "not committed" }, record(foreignId!, "foreign")],
+    }), /project/i);
+    assert.equal(repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]?.title, "updated");
+    assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [foreignId!] }), []);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
 });

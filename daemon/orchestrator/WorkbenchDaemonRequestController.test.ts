@@ -456,6 +456,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
     assert.notEqual(String(admitted.threadId), String(nativeThreadId));
     const repository = new WorkbenchThreadStateRelationalRepository(sqlite, identities);
     const persistence = new WorkbenchThreadStateStore({
+      commitThreadState: async changes => { repository.commit(changes); },
       readThreadStateProject: async id => repository.readProject(id),
       readThreadStateTitleHistories: async id => repository.readTitleHistories(id),
       writeThreadStateProject: async (id, document, histories) => { repository.writeProject(id, document, histories); },

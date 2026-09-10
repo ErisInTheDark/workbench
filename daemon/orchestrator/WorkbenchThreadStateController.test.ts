@@ -98,6 +98,28 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
   readonly projects = new Map<ProjectId, object>();
   readonly titleHistories = new Map<string, WorkbenchStoredThreadTitleHistory[]>();
 
+  async writeChanges(projectId: ProjectId, changes: Parameters<WorkbenchThreadStatePersistence["writeChanges"]>[1]) {
+    const document = parseProjectDocument(JSON.stringify(this.projects.get(projectId) ?? { version: 4, records: [], drafts: [] }), projectId);
+    const records = new Map(document.records.map(record => [record.identity.threadId, record]));
+    for (const record of changes.records ?? []) records.set(record.identity.threadId, record);
+    for (const threadId of changes.deletedThreadIds ?? []) records.delete(threadId);
+    const drafts = new Map(document.drafts.map(draft => [draft.draftId, draft]));
+    for (const stored of changes.drafts ?? []) drafts.set(stored.draft.draftId, { ...stored.draft, pinned: stored.pinned, snoozed: stored.snoozed });
+    for (const draftId of changes.deletedDraftIds ?? []) drafts.delete(draftId);
+    const histories = new Map((this.titleHistories.get(projectId) ?? []).map(history => [history.identity.threadId, history]));
+    for (const record of changes.records ?? []) {
+      if (record.titleHistory !== undefined) histories.set(record.identity.threadId, { identity: record.identity, titles: record.titleHistory });
+    }
+    const layout = changes.layouts?.find(layout => layout.owner.kind === "project" && layout.owner.projectId === projectId);
+    const profile = changes.projectProfiles?.find(profile => profile.projectId === projectId);
+    this.projects.set(projectId, structuredClone({
+      ...document, version: 4, records: [...records.values()], drafts: [...drafts.values()],
+      ...(layout ? { displayOrder: layout.displayOrder } : {}),
+      ...(profile ? { newThreadProfile: profile.profile } : {}),
+    }));
+    this.titleHistories.set(projectId, structuredClone([...histories.values()]));
+  }
+
   async readArchiveEligible(activeBefore: number) {
     return [...this.projects].flatMap(([projectId, document]) =>
       parseProjectDocument(JSON.stringify(document), projectId).records
@@ -134,6 +156,171 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 }
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
+
+test("thread mutations do not replace their project document", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "isolated-thread-writes", threadStateStore: persistence,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
+    publish: () => undefined, reconcileProject: async () => [],
+  });
+  const provider = normalizeProviderSidebarEntry("codex", { id: "isolated", name: "original", updatedAt: 1 });
+  assert.ok(provider && provider.entryKind === "thread");
+  try {
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], provider);
+    const neighbour = normalizeProviderSidebarEntry("copilot", { id: "neighbour", name: "untouched", updatedAt: 1 });
+    assert.ok(neighbour && neighbour.entryKind === "thread");
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], neighbour);
+    await controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, {
+      kind: "custom", settings: { ...EMPTY_CODEX_SETTINGS, model: "isolated-model" },
+    });
+    await controller.refresh(fixtureProjectIds["project"]);
+    await controller.open("isolated-viewer", fixtureProjectIds["project"], 4);
+    const writeChanges = persistence.writeChanges.bind(persistence);
+    persistence.writeChanges = async (projectId, changes) => {
+      assert.ok(changes.records?.every(record => record.identity.threadId === provider.identity.threadId) ?? true,
+        "an unrelated thread entered the operation's write");
+      assert.equal(changes.projectProfiles, undefined);
+      assert.equal(changes.drafts, undefined);
+      await writeChanges(projectId, changes);
+    };
+    persistence.writeProject = async () => { throw new Error("unrelated project records entered a thread write"); };
+    const profile = await controller.prepareComposerProfileTarget({
+      kind: "thread", projectId: fixtureProjectIds["project"], ...provider.identity,
+    });
+    assert.equal(profile.selection.settings.model, "isolated-model");
+    await controller.setTitle(fixtureProjectIds["project"], "codex", provider.identity.threadId, "renamed");
+    await controller.setMcpGeneration(fixtureProjectIds["project"], "codex", provider.identity.threadId, "generation");
+    assert.equal(await controller.getMcpGeneration(fixtureProjectIds["project"], "codex", provider.identity.threadId), "generation");
+    for (const request of [
+      { method: "workbench/thread-state/priority/set" as const, sourceKey: getThreadDisplayThreadKey("codex", provider.identity.threadId), priority: "pinned" as const },
+      { method: "workbench/thread-state/status/set" as const, identity: provider.identity, status: "completed" as const },
+      { method: "workbench/thread-state/settle" as const, identity: provider.identity },
+    ]) {
+      const response = await controller.handleRequest("isolated-viewer", { ...request, projectId: fixtureProjectIds["project"] });
+      assert.equal(response.error, undefined);
+    }
+    const document = parseProjectDocument(JSON.stringify(await persistence.readProject("project")), fixtureProjectIds["project"]);
+    assert.equal(document.records.find(record => record.identity.threadId === neighbour.identity.threadId)?.title, "untouched");
+    assert.equal(document.records.find(record => record.identity.threadId === provider.identity.threadId)?.lifecycle.settled, true);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("failed provider installation does not leave a new entry in project memory", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "failed-provider-install", threadStateStore: persistence,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
+    publish: () => undefined, reconcileProject: async () => [],
+  });
+  const provider = normalizeProviderSidebarEntry("codex", { id: "rejected-install", name: "rejected", updatedAt: 1 });
+  assert.ok(provider && provider.entryKind === "thread");
+  try {
+    await controller.getSnapshot(fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+    persistence.writeChanges = async () => { throw new Error("storage rejected installation"); };
+    await assert.rejects(controller.ensureProviderEntry(fixtureProjectIds["project"], provider), /storage rejected installation/);
+    assert.equal(await controller.getThreadEntry(fixtureProjectIds["project"], "codex", provider.identity.threadId), null);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("a queued title write retains the profile committed ahead of it", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  let enter!: () => void;
+  let release!: () => void;
+  let titleStarted!: () => void;
+  const writing = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const titleStarting = new Promise<void>(resolve => { titleStarted = resolve; });
+  let onNow = () => {};
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "queued-thread-facts", threadStateStore: persistence,
+    now: () => { onNow(); return 10; },
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
+    publish: () => undefined, reconcileProject: async () => [],
+  });
+  const provider = normalizeProviderSidebarEntry("codex", { id: "queued-profile", name: "original", updatedAt: 1 });
+  assert.ok(provider && provider.entryKind === "thread");
+  try {
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], provider);
+    await controller.refresh(fixtureProjectIds["project"]);
+    const write = persistence.writeChanges.bind(persistence);
+    let first = true;
+    persistence.writeChanges = async (projectId, changes) => {
+      if (first) { first = false; enter(); await gate; }
+      await write(projectId, changes);
+    };
+    const selection = { kind: "custom" as const, settings: { ...EMPTY_CODEX_SETTINGS, model: "new-profile" } };
+    const profileSave = controller.setComposerProfileTarget({
+      kind: "thread", projectId: fixtureProjectIds["project"], ...provider.identity,
+    }, selection);
+    await writing;
+    onNow = titleStarted;
+    const titleSave = controller.setTitle(fixtureProjectIds["project"], "codex", provider.identity.threadId, "new title");
+    await titleStarting;
+    release();
+    await Promise.all([profileSave, titleSave]);
+    const document = parseProjectDocument(JSON.stringify(await persistence.readProject("project")), fixtureProjectIds["project"]);
+    assert.equal(document.records[0]?.title, "new title");
+    assert.deepEqual(document.records[0]?.profile, selection);
+  } finally {
+    release();
+    await controller.dispose();
+  }
+});
+
+test("failed discovery rollback preserves a newer title and its eventual save", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  let enter!: () => void;
+  let release!: () => void;
+  let titleStarted!: () => void;
+  const writing = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const titleStarting = new Promise<void>(resolve => { titleStarted = resolve; });
+  const provider = normalizeProviderSidebarEntry("codex", { id: "discovery-race", name: "original", updatedAt: 1 });
+  assert.ok(provider && provider.entryKind === "thread");
+  let discover = false;
+  let onNow = () => {};
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "discovery-write-race", threadStateStore: persistence,
+    now: () => { onNow(); return 10; },
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, accept) => {
+      if (discover) await accept("codex", [{ ...provider, title: "discovery title" }], { complete: false });
+      return [];
+    },
+  });
+  try {
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], provider);
+    await controller.refresh(fixtureProjectIds["project"]);
+    const write = persistence.writeChanges.bind(persistence);
+    let first = true;
+    persistence.writeChanges = async (projectId, changes) => {
+      if (first) { first = false; enter(); await gate; throw new Error("discovery save failed"); }
+      await write(projectId, changes);
+    };
+    discover = true;
+    const refresh = controller.refresh(fixtureProjectIds["project"]);
+    await writing;
+    onNow = titleStarted;
+    const titleSave = controller.setTitle(fixtureProjectIds["project"], "codex", provider.identity.threadId, "newer title");
+    await titleStarting;
+    release();
+    await Promise.all([refresh, titleSave]);
+    assert.equal((await controller.getThreadEntry(fixtureProjectIds["project"], "codex", provider.identity.threadId))?.title, "newer title");
+    const document = parseProjectDocument(JSON.stringify(await persistence.readProject("project")), fixtureProjectIds["project"]);
+    assert.equal(document.records[0]?.title, "newer title");
+    assert.match((await controller.getSnapshot(fixtureProjectIds["project"])).error ?? "", /discovery save failed/);
+  } finally {
+    release();
+    await controller.dispose();
+  }
+});
 
 for (const scope of ["project", "global"] as const) {
   test(`retiring thread state fences ${scope} storage reads before repair writes`, async () => {
@@ -656,12 +843,12 @@ test("failed retroactive archival preserves the visible thread and its settled f
     }],
     displayOrder: { folders: [{ folderId, section: "settled", title: "Keep", threadKeys: ["codex:overdue"] }] },
   });
-  const write = persistence.writeProject.bind(persistence);
-  persistence.writeProject = async (projectId, document, histories) => {
-    if ((document as { records?: Array<{ metadata?: { archived: boolean } }> }).records?.some(record => record.metadata?.archived)) {
+  const write = persistence.writeChanges.bind(persistence);
+  persistence.writeChanges = async (projectId, changes) => {
+    if (changes.records?.some(record => record.entryKind === "thread" && record.metadata.archived)) {
       throw new Error("archive save failed");
     }
-    await write(projectId, document, histories);
+    await write(projectId, changes);
   };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "archive-save-failure", threadStateStore: persistence, now: () => 20 * 24 * 60 * 60 * 1_000,
@@ -914,9 +1101,9 @@ test("a failed cross-priority pinned move restores the loaded project state", as
     storageRoot: root,
   });
   await controller.open("observer", fixtureProjectIds["project"], 3);
-  const writeProject = persistence.writeProject.bind(persistence);
-  persistence.writeProject = async () => {
-    persistence.writeProject = writeProject;
+  const writeChanges = persistence.writeChanges.bind(persistence);
+  persistence.writeChanges = async () => {
+    persistence.writeChanges = writeChanges;
     throw new Error("Project persistence unavailable.");
   };
 
@@ -1036,7 +1223,7 @@ test("authoritative SQLite read and write failures surface at the controller bou
   });
   try {
     await writeController.open("observer", fixtureProjectIds["project"], 4);
-    writeStore.writeProject = async () => { throw new Error("sqlite write unavailable"); };
+    writeStore.writeChanges = async () => { throw new Error("sqlite write unavailable"); };
     const draftId = "00000000-0000-4000-8000-000000000302";
     await assert.rejects(writeController.handleRequest("observer", {
       draft: {
@@ -2822,11 +3009,11 @@ test("proper questionnaires and late-response history survive controller restart
   const first = createController();
   await first.open("first", fixtureProjectIds["project"]);
   await waitFor(async () => (await first.getSnapshot(fixtureProjectIds["project"])).entries.length > 0, "Provider thread was not discovered.");
-  const writeProject = persistence.writeProject.bind(persistence);
+  const writeChanges = persistence.writeChanges.bind(persistence);
   let writes = 0;
-  persistence.writeProject = async (projectId, document) => {
+  persistence.writeChanges = async (projectId, changes) => {
     writes += 1;
-    await writeProject(projectId, document);
+    await writeChanges(projectId, changes);
   };
   await first.observeLifecycle("codex", fixtureThreadIds["thread"], { kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(questionnaire.turnId) });
   assert.equal(writes, 1);
@@ -3117,14 +3304,14 @@ test("profile-less threads display the daemon default and reads cannot overtake 
   const writing = new Promise<void>((resolve) => { entered = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const persistence = new MemoryThreadStatePersistence();
-  const write = persistence.writeProject.bind(persistence);
-  persistence.writeProject = async (projectId, document) => {
+  const write = persistence.writeChanges.bind(persistence);
+  persistence.writeChanges = async (projectId, changes) => {
     if (failWrite) {
       entered();
       await gate;
       throw new Error("Profile disk failure");
     }
-    await write(projectId, document);
+    await write(projectId, changes);
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
@@ -3536,6 +3723,7 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
   let releaseSourceRead = () => undefined;
   const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
   const gatedPersistence: WorkbenchThreadStatePersistence = {
+    writeChanges: (projectId, changes) => persistence.writeChanges(projectId, changes),
     readNextArchiveEligibility: () => persistence.readNextArchiveEligibility(),
     readArchiveEligible: before => persistence.readArchiveEligible(before),
     readGlobal: async (id) => await persistence.readGlobal(id),
@@ -3639,11 +3827,11 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   await controller.open("observer", fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   publications = 0;
-  const writeProject = persistence.writeProject.bind(persistence);
+  const writeChanges = persistence.writeChanges.bind(persistence);
   let writes = 0;
-  persistence.writeProject = async (projectId, document) => {
+  persistence.writeChanges = async (projectId, changes) => {
     writes += 1;
-    await writeProject(projectId, document);
+    await writeChanges(projectId, changes);
   };
   const responses = await Promise.all(Array.from({ length: 10 }, () => controller.handleRequest("observer", {
     identity: terminal.identity,

@@ -698,13 +698,14 @@ export default class WorkbenchThreadStateFeature {
   ) {
     const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
     const relationshipKeys = new Set(harnessRelationships.map((relationship) => relationship.threadId));
-    const topLevelEntries = providerEntries
-      .filter((entry) => entry.entryKind !== "thread" || !relationshipKeys.has(entry.identity.threadId))
-      .map((entry) => {
-        if (entry.entryKind === "draft") return entry;
-        return entry;
-      });
-    const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchObservedThreadEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
+    // Provider lists may ignore cwd filters. Admission, not the requested filter,
+    // establishes which project may receive each row.
+    const scopedEntries = providerEntries.filter(entry => entry.entryKind === "draft"
+      ? entry.draft.projectId === projectId
+      : this.context.identities.threads.knownThread(entry.identity.threadId).projectId === projectId);
+    const topLevelEntries = scopedEntries
+      .filter((entry) => entry.entryKind !== "thread" || !relationshipKeys.has(entry.identity.threadId));
+    const providerById = new Map(scopedEntries.filter((entry): entry is Extract<WorkbenchObservedThreadEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
     return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchObservedThreadEntry => {
       const provider = providerById.get(relationship.threadId);
       const lifecycle = normalizeSubagentProviderLifecycle(provider?.lifecycle);

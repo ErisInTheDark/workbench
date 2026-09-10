@@ -252,6 +252,20 @@ export default class WorkbenchThreadStateRelationalRepository {
 
   commit(changes: WorkbenchThreadStateCommit) {
     this.database.transaction(() => {
+      if (changes.projectId !== undefined) {
+        const projectId = changes.projectId;
+        for (const threadId of [
+          ...(changes.records ?? []).map(record => record.identity.threadId),
+          ...(changes.deletedThreadIds ?? []),
+        ]) {
+          const identity = this.threadIdentity.resolve({ projectId, threadId });
+          if (!identity || identity.threadId !== threadId) throw new Error("Project state requires a canonical thread in its project.");
+        }
+        if (changes.drafts?.some(({ draft }) => draft.projectId !== projectId)
+          || changes.projectProfiles?.some(profile => profile.projectId !== projectId)
+          || changes.layouts?.some(({ owner }) => owner.kind !== "project" || owner.projectId !== projectId)
+          || changes.pinnedImports !== undefined) throw new Error("Changed facts belong to another project.");
+      }
       this.writeDrafts(changes.drafts ?? []);
       this.writeRecords(changes.records ?? []);
       for (const { projectId, profile } of changes.projectProfiles ?? []) {
@@ -268,6 +282,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       for (const draftId of changes.deletedDraftIds ?? []) {
         const draft = this.database.prepare("SELECT project_id FROM workbench_thread_drafts WHERE draft_id = ?")
           .get(draftId) as { project_id: ProjectId } | undefined;
+        if (changes.projectId !== undefined && draft?.project_id !== changes.projectId) continue;
         if (draft) this.layouts.removeDraft(draft.project_id, draftId);
         this.database.prepare("DELETE FROM workbench_thread_drafts WHERE draft_id = ?").run(draftId);
       }
