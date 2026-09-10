@@ -1,90 +1,21 @@
 /*
- * Keywords: startup, stored sidebar, project summaries, cold identities, metadata, restart.
- * No exports. Tests open the app's composite thread state with cold database-backed identity owners.
+ * No exports. Tests protect provider-free cold serving of durable thread state.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
-import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
-import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
-import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchThreadStateController from "./WorkbenchThreadStateController";
-import { mapNativeThreadStateResult } from "./thread-identity-workbench-mapping";
-import type { WorkbenchThreadStateOpenResult } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchThreadIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
-import type { JsonRpcRequest } from "./bridge-types";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+import { parseWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
-async function fixture(database: Database.Database, failMetadata = false, crossProviderChild = false, foreignThread = false) {
-  const repository = new WorkbenchThreadIdentityRepository(database);
-  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
-  const threads = new WorkbenchThreadIdentityController({
-    listThreadIdentities: async () => repository.list(),
-    observeThreadIdentities: async (input) => repository.observeMany(input),
-    resolveThreadIdentity: async (input) => repository.resolve(input),
-    resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
-    observeTurnIdentities: async (input) => repository.observeTurns(input),
-    resolveTurnIdentity: async (input) => repository.resolveTurn(input),
-  });
-  const items = new WorkbenchTranscriptIdentityController({
-    admitTranscriptItemIdentities: async (input) => itemRepository.admitMany(input),
-    resolveTranscriptItemIdentity: async (input) => itemRepository.resolve(input),
-  });
-  await threads.start();
-  const requests: JsonRpcRequest[] = [];
-  const harnesses = new WorkbenchHarnessController((["codex", "opencode"] as const).map((id) => ({
-    id, serverMethods: [], recovery: { kind: "none" as const },
-    internal: { request: async (request) => {
-      requests.push(request);
-      const params = request.params as { threadId: string; includeTurns?: boolean; itemsView?: string };
-      if (failMetadata) return { id: request.id ?? null, error: { code: -32000, message: "Metadata unavailable" } };
-      if (request.method === "thread/read") {
-        assert.equal(params.includeTurns, false, "Startup must not request transcript bodies");
-        assert.equal(id, params.threadId === "native-child" ? "opencode" : "codex", "Parent provider must not come from its child");
-        return { id: request.id ?? null, result: { thread: {
-          id: params.threadId, cwd: params.threadId === "foreign-thread" ? "/other" : "/repo", createdAt: 1, updatedAt: 2, name: "Saved",
-          source: "cli", parentThreadId: null, turns: [],
-        } as Thread } };
-      }
-      assert.equal(request.method, "thread/turns/list");
-      assert.equal(params.itemsView, "notLoaded");
-      return { id: request.id ?? null, result: { data: [{
-        id: "native-turn", status: "completed", startedAt: 1, completedAt: 2, durationMs: 1000,
-        items: [], error: null,
-      } as Turn], nextCursor: null } };
-    } },
-    browser: { handleBrowserMessage: async () => { throw new Error("Startup must not resume or start a turn"); } },
-    browse: { readThread: async () => { throw new Error("Startup must not load a transcript"); }, steerTurn: async () => null },
-  })), {
-    identities: threads, itemIdentities: items,
-    resolveProject: async (cwd) => ({ projectId: cwd === "/other" ? "other" : "project", projectRoot: cwd }),
-  });
-  const document = {
-    version: 4, drafts: [], newThreadProfile: null,
-    records: [...(foreignThread ? [{
-      entryKind: "thread", identity: { harness: "codex", threadId: "foreign-thread" },
-      title: "Foreign", activityAt: 1, metadata: { archived: false, pinned: true, snoozed: false },
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    }] : []), ...(crossProviderChild ? [{
-      entryKind: "subagent", identity: { harness: "opencode", threadId: "native-child" },
-      parentThreadId: "native-thread", name: "Child", profileId: "profile", profileName: "Profile",
-      cwd: "/repo", title: "Child", activityAt: 2, createdAt: 1, updatedAt: 2,
-      metadata: { archived: false, pinned: false, snoozed: false }, pinned: false,
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    }] : []), {
-      entryKind: "thread", identity: { harness: "codex", threadId: "native-thread" },
-      title: "Saved", activityAt: 2,
-      metadata: { archived: false, pinned: true, snoozed: false },
-      lifecycle: { kind: "completed", reason: "agentCompleted", settled: false,
-        agent: { agentStatus: "completed", turnId: "native-turn" } },
-    }],
-    displayOrder: { pinned: { "codex:native-thread": { above: foreignThread ? ["codex:foreign-thread"] : [], below: [] } } },
-  };
-  const state = new WorkbenchThreadStateController({
+function record(value: object) {
+  const entry = parseWorkbenchThreadStateEntry(value);
+  assert.ok(entry.entryKind !== "draft");
+  return entry;
+}
+
+function controller(database: ReturnType<typeof createThreadStateTestDatabase>) {
+  return new WorkbenchThreadStateController({
     getProjectCatalog: () => ({
       data: [{ id: "project", kind: "git", name: "Project", relativePath: "repo", rootPath: "/repo",
         roots: [{ id: "repo", name: "Repo", relativePath: ".", rootPath: "/repo", isPrimary: true }],
@@ -92,101 +23,87 @@ async function fixture(database: Database.Database, failMetadata = false, crossP
       rootPath: "/",
     }),
     hasLiveGitArcClaims: async () => false,
-    resolveGitArc: async () => null, resolveGitArcPlan: async () => null,
+    resolveGitArc: async () => null,
+    resolveGitArcPlan: async () => null,
     runGitArcReadTransition: async (_projectId, operation) => await operation(),
     projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => undefined },
-    publish: () => undefined, reconcileProject: async () => [],
-    threadStateStore: {
-      readProject: async () => structuredClone(document), readTitleHistories: async () => [],
-      readGlobal: async () => null, writeGlobal: async () => undefined, writeProject: async () => undefined,
-    },
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    threadStateStore: database.persistence,
   });
-  const owners = {
-    threads, items,
-    resolveThreadIdentity: (input: WorkbenchThreadIdentityLookup) => harnesses.resolveThreadIdentity(input),
-    resolveTurnIdentity: (input: WorkbenchThreadIdentityLookup & { turnId: string }) => harnesses.resolveTurnIdentity(input),
-  };
-  return {
-    requests,
-    open: async () => await mapNativeThreadStateResult(owners, await state.open("client", "project", 4)) as WorkbenchThreadStateOpenResult,
-    close: async () => { await state.dispose(); threads.dispose(); items.dispose(); },
-  };
 }
 
-test("cold startup publishes saved sidebar and layout with stable WB identities without reading bodies", async () => {
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
-  let current = await fixture(database);
+test("cold relational startup preserves canonical entries and layout across reopen without provider metadata reads", async () => {
+  const sqlite = new Database(":memory:");
+  const database = createThreadStateTestDatabase(sqlite);
+  const threadId = "43596355-c379-497b-b1e0-2f2619c977a1";
+  const turnId = "8997417f-de30-47a7-b63b-fb41e6e8b4e5";
+  database.admitThread("project", threadId);
+  await database.commitThreadState({
+    records: [record({
+      entryKind: "thread", identity: { harness: "codex", threadId },
+      title: "Saved", activityAt: 2,
+      metadata: { archived: false, pinned: true, snoozed: false },
+      lifecycle: { kind: "completed", reason: "agentCompleted", settled: false,
+        agent: { agentStatus: "completed", turnId } },
+    })],
+    layouts: [{ owner: { kind: "project", projectId: "project" },
+      revision: 1, displayOrder: { pinned: { [`codex:${threadId}`]: { above: [], below: [] } } } }],
+  });
+  let current = controller(database);
   try {
-    const first = await current.open();
+    const first = await current.open("client", "project", 5);
     const entry = first.sidebar.entries[0]!;
     assert.equal(entry.entryKind, "thread");
-    if (entry.entryKind !== "thread") throw new Error("Saved thread disappeared");
-    assert.notEqual(entry.identity.threadId, "native-thread");
-    assert.equal(entry.lifecycle.kind, "completed");
+    assert.ok(entry.entryKind === "thread");
+    assert.equal(entry.identity.threadId, threadId);
     assert.ok("agent" in entry.lifecycle && entry.lifecycle.agent);
-    assert.notEqual(entry.lifecycle.agent.turnId, "native-turn");
-    assert.deepEqual(database.prepare("SELECT COUNT(*) AS count FROM thread_items").get(), { count: 0 });
-    assert.equal(current.requests.filter(({ method }) => method === "thread/read").length, 1);
-    assert.equal(current.requests.filter(({ method }) => method === "thread/turns/list").length, 1);
-    await current.close();
-    current = await fixture(database);
-    const reopened = await current.open();
+    assert.equal(entry.lifecycle.agent.turnId, turnId);
+    assert.deepEqual(sqlite.prepare("SELECT COUNT(*) AS count FROM thread_items").get(), { count: 0 });
+    await current.dispose();
+    current = controller(createThreadStateTestDatabase(sqlite));
+    const reopened = await current.open("client", "project", 5);
     assert.deepEqual(reopened.sidebar.entries, first.sidebar.entries);
-    assert.equal(current.requests.length, 0, "Warm restart must use durable identity metadata");
-    assert.deepEqual(database.pragma("foreign_key_check"), []);
-  } finally { await current.close(); database.close(); }
+    assert.deepEqual(reopened.sidebar.displayOrder, first.sidebar.displayOrder);
+    assert.deepEqual(sqlite.pragma("foreign_key_check"), []);
+  } finally {
+    await current.dispose();
+  }
 });
 
-test("cold startup resolves a cross-provider parent independently of the child and sidebar order", async () => {
-  const database = new Database(":memory:");
-  installWorkbenchDatabaseSchema(database);
-  const current = await fixture(database, false, true);
+test("complete cold serving isolates projects and retains settled cross-harness children", async () => {
+  const database = createThreadStateTestDatabase();
+  const parentId = "7b6a28d5-0aad-4bed-8997-4d3cec747e68";
+  const childId = "17cbfbd0-4b9e-41e0-925e-6e5edb833904";
+  const foreignId = "f5efad70-c326-4947-b0ce-6b389d04cab3";
+  for (const [projectId, id] of [["project", parentId], ["project", childId], ["other", foreignId]]) {
+    database.admitThread(projectId!, id!);
+  }
+  await database.commitThreadState({ records: [
+    ...[parentId, foreignId].map(threadId => record({
+      entryKind: "thread", identity: { harness: "codex", threadId }, title: threadId, activityAt: 2,
+      metadata: { archived: false, pinned: true, snoozed: false },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    })),
+    record({
+      entryKind: "subagent", identity: { harness: "opencode", threadId: childId },
+      parentThreadId: parentId, projectId: "project", name: "Child", profileId: "profile", profileName: "Profile",
+      cwd: "/repo", title: "Child", activityAt: 2, createdAt: 1, updatedAt: 2,
+      directSubagentIndex: 0, pinned: false,
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    }),
+  ] });
+  const current = controller(database);
   try {
-    const opened = await current.open();
-    const child = opened.sidebar.entries.find((entry) => entry.entryKind === "subagent");
-    const parent = opened.sidebar.entries.find((entry) => entry.entryKind === "thread");
-    assert.ok(child?.entryKind === "subagent");
-    assert.ok(parent?.entryKind === "thread");
-    assert.equal(child.parentThreadId, parent.identity.threadId);
-    assert.notEqual(child.identity.threadId, parent.identity.threadId);
-    assert.equal(child.identity.harness, "opencode");
-    assert.equal(parent.identity.harness, "codex");
-  } finally { await current.close(); database.close(); }
-});
-
-test("failed cold metadata admission leaves the saved sidebar recoverable on a later open", async () => {
-  const database = new Database(":memory:");
-  installWorkbenchDatabaseSchema(database);
-  let current = await fixture(database, true);
-  try {
-    await assert.rejects(current.open(), /Metadata unavailable/);
-    assert.deepEqual(database.prepare("SELECT COUNT(*) AS count FROM workbench_threads").get(), { count: 0 });
-    await current.close();
-    current = await fixture(database);
-    assert.equal((await current.open()).sidebar.entries.length, 1);
-  } finally { await current.close(); database.close(); }
-});
-
-test("stale foreign-project sidebar references do not acquire the wrong owner or block local threads", async () => {
-  const database = new Database(":memory:");
-  installWorkbenchDatabaseSchema(database);
-  const current = await fixture(database, false, false, true);
-  try {
-    const opened = await current.open();
-    assert.equal(opened.sidebar.entries.length, 1);
-    assert.equal(opened.sidebar.entries[0]?.title, "Saved");
-    assert.ok(!JSON.stringify(opened.sidebar.displayOrder).includes("foreign-thread"));
-    const summary = opened.projectThreads.projects.find(({ projectId }) => projectId === "project")!;
-    assert.deepEqual(summary.unsettledThreads.map(({ identity }) => identity), opened.sidebar.entries.map((entry) => {
-      assert.ok(entry.entryKind !== "draft");
-      return entry.identity;
-    }));
-    assert.deepEqual(summary.pinnedThreads.map((entry) => entry.entryKind === "thread" ? entry.identity : null),
-      summary.unsettledThreads.map(({ identity }) => identity));
-    assert.equal(summary.counts.completed, summary.unsettledThreads.length);
-    const foreign = database.prepare("SELECT t.project_id FROM workbench_threads t JOIN workbench_pending_import_threads p ON p.thread_id = t.id WHERE p.native_thread_id = ?").get("foreign-thread");
-    assert.deepEqual(foreign, { project_id: "other" });
-  } finally { await current.close(); database.close(); }
+    const opened = await current.open("client", "project", 5);
+    assert.deepEqual(new Set(opened.sidebar.entries.map(entry => entry.entryKind !== "draft" && entry.identity.threadId)), new Set([parentId, childId]));
+    const children = await database.readThreadStateRecords({ selection: "children", parentThreadId: parentId });
+    assert.equal(children.length, 1);
+    assert.ok(children[0]?.entryKind === "subagent");
+    assert.equal(children[0].parentThreadId, parentId);
+    assert.equal(children[0].identity.harness, "opencode");
+    assert.deepEqual(await database.readThreadStateRecords({ selection: "threads", projectId: "project", threadIds: [foreignId] }), []);
+  } finally {
+    await current.dispose();
+  }
 });

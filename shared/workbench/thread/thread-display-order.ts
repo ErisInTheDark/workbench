@@ -1,15 +1,14 @@
 /*
- * Keywords: sidebar, thread, folder, archive, ordering.
  * Exports:
  * - WORKBENCH_THREAD_DISPLAY_SECTIONS/WorkbenchThreadDisplaySection: manually ordered sidebar sections.
  * - WorkbenchThreadDisplayItem: projected thread or folder row.
  * - moveWorkbenchThreadDisplayOrder: move a thread at a section root.
- * - WorkbenchThreadDisplayOrderSchema/WorkbenchThreadDisplayOrder/WorkbenchThreadFolder: strict project-level user layout with one-level folders. Keywords: thread, folder, display, ordering, schema.
- * - getWorkbenchThreadDisplayKey/getWorkbenchThreadDisplaySection/getWorkbenchThreadFolderKey: stable row, section, and folder identity. Keywords: thread, folder, pinned, snoozed, settled.
- * - normalizeWorkbenchThreadDisplayOrder/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode legacy state and resolve layered automatic plus user order. Keywords: fallback, claims, lifecycle, user order.
- * - reconcileWorkbenchThreadDisplayOrder/createWorkbenchThreadFolder/renameWorkbenchThreadFolder/moveWorkbenchThreadDisplayItem/replaceWorkbenchThreadFolderMember: validate, prune, create, rename, move, and materialize layout state. Keywords: folder, draft, drag, persistence, section.
- * - projectWorkbenchThreadDisplaySection/findWorkbenchThreadFolder: project mixed root items and folder membership for rendering. Keywords: sidebar, disclosure, projection.
- * - isWorkbenchThreadDisplayOrderEmpty: identify layouts that do not need persistence. Keywords: storage, empty.
+ * - WorkbenchThreadDisplayOrderSchema/WorkbenchThreadDisplayOrder/WorkbenchThreadFolder: strict project-level user layout with one-level folders.
+ * - getWorkbenchThreadDisplayKey/getWorkbenchThreadDisplaySection/getWorkbenchThreadFolderKey: stable row, section, and folder identity.
+ * - normalizeWorkbenchThreadDisplayOrder/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode legacy state and resolve layered automatic plus user order.
+ * - reconcileWorkbenchThreadDisplayOrder/createWorkbenchThreadFolder/renameWorkbenchThreadFolder/moveWorkbenchThreadDisplayItem/replaceWorkbenchThreadFolderMember: validate, prune, create, rename, move, and materialize layout state.
+ * - projectWorkbenchThreadDisplaySection/findWorkbenchThreadFolder: project mixed root items and folder membership for rendering.
+ * - isWorkbenchThreadDisplayOrderEmpty: identify layouts that do not need persistence.
  */
 
 import type { WorkbenchThreadSidebarEntry } from "./thread-state.ts";
@@ -121,8 +120,8 @@ function threadTurnStartSort(entry: WorkbenchThreadSidebarEntry) {
 }
 
 function compareThreadIdentity(left: WorkbenchThreadSidebarEntry, right: WorkbenchThreadSidebarEntry) {
-  const leftHarness = left.entryKind === "draft" ? left.draft.harness : left.identity.harness;
-  const rightHarness = right.entryKind === "draft" ? right.draft.harness : right.identity.harness;
+  const leftHarness = left.entryKind === "draft" ? left.draft.composerSettings.harness : left.identity.harness;
+  const rightHarness = right.entryKind === "draft" ? right.draft.composerSettings.harness : right.identity.harness;
   return leftHarness.localeCompare(rightHarness) || getWorkbenchThreadDisplayKey(left).localeCompare(getWorkbenchThreadDisplayKey(right));
 }
 

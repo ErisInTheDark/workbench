@@ -1,5 +1,4 @@
 /*
- * Keywords: thread identity, fresh UUID, legacy relink, lookup precedence.
  * No exports. Tests protect durable identity independently of native ids and transcript bodies.
  */
 import assert from "node:assert/strict";
@@ -30,6 +29,22 @@ function setup() {
   installWorkbenchDatabaseSchema(database);
   return { database, identity: new WorkbenchThreadIdentityRepository(database) };
 }
+
+test("retained parent references acquire real provider bindings without changing canonical ownership", () => {
+  const { database, identity } = setup();
+  try {
+    const retained = identity.admitRetainedReference({ reference: "missing-parent", projectId: "project", projectRoot: "C:/project" });
+    assert.deepEqual(retained.bindings, []);
+    assert.notEqual(retained.threadId, "missing-parent");
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_thread_states").pluck().get(), 0);
+    assert.throws(() => identity.admitRetainedReference({ reference: "missing-parent", projectId: "other", projectRoot: "C:/other" }), /project/);
+    const observed = identity.observe(metadata("missing-parent"));
+    assert.equal(observed.threadId, retained.threadId);
+    assert.equal(observed.bindings[0]?.harness, "codex");
+    assert.equal(identity.list().length, 1);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
 
 test("Windows metadata and turn catalogs reuse retained identities across equivalent path spellings", () => {
   const { database } = setup();

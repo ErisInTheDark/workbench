@@ -1,12 +1,13 @@
 /*
- * Keywords: provider, sidebar, explicit title, fallback, lifecycle, reconciliation, questionnaire interruption.
  * Exports:
- * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports. Keywords: dependency injection, thread state, retention, project, sqlite.
- * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result. Keywords: lifecycle, observation, persistence.
- * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
- * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite store injection, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, sqlite, reloadable feature.
+ * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports.
+ * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
+ * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications.
+ * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite store injection, provider-backed title and status commands, notification observation, and the current controller.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
@@ -21,13 +22,13 @@ import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchObservedThreadEntry, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import WorkbenchThreadStateStore, {
-  type WorkbenchThreadStateShadowNotifier,
   type WorkbenchThreadStateStoreDatabase,
 } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGitArcPlanState as GitArcPlanState } from "./WorkbenchGitArcFeature";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { mapNativeProviderResponse } from "./thread-identity-workbench-mapping";
+import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import { admitProviderThreads, admitProviderNotifications, mapProviderThread, mapProviderNotification } from "./thread-identity-provider-mapping";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 interface ProjectRecord { id: string; rootPath: string }
@@ -84,7 +85,6 @@ export interface WorkbenchThreadStateFeatureContext {
   publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
-  shadow?: WorkbenchThreadStateShadowNotifier;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
 }
@@ -222,6 +222,41 @@ export default class WorkbenchThreadStateFeature {
   readonly controller: WorkbenchThreadStateController;
   private paginationQueue: Promise<unknown> = Promise.resolve();
 
+  private async admitThread(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"]) {
+    const owners = this.context.identities;
+    if (!owners) return thread;
+    const { project } = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Thread-state provider admission" });
+    const native = { harness, nativeLocation: thread.cwd, nativeThreadId: thread.id };
+    await admitProviderThreads(owners, [{
+      thread, metadata: {
+        native, projectId: project.id, projectRoot: project.rootPath,
+        title: thread.name ?? "", createdAt: Math.round(thread.createdAt * 1_000),
+        updatedAt: Math.round(thread.updatedAt * 1_000), activityAt: Math.round(thread.updatedAt * 1_000),
+      },
+    }]);
+    return mapProviderThread(owners, native, thread);
+  }
+
+  private async requestProvider(harness: WorkbenchHarness, request: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const owners = this.context.identities;
+    const mapped = owners ? await mapWorkbenchProviderRequest(owners.threads, harness, request) : { harness, request };
+    const response = await this.context.harnesses.request(mapped.harness, mapped.request);
+    if (!owners || response.error) return response;
+    const result = asRecord(response.result);
+    if (result?.thread) await this.admitThread(mapped.harness, result.thread as ThreadReadResponse["thread"]);
+    if (mapped.request.method === "thread/list" && Array.isArray(result?.data)) {
+      await Promise.all(result.data.map(thread => this.admitThread(mapped.harness, thread as ThreadReadResponse["thread"])));
+    }
+    const params = asRecord(mapped.request.params);
+    if (typeof params?.threadId === "string") {
+      const turns = result?.turn ? [result.turn as Turn]
+        : mapped.request.method === "thread/turns/list" && Array.isArray(result?.data) ? result.data as Turn[] : [];
+      if (turns.length) await admitProviderNotifications(owners, owners.threads.knownNativeBinding(mapped.harness, params.threadId),
+        turns.map(turn => ({ method: "turn/started", params: { threadId: params.threadId as string, turn } })));
+    }
+    return mapNativeProviderResponse(owners, mapped.harness, mapped.request, response);
+  }
+
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
       readComposerProfiles: context.readComposerProfiles,
@@ -276,14 +311,23 @@ export default class WorkbenchThreadStateFeature {
         const read = context.transitions.read ?? context.transitions.run;
         return await read.call(context.transitions, project.rootPath, operation);
       },
-      threadStateStore: new WorkbenchThreadStateStore(context.database, Date.now, context.shadow),
+      threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
   }
 
   async observeProviderNotification(harness: HarnessKind, notification: JsonRpcNotification) {
+    const owners = this.context.identities;
+    const params = asRecord(notification.params);
+    let projectId: string | undefined;
+    if (owners && typeof params?.threadId === "string") {
+      const native = owners.threads.knownNativeBinding(harness, params.threadId);
+      projectId = (await owners.threads.resolveNative(native))?.projectId;
+      await admitProviderNotifications(owners, native, [notification as ServerNotification]);
+      notification = mapProviderNotification(owners, native, notification as ServerNotification);
+    }
     const timeout = harness === "codex" ? getCodexQuestionnaireTimeout(notification) : null;
     if (timeout) {
-      const pending = this.controller.findPendingSidebarQuestionnaire(harness, timeout.threadId);
+      const pending = await this.findPendingQuestionnaire(harness, timeout.threadId);
       if (pending && pending.questionnaire.turnId === timeout.turnId) {
         await this.interruptQuestionnaire(pending.projectId, harness, timeout.threadId, pending.questionnaire);
       }
@@ -292,7 +336,9 @@ export default class WorkbenchThreadStateFeature {
     const mapped = mapProviderLifecycleNotification(notification);
     let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
-      const lifecycle = await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
+      const lifecycle = projectId
+        ? await this.controller.observeLifecycleInProject(projectId, harness, mapped.threadId, mapped.event)
+        : await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
       observation = { ...mapped, lifecycle };
       if (mapped.event.kind !== "userInputDelivered") return observation;
     }
@@ -300,16 +346,19 @@ export default class WorkbenchThreadStateFeature {
       const params = asRecord(notification.params);
       const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
       const title = normalizeThreadTitle(typeof params?.name === "string" ? params.name : null);
-      if (threadId && title) await this.controller.observeTitle(harness, threadId, title);
+      if (threadId && title) {
+        if (projectId) await this.controller.setTitle(projectId, harness, threadId, title);
+        else await this.controller.observeTitle(harness, threadId, title);
+      }
       return observation;
     }
     const activity = mapProviderActivityNotification(notification);
-    if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined);
+    if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined, projectId);
     return observation;
   }
 
   private async setProviderThreadTitle(harness: WorkbenchHarness, threadId: string, title: string, cwd: string) {
-    const response = await this.context.harnesses.request(harness, {
+    const response = await this.requestProvider(harness, {
       id: `thread-state:title:${threadId}`,
       method: "thread/name/set",
       params: { cwd, name: title, threadId },
@@ -317,9 +366,18 @@ export default class WorkbenchThreadStateFeature {
     if (response.error) throw new Error(response.error.message);
   }
 
+  private async findPendingQuestionnaire(harness: WorkbenchHarness, threadId: string) {
+    if (!this.context.identities) return this.controller.findPendingSidebarQuestionnaire(harness, threadId);
+    const identity = await this.context.identities.threads.resolve({ harness, threadId });
+    if (!identity) return null;
+    const entry = await this.controller.getThreadEntry(identity.projectId, harness, identity.threadId);
+    return entry?.entryKind !== "draft" && entry?.pendingQuestionnaire
+      ? { projectId: identity.projectId, entry, questionnaire: entry.pendingQuestionnaire } : null;
+  }
+
   private async interruptQuestionnaire(projectId: string, harness: WorkbenchHarness, threadId: string, questionnaire: WorkbenchDurableQuestionnaire) {
-    const isCurrent = () => {
-      const current = this.controller.findPendingSidebarQuestionnaire(harness, threadId);
+    const isCurrent = async () => {
+      const current = await this.findPendingQuestionnaire(harness, threadId);
       if (!current || current.projectId !== projectId || current.entry.lifecycle.kind === "working") return false;
       const turnId = getWorkbenchLifecycleTurnId(current.entry.lifecycle);
       return current.questionnaire.requestKey === questionnaire.requestKey
@@ -328,12 +386,10 @@ export default class WorkbenchThreadStateFeature {
         && (turnId === null || turnId === questionnaire.turnId)
         && !isWorkbenchApprovalRequest(current.questionnaire.request);
     };
-    if (!isCurrent()) return false;
+    if (!await isCurrent()) return false;
     try {
       const project = await this.context.resolveProjectById(projectId);
-      // Thread-state records and provider observations retain native IDs. Public
-      // sidebar mutation IDs have already passed through the identity boundary.
-      const response = await this.context.harnesses.request(harness, {
+      const response = await this.requestProvider(harness, {
         id: `questionnaire:read:${threadId}`,
         method: harness === "codex" ? "thread/turns/list" : "thread/read",
         params: harness === "codex"
@@ -350,19 +406,21 @@ export default class WorkbenchThreadStateFeature {
         throw new Error("Provider returned invalid turn metadata for questionnaire interruption.");
       }
       const active = turn?.status === "inProgress";
-      if (!isCurrent() || (active && turn?.id !== questionnaire.turnId)) return false;
+      if (!await isCurrent() || (active && turn?.id !== questionnaire.turnId)) return false;
       if (harness === "codex") {
         if (!this.context.releaseQuestionnaire) throw new Error("Live questionnaire release is unavailable.");
-        await this.context.releaseQuestionnaire(threadId, questionnaire.requestKey);
+        const mapped = this.context.identities
+          ? await mapWorkbenchProviderRequest(this.context.identities.threads, harness, { params: { threadId } }) : null;
+        await this.context.releaseQuestionnaire(mapped ? (mapped.request.params as { threadId: string }).threadId : threadId, questionnaire.requestKey);
       }
-      if (!isCurrent()) return false;
+      if (!await isCurrent()) return false;
       if (!active) return true;
       if (!questionnaire.turnId) return false;
       await stopWorkbenchThread({
         harness, threadId, turnId: questionnaire.turnId,
         sendRequest: async (targetHarness, request) => {
-          if (!isCurrent()) throw new Error("The questionnaire changed before interruption completed.");
-          const response = await this.context.harnesses.request(targetHarness, {
+          if (!await isCurrent()) throw new Error("The questionnaire changed before interruption completed.");
+          const response = await this.requestProvider(targetHarness, {
             ...request, id: `questionnaire:stop:${threadId}`,
             params: { ...request.params, cwd: project.rootPath },
           });
@@ -377,20 +435,7 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
-    try {
-      const response = await this.handleNativeManagedThreadRequest(request);
-      if (response.error || !this.context.identities) return response;
-      const result = asRecord(response.result);
-      if (typeof result?.threadId !== "string") return response;
-      const identity = await this.context.identities.threads.resolve({ threadId: result.threadId });
-      const binding = identity?.bindings[0];
-      if (!binding) return { id: request.id ?? null, error: { code: -32000, message: "Managed thread result has no admitted identity." } };
-      return await mapNativeProviderResponse(this.context.identities, WorkbenchHarnessSchema.parse(binding.harness), {
-        ...request, params: { threadId: binding.nativeThreadId },
-      }, response);
-    } catch (error) {
-      return { id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Managed thread identity projection failed." } };
-    }
+    return this.handleNativeManagedThreadRequest(request);
   }
 
   private async handleNativeManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -442,12 +487,18 @@ export default class WorkbenchThreadStateFeature {
         if (!turnId) throw new Error("The managed thread has no current turn to label.");
         const entry = await this.controller.applyLifecycle(resolved.projectId, resolved.harness, resolved.thread.id, { kind: "agentStatus", status, turnId }, providerEntry ?? undefined);
         if (!entry || entry.entryKind !== "thread") throw new Error("The current managed lifecycle could not be updated.");
-        const snapshot = await this.controller.getSnapshot(resolved.projectId);
-        return { id, result: { agentStatus: status, revision: snapshot.revision, threadId: resolved.thread.id, turnId, userStatus: entry.lifecycle.kind } };
+        return { id, result: { agentStatus: status, revision: await this.controller.getRevision(resolved.projectId), threadId: resolved.thread.id, turnId, userStatus: entry.lifecycle.kind } };
       }
       if (request.method === "workbench/thread/resume") {
         if (!turnId) throw new Error("The managed thread has no current turn to resume.");
-        await this.context.harnesses.resumeThread(resolved.harness, resolved.thread.id);
+        const native = this.context.identities
+          ? await mapWorkbenchProviderRequest(this.context.identities.threads, resolved.harness, {
+            method: "thread/resume", params: { threadId: resolved.thread.id },
+          })
+          : { harness: resolved.harness, request: { params: { threadId: resolved.thread.id } } };
+        const nativeThreadId = asRecord(native.request.params)?.threadId;
+        if (typeof nativeThreadId !== "string") throw new Error("The managed thread has no provider binding.");
+        await this.context.harnesses.resumeThread(native.harness, nativeThreadId);
         return { id, result: { accepted: true, threadId: resolved.thread.id, turnId } };
       }
       throw new Error("Unsupported managed thread command.");
@@ -461,6 +512,7 @@ export default class WorkbenchThreadStateFeature {
   async prepareCodexProfile(thread: ThreadReadResponse["thread"]) {
     if (!thread.id || !thread.cwd) throw new Error("Codex profile preparation requires a provider thread and cwd.");
     const resolved = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex profile preparation" });
+    thread = await this.admitThread("codex", thread);
     const entry = normalizeProviderSidebarEntry("codex", thread);
     if (!entry || entry.entryKind === "draft") throw new Error("The managed Codex thread could not be normalized.");
     await this.controller.ensureProviderEntry(resolved.project.id, entry);
@@ -481,22 +533,28 @@ export default class WorkbenchThreadStateFeature {
     const thread = (response.result as ThreadReadResponse | undefined)?.thread;
     if (!thread || thread.id !== threadId) throw new Error("The managed Codex thread could not be read before turn admission.");
     const project = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex MCP freshness" });
-    const providerEntry = normalizeProviderSidebarEntry("codex", thread);
+    const canonical = await this.admitThread("codex", thread);
+    const providerEntry = normalizeProviderSidebarEntry("codex", canonical);
     if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed Codex thread could not be normalized.");
     await this.controller.ensureProviderEntry(project.project.id, providerEntry);
     return {
-      generation: await this.controller.getMcpGeneration(project.project.id, "codex", threadId),
+      generation: await this.controller.getMcpGeneration(project.project.id, "codex", canonical.id),
       projectId: project.project.id,
     };
   }
 
   async setManagedCodexMcpGeneration(projectId: string, threadId: string, generation: string) {
+    if (this.context.identities) {
+      const identity = await this.context.identities.threads.resolve({ threadId, harness: "codex", projectId });
+      if (!identity) throw new Error("Managed Codex identity is unavailable.");
+      threadId = identity.threadId;
+    }
     await this.controller.setMcpGeneration(projectId, "codex", threadId, generation);
   }
 
   async installSubagentRelationship(relationship: WorkbenchSubagentRelationship) {
     const project = await this.context.resolveProjectById(relationship.projectId);
-    const response = await this.context.harnesses.request(relationship.harness, {
+    const response = await this.requestProvider(relationship.harness, {
       id: `thread-state:subagent:${relationship.threadId}`,
       method: "thread/read",
       params: { cwd: relationship.cwd, includeTurns: false, threadId: relationship.threadId },
@@ -522,7 +580,7 @@ export default class WorkbenchThreadStateFeature {
   private async reconcileProject(
     projectId: string,
     signal: AbortSignal,
-    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchObservedThreadEntry[], options: { complete: boolean }) => void,
+    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchObservedThreadEntry[], options: { complete: boolean }) => Promise<void>,
     acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) {
     const project = await this.context.resolveProjectById(projectId);
@@ -556,7 +614,7 @@ export default class WorkbenchThreadStateFeature {
       try {
         const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, async (entries) => {
           const relationships = await this.context.listSubagents(projectId);
-          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: false });
+          await acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: false });
         });
         return { entries: providerEntries, harness };
       } catch (error) {
@@ -567,9 +625,9 @@ export default class WorkbenchThreadStateFeature {
     const completed = results.filter((result): result is Extract<typeof result, { entries: WorkbenchObservedThreadEntry[] }> => "entries" in result);
     await this.context.transitions.run(project.rootPath, async () => {
       const relationships = await this.context.listSubagents(projectId);
-      completed.forEach(({ entries, harness }) => {
-        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: true });
-      });
+      for (const { entries, harness } of completed) {
+        await acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: true });
+      }
       await acceptGitArcSnapshot(await readGitArcSnapshot());
     });
     return results.flatMap((result) => "failure" in result ? [result.failure] : []);
@@ -599,8 +657,8 @@ export default class WorkbenchThreadStateFeature {
         ...(harness === "codex" ? { workbenchRequestSource: "autoRefresh" } : {}),
       } satisfies JsonRpcRequest;
       const response = page === 0
-        ? await this.context.harnesses.request(harness, request)
-        : await this.enqueuePagination(() => this.context.harnesses.request(harness, request));
+        ? await this.requestProvider(harness, request)
+        : await this.enqueuePagination(() => this.requestProvider(harness, request));
       if (response.error) throw new Error(response.error.message);
       const result = asRecord(response.result);
       for (const candidate of Array.isArray(result?.data) ? result.data : []) {
@@ -650,7 +708,7 @@ export default class WorkbenchThreadStateFeature {
 
   private async resolveManagedTurn(resolved: { cwd: string; harness: WorkbenchHarness; projectId: string; thread: ThreadReadResponse["thread"] }) {
     if (resolved.harness === "codex") {
-      const response = await this.context.harnesses.request("codex", {
+      const response = await this.requestProvider("codex", {
         id: 0, method: "thread/turns/list",
         params: { cwd: resolved.cwd, threadId: resolved.thread.id, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
       });
@@ -671,27 +729,15 @@ export default class WorkbenchThreadStateFeature {
     if (!callerThreadId || !cwd) throw new Error("A managed Workbench thread identity and cwd are required.");
     const requestedProject = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench managed thread" });
     const identity = await this.context.identities?.threads.resolve({ threadId: callerThreadId, projectId: requestedProject.project.id });
-    const destinations = identity?.bindings.length
-      ? [identity.bindings[0]!]
-      : this.context.harnesses.listHarnesses().map((harness) => ({ harness, nativeThreadId: callerThreadId }));
-    for (const destination of destinations) {
-      const harness = WorkbenchHarnessSchema.parse(destination.harness);
-      const threadId = destination.nativeThreadId;
-      try {
-        const response = await this.context.harnesses.request(harness, { id: 0, method: "thread/read", params: { cwd, includeTurns: false, threadId } });
-        if (response.error) {
-          if (identity) throw new Error(response.error.message);
-          continue;
-        }
-        const thread = (response.result as ThreadReadResponse | undefined)?.thread;
-        if (!thread || thread.id !== threadId) continue;
-        const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread" });
-        if (actualProject.project.id === requestedProject.project.id) return { cwd, harness, projectId: requestedProject.project.id, thread };
-      } catch (error) {
-        if (identity) throw error;
-        this.context.log?.(`Managed thread metadata lookup failed for ${harness}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    if (this.context.identities && !identity?.bindings.length) throw new Error("The managed thread has no admitted native execution.");
+    const harness = WorkbenchHarnessSchema.parse(identity?.bindings[0]?.harness ?? "codex");
+    const threadId = identity?.threadId ?? callerThreadId;
+    const response = await this.requestProvider(harness, { id: 0, method: "thread/read", params: { cwd, includeTurns: false, threadId } });
+    if (response.error) throw new Error(response.error.message);
+    const thread = (response.result as ThreadReadResponse | undefined)?.thread;
+    if (!thread || thread.id !== threadId) throw new Error("The managed thread metadata returned a different identity.");
+    const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread" });
+    if (actualProject.project.id === requestedProject.project.id) return { cwd, harness, projectId: requestedProject.project.id, thread };
     throw new Error("The managed thread does not belong to this cwd project.");
   }
 }

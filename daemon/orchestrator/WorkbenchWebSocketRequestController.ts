@@ -1,5 +1,4 @@
 /*
- * Keywords: websocket, request, reload, stream, handoff, event logs, diagnostics.
  * Exports:
  * - WorkbenchWebSocketPendingRequestState: transferable browser request timing.
  * - WorkbenchWebSocketDelivery: physical send receipt for the current graph owner.
@@ -486,10 +485,14 @@ export default class WorkbenchWebSocketRequestController {
           message = { ...envelope, params };
           const kind = "updateKind" in params ? params.updateKind : "sidebar";
           const snapshot = "sidebar" in params ? params.sidebar : "summary" in params ? params.summary : params;
-          const entries = "entries" in snapshot ? snapshot.entries.length : 0;
+          const entries = "entries" in snapshot ? snapshot.entries.length
+            : "upserts" in snapshot ? snapshot.upserts.length
+            : 0;
           const sourceSnapshot = "sidebar" in source ? source.sidebar : "summary" in source ? source.summary : source;
           // Fanout wrappers can differ, but share the source entries or summary.
-          const publication = "entries" in sourceSnapshot ? sourceSnapshot.entries : sourceSnapshot;
+          const publication = "entries" in sourceSnapshot ? sourceSnapshot.entries
+            : "upserts" in sourceSnapshot ? sourceSnapshot.upserts
+            : sourceSnapshot;
           if (!this.loggedThreadStateProjections.has(publication)) {
             this.loggedThreadStateProjections.add(publication);
             // Temporary, unthrottled measurement of the first successful projection.

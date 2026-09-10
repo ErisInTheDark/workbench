@@ -1,8 +1,7 @@
 /*
- * Keywords: core, graph, lifecycle, startup diagnostics, registrations.
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, and supervisor registrations plus direct child declarations. Keywords: core, graph, registry.
- * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle. Keywords: reload, harness, lifecycle.
+ * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, and supervisor registrations plus direct child declarations.
+ * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
@@ -10,6 +9,8 @@ import { getWorkbenchLifecycleTurnId, type WorkbenchThreadSidebarEntry, type Wor
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchProjectsPayload } from "workbench-shared/types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexHealthMonitor from "./CodexHealthMonitor";
@@ -50,7 +51,6 @@ import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSe
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
-import WorkbenchThreadStateShadowController from "./WorkbenchThreadStateShadowController";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -178,10 +178,6 @@ function createWorkbenchCoreFeature(
       source: "thread-state-ws",
     });
   };
-  const threadStateShadow = new WorkbenchThreadStateShadowController({
-    database,
-    log: logThreadStateWarning,
-  });
   const gitArc = new WorkbenchGitArcFeature({
     identities: threadIdentity,
     getThreadCreatedAt: async (projectId, _harness, threadId) => {
@@ -268,16 +264,27 @@ function createWorkbenchCoreFeature(
   const subagents = new WorkbenchSubagentFeature({
     bridgeUrl: context.codexBridgeUrl,
     identities: { threads: threadIdentity, items: transcriptIdentity },
-    requestNativeHarness: (harness, request) => harnesses.request(harness, request),
-    onRelationshipCommitted: context.installSubagentRelationship,
+    requestNativeHarness: async (harness, request) => {
+      const response = await harnesses.request(harness, request);
+      if (!response.error && response.result && typeof response.result === "object") {
+        const result = response.result as { thread?: Thread; turn?: Turn };
+        if (result.thread) await harnesses.admitThreads(harness, [result.thread]);
+        if (result.turn && request.params && typeof request.params === "object" && "threadId" in request.params
+          && typeof request.params.threadId === "string") {
+          await harnesses.admitNotifications(harness, request.params.threadId, [{
+            method: "turn/started", params: { threadId: request.params.threadId, turn: result.turn },
+          }]);
+        }
+      }
+      return response;
+    },
+    onRelationshipCommitted: (record) => requireThreadState().installSubagentRelationship(record),
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
-    shadow: threadStateShadow,
-    storageRoot: context.legacyMigrationProjectRoot,
+    persistence: database,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
-        const snapshot = await requireThreadState().controller.getSnapshot(projectId);
-        return snapshot.entries.find((entry) => entry.entryKind === "subagent" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
+        return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);
       },
       mutate: async (request: WorkbenchThreadStateRequest) => {
         const response = await requireThreadState().controller.handleRequest("subagent-controller", request);
@@ -301,7 +308,6 @@ function createWorkbenchCoreFeature(
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
-    shadow: threadStateShadow,
     transitions: worktreeGitTransitions,
   });
   const questionnaires = new WorkbenchQuestionnaireController({
@@ -388,8 +394,6 @@ function createWorkbenchCoreFeature(
       for (const [phase, start] of [
         ["composer profiles", () => profileStore.start()],
         ["loaded harness identities", () => harnesses.restoreLoadedIdentities()],
-        ["subagents", () => subagents.start()],
-        ["thread-state shadow", () => threadStateShadow.start()],
         ["project discovery", () => projectCatalog.readCatalog()],
       ] as const) {
         void start().catch((error: unknown) => {
@@ -404,7 +408,7 @@ function createWorkbenchCoreFeature(
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
       reportPhase("subagent disposal");
-      subagents.dispose();
+      await subagents.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
       reportPhase("stats disposal");
@@ -415,8 +419,6 @@ function createWorkbenchCoreFeature(
       await threadState.dispose();
       reportPhase("composer profile disposal");
       await profileStore.dispose();
-      reportPhase("thread-state shadow disposal");
-      await threadStateShadow.dispose();
       reportPhase("search disposal");
       await search.dispose();
       reportPhase("project snapshot disposal");
@@ -471,10 +473,6 @@ function createWorkbenchCoreFeature(
       await harnesses.restoreLoadedIdentities();
       reportPhase("stats startup");
       stats.start();
-      reportPhase("subagent startup");
-      await subagents.start();
-      reportPhase("thread-state shadow startup");
-      void threadStateShadow.start();
       reportPhase("browse session cleanup startup");
       browseSessionCleanup.start();
     },
@@ -523,7 +521,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateFeature.ts",
     "daemon/orchestrator/WorkbenchThreadStateController.ts",
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
-    "daemon/orchestrator/WorkbenchThreadStateShadowController.ts",
     "daemon/orchestrator/WorkbenchQuestionnaireController.ts",
     "daemon/orchestrator/codex-questionnaire-timeout.ts",
     "shared/workbench/thread/thread-stop.ts",

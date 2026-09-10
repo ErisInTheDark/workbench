@@ -1,5 +1,4 @@
 /*
- * Keywords: thread, sidebar, protocol, lifecycle, previous titles, pinned summaries.
  * Exports:
  * - WorkbenchHarnessSchema/WorkbenchHarnessId: supported provider identities.
  * - WorkbenchComposerSettingsState/WorkbenchComposerProfileSelectionState: shared composer settings and selected profile types.
@@ -14,33 +13,36 @@
  * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
  * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
- * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
+ * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
  * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
  * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
  * - WorkbenchThreadObservationResultSchema: initial observation acknowledgement.
  * - WorkbenchThreadActivityUpdate: compact activity delta type.
+ * - WorkbenchThreadStateDeltaSchema/WorkbenchThreadStateDelta: revisioned changed entries, projection removals and optional layout.
+ * - WorkbenchThreadDraftAttachmentSchema: typed persisted attachment identity and URL.
+ * - serializeLegacyThreadDraft: derive older wire aliases from canonical composer settings.
  * - WorkbenchProjectThreadSummaryUpdateSchema/WorkbenchProjectThreadSummaryUpdate: project summary notification.
  * - WorkbenchProjectThreadSidebarUpdateSchema/WorkbenchProjectThreadSidebarUpdate: project sidebar notification.
  * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
  * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
- * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
- * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts. Keywords: composer, profile, settings, daemon.
- * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
- * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema/WorkbenchThreadActivityUpdateSchema: project and global full sidebar state plus tiny activity delta contracts. Keywords: sidebar, websocket, revision, global.
- * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order. Keywords: home, order, global, websocket.
- * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection. Keywords: project, status, summary, pinned, subagent, activity.
- * - WorkbenchThreadStateOpenResultV2Schema/WorkbenchThreadStateOpenResultSchema/WorkbenchGlobalThreadStateOpenResultSchema/WorkbenchPinnedThreadContextResultSchema: atomic project and global observation bootstraps plus bounded admitted-pin context. Keywords: open, bootstrap, snapshot, compatibility, pinned, global.
- * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent. Keywords: priority, drag, sidebar.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
- * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
- * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections. Keywords: grouping, pin, sidebar, archive.
- * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths. Keywords: plan, claim, intersection, sidebar, selector.
- * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
- * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
- * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
+ * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
+ * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts.
+ * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
+ * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema/WorkbenchThreadActivityUpdateSchema: project and global full sidebar state plus tiny activity delta contracts.
+ * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
+ * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection.
+ * - WorkbenchThreadStateOpenResultV2Schema/WorkbenchThreadStateOpenResultSchema/WorkbenchGlobalThreadStateOpenResultSchema/WorkbenchPinnedThreadContextResultSchema: atomic project and global observation bootstraps plus bounded admitted-pin context.
+ * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol.
+ * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
+ * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections.
+ * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths.
+ * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
+ * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
+ * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection.
  * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent or approval authority.
- * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules. Keywords: draft, threshold, title.
+ * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules.
  */
 
 import { z } from "zod";
@@ -118,40 +120,61 @@ export const WorkbenchObservedThreadTargetSchema = z.discriminatedUnion("kind", 
 ]);
 export type WorkbenchObservedThreadTarget = z.infer<typeof WorkbenchObservedThreadTargetSchema>;
 
+export const WorkbenchThreadDraftAttachmentSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+}).strict();
+
 const WorkbenchThreadDraftInputSchema = z.object({
-  agent: z.string().nullable(),
-  attachments: z.array(JsonValueSchema),
+  agent: z.string().nullable().optional(),
+  attachments: z.array(WorkbenchThreadDraftAttachmentSchema),
   clientUpdatedAt: z.number().int().nonnegative(),
   composerSettings: z.union([WorkbenchComposerSettingsSchema, z.record(z.string(), JsonValueSchema)]),
   createdAt: z.number().int().nonnegative(),
   draftId: CanonicalUuidSchema,
-  harness: WorkbenchHarnessSchema,
-  model: z.string().nullable(),
+  harness: WorkbenchHarnessSchema.optional(),
+  model: z.string().nullable().optional(),
   profileId: z.string().nullable(),
   projectId: z.string().trim().min(1),
   prompt: z.string(),
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable(),
+  reasoningEffort: z.string().nullable().optional(),
+  serviceTier: z.string().nullable().optional(),
   updatedAt: z.number().int().nonnegative(),
 }).strict();
 
-export const WorkbenchThreadDraftSchema = WorkbenchThreadDraftInputSchema.transform((draft) => {
+export const WorkbenchThreadDraftSchema = WorkbenchThreadDraftInputSchema.transform((draft, context) => {
   const settings = WorkbenchComposerSettingsSchema.safeParse(draft.composerSettings);
+  if (!settings.success && !draft.harness) {
+    context.addIssue({ code: "custom", message: "Draft requires composer settings or a legacy harness.", path: ["composerSettings"] });
+    return z.NEVER;
+  }
+  const { agent, harness, model, reasoningEffort, serviceTier, ...body } = draft;
   return {
-    ...draft,
+    ...body,
     composerSettings: settings.success
       ? settings.data
       : {
-        agentPath: draft.agent,
+        agentPath: agent ?? null,
         agentSource: null,
-        harness: draft.harness,
-        model: draft.model ?? "",
-        reasoningEffort: draft.reasoningEffort,
-        serviceTier: draft.serviceTier === "fast" ? "fast" as const : null,
+        harness: harness!,
+        model: model ?? "",
+        reasoningEffort: reasoningEffort ?? null,
+        serviceTier: serviceTier === "fast" ? "fast" as const : null,
       },
   };
 });
 export type WorkbenchThreadDraft = z.infer<typeof WorkbenchThreadDraftSchema>;
+
+export function serializeLegacyThreadDraft(draft: WorkbenchThreadDraft) {
+  return {
+    ...draft,
+    agent: draft.composerSettings.agentPath,
+    harness: draft.composerSettings.harness,
+    model: draft.composerSettings.model,
+    reasoningEffort: draft.composerSettings.reasoningEffort,
+    serviceTier: draft.composerSettings.serviceTier,
+  };
+}
 
 const AgentTurnSchema = z.object({
   agentStatus: z.enum(["working", "completed", "blocked"]),
@@ -498,7 +521,12 @@ export const WorkbenchGlobalThreadStateOpenResultV6Schema = WorkbenchGlobalThrea
   homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
   version: z.literal(6),
 }).strict();
+export const WorkbenchGlobalThreadStateOpenResultV7Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
+  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
+  version: z.literal(7),
+}).strict();
 export const WorkbenchGlobalThreadStateOpenResultSchema = z.union([
+  WorkbenchGlobalThreadStateOpenResultV7Schema,
   WorkbenchGlobalThreadStateOpenResultV6Schema,
   WorkbenchGlobalThreadStateOpenResultV5Schema,
   WorkbenchGlobalThreadStateOpenResultV4Schema,
@@ -565,6 +593,18 @@ export const WorkbenchThreadActivityUpdateSchema = z.object({
 }).strict();
 export type WorkbenchThreadActivityUpdate = z.infer<typeof WorkbenchThreadActivityUpdateSchema>;
 
+export const WorkbenchThreadStateDeltaSchema = z.object({
+  projectId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  upserts: z.array(WorkbenchThreadSidebarEntrySchema),
+  removedKeys: z.array(z.string().min(1)),
+  displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
+  error: z.string().max(500).nullable(),
+  freshness: z.enum(["loading", "fresh", "partial"]),
+  updateKind: z.literal("threadStateDelta"),
+}).strict();
+export type WorkbenchThreadStateDelta = z.infer<typeof WorkbenchThreadStateDeltaSchema>;
+
 export const WorkbenchProjectThreadSummaryUpdateSchema = z.object({
   summary: WorkbenchProjectThreadSummarySchema,
   updateKind: z.literal("projectThreadSummary"),
@@ -578,6 +618,7 @@ export const WorkbenchProjectThreadSidebarUpdateSchema = z.object({
 export type WorkbenchProjectThreadSidebarUpdate = z.infer<typeof WorkbenchProjectThreadSidebarUpdateSchema>;
 
 export const WorkbenchThreadStateSnapshotSchema = z.union([
+  WorkbenchThreadStateDeltaSchema,
   WorkbenchThreadObservationSnapshotSchema,
   WorkbenchThreadSidebarSnapshotSchema,
   WorkbenchThreadActivityUpdateSchema,
@@ -624,8 +665,8 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
     version: z.literal(1),
   }),
   z.object({ method: z.literal("workbench/thread-state/release"), subscriptionId: CanonicalUuidSchema }).strict(),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional() }),
-  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6)]) }).strict(),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]).optional() }),
+  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7)]) }).strict(),
   z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),

@@ -1,274 +1,110 @@
 /*
- * Exports:
- * - No production exports; Node tests cover per-parent migration, relationship-only durability, cross-generation writes, bounded cursor pages, and parent isolation. Keywords: subagent, store, migration, relationship, reload, pagination, test.
+ * No production exports. Protect store pagination and fresh-wrapper durability.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { test } from "node:test";
-
-import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
+import Database from "better-sqlite3";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
-import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
-import type { WorkbenchSubagentParentSnapshot } from "./database/thread-state/workbench-thread-state-shadow-types";
-import { createWorkbenchSubagentStoreState } from "./workbench-subagent-store-state";
+import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
+import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchSubagentRelationshipRepository from "./database/thread-state/WorkbenchSubagentRelationshipRepository";
+import type { WorkbenchSubagentPersistence } from "./database/thread-state/workbench-thread-state-persistence";
 
-function summary(
-  parentThreadId: string,
-  threadId: string,
-  overrides: Partial<WorkbenchSubagentRelationship> = {},
-): WorkbenchSubagentRelationship {
-  return {
-    createdAt: 1,
-    cwd: "C:/workspace",
-    directSubagentIndex: 0,
-    harness: "codex",
-    name: `Agent ${threadId}`,
-    parentThreadId,
-    profileId: "profile",
-    profileName: "Lily INFINITE",
-    projectId: "project",
-    threadId,
-    title: `Task ${threadId}`,
-    updatedAt: 1,
-    ...overrides,
+function fixture() {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const identities = new WorkbenchThreadIdentityRepository(database);
+  const observe = (nativeThreadId: string) => identities.observe({
+    native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId },
+    projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+    createdAt: 1, updatedAt: 1, activityAt: 1,
+  }).threadId;
+  const repository = new WorkbenchSubagentRelationshipRepository(database);
+  const persistence: WorkbenchSubagentPersistence = {
+    readSubagents: async (query) => repository.read(query),
+    readOwnedSubagents: async (parent, project, threads) => repository.getOwnedMany(parent, project, threads),
+    reserveSubagent: async (record) => repository.reserve(record),
+    activateSubagent: async (parent, reservation, record) => repository.activate(parent, reservation, record),
+    removeSubagent: async (parent, identifier) => { repository.remove(parent, identifier); },
   };
+  const metadata = (parentThreadId: string, name: string, createdAt = 1) => ({
+    parentThreadId, reservationId: randomUUID(), projectId: "project", harness: "codex" as const,
+    cwd: "C:/project", name, title: `Task ${name}`, profileId: "profile", profileName: "reviewer",
+    createdAt, updatedAt: createdAt,
+  });
+  const add = async (store: WorkbenchSubagentStore, parent: string, name: string, createdAt = 1) => {
+    const { reservationId, ...reserved } = await store.reserve(metadata(parent, name, createdAt));
+    const record = { ...reserved, threadId: observe(name) };
+    await store.replace(parent, reservationId, record);
+    return record;
+  };
+  return { database, observe, persistence, metadata, add };
 }
 
-async function addActive(store: WorkbenchSubagentStore, source: WorkbenchSubagentRelationship) {
-  const { threadId, directSubagentIndex: _index, ...metadata } = source;
-  const { reservationId, ...reserved } = await store.reserve({ ...metadata, reservationId: randomUUID() });
-  const record = { ...reserved, threadId };
-  await store.replace(source.parentThreadId, reservationId, record);
-  return record;
-}
-
-test("legacy reservations become typed UUID reservations without becoming child threads", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-reservation-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const directory = path.join(root, ".workbench", "runtime", "subagents");
-  await fs.mkdir(directory, { recursive: true });
-  const reservationId = randomUUID();
-  const source = summary("parent", `pending:${reservationId}`, { name: "Reserved", directSubagentIndex: 3 });
-  await fs.writeFile(path.join(directory, `${encodeTranscriptPathSegment("parent")}.json`), JSON.stringify({
-    parentThreadId: "parent", schemaVersion: 4, nextDirectSubagentIndex: 4,
-    subagents: { [source.threadId]: source },
-  }));
-  const state = createWorkbenchSubagentStoreState();
-  const store = new WorkbenchSubagentStore(root, { state });
-  await store.initialize();
-  const reserved = [...state.parents.get("parent")!.values()][0]!;
-  assert.equal(Reflect.get(reserved, "kind"), "reserved");
-  assert.equal(Reflect.get(reserved, "reservationId"), reservationId);
-  assert.equal("threadId" in reserved, false);
-  assert.deepEqual((await store.list({ projectId: "project" })).subagents, []);
-  const { threadId: _threadId, directSubagentIndex: _index, ...metadata } = source;
-  await assert.rejects(store.reserve({ ...metadata, reservationId: randomUUID() }), /name is already in use/u);
-  await store.replace("parent", reservationId, { ...source, threadId: "child" });
-  assert.equal(state.parents.get("parent")!.size, 1);
-  const reopened = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
-  const active = (await reopened.list({ projectId: "project" })).subagents;
-  assert.equal(active[0]?.threadId, "child");
-  assert.equal(active[0]?.directSubagentIndex, 3);
-  await reopened.remove("parent", "child");
-  const next = await reopened.reserve({ ...metadata, reservationId: randomUUID() });
-  assert.equal(next.directSubagentIndex, 4);
-  assert.deepEqual((await reopened.list({ projectId: "project" })).subagents, []);
-});
-
-test("migrates the global store into parent files and removes legacy lifecycle fields", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-migration-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const runtimePath = path.join(root, ".workbench", "runtime");
-  await fs.mkdir(runtimePath, { recursive: true });
-  const legacyActive = { ...summary("parent-a", "child-a", { updatedAt: 10 }), activityStatus: "active", lastActivityAt: 10, pinned: true };
-  const legacyUnknown = summary("parent-b", "child-b", { updatedAt: 20 });
-  await fs.writeFile(path.join(runtimePath, "subagents.json"), JSON.stringify({
-    subagents: {
-      [legacyActive.threadId]: legacyActive,
-      [legacyUnknown.threadId]: legacyUnknown,
-    },
-    version: 1,
-  }), "utf8");
-
-  const store = new WorkbenchSubagentStore(root);
-  await store.initialize();
-  await assert.rejects(fs.access(path.join(runtimePath, "subagents.json")));
-  const parentFiles = await fs.readdir(path.join(runtimePath, "subagents"));
-  assert.equal(parentFiles.length, 2);
-  const migrated = (await store.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0];
-  assert.equal("activityStatus" in (migrated ?? {}), false);
-  assert.equal("lastActivityAt" in (migrated ?? {}), false);
-  assert.equal("pinned" in (migrated ?? {}), false);
-  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
-  await restarted.initialize();
-  assert.equal((await restarted.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.threadId, "child-a");
-});
-
-test("repeats a partial migration without replacing a newer parent record", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-partial-migration-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const runtimePath = path.join(root, ".workbench", "runtime");
-  const parentPath = path.join(runtimePath, "subagents");
-  await fs.mkdir(parentPath, { recursive: true });
-  const older = summary("parent", "child", { title: "Older legacy record", updatedAt: 10 });
-  const newer = summary("parent", "child", { title: "Newer parent record", updatedAt: 20 });
-  await fs.writeFile(path.join(parentPath, `${encodeTranscriptPathSegment("parent")}.json`), JSON.stringify({
-    parentThreadId: "parent",
-    schemaVersion: 2,
-    subagents: { child: newer },
-  }), "utf8");
-  await fs.writeFile(path.join(runtimePath, "subagents.json"), JSON.stringify({
-    subagents: { child: older },
-    version: 1,
-  }), "utf8");
-
-  const store = new WorkbenchSubagentStore(root);
-  await store.initialize();
-  const [record] = (await store.list({ parentThreadId: "parent", projectId: "project" })).subagents;
-  assert.equal(record?.title, "Newer parent record");
-  await assert.rejects(fs.access(path.join(runtimePath, "subagents.json")));
-  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
-  assert.equal((await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents[0]?.title, "Newer parent record");
-});
-
-test("keeps parent writes isolated, lists project relationships, and pages newest relationships twenty at a time", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-pages-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const store = new WorkbenchSubagentStore(root);
-  await store.initialize();
+test("SQL pages keep parent/project scope and do not repeat entries at equal timestamps", async (context) => {
+  const { database, observe, persistence, add } = fixture();
+  context.after(() => database.close());
+  const store = new WorkbenchSubagentStore(persistence);
+  const parent = observe("parent");
+  const otherParent = observe("other-parent");
+  const children = [];
   for (let index = 0; index < 25; index += 1) {
-    await addActive(store, summary("parent-a", `child-${index.toString().padStart(2, "0")}`, {
-      createdAt: index,
-      updatedAt: index,
-    }));
+    children.push(await add(store, parent, `child-${index}`, Math.floor(index / 2)));
   }
-  await addActive(store, summary("parent-b", "other-child"));
-
-  const projectRelationships = await store.list({ projectId: "project" });
-  assert.equal(projectRelationships.subagents.find(({ threadId }) => threadId === "other-child")?.parentThreadId, "parent-b");
-
-  const first = await store.list({ limit: 20, parentThreadId: "parent-a", projectId: "project" });
+  const other = await add(store, otherParent, "other-child");
+  const first = await store.list({ parentThreadId: parent, projectId: "project" });
   assert.equal(first.subagents.length, 20);
-  assert.equal(first.subagents[0]?.threadId, "child-24");
   assert.ok(first.nextCursor);
-  const second = await store.list({ cursor: first.nextCursor, limit: 20, parentThreadId: "parent-a", projectId: "project" });
+  const second = await store.list({ parentThreadId: parent, projectId: "project", cursor: first.nextCursor });
   assert.equal(second.subagents.length, 5);
   assert.equal(second.nextCursor, null);
-  assert.equal(new Set([...first.subagents, ...second.subagents].map(({ threadId }) => threadId)).size, 25);
-  await assert.rejects(
-    store.list({ cursor: first.nextCursor, parentThreadId: "parent-b", projectId: "project" }),
-    /Invalid subagent list cursor/u,
-  );
-  await assert.rejects(store.list({ limit: 21, parentThreadId: "parent-a", projectId: "project" }), /between 1 and 20/u);
-
-  const files = await fs.readdir(path.join(root, ".workbench", "runtime", "subagents"));
-  assert.equal(files.length, 2);
-  assert.deepEqual((await store.list({ parentThreadId: "parent-b", projectId: "project" })).subagents.map(({ threadId }) => threadId), ["other-child"]);
+  const combined = [...first.subagents, ...second.subagents];
+  assert.deepEqual(new Set(combined.map(record => record.threadId)), new Set(children.map(record => record.threadId)));
+  assert.ok(combined.every((record, index) => index === 0 || combined[index - 1]!.createdAt >= record.createdAt));
+  assert.equal((await store.list({ projectId: "project" })).subagents.length, 26);
+  assert.deepEqual((await store.list({ parentThreadId: otherParent, projectId: "project" })).subagents, [other]);
+  await assert.rejects(store.list({ parentThreadId: otherParent, projectId: "project", cursor: first.nextCursor }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: "another", cursor: first.nextCursor }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: "project", cursor: "not-json" }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: "project", limit: 21 }));
+  await assert.rejects(store.list({ projectId: "project", cursor: first.nextCursor }));
 });
 
-test("relationship updates do not acquire lifecycle or Lock fields", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-relationship-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const store = new WorkbenchSubagentStore(root);
-  const reserved = await addActive(store, summary("parent", "child"));
-  await store.replace("parent", "child", { ...reserved, title: "Updated", updatedAt: 200 });
-  const [record] = (await store.list({ parentThreadId: "parent", projectId: "project" })).subagents;
-  assert.equal(record?.title, "Updated");
-  assert.equal("lifecycle" in (record ?? {}), false);
-  assert.equal("pinned" in (record ?? {}), false);
+test("fresh store wrappers share durable reservations and never reuse allocated indexes", async (context) => {
+  const { database, observe, persistence, metadata, add } = fixture();
+  context.after(() => database.close());
+  const parent = observe("parent");
+  const first = new WorkbenchSubagentStore(persistence);
+  const second = new WorkbenchSubagentStore(persistence);
+  const reserved = await first.reserve(metadata(parent, "held"));
+  assert.deepEqual((await second.list({ projectId: "project" })).subagents, []);
+  await assert.rejects(second.reserve(metadata(parent, "HELD")));
+  await second.remove(parent, reserved.reservationId);
+  const children = await Promise.all([add(first, parent, "one"), add(second, parent, "two")]);
+  assert.deepEqual(children.map(record => record.directSubagentIndex), [1, 2]);
+  const reopened = new WorkbenchSubagentStore(persistence);
+  assert.deepEqual(new Set((await reopened.list({ projectId: "project" })).subagents.map(record => record.threadId)),
+    new Set(children.map(record => record.threadId)));
+  assert.deepEqual(database.pragma("foreign_key_check"), []);
 });
 
-test("fresh wrappers serialize one parent and persist unique direct-child indexes", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-reload-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const state = createWorkbenchSubagentStoreState();
-  const first = new WorkbenchSubagentStore(root, { state });
-  const second = new WorkbenchSubagentStore(root, { state });
-
-  await Promise.all([
-    addActive(first, summary("parent", "child-a", { name: "A" })),
-    addActive(second, summary("parent", "child-b", { name: "B" })),
-  ]);
-
-  const memoryRecords = (await first.list({ parentThreadId: "parent", projectId: "project" })).subagents;
-  assert.deepEqual(memoryRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
-  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
-  const diskRecords = (await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents;
-  assert.deepEqual(new Set(diskRecords.map(({ threadId }) => threadId)), new Set(["child-a", "child-b"]));
-  assert.deepEqual(diskRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
-});
-
-test("a fresh wrapper publishes relationships already loaded by shared state", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-republish-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const state = createWorkbenchSubagentStoreState();
-  const firstSnapshots: WorkbenchSubagentParentSnapshot[][] = [];
-  const secondSnapshots: WorkbenchSubagentParentSnapshot[][] = [];
-  const first = new WorkbenchSubagentStore(root, {
-    shadow: { replaceSubagentParents: (parents) => firstSnapshots.push([...parents]) },
-    state,
-  });
-  await addActive(first, summary("parent", "child"));
-  const second = new WorkbenchSubagentStore(root, {
-    shadow: { replaceSubagentParents: (parents) => secondSnapshots.push([...parents]) },
-    state,
-  });
-  await second.initialize();
-  assert.equal(firstSnapshots.at(-1)?.length, 1);
-  assert.equal(secondSnapshots.length, 1);
-  const published = secondSnapshots[0]?.[0]?.relationships[0];
-  assert.equal(published?.kind === "active" ? published.threadId : null, "child");
-});
-
-test("shadow snapshots split mixed parent scopes and preserve the saved allocation watermark", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-scopes-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const snapshots: WorkbenchSubagentParentSnapshot[][] = [];
-  const store = new WorkbenchSubagentStore(root, {
-    shadow: { replaceSubagentParents: (parents) => snapshots.push([...parents]) },
-    state: createWorkbenchSubagentStoreState(),
-  });
-  await addActive(store, summary("shared-parent", "child-a", { name: "A", projectId: "project-a" }));
-  await addActive(store, summary("shared-parent", "child-b", { harness: "copilot", name: "B", projectId: "project-b" }));
-
-  assert.deepEqual(snapshots.at(-1)?.map((parent) => ({
-    harness: parent.harness,
-    nextDirectSubagentIndex: parent.nextDirectSubagentIndex,
-    projectId: parent.projectId,
-    threadIds: parent.relationships.flatMap((relationship) => relationship.kind === "active" ? [relationship.threadId] : []),
-  })), [
-    { harness: "codex", nextDirectSubagentIndex: 2, projectId: "project-a", threadIds: ["child-a"] },
-    { harness: "copilot", nextDirectSubagentIndex: 2, projectId: "project-b", threadIds: ["child-b"] },
-  ]);
-});
-
-test("successful relationship writes publish complete shadow snapshots", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-shadow-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const snapshots: WorkbenchSubagentParentSnapshot[][] = [];
-  const store = new WorkbenchSubagentStore(root, {
-    shadow: {
-      replaceSubagentParents: (parents) => snapshots.push([...parents]),
-    },
-    state: createWorkbenchSubagentStoreState(),
-  });
-
-  await store.initialize();
-  const { threadId: _threadId, directSubagentIndex: _index, ...metadata } = summary("parent", "child");
-  const reservationId = randomUUID();
-  const { reservationId: _reservationId, ...reserved } = await store.reserve({ ...metadata, reservationId });
-  await store.replace("parent", reservationId, { ...reserved, threadId: "child", updatedAt: 2 });
-  await store.remove("parent", "child");
-
-  assert.deepEqual(snapshots.map((snapshot) => snapshot.flatMap(({ relationships }) => relationships.map((relationship) => (
-    relationship.kind === "reserved" ? relationship.reservationId : relationship.threadId
-  )))), [
-    [],
-    [reservationId],
-    ["child"],
-    [],
-  ]);
+test("ownership admission is all-or-nothing and wrong parents cannot remove membership", async (context) => {
+  const { database, observe, persistence, add } = fixture();
+  context.after(() => database.close());
+  const store = new WorkbenchSubagentStore(persistence);
+  const parent = observe("parent");
+  const otherParent = observe("other-parent");
+  const child = await add(store, parent, "child");
+  const other = await add(store, otherParent, "other");
+  assert.deepEqual(await store.getOwned(parent, "project", child.threadId), child);
+  assert.equal(await store.getOwned(parent, "another", child.threadId), null);
+  assert.equal(await store.getOwned(otherParent, "project", child.threadId), null);
+  assert.equal(await store.getOwnedMany(parent, "project", [child.threadId, other.threadId]), null);
+  await store.remove(otherParent, child.threadId);
+  assert.deepEqual(await store.getOwnedMany(parent, "project", [child.threadId]), [child]);
+  await store.remove(parent, child.threadId);
+  assert.equal(await store.getOwned(parent, "project", child.threadId), null);
+  assert.ok(database.prepare("SELECT id FROM workbench_threads WHERE id = ?").get(child.threadId));
 });

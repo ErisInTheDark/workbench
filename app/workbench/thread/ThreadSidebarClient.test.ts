@@ -1,5 +1,4 @@
 /*
- * Keywords: sidebar, observation, draft, persistence, acknowledgement, navigation, retirement.
  * No production exports. Tests protect subscriptions, project-qualified draft queues and leave-safe flushing.
  */
 import assert from "node:assert/strict";
@@ -8,9 +7,9 @@ import ThreadSidebarClient from "./ThreadSidebarClient.ts";
 import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
-  agent: null, attachments: [], clientUpdatedAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
-  draftId: "00000000-0000-4000-8000-000000000001", harness: "codex", model: null,
-  profileId: null, projectId: "project", prompt, reasoningEffort: null, serviceTier: null, updatedAt: clientUpdatedAt,
+  attachments: [], clientUpdatedAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
+  draftId: "00000000-0000-4000-8000-000000000001",
+  profileId: null, projectId: "project", prompt, updatedAt: clientUpdatedAt,
 });
 const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
 const pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };

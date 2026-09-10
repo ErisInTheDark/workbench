@@ -1,5 +1,4 @@
 /*
- * Keywords: sidebar, revision, sparse activity, ordering, summaries.
  * No exports. Tests protect structural state from reordered partial deliveries.
  */
 import assert from "node:assert/strict";
@@ -27,6 +26,62 @@ async function createState() {
   return state;
 }
 
+test("changed entries survive overtaken bootstrap and activity without erasing independent local intent", async () => {
+  const state = await createState();
+  const changed = sidebar(3).entries[0]!;
+  changed.title = "renamed";
+  const delta = {
+    updateKind: "threadStateDelta" as const, projectId: "project", revision: 3,
+    upserts: [changed], removedKeys: [], error: null, freshness: "fresh" as const,
+  };
+  state.acceptDelta(delta);
+  state.acceptSidebar(sidebar(2));
+  assert.equal(state.getSnapshot()!.entries.find(entry => entry.title === "renamed")?.title, "renamed");
+  const local = structuredClone(state.getSnapshot()!);
+  local.entries[0]!.title = "local intent";
+  state.replaceLocalSidebar(local);
+  state.acceptDelta({ ...delta, revision: 4, upserts: [{ ...sidebar(4).entries[1]!, title: "other change" }] });
+  state.acceptActivity(activity(5, "two"));
+  assert.ok(state.getSnapshot()!.entries.some(entry => entry.title === "local intent"));
+  assert.ok(state.getSnapshot()!.entries.some(entry => entry.title === "other change"));
+  state.acceptDelta({ ...delta, revision: 6, upserts: [], removedKeys: ["codex:one"] });
+  state.acceptSidebar(sidebar(5));
+  assert.equal(state.getSnapshot()!.entries.length, 1);
+  state.acceptSidebar(sidebar(7));
+  assert.equal(state.getSnapshot()!.entries.length, 2);
+});
+
+test("entry updates arriving before bootstrap survive the older complete response", () => {
+  const state = new ThreadSidebarProjectState();
+  const entry = sidebar(2).entries[0]!;
+  state.acceptDelta({
+    updateKind: "threadStateDelta", projectId: "project", revision: 2,
+    upserts: [{ ...entry, title: "before bootstrap" }], removedKeys: [], error: null, freshness: "fresh",
+  });
+  state.acceptSidebar(sidebar(1));
+  assert.equal(state.getSnapshot()!.entries[0]!.title, "before bootstrap");
+});
+
+test("unrelated and older draft deliveries preserve the local draft body", async () => {
+  const state = await createState();
+  const draft = {
+    draftId: "00000000-0000-4000-8000-000000000001", projectId: "project",
+    prompt: "local body", attachments: [], clientUpdatedAt: 20, createdAt: 1, updatedAt: 20, profileId: null,
+    composerSettings: { harness: "codex" as const, agentPath: null, agentSource: null, model: "", reasoningEffort: null, serviceTier: null },
+  };
+  const entry = {
+    entryKind: "draft" as const, draft, activityAt: 20, title: "local body",
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+  };
+  state.replaceLocalSidebar({ ...state.getSnapshot()!, entries: [...state.getSnapshot()!.entries, entry] });
+  state.acceptDelta({
+    updateKind: "threadStateDelta", projectId: "project", revision: 3, error: null, freshness: "fresh", removedKeys: [],
+    upserts: [{ ...entry, draft: { ...draft, clientUpdatedAt: 10, prompt: "older body" } }, sidebar(3).entries[0]!],
+  });
+  assert.equal(state.getSnapshot()!.entries.find(value => value.entryKind === "draft")?.title, "local body");
+  const retained = state.getSnapshot()!.entries.find(value => value.entryKind === "draft");
+  assert.equal(retained?.entryKind === "draft" && retained.draft.prompt, "local body");
+});
 for (const change of ["title", "status", "settle", "priority"] as const) {
   test(`${change} survives a later activity update overtaking its full sidebar`, async () => {
     const state = await createState();

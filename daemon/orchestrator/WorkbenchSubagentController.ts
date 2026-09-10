@@ -1,8 +1,7 @@
 /*
- * Keywords: subagent ownership, native tool output, cross-harness message, questionnaire handoff.
  * Exports:
- * - WorkbenchSubagentControllerOptions: injected bridge, durable store, harness client, and validated project resolver dependencies. Keywords: orchestrator, subagent, project, test.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation. Keywords: orchestrator, subagent, controller, ownership, wait.
+ * - WorkbenchSubagentControllerOptions: injected bridge, durable store, harness client, and validated project resolver dependencies.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation.
  */
 import { randomUUID } from "node:crypto";
 
@@ -30,11 +29,12 @@ import {
 } from "../lib/workbench/subagent/subagent-output";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { TurnToolOutput } from "workbench-shared/codex/generated/app-server/v2/TurnToolOutput";
-import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -66,6 +66,7 @@ export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
   requestNativeHarness?: (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   publicThreadId?: (threadId: string, projectId: string) => Promise<string>;
+  identities?: Pick<WorkbenchThreadIdentityController, "resolve">;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
@@ -133,6 +134,7 @@ export default class WorkbenchSubagentController {
   private readonly bridgeUrl: string;
   private readonly requestNativeHarness: WorkbenchSubagentControllerOptions["requestNativeHarness"];
   private readonly publicThreadId: NonNullable<WorkbenchSubagentControllerOptions["publicThreadId"]>;
+  private readonly identities: WorkbenchSubagentControllerOptions["identities"];
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
   private readonly onRelationshipCommitted: WorkbenchSubagentControllerOptions["onRelationshipCommitted"];
@@ -141,11 +143,15 @@ export default class WorkbenchSubagentController {
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
+  private active = true;
+  // Creation ordering cannot account for admitted messages, stops and waits.
+  private readonly requests = new Set<Promise<JsonRpcResponse>>();
 
   constructor({
     bridgeUrl,
     requestNativeHarness,
     publicThreadId = async (threadId) => threadId,
+    identities,
     createHarnessClient = () => new CodexAppServerClient(),
     onRelationshipCommitted,
     profileStore,
@@ -156,6 +162,7 @@ export default class WorkbenchSubagentController {
     this.bridgeUrl = bridgeUrl;
     this.requestNativeHarness = requestNativeHarness;
     this.publicThreadId = publicThreadId;
+    this.identities = identities;
     this.createHarnessClient = createHarnessClient;
     this.onRelationshipCommitted = onRelationshipCommitted;
     this.profileStore = profileStore;
@@ -165,16 +172,42 @@ export default class WorkbenchSubagentController {
   }
 
   beginRuntimeDrain() {
+    this.active = false;
     for (const waiter of this.waiters.values()) waiter.abort(new Error("Subagent wait cancelled for runtime reload."));
     this.waiters.clear();
   }
 
-  dispose() { this.beginRuntimeDrain(); }
+  async dispose() {
+    this.beginRuntimeDrain();
+    await Promise.all(this.requests);
+  }
 
-  async handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+  handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const operation = Promise.resolve().then(() => this.handleRequestOwned(message));
+    this.requests.add(operation);
+    return operation.finally(() => this.requests.delete(operation));
+  }
+
+  private async handleRequestOwned(message: JsonRpcRequest): Promise<JsonRpcResponse> {
     const id = message.id ?? null;
     try {
-      const params = isRecord(message.params) ? message.params : {};
+      if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
+      const params = isRecord(message.params) ? { ...message.params } : {};
+      if (this.identities && message.method !== "workbench/subagent/waitCancel") {
+        const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
+        const canonicalId = async (threadId: string) => {
+          const identity = await this.identities!.resolve({ threadId, projectId: project.id });
+          if (!identity) throw new Error("Subagent thread identity is unavailable in this project.");
+          return identity.threadId;
+        };
+        for (const key of ["callerThreadId", "parentThreadId", "threadId"] as const) {
+          if (typeof params[key] === "string") params[key] = await canonicalId(params[key]);
+        }
+        if (Array.isArray(params.threadIds)) params.threadIds = await Promise.all(params.threadIds.map((threadId) => {
+          if (typeof threadId !== "string") throw new Error("Subagent thread IDs must be strings.");
+          return canonicalId(threadId);
+        }));
+      }
       switch (message.method) {
         case "workbench/subagent/list": return { id, result: await this.list(params) };
         case "workbench/subagent/profiles": return { id, result: await this.profiles(params) };
@@ -255,15 +288,13 @@ export default class WorkbenchSubagentController {
     label: string,
     knownHarness?: WorkbenchHarness,
   ) {
-    for (const harness of getWorkbenchThreadHarnessCandidates(threadId, knownHarness)) {
-      try {
-        const thread = await this.readThread(client, harness, threadId, cwd);
-        const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label });
-        if (threadProject.project.id === project.id) return { harness, thread };
-      } catch {
-        // Try the next locally ordered provider candidate.
-      }
-    }
+    const identity = await this.identities?.resolve({ threadId, projectId: project.id });
+    const nativeHarness = identity?.bindings[0]?.harness ?? knownHarness ?? (this.identities ? null : "codex");
+    if (!nativeHarness) throw new Error(`${label} has no native execution.`);
+    const harness = WorkbenchHarnessSchema.parse(nativeHarness);
+    const thread = await this.readThread(client, harness, identity?.threadId ?? threadId, cwd);
+    const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label });
+    if (threadProject.project.id === project.id) return { harness, thread };
     throw new Error(`${label} does not belong to this cwd project.`);
   }
 
@@ -378,7 +409,7 @@ export default class WorkbenchSubagentController {
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.onRelationshipCommitted(record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
-          const turnContext = await this.buildPromptContext(caller, profile, childId, name, workbenchOrigin);
+        const turnContext = await this.buildPromptContext(caller, profile, childId, name, workbenchOrigin);
         await this.requestHarness(client, profile.harness, {
           method: "turn/start",
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: turnContext,
@@ -392,8 +423,11 @@ export default class WorkbenchSubagentController {
         });
         result = { threadId: childId };
       } catch (error) {
-        if (!childId) {
+        try {
+          // Removal by reservation ID leaves an activated child's membership intact.
           await this.subagentStore.remove(caller.callerThreadId, reservationId);
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "Subagent creation failed and its reservation could not be released.");
         }
         throw new Error(`${error instanceof Error ? error.message : String(error)}${childId ? ` (subagent thread ${await this.publicThreadId(childId, caller.project.id)})` : ""}`);
       }
@@ -482,6 +516,7 @@ export default class WorkbenchSubagentController {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
     const waitId = requiredString(params, "waitId");
+    if (!this.active) throw new Error("Subagent wait cancelled for runtime reload.");
     if (this.waiters.has(waitId)) throw new Error("That subagent wait id is already active.");
     const controller = new AbortController(); this.waiters.set(waitId, controller);
     try {
@@ -496,6 +531,7 @@ export default class WorkbenchSubagentController {
         };
         let ready = await selectReady();
         if (!ready) {
+          if (controller.signal.aborted) throw controller.signal.reason;
           ready = await new Promise<{ entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>; record: WorkbenchSubagentRelationship }>((resolve, reject) => {
             const unsubscribe = this.threadState!.subscribe((projectId, entry) => {
               if (entry.entryKind !== "subagent" || projectId !== records[0]!.projectId || !recordKeys.has(`${entry.identity.harness}:${entry.identity.threadId}`)) return;

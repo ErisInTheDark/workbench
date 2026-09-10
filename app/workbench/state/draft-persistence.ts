@@ -1,5 +1,4 @@
 /*
- * Keywords: draft, persistence, identity, composer, questionnaire, sidebar, materialisation.
  * Exports:
  * - ClientDraftIdentity: project-qualified client-state address.
  * - ComposerDraftTarget: existing-thread or unsent-sidebar destination.
@@ -35,12 +34,7 @@ export type ComposerDraftTarget =
 export function sidebarDraftToInput(draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft {
   return {
     text: draft?.prompt ?? "",
-    attachments: draft?.attachments.flatMap((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return [];
-      const candidate = attachment as { id?: string; url?: string };
-      return typeof candidate.id === "string" && typeof candidate.url === "string"
-        ? [{ id: candidate.id, url: candidate.url }] : [];
-    }) ?? [],
+    attachments: draft?.attachments.map(({ id, url }) => ({ id, url })) ?? [],
     updatedAt: draft?.updatedAt ?? 0,
   };
 }

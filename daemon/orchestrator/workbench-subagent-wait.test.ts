@@ -1,11 +1,9 @@
 /*
  * Exports:
- * - No production exports; Node tests cover multiplexed subagent wait ordering, immediate readiness, and shared questionnaire reads. Keywords: subagent, wait, multiplex, questionnaire, test.
+ * - No production exports; Node tests cover multiplexed subagent wait ordering, immediate readiness, and shared questionnaire reads.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -14,6 +12,7 @@ import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "w
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 
 const callerThreadId = "parent-thread";
 const inactiveThreadId = "inactive-child";
@@ -102,18 +101,17 @@ class FakeHarnessClient {
 }
 
 test("multiplexed wait immediately prefers questionnaires, then inactive turns", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-wait-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
   const cwd = process.cwd();
   const projectId = "subagent-wait-project";
   const inactive = summary({ cwd, name: "Yuzu", projectId, threadId: inactiveThreadId });
   const waiting = summary({ cwd, name: "Momo", projectId, threadId: questionnaireThreadId });
-  const metadataPath = path.join(storageRoot, ".workbench", "runtime", "subagents.json");
-  await mkdir(path.dirname(metadataPath), { recursive: true });
-  await writeFile(metadataPath, JSON.stringify({
-    subagents: { [inactiveThreadId]: inactive, [questionnaireThreadId]: waiting },
-    version: 1,
-  }), "utf8");
+  const subagentStore = new WorkbenchSubagentStore(createThreadStateTestDatabase());
+  for (const record of [inactive, waiting]) {
+    const { threadId, directSubagentIndex: _index, ...metadata } = record;
+    const reservationId = randomUUID();
+    const reservation = await subagentStore.reserve({ ...metadata, reservationId });
+    await subagentStore.replace(callerThreadId, reservationId, { ...record, directSubagentIndex: reservation.directSubagentIndex });
+  }
   const client = new FakeHarnessClient(cwd);
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
@@ -121,8 +119,9 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore,
   });
+  context.after(() => controller.dispose());
   const params = { callerThreadId, cwd, threadIds: [inactiveThreadId, questionnaireThreadId] };
 
   const questionnaireResult = await controller.handleRequest({

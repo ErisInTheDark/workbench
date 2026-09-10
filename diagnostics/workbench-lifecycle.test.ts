@@ -1,5 +1,4 @@
 /*
- * Keywords: startup, reload, expiry, rollback, SQLite, HTTP, WebSocket, integration.
  * No exports. One isolated lifecycle scenario, never ordinary test discovery.
  */
 import assert from "node:assert/strict";
@@ -8,6 +7,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import { appendLifecycleMigration, installLifecycleProbe, writeLifecycleFault } from "./lifecycle-fixture";
+import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, installThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import {
   WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD, WorkbenchOrchestratorReloadDirtEnvelopeSchema,
@@ -97,6 +97,9 @@ test("real application survives reload expiry, migrated candidate failure, retry
     else clean(dirt);
   };
   try {
+    const captured = await captureThreadStateMigrationSource(path.resolve(process.cwd(), ".."), runtime.root);
+    await verifyThreadStateMigrationSource(captured);
+    const capturedCounts = await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
     await installLifecycleProbe(runtime.project);
     await runtime.start();
     await runtime.startApp();
@@ -163,6 +166,12 @@ test("real application survives reload expiry, migrated candidate failure, retry
     clean(await serverDirt());
     assert.equal(inspectDatabase(appDatabase).integrity, "ok");
     assert.equal(inspectDatabase(serverDatabase).integrity, "ok");
+    const reopened = new Database(serverDatabase, { readonly: true });
+    try {
+      assert.equal(reopened.prepare("SELECT count(*) FROM workbench_thread_states").pluck().get(), capturedCounts.states);
+      assert.equal(reopened.prepare("SELECT count(*) FROM workbench_subagent_relationships").pluck().get(), capturedCounts.relationships);
+      assert.ok(Number(reopened.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= Number(capturedCounts.threads));
+    } finally { reopened.close(); }
     assert.deepEqual(await runtime.stop(), { app: 0, orchestrator: 0 });
     console.log("cold reopening preserved durable state");
     await writeLifecycleFault(runtime.project, { fail: "client:http", initial: true });

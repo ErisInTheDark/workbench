@@ -1,22 +1,24 @@
 /*
- * Keywords: thread state, source, relational, repair, digest, parity.
  * Exports:
  * - ProjectDocument: parsed project state.
  * - SourceProject: project state with source identity and update time.
  * - asRecord: narrow external object input.
  * - parseProjectDocument: repair current and legacy project documents.
+ * - parseProjectImport: reject facts that repair would discard before retiring the source.
  * - decodeGlobalDocument: decode a global state document.
  * - createSourceDigest: fingerprint source documents and relationship state.
  */
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
 
-import type { WorkbenchStoredSubagent } from "../../workbench-subagent-store-state.ts";
+import type { WorkbenchStoredSubagent } from "../../workbench-subagent-record.ts";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchComposerSettingsSchema,
+  WorkbenchThreadDraftAttachmentSchema,
   WorkbenchThreadDraftSchema,
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchThreadDraft,
@@ -69,11 +71,17 @@ function decodeJson(encoded: string, identity: string): unknown {
 
 function parseDraft(value: unknown, projectId: string): StoredDraft {
   const record = asRecord(value);
-  const identity = StoredDraftIdentitySchema.safeParse(record);
+  const settings = WorkbenchComposerSettingsSchema.safeParse(record.composerSettings);
+  const identity = StoredDraftIdentitySchema.safeParse({
+    ...record,
+    harness: settings.success ? settings.data.harness : record.harness,
+  });
   if (!identity.success) {
     throw new Error(`Stored project ${projectId} contains a draft without a recoverable identity.`);
   }
-  const settings = WorkbenchComposerSettingsSchema.safeParse(record.composerSettings);
+  if (record.attachments !== undefined && !z.array(WorkbenchThreadDraftAttachmentSchema).safeParse(record.attachments).success) {
+    throw new Error(`Stored project ${projectId} contains unsupported draft attachments.`);
+  }
   const harness = identity.data.harness;
   const composerSettings = settings.success
     ? settings.data
@@ -86,19 +94,14 @@ function parseDraft(value: unknown, projectId: string): StoredDraft {
       serviceTier: record.serviceTier === "fast" ? "fast" as const : null,
     };
   const parsed = conformToZodSchema(WorkbenchThreadDraftSchema, { ...record, projectId }, {
-    agent: null,
     attachments: [],
     clientUpdatedAt: 0,
     composerSettings,
     createdAt: 0,
     draftId: identity.data.draftId,
-    harness,
-    model: null,
     profileId: null,
     projectId,
     prompt: "",
-    reasoningEffort: null,
-    serviceTier: null,
     updatedAt: 0,
   });
   return {
@@ -151,6 +154,72 @@ export function parseProjectDocument(encoded: string, projectId: string): Projec
     newThreadProfile: profile.success ? profile.data : latestProfile,
     records,
   };
+}
+
+export function parseProjectImport(encoded: string, projectId: string): ProjectDocument {
+  const decoded = decodeJson(encoded, "thread-state import");
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new Error("Thread-state import has no project object.");
+  const source = asRecord(decoded);
+  const parsed = parseProjectDocument(encoded, projectId);
+  const supported = new Set(["version", "records", "threads", "drafts", "displayOrder", "newThreadProfile"]);
+  if (Object.keys(source).some(key => !supported.has(key))
+    || source.version !== undefined && ![1, 2, 3, 4].includes(Number(source.version))
+    || source.records !== undefined && !Array.isArray(source.records)
+    || source.threads !== undefined && !Array.isArray(source.threads)
+    || source.drafts !== undefined && !Array.isArray(source.drafts)
+    || source.records !== undefined && source.threads !== undefined) {
+    throw new Error("Thread-state import contains unsupported project facts.");
+  }
+  const preserve = (value: unknown, actual: unknown, location: string): void => {
+    if (Array.isArray(value)) {
+      if (!Array.isArray(actual) || value.length !== actual.length) throw new Error(`Thread-state import would discard ${location}.`);
+      value.forEach((item, index) => preserve(item, actual[index], location));
+    } else if (value && typeof value === "object") {
+      if (!actual || typeof actual !== "object" || Array.isArray(actual)) throw new Error(`Thread-state import would discard ${location}.`);
+      const candidate = asRecord(actual);
+      for (const [key, field] of Object.entries(value)) preserve(field, candidate[key], location);
+    } else if (!isDeepStrictEqual(value, actual)) {
+      throw new Error(`Thread-state import would change ${location}.`);
+    }
+  };
+  if (Array.isArray(source.records)) source.records.forEach((record, index) => preserve(record, parsed.records[index], "thread facts"));
+  if (Array.isArray(source.threads)) {
+    const legacyFields = new Set([
+      "archived", "harness", "lifecycle", "mcpGeneration", "orderAt", "pendingQuestionnaire",
+      "pinned", "questionnaireHistory", "snoozed", "threadId", "titleFallback",
+    ]);
+    source.threads.forEach((value, index) => {
+      const record = asRecord(value);
+      if (Object.keys(record).some(key => !legacyFields.has(key))) throw new Error("Thread-state import contains unsupported legacy thread facts.");
+      const actual = parsed.records[index]!;
+      if (actual.entryKind !== "thread") throw new Error("Legacy thread changed its kind during import.");
+      preserve(record, {
+        ...actual.metadata, harness: actual.identity.harness, threadId: actual.identity.threadId,
+        lifecycle: actual.lifecycle, mcpGeneration: actual.mcpGeneration, orderAt: actual.orderAt,
+        pendingQuestionnaire: actual.pendingQuestionnaire, questionnaireHistory: actual.questionnaireHistory,
+        titleFallback: actual.title,
+      }, "legacy thread facts");
+    });
+  }
+  if (Array.isArray(source.drafts)) {
+    source.drafts.forEach((value, index) => {
+      const { agent, harness, model, reasoningEffort, serviceTier, composerSettings, ...facts } = asRecord(value);
+      const settings = WorkbenchComposerSettingsSchema.safeParse(composerSettings);
+      preserve({
+        ...facts,
+        composerSettings: settings.success ? settings.data : {
+          agentPath: typeof agent === "string" ? agent : null,
+          agentSource: null, harness,
+          model: typeof model === "string" ? model : "",
+          reasoningEffort: typeof reasoningEffort === "string" ? reasoningEffort : null,
+          serviceTier: serviceTier === "fast" ? "fast" : null,
+        },
+      }, parsed.drafts[index], "draft facts");
+    });
+  }
+  if (source.displayOrder !== undefined) preserve(source.displayOrder, parsed.displayOrder, "layout facts");
+  if (source.newThreadProfile != null) preserve(source.newThreadProfile, parsed.newThreadProfile, "profile facts");
+  return parsed;
 }
 
 export function decodeGlobalDocument(encoded: string, id: string) {

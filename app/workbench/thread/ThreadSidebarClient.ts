@@ -1,5 +1,4 @@
 /*
- * Keywords: sidebar, project, admission, pinned, drafts, debounce, flush, observation.
  * Exports:
  * - ThreadSidebarOpenResult: project observation bootstrap.
  * - ThreadSidebarGlobalOpenResult: global observation bootstrap.
@@ -168,6 +167,13 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   acceptActivity(update: WorkbenchThreadActivityUpdate) {
     if (this.mode !== "global" && (this.mode !== "project" || update.projectId !== this.projectId)) return;
     if (!this.projectState(update.projectId).acceptActivity(update)) return;
+    this.syncProjectViews();
+    this.publish();
+  }
+  acceptDelta(update: import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadStateDelta) {
+    if (this.mode !== "global" && (this.mode !== "project" || update.projectId !== this.projectId)) return;
+    for (const entry of update.upserts) if (entry.entryKind === "draft") this.receiveDraft(entry.draft);
+    if (!this.projectState(update.projectId).acceptDelta(update)) return;
     this.syncProjectViews();
     this.publish();
   }

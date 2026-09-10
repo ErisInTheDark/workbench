@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect layered sorting, user-order snapshots, one-level folders, section transitions, and malformed-state fallback. Keywords: thread, folder, sort, user order, lifecycle, test.
+ * No production exports. Tests protect layered sorting, user-order snapshots, one-level folders, section transitions, and malformed-state fallback.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -59,9 +59,8 @@ function draft(id: string, createdAt: number, options: { pinned?: boolean; snooz
   return {
     activityAt: createdAt,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: createdAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt,
-      draftId: id, harness: "codex", model: null, profileId: null, projectId: "project", prompt: id,
-      reasoningEffort: null, serviceTier: null, updatedAt: createdAt,
+      attachments: [], clientUpdatedAt: createdAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt,
+      draftId: id, profileId: null, projectId: "project", prompt: id, updatedAt: createdAt,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },

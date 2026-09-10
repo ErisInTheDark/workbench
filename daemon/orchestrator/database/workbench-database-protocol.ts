@@ -1,16 +1,16 @@
 /*
- * Keywords: database, worker, requests, responses, context usage.
- * WorkbenchDatabaseControllerState: complete database-controller lifecycle state. Keywords: database, worker, lifecycle.
- * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker. Keywords: database, worker, protocol.
- * WorkbenchDatabaseRequest: correlated requests admitted by the database worker. Keywords: database, worker, protocol.
- * WorkbenchDatabaseResponse: typed responses returned by the database worker. Keywords: database, worker, protocol.
- * WorkbenchDatabaseInventory: installed schema inventory returned after readiness. Keywords: database, schema, inventory.
- * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch. Keywords: database, statement, transaction.
+ * WorkbenchDatabaseControllerState: complete database-controller lifecycle state.
+ * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
+ * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
+ * WorkbenchDatabaseResponse: typed responses returned by the database worker.
+ * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
+ * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
 import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsDetailedReadRequest, WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
-import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchSubagentReservation } from "../workbench-subagent-record.ts";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type {
   WorkbenchNativeThreadIdentity,
@@ -36,9 +36,16 @@ import type {
   WorkbenchTranscriptItemIdentityLookup,
 } from "./transcript/workbench-transcript-types.ts";
 import type {
-  WorkbenchThreadStateShadowRefresh,
-  WorkbenchThreadStateShadowStatus,
-} from "./thread-state/workbench-thread-state-shadow-types.ts";
+  WorkbenchStoredThreadDraft,
+  WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
+  WorkbenchSubagentRelationshipRead,
+  WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+} from "./thread-state/workbench-thread-state-persistence.ts";
+import type { WorkbenchThreadStateRecord } from "../workbench-thread-state-record.ts";
+import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore.ts";
+import type { WorkbenchThreadLayoutOwner } from "./thread-state/WorkbenchThreadStateLayoutRepository.ts";
+import type { ThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
+import type { WorkbenchComposerProfileSelectionState } from "workbench-shared/workbench/thread/thread-state";
 import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
@@ -81,8 +88,26 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "resolveTurnIdentity"; input: WorkbenchTurnIdentityLookup }
   | { type: "admitTranscriptItemIdentities"; inputs: readonly WorkbenchTranscriptItemIdentityAdmission[] }
   | { type: "resolveTranscriptItemIdentity"; input: WorkbenchTranscriptItemIdentityLookup }
-  | { type: "rebuildThreadStateShadow"; request: WorkbenchThreadStateShadowRefresh }
-  | { type: "readThreadStateShadowStatus" }
+  | { type: "readThreadStateProject"; projectId: string }
+  | { type: "readThreadStateTitleHistories"; projectId: string }
+  | { type: "writeThreadStateProject"; projectId: string; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
+  | { type: "readThreadStateGlobal"; documentId: WorkbenchThreadStateGlobalDocument["id"] }
+  | { type: "writeThreadStateGlobal"; document: WorkbenchThreadStateGlobalDocument }
+  | { type: "readThreadStateRecords"; query: WorkbenchThreadRecordQuery }
+  | { type: "readThreadStateDrafts"; projectId: string }
+  | { type: "readThreadStateProfile"; projectId: string }
+  | { type: "readThreadStateLayout"; owner: WorkbenchThreadLayoutOwner }
+  | { type: "readThreadStatePinnedImports" }
+  | { type: "readThreadStateArchiveDeadline" }
+  | { type: "readThreadStateActivity"; projectId: string }
+  | { type: "readThreadStateSnoozeSources"; targetThreadId: string }
+  | { type: "readThreadStateArchiveEligible"; activeBefore: number }
+  | { type: "commitThreadState"; changes: WorkbenchThreadStateCommit }
+  | { type: "readSubagents"; query: WorkbenchSubagentRelationshipRead }
+  | { type: "readOwnedSubagents"; parentThreadId: string; projectId: string; threadIds: readonly string[] }
+  | { type: "reserveSubagent"; record: Omit<WorkbenchSubagentReservation, "directSubagentIndex"> }
+  | { type: "activateSubagent"; parentThreadId: string; reservationId: string; record: WorkbenchSubagentRelationship }
+  | { type: "removeSubagent"; parentThreadId: string; identifier: string }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "queryTranscript"; request: TranscriptQuery }
@@ -121,7 +146,20 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "turnIdentity"; identity: WorkbenchTurnIdentityRecord | null }
   | { id: number; type: "transcriptItemIdentities"; identities: WorkbenchTranscriptItemIdentity[] }
   | { id: number; type: "transcriptItemIdentity"; identity: WorkbenchTranscriptItemIdentity | null }
-  | { id: number; type: "threadStateShadowStatus"; status: WorkbenchThreadStateShadowStatus | null }
+  | { id: number; type: "threadStateProject"; document: WorkbenchThreadStateProjectDocument }
+  | { id: number; type: "threadStateTitleHistories"; histories: WorkbenchStoredThreadTitleHistory[] }
+  | { id: number; type: "threadStateGlobal"; document: WorkbenchThreadStateGlobalDocument | null }
+  | { id: number; type: "threadStateRecords"; records: WorkbenchThreadStateRecord[] }
+  | { id: number; type: "threadStateDrafts"; drafts: WorkbenchStoredThreadDraft[] }
+  | { id: number; type: "threadStateProfile"; profile: WorkbenchComposerProfileSelectionState | null }
+  | { id: number; type: "threadStateLayout"; layout: { revision: number; displayOrder: ThreadDisplayLayout } | null }
+  | { id: number; type: "threadStatePinnedImports"; projectIds: string[] }
+  | { id: number; type: "threadStateArchiveDeadline"; activeAt: number | null }
+  | { id: number; type: "threadStateActivity"; activityAt: number | null }
+  | { id: number; type: "threadStateSnoozeSources"; sources: Array<{ projectId: string; threadId: string }> }
+  | { id: number; type: "threadStateArchiveEligible"; records: Array<{ projectId: string; record: WorkbenchThreadStateRecord }> }
+  | { id: number; type: "subagents"; records: WorkbenchSubagentRelationship[] | null }
+  | { id: number; type: "subagentReservation"; record: WorkbenchSubagentReservation }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
   | { id: number; type: "transcriptQueryResult"; result: { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } }

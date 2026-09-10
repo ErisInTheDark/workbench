@@ -1,12 +1,11 @@
 /*
- * Keywords: client, routes, thread state, title mutations, pinned admission, shared draft persistence.
  * Exports:
- * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
+ * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering.
  * - openWorkbenchThreadStateObservation: negotiate project sidebar bootstrap versions.
  * - openWorkbenchGlobalThreadStateObservation: negotiate global sidebar bootstrap versions.
  * - describeGlobalThreadStateOpenFailure: describe bounded global-open transport failures.
- * - MountedWorkbenchClient: provider-facing controls, thread runtime, sidebar store, and disposal boundary. Keywords: React, domain hook, mount.
- * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume, global home, durable questionnaire.
+ * - MountedWorkbenchClient: provider-facing controls, thread runtime, sidebar store, and disposal boundary.
+ * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together.
  */
 
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
@@ -60,6 +59,7 @@ import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-sh
 import ThreadIdentityController from "./workbench/thread/ThreadIdentityController";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
+import { serializeLegacyThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import conformWorkbenchThreadStateOpenResult, {
     conformWorkbenchGlobalThreadStateOpenResult,
     conformWorkbenchThreadStateSnapshot,
@@ -206,7 +206,7 @@ export async function openWorkbenchThreadStateObservation({
   acceptProject: (update: WorkbenchProjectStateUpdate) => void;
   installCatalog: (catalog: WorkbenchProjectsPayload) => void;
   projectId: string;
-  request: (params: { projectId: string; version?: 2 | 3 | 4 }) => Promise<unknown>;
+  request: (params: { projectId: string; version?: 2 | 3 | 4 | 5 }) => Promise<unknown>;
 }) {
   const acceptComposite = (response: unknown) => {
     const parsed = WorkbenchThreadStateOpenResultSchema.safeParse(response);
@@ -219,27 +219,16 @@ export async function openWorkbenchThreadStateObservation({
     return conformed;
   };
   let response: unknown;
-  try {
-    response = await request({ projectId, version: 4 });
-  } catch (error) {
-    if (!isUnsupportedThreadStateOpenVersion(error)) throw error;
-    let fallbackResponse: unknown;
+  for (const version of [5, 4, 3, 2, undefined] as const) {
     try {
-      fallbackResponse = await request({ projectId, version: 3 });
-    } catch (fallbackError) {
-      if (!isUnsupportedThreadStateOpenVersion(fallbackError)) throw fallbackError;
-      try {
-        fallbackResponse = await request({ projectId, version: 2 });
-      } catch (legacyError) {
-        if (!isUnsupportedThreadStateOpenVersion(legacyError)) throw legacyError;
-        fallbackResponse = await request({ projectId });
-      }
+      response = await request(version === undefined ? { projectId } : { projectId, version });
+      break;
+    } catch (error) {
+      if (version === undefined || !isUnsupportedThreadStateOpenVersion(error)) throw error;
     }
-    if (isCompositeThreadStateOpenResponse(fallbackResponse)) {
-      const composite = acceptComposite(fallbackResponse).data;
-      return { pinnedThreadLayout: composite.pinnedThreadLayout, projectThreads: composite.projectThreads, sidebar: composite.sidebar };
-    }
-    const legacy = WorkbenchThreadSidebarSnapshotSchema.safeParse(fallbackResponse);
+  }
+  if (!isCompositeThreadStateOpenResponse(response)) {
+    const legacy = WorkbenchThreadSidebarSnapshotSchema.safeParse(response);
     if (!legacy.success) {
       reportClientSchemaError("Rejected legacy Workbench thread-state open response", legacy.error);
       throw new Error("The legacy thread-state open response was invalid.");
@@ -256,20 +245,16 @@ export async function openWorkbenchGlobalThreadStateObservation({
   request,
 }: {
   installCatalog: (catalog: WorkbenchProjectsPayload) => void;
-  request: (version: 4 | 5 | 6) => Promise<unknown>;
+  request: (version: 4 | 5 | 6 | 7) => Promise<unknown>;
 }) {
   let response: unknown;
-  try {
-    response = await request(6);
-  } catch (error) {
-    const code = error instanceof WorkbenchDaemonRequestError ? error.code as unknown : null;
-    if (code !== "invalidThreadStateMutation") throw error;
+  for (const version of [7, 6, 5, 4] as const) {
     try {
-      response = await request(5);
-    } catch (fallbackError) {
-      const fallbackCode = fallbackError instanceof WorkbenchDaemonRequestError ? fallbackError.code as unknown : null;
-      if (fallbackCode !== "invalidThreadStateMutation") throw fallbackError;
-      response = await request(4);
+      response = await request(version);
+      break;
+    } catch (error) {
+      const code = error instanceof WorkbenchDaemonRequestError ? error.code as unknown : null;
+      if (version === 4 || code !== "invalidThreadStateMutation") throw error;
     }
   }
   const parsed = WorkbenchGlobalThreadStateOpenResultSchema.safeParse(response);
@@ -394,7 +379,7 @@ export async function WorkbenchClient(
         request: async (version) => await threadClient.requestWorkbench("workbench/thread-state/global/open", { version }),
       }),
       upsertDraft: async (projectId, draft, folderId) => {
-        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, folderId, projectId }));
+        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft: serializeLegacyThreadDraft(draft), folderId, projectId }));
         if (!parsed.success) {
           reportClientSchemaError("Rejected Workbench draft mutation response", parsed.error);
           throw new Error("The draft mutation response was invalid.");
@@ -447,6 +432,7 @@ export async function WorkbenchClient(
         else if (conformed.updateKind === "projectThreadSummary") threadSidebarClient.acceptProjectThreadSummary(conformed);
         else if (conformed.updateKind === "pinnedThreadLayout") threadSidebarClient.acceptPinnedThreadLayout(conformed);
         else if (conformed.updateKind === "activity") threadSidebarClient.acceptActivity(conformed);
+        else if (conformed.updateKind === "threadStateDelta") threadSidebarClient.acceptDelta(conformed);
       } else {
         threadSidebarClient.accept(conformed);
       }

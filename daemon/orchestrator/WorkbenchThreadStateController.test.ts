@@ -1,5 +1,4 @@
 /*
- * Keywords: SQLite, title history, fallback, lifecycle, reconciliation, persistence.
  * Exports: none. Tests protect headless thread ownership, mutations, durability, and publication fences.
  */
 import assert from "node:assert/strict";
@@ -17,6 +16,7 @@ import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadObservationRes
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
+import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
@@ -28,6 +28,19 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
   readonly globals = new Map<WorkbenchThreadStateGlobalDocumentId, object>();
   readonly projects = new Map<string, object>();
   readonly titleHistories = new Map<string, WorkbenchStoredThreadTitleHistory[]>();
+
+  async readArchiveEligible(activeBefore: number) {
+    return [...this.projects].flatMap(([projectId, document]) =>
+      parseProjectDocument(JSON.stringify(document), projectId).records
+        .filter(record => record.entryKind === "thread" && record.lifecycle.settled
+          && !record.metadata.archived && !record.metadata.pinned && record.activityAt <= activeBefore)
+        .map(record => ({ projectId, record })));
+  }
+
+  async readNextArchiveEligibility() {
+    const records = await this.readArchiveEligible(Number.MAX_SAFE_INTEGER);
+    return records.length ? Math.min(...records.map(({ record }) => record.activityAt)) : null;
+  }
 
   async readTitleHistories(projectId: string) {
     return structuredClone(this.titleHistories.get(projectId) ?? []);
@@ -328,6 +341,62 @@ function projectOption(id: string, rootPath: string) {
   };
 }
 
+test("settlement publishes the affected entry while discovery is held, including headless subscribers", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const observed: WorkbenchThreadSidebarEntry[] = [];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "immediate-incremental-settlement", projectState: projectState(),
+    getProjectCatalog: () => ({ data: [projectOption("project", "C:/project")], rootPath: "C:/" }),
+    publish: (_connection, snapshot) => publications.push(snapshot),
+    reconcileProject: async () => { entered(); await gate; return []; },
+  });
+  let refreshing: Promise<WorkbenchThreadSidebarSnapshot> | null = null;
+  try {
+    for (const threadId of ["changed", "unrelated"]) await controller.ensureProviderEntry("project", {
+      entryKind: "thread", identity: { harness: "codex", threadId }, activityAt: 1, title: threadId,
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+    });
+    await controller.open("viewer", "project", 5);
+    refreshing = controller.refresh("project");
+    await started;
+    publications.length = 0;
+    await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/settle", projectId: "project", identity: { harness: "codex", threadId: "changed" },
+    });
+    const delta = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
+    assert.ok(delta && "upserts" in delta);
+    assert.equal(delta.upserts.length, 1);
+    assert.equal(delta.upserts[0]?.entryKind !== "draft" && delta.upserts[0]?.lifecycle.settled, true);
+    publications.length = 0;
+    await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/priority/set", projectId: "project", sourceKey: "codex:unrelated", priority: "pinned",
+    });
+    const priority = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
+    assert.ok(priority && "upserts" in priority);
+    assert.equal(priority.upserts.length, 1);
+    assert.equal(priority.upserts[0]?.entryKind === "thread" && priority.upserts[0].metadata.pinned, true);
+    publications.length = 0;
+    await controller.setTitle("project", "codex", "unrelated", "visible title");
+    const title = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
+    assert.ok(title && "upserts" in title);
+    assert.equal(title.upserts[0]?.title, "visible title");
+    await controller.close("viewer", "project");
+    const stop = controller.subscribe((_projectId, entry) => observed.push(entry));
+    await controller.setTitle("project", "codex", "unrelated", "headless change");
+    stop();
+    assert.equal(observed.at(-1)?.title, "headless change");
+  } finally {
+    release();
+    await refreshing;
+    await controller.dispose();
+  }
+});
+
 test("a pinned thread observation receives full live state without observing its project sidebar", async () => {
   const identity = { harness: "codex" as const, threadId: "foreign-thread" };
   const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
@@ -425,7 +494,7 @@ test("questionnaire completion revalidates the captured item after interruption 
       storageRoot: `questionnaire-completion-${outcome}`, threadStateStore: new MemoryThreadStatePersistence(),
       getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
       reconcileProject: async (_project, _signal, accept) => {
-        accept("codex", [record], { complete: true });
+        await accept("codex", [record], { complete: true });
         return [];
       },
       interruptQuestionnaire: async () => {
@@ -557,7 +626,7 @@ test("questionnaire snooze retains input through interruption, then stop dismiss
   const controller = new WorkbenchThreadStateController({
     storageRoot: "questionnaire-snooze", threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
-    reconcileProject: async (_project, _signal, accept) => { accept("codex", [provider], { complete: true }); return []; },
+    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [provider], { complete: true }); return []; },
     interruptQuestionnaire: async () => {
       interrupts++;
       await controller.applyLifecycle("project", "codex", provider.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: "turn" });
@@ -651,7 +720,7 @@ test("UI subscribers share headless observation and warm snapshots without ownin
     },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliations += 1;
-      acceptProviderSnapshot("codex", [knownEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [knownEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -801,17 +870,21 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-authority-"));
   await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, ".workbench", "workbench.sqlite3") });
-  const store = new WorkbenchThreadStateStore(database, () => 10);
+  const store = new WorkbenchThreadStateStore(database);
+  const [alpha, beta] = await database.observeThreadIdentities(["alpha", "beta"].map(nativeThreadId => ({
+    native: { harness: "codex" as const, nativeThreadId, nativeLocation: root },
+    projectId: "project", projectRoot: root, title: nativeThreadId, createdAt: 1, updatedAt: 1, activityAt: 1,
+  })));
   const providerEntries: WorkbenchThreadSidebarEntry[] = [
-    pinnedRecord("alpha", "Private alpha title"),
-    pinnedRecord("beta", "Private beta title"),
+    pinnedRecord(alpha!.threadId, "Private alpha title"),
+    pinnedRecord(beta!.threadId, "Private beta title"),
   ];
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -821,8 +894,8 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
   try {
     await controller.openGlobal("global", 6);
     await waitFor(async () => (await controller.getSnapshot("project")).entries.length === 2, "Provider entries did not reconcile.");
-    const alphaKey = getProjectQualifiedThreadDisplayKey("project", "codex:alpha");
-    const betaKey = getProjectQualifiedThreadDisplayKey("project", "codex:beta");
+    const alphaKey = getProjectQualifiedThreadDisplayKey("project", `codex:${alpha!.threadId}`);
+    const betaKey = getProjectQualifiedThreadDisplayKey("project", `codex:${beta!.threadId}`);
     const pinnedFolderId = "00000000-0000-4000-8000-000000000301";
     const pinnedResult = await controller.handleRequest("global", {
       folderId: pinnedFolderId,
@@ -956,7 +1029,7 @@ test("managed wait state is projected live and never persisted", async () => {
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [entry], { complete: true });
+      await acceptProviderSnapshot("codex", [entry], { complete: true });
       reconciled = true;
       return [];
     },
@@ -997,7 +1070,7 @@ test("version 3 bootstraps every project summary and publishes cross-project cha
       const lifecycle = projectId === "beta" && reconciliation > 1
         ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
         : { agent: { agentStatus: "working" as const, turnId: "turn" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const };
-      acceptProviderSnapshot("codex", [{
+      await acceptProviderSnapshot("codex", [{
         activityAt: reconciliation,
         entryKind: "thread",
         identity: { harness: "codex", threadId: `${projectId}-thread` },
@@ -1030,6 +1103,9 @@ test("version 3 bootstraps every project summary and publishes cross-project cha
 
   publications.length = 0;
   await controller.refresh("beta");
+  await waitFor(() => publications.some(({ snapshot }) => "updateKind" in snapshot
+    && snapshot.updateKind === "projectThreadSummary" && snapshot.summary.projectId === "beta"
+    && snapshot.summary.counts.needsAttentionActive === 1), "Refreshed project summary was not published.");
   const summaryPublications = publications.filter((publication) => "updateKind" in publication.snapshot
     && publication.snapshot.updateKind === "projectThreadSummary");
   assert.equal(summaryPublications.length > 0, true);
@@ -1136,8 +1212,8 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     renameThread: async (_projectId, _harness, _threadId, title) => title,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
       if (projectId === "owner") {
-        acceptProviderSnapshot("codex", [pinnedRoot], { complete: true });
-        acceptProviderSnapshot("opencode", [directSubagent], { complete: true });
+        await acceptProviderSnapshot("codex", [pinnedRoot], { complete: true });
+        await acceptProviderSnapshot("opencode", [directSubagent], { complete: true });
       }
       return [];
     },
@@ -1232,13 +1308,13 @@ test("incomplete provider snapshots retain unseen rows until an authoritative sn
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliation += 1;
       if (reconciliation === 1) {
-        acceptProviderSnapshot("codex", [oldEntry], { complete: true });
+        await acceptProviderSnapshot("codex", [oldEntry], { complete: true });
         return [];
       }
-      acceptProviderSnapshot("codex", [newEntry], { complete: false });
+      await acceptProviderSnapshot("codex", [newEntry], { complete: false });
       incompleteInstalled = true;
       await finalGate;
-      acceptProviderSnapshot("codex", [newEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [newEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -1422,7 +1498,7 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   };
   const draft = {
     agent: null,
-    attachments: [{ kind: "kept" }, null, { kind: "also-kept" }],
+    attachments: [{ id: "kept", url: "data:text/plain,kept" }, { id: "also-kept", url: "data:text/plain,also-kept" }],
     clientUpdatedAt: 2,
     composerSettings: {},
     createdAt: 1,
@@ -1449,7 +1525,7 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliations += 1;
-      acceptProviderSnapshot("codex", [{
+      await acceptProviderSnapshot("codex", [{
         activityAt: 11,
         entryKind: "thread",
         identity: { harness: "codex", threadId: "kept-thread" },
@@ -1482,7 +1558,7 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
     projectId: openedDraft.draft.projectId,
     prompt: openedDraft.draft.prompt,
   } : null, {
-    attachments: [{ kind: "kept" }, null, { kind: "also-kept" }],
+    attachments: [{ id: "kept", url: "data:text/plain,kept" }, { id: "also-kept", url: "data:text/plain,also-kept" }],
     metadata: { archived: false, pinned: true, snoozed: false },
     projectId: "project",
     prompt: "Kept draft",
@@ -1727,7 +1803,7 @@ test("home order persists folder blocks and rejects foreign-project folder membe
     projectState: projectState(),
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", entriesByProject.get(projectId) ?? [], { complete: true });
+      await acceptProviderSnapshot("codex", entriesByProject.get(projectId) ?? [], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -1980,7 +2056,7 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
     },
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2089,7 +2165,7 @@ test("disposal fences late reconciliation without awaiting its provider request"
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationStarted = true;
       await reconciliationGate;
-      acceptProviderSnapshot("codex", [lateEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [lateEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2182,7 +2258,7 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationCount += 1;
       if (reconciliationCount === 1) {
-        acceptProviderSnapshot("codex", [known], { complete: true });
+        await acceptProviderSnapshot("codex", [known], { complete: true });
         return [];
       }
       staleAccept = acceptProviderSnapshot as typeof staleAccept;
@@ -2221,7 +2297,7 @@ test("request telemetry reports bounded validation evidence without logging requ
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [], { complete: true });
+      await acceptProviderSnapshot("codex", [], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2320,7 +2396,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
     },
     projectState: projectState(),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2481,7 +2557,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
       if ("entries" in snapshot && snapshot.entries.length === 2) discovered = true;
     },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [accepted, pending], { complete: true });
+      await acceptProviderSnapshot("codex", [accepted, pending], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2531,7 +2607,7 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
     projectState: projectState(),
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2584,14 +2660,16 @@ test("inactive providers release stale questionnaire ownership without changing 
   };
   let providerEntries: WorkbenchThreadSidebarEntry[] = [working("top"), child];
   let publishedEntries: WorkbenchThreadSidebarEntry[] = [];
+  let freshRevision = -1;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: (_connectionId, snapshot) => {
       if ("entries" in snapshot) publishedEntries = snapshot.entries;
+      if (!("updateKind" in snapshot) && snapshot.freshness === "fresh") freshRevision = snapshot.revision;
     },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2601,8 +2679,10 @@ test("inactive providers release stale questionnaire ownership without changing 
   await controller.observeLifecycle("codex", "top", { kind: "pendingInput", questionnaire: null, requestKey: "top-request", turnId: "top-turn" });
   await controller.observeLifecycle("codex", "child", { kind: "pendingInput", questionnaire: null, requestKey: "child-request", turnId: "child-turn" });
 
+  const beforeRefresh = freshRevision;
   await controller.refresh("project");
-  await waitFor(() => publishedEntries.every((entry) => entry.entryKind === "draft" || entry.lifecycle.reason === "pendingInput"), "Active questionnaires lost provider ownership.");
+  await waitFor(() => freshRevision > beforeRefresh
+    && publishedEntries.every((entry) => entry.entryKind === "draft" || entry.lifecycle.reason === "pendingInput"), "Active questionnaires lost provider ownership.");
 
   providerEntries = [
     { ...working("top"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } },
@@ -2652,7 +2732,7 @@ test("proper questionnaires and late-response history survive controller restart
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2839,7 +2919,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -2911,7 +2991,7 @@ test("thread folders persist across restart and reconcile members that leave the
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3068,7 +3148,7 @@ test("drag priority and folder drops update one project-owned state atomically",
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [source, target], { complete: true });
+      await acceptProviderSnapshot("codex", [source, target], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3166,7 +3246,7 @@ test("cross-project dependent snooze waits for completion and the final live cla
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
-      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       await acceptGitArcSnapshot({
         arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: "target" }] : [],
         plans: [],
@@ -3238,7 +3318,7 @@ test("dependent snooze also wakes when claims leave before manual completion", a
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
-      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       await acceptGitArcSnapshot({
         arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: "target" }] : [],
         plans: [],
@@ -3313,7 +3393,7 @@ test("dependent snooze replacement survives a missing target, skips ordinary aut
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", projectId === "alpha" ? [source, ordinary, active] : betaEntries, { complete: true });
+      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source, ordinary, active] : betaEntries, { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3387,6 +3467,8 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
   let releaseSourceRead = () => undefined;
   const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
   const gatedPersistence: WorkbenchThreadStatePersistence = {
+    readNextArchiveEligibility: () => persistence.readNextArchiveEligibility(),
+    readArchiveEligible: before => persistence.readArchiveEligible(before),
     readGlobal: async (id) => await persistence.readGlobal(id),
     readTitleHistories: async (projectId) => await persistence.readTitleHistories(projectId),
     readProject: async (projectId) => {
@@ -3404,7 +3486,7 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3442,7 +3524,7 @@ test("provider completion auto-completes subagents while top-level turns still n
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [parent, working("top"), child], { complete: true });
+      await acceptProviderSnapshot("codex", [parent, working("top"), child], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3480,7 +3562,7 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
     projectState: projectState(),
     publish: (_connectionId, snapshot) => { if ("entries" in snapshot) publications += 1; },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [terminal], { complete: true });
+      await acceptProviderSnapshot("codex", [terminal], { complete: true });
       return [];
     },
     storageRoot: root,
@@ -3550,7 +3632,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
     projectState: projectState(),
     publish: (_connectionId, snapshot) => published.push(snapshot),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
+      await acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
     },
     runGitArcReadTransition: async (_projectId, operation) => {

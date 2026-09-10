@@ -1,88 +1,87 @@
 /*
- * Keywords: thread state, relational, sqlite, parity, constraints.
  * Exports:
- * - default WorkbenchThreadStateRelationalRepository: own shadow projection and transactional reconciliation.
+ * - default WorkbenchThreadStateRelationalRepository: own scoped relational reads and affected-fact writes.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type Database from "better-sqlite3";
-import { z } from "zod";
-
-import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import {
+  WorkbenchComposerProfileSelectionSchema,
+  WorkbenchThreadDraftSchema,
+  WorkbenchHarnessSchema,
+  WorkbenchThreadLifecycleSchema,
   type WorkbenchComposerProfileSelectionState,
-  type WorkbenchDurableQuestionnaire,
   type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
-import { normalizeThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
-import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import {
-  asRecord,
-  createSourceDigest,
-  decodeGlobalDocument,
-  parseProjectDocument,
-  type SourceProject,
-} from "./workbench-thread-state-document-source.ts";
-import {
-  projectThreadStateLayout,
-  type ThreadStateLayoutIdentity,
-  type ThreadStateLayoutTarget,
-} from "./workbench-thread-state-layout-projector.ts";
-import { projectThreadStateQuestionnaires } from "./workbench-thread-state-questionnaire-projector.ts";
-import {
-  ANSWER_TABLE,
-  ACTIVE_SUBAGENT_RELATIONSHIP_TABLE,
-  ATTACHMENT_TABLE,
-  DELETE_ORDER,
-  DRAFT_TABLE,
-  FOLDER_MEMBER_TABLE,
-  FOLDER_TABLE,
-  GLOBAL_DOCUMENT_TABLE,
-  GLOBAL_LAYOUT_TABLE,
-  IDENTITY_TABLE,
-  LAYOUT_DRAFT_TABLE,
-  LAYOUT_FOLDER_TABLE,
-  LAYOUT_ITEM_TABLE,
-  LAYOUT_RELATION_TABLE,
-  LAYOUT_TABLE,
-  LAYOUT_THREAD_TABLE,
-  LIFECYCLE_TABLE,
-  PINNED_IMPORT_TABLE,
-  PENDING_SUBAGENT_RELATIONSHIP_TABLE,
-  PROFILE_TABLE,
-  PROJECT_DOCUMENT_TABLE,
-  PROJECT_LAYOUT_TABLE,
-  PROJECT_PROFILE_TABLE,
-  PROJECTION_STATUS_TABLE,
-  QUESTIONNAIRE_TABLE,
-  QUESTION_TABLE,
-  OPTION_TABLE,
-  RELATIONAL_TABLE_KEYS,
-  RELATIONAL_TABLES,
-  RETENTION_TABLE,
-  SNOOZE_TABLE,
-  SUBAGENT_TABLE,
-  SUBAGENT_PARENT_TABLE,
-  SUBAGENT_RELATIONSHIP_TABLE,
-  THREAD_TABLE,
-  addRow,
-  canonicalRows,
-  rowKey,
-  rowSignatures,
-  providerReferenceKey,
-  type RelationalTableName,
-  type RowSets,
-  type SqlRow,
-  type SqlValue,
-} from "./workbench-thread-state-relational-tables.ts";
-import type {
-  WorkbenchSubagentParentSnapshot,
-  WorkbenchThreadStateShadowRefresh,
-  WorkbenchThreadStateShadowStatus,
-} from "./workbench-thread-state-shadow-types.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
-import WorkbenchTranscriptIdentityRepository from "../transcript/WorkbenchTranscriptIdentityRepository.ts";
+import WorkbenchThreadStateGitRepository from "./WorkbenchThreadStateGitRepository.ts";
+import WorkbenchThreadStateQuestionnaireRepository from "./WorkbenchThreadStateQuestionnaireRepository.ts";
+import type {
+  WorkbenchStoredThreadDraft, WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
+  WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+} from "./workbench-thread-state-persistence.ts";
+import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
+import type { WorkbenchStoredThreadTitleHistory } from "../../WorkbenchThreadStateStore.ts";
+import WorkbenchThreadStateLayoutRepository, { type WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository.ts";
+
+type SqlValue = string | number | null;
+type SqlRow = Record<string, SqlValue>;
+
+interface ThreadStateRow {
+  thread_id: string;
+  thread_kind: "topLevel" | "subagent";
+  harness_id: "codex" | "copilot" | "opencode";
+  title: string;
+  activity_at: number;
+  provider_observed: 0 | 1;
+  project_id: string;
+  archived: 0 | 1 | null;
+  pinned: 0 | 1 | null;
+  snoozed: 0 | 1 | null;
+  order_at: number | null;
+  parent_thread_id: string | null;
+  cwd: string | null;
+  name: string | null;
+  profile_id: string | null;
+  profile_name: string | null;
+  direct_subagent_index: number | null;
+  created_at: number | null;
+  updated_at: number | null;
+  child_pinned: 0 | 1 | null;
+  lifecycle_kind: WorkbenchThreadLifecycle["kind"] | null;
+  reason: WorkbenchThreadLifecycle["reason"] | null;
+  settled: 0 | 1 | null;
+  turn_id: string | null;
+  request_key: string | null;
+  agent_status: "working" | "completed" | "blocked" | null;
+  settled_at: number | null;
+  git_history_cleaned_at: number | null;
+  mcp_generation: string | null;
+}
+
+const SELECT_THREAD_STATES = `
+  SELECT state.*, thread.project_id, top.archived, top.pinned, top.snoozed, top.order_at,
+    child.parent_thread_id, child.cwd, child.name, child.profile_id, child.profile_name,
+    child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
+    lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
+    lifecycle.request_key, lifecycle.agent_status,
+    retention.settled_at, retention.git_history_cleaned_at, retention.mcp_generation
+  FROM workbench_thread_states state
+  JOIN workbench_threads thread ON thread.id = state.thread_id
+  LEFT JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = state.thread_id
+  LEFT JOIN workbench_top_level_thread_states top ON top.thread_id = state.thread_id
+  LEFT JOIN workbench_subagent_thread_states child ON child.thread_id = state.thread_id
+  LEFT JOIN workbench_thread_retention retention ON retention.thread_id = state.thread_id
+`;
+
+const UNFINISHED_CHILD = `EXISTS (
+  SELECT 1 FROM workbench_subagent_thread_states child_state
+  JOIN workbench_thread_lifecycle child_lifecycle ON child_lifecycle.thread_id = child_state.thread_id
+  JOIN workbench_thread_states child_observation ON child_observation.thread_id = child_state.thread_id
+  WHERE child_state.parent_thread_id = state.thread_id AND child_lifecycle.settled = 0 AND child_observation.provider_observed = 1
+    AND child_lifecycle.lifecycle_kind IN ('working', 'needsAttention')
+)`;
 
 function profileRow(profile: WorkbenchComposerProfileSelectionState) {
   return {
@@ -110,675 +109,540 @@ function lifecycleRow(lifecycle: WorkbenchThreadLifecycle) {
   } satisfies SqlRow;
 }
 
-function sourceRelationships(parents: readonly WorkbenchSubagentParentSnapshot[]) {
-  return parents.flatMap(({ relationships }) => relationships);
-}
-
-function sourceDigestWithParents(sourceDigest: string, parents: readonly WorkbenchSubagentParentSnapshot[]) {
-  return createHash("sha256").update(sourceDigest).update(JSON.stringify(
-    parents.map(({ harness, nextDirectSubagentIndex, parentThreadId, projectId }) => (
-      [projectId, harness, parentThreadId, nextDirectSubagentIndex]
-    )),
-  )).digest("hex");
-}
-
-function isSqliteConstraintError(error: unknown): error is Error & { code: string } {
-  if (!(error instanceof Error)) return false;
-  const code = (error as Error & { code?: unknown }).code;
-  return typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT");
-}
-
-function sqliteConstraintFailureText(error: Error) {
-  const structuralIdentity = /^(?:NOT NULL|UNIQUE) constraint failed: ((?:workbench_[a-z0-9_]+\.[a-z0-9_]+)(?:, workbench_[a-z0-9_]+\.[a-z0-9_]+)*)$/u
-    .exec(error.message)?.[1];
-  return structuralIdentity
-    ? `Thread-state projection failed: SQLite constraint failure (${structuralIdentity}).`
-    : "Thread-state projection failed: SQLite constraint failure.";
-}
-
-function readStatusRow(row: Record<string, SqlValue>): WorkbenchThreadStateShadowStatus {
-  return {
-    completedAt: row.completed_at as number | null,
-    errorCode: row.error_code as WorkbenchThreadStateShadowStatus["errorCode"],
-    errorText: row.error_text as string | null,
-    generation: row.generation as number,
-    mismatchCount: row.mismatch_count as number,
-    projectedSubagentCount: row.projected_subagent_count as number,
-    projectedThreadCount: row.projected_thread_count as number,
-    sourceDigest: row.source_digest as string,
-    sourceProjectCount: row.source_project_count as number,
-    sourceProjectUpdatedAt: row.source_project_updated_at as number,
-    sourceSubagentParentCount: row.source_subagent_parent_count as number,
-    sourceSubagentCount: row.source_subagent_count as number,
-    state: row.state as WorkbenchThreadStateShadowStatus["state"],
-    updatedAt: row.updated_at as number,
-  };
-}
-
 export default class WorkbenchThreadStateRelationalRepository {
   private readonly database: Database.Database;
+  private readonly git: WorkbenchThreadStateGitRepository;
+  private readonly questionnaires: WorkbenchThreadStateQuestionnaireRepository;
+  private readonly layouts: WorkbenchThreadStateLayoutRepository;
 
   constructor(
     database: Database.Database,
     private readonly threadIdentity = new WorkbenchThreadIdentityRepository(database),
-    private readonly itemIdentity = new WorkbenchTranscriptIdentityRepository(database),
   ) {
     this.database = database;
+    this.git = new WorkbenchThreadStateGitRepository(database);
+    this.questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);
+    this.layouts = new WorkbenchThreadStateLayoutRepository(database, {
+      resolveThread: (projectId, harness, threadId) => {
+        const identity = this.threadIdentity.resolve({ projectId, harness, threadId });
+        if (!identity) throw new Error("Layout references an unresolved canonical thread.");
+        return identity.threadId;
+      },
+      readThread: (threadId) => {
+        const identity = this.threadIdentity.resolve({ threadId });
+        if (!identity) throw new Error("Layout references an unresolved canonical thread.");
+        const state = this.database.prepare("SELECT harness_id FROM workbench_thread_states WHERE thread_id = ?")
+          .get(threadId) as { harness_id: string } | undefined;
+        return {
+          threadId: identity.threadId, projectId: identity.projectId,
+          harness: WorkbenchHarnessSchema.parse(state?.harness_id ?? identity.bindings[0]?.harness),
+        };
+      },
+    });
   }
 
-  readStatus(): WorkbenchThreadStateShadowStatus | null {
-    const row = this.database.prepare(
-      `SELECT * FROM ${PROJECTION_STATUS_TABLE} WHERE id = 1`,
-    ).get() as Record<string, SqlValue> | undefined;
-    return row ? readStatusRow(row) : null;
+  readLayout(owner: WorkbenchThreadLayoutOwner) {
+    return this.layouts.read(owner);
   }
 
-  rebuild(request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
-    try {
-      return this.rebuildProjection(request);
-    } catch (error) {
-      return this.recordFailure(error, request);
+  readProject(projectId: string): WorkbenchThreadStateProjectDocument {
+    return this.database.transaction(() => ({
+      version: 4 as const,
+      records: this.readRecords({ selection: "project", projectId }),
+      drafts: this.readDrafts(projectId).map(({ draft, pinned, snoozed }) => ({ ...draft, pinned, snoozed })),
+      newThreadProfile: this.readProjectProfile(projectId),
+      displayOrder: this.layouts.read({ kind: "project", projectId })?.displayOrder ?? {},
+    }))();
+  }
+
+  readTitleHistories(projectId: string): WorkbenchStoredThreadTitleHistory[] {
+    const rows = this.database.prepare(`
+      SELECT title.thread_id, title.title, title.used_at, state.harness_id
+      FROM workbench_thread_title_history title
+      JOIN workbench_threads thread ON thread.id = title.thread_id
+      LEFT JOIN workbench_thread_states state ON state.thread_id = title.thread_id
+      WHERE thread.project_id = ? ORDER BY title.used_at DESC, title.title
+    `).all(projectId) as Array<{ thread_id: string; title: string; used_at: number; harness_id: string | null }>;
+    const histories = new Map<string, WorkbenchStoredThreadTitleHistory>();
+    for (const row of rows) {
+      let history = histories.get(row.thread_id);
+      if (!history) {
+        const harness = WorkbenchHarnessSchema.parse(row.harness_id
+          ?? this.threadIdentity.resolve({ projectId, threadId: row.thread_id })?.bindings[0]?.harness);
+        history = { identity: { harness, threadId: row.thread_id }, titles: [] };
+        histories.set(row.thread_id, history);
+      }
+      history.titles.push({ title: row.title, usedAt: row.used_at });
     }
+    return [...histories.values()];
   }
 
-  private rebuildProjection(request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
-    const relationships = sourceRelationships(request.parents);
-    const sourceRows = this.database.prepare(
-      `SELECT project_id, document_json, updated_at FROM ${PROJECT_DOCUMENT_TABLE} ORDER BY project_id`,
-    ).all() as Array<{ document_json: string; project_id: string; updated_at: number }>;
-    const projects = sourceRows.map(({ document_json, project_id, updated_at }): SourceProject => ({
-      document: parseProjectDocument(document_json, project_id),
-      projectId: project_id,
-      updatedAt: updated_at,
-    }));
-    const globalRows = this.database.prepare(
-      `SELECT id, document_json FROM ${GLOBAL_DOCUMENT_TABLE} ORDER BY id`,
-    ).all() as Array<{ document_json: string; id: string }>;
-    const globals = new Map(globalRows.map(({ document_json, id }) => [
-      id,
-      decodeGlobalDocument(document_json, id),
-    ]));
-    const digest = sourceDigestWithParents(createSourceDigest(
-      sourceRows.map(({ document_json, project_id, updated_at }) => ({
-        documentJson: document_json,
-        projectId: project_id,
-        updatedAt: updated_at,
-      })),
-      globalRows.map(({ document_json, id }) => ({ documentJson: document_json, id })),
-      relationships,
-    ), request.parents);
-    const previousGeneration = this.readStatus()?.generation ?? 0;
-
-    return this.database.transaction(() => {
-      this.database.pragma("defer_foreign_keys = ON");
-      this.normaliseThreadIdentities();
-      this.normaliseOpaqueIdentities();
-      const rows = this.projectRows(projects, request.parents, globals);
-      const actualRows = new Map(RELATIONAL_TABLES.map((table) => [
-        table,
-        this.database.prepare(`SELECT * FROM ${table}`).all() as SqlRow[],
-      ]));
-      const expectedByTable = new Map(RELATIONAL_TABLES.map((table) => [
-        table,
-        new Map((rows.get(table) ?? []).map((row) => [rowKey(table, row), row])),
-      ]));
-      for (const table of DELETE_ORDER) {
-        const expected = expectedByTable.get(table)!;
-        for (const actual of actualRows.get(table) ?? []) {
-          if (!expected.has(rowKey(table, actual))) this.delete(table, actual);
-        }
-      }
-      for (const table of RELATIONAL_TABLES) {
-        const actual = new Map((actualRows.get(table) ?? []).map((row) => [rowKey(table, row), row]));
-        for (const [key, expected] of expectedByTable.get(table)!) {
-          const existing = actual.get(key);
-          if (!existing) this.insert(table, expected);
-          else if (!isDeepStrictEqual(canonicalRows(existing), canonicalRows(expected))) this.update(table, expected);
-        }
-      }
-      let mismatchCount = this.sourceCoverageMismatchCount(rows, projects, request.parents);
-      for (const table of RELATIONAL_TABLES) {
-        const expected = rowSignatures(rows.get(table) ?? []);
-        const actual = rowSignatures(this.database.prepare(`SELECT * FROM ${table}`).all() as SqlRow[]);
-        if (!isDeepStrictEqual(actual, expected)) mismatchCount += 1;
-      }
-      const statusRow = {
-        id: 1,
-        generation: previousGeneration + 1,
-        state: mismatchCount ? "stale" : "complete",
-        source_project_count: projects.length,
-        source_project_updated_at: Math.max(0, ...projects.map(({ updatedAt }) => updatedAt)),
-        source_subagent_parent_count: request.parents.length,
-        source_subagent_count: relationships.length,
-        source_digest: digest,
-        projected_thread_count: rows.get(THREAD_TABLE)?.length ?? 0,
-        projected_subagent_count: rows.get(SUBAGENT_TABLE)?.length ?? 0,
-        mismatch_count: mismatchCount,
-        completed_at: mismatchCount ? null : request.now,
-        error_code: null,
-        error_text: null,
-        updated_at: request.now,
-      } satisfies SqlRow;
-      this.database.prepare(`DELETE FROM ${PROJECTION_STATUS_TABLE}`).run();
-      this.insert(PROJECTION_STATUS_TABLE, statusRow);
-      return readStatusRow(statusRow);
-    })();
-  }
-
-  private recordFailure(error: unknown, request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
-    const relationships = sourceRelationships(request.parents);
-    const previous = this.readStatus();
-    const sourceRows = this.database.prepare(
-      `SELECT project_id, document_json, updated_at FROM ${PROJECT_DOCUMENT_TABLE} ORDER BY project_id`,
-    ).all() as Array<{ document_json: string; project_id: string; updated_at: number }>;
-    const globalRows = this.database.prepare(
-      `SELECT id, document_json FROM ${GLOBAL_DOCUMENT_TABLE} ORDER BY id`,
-    ).all() as Array<{ document_json: string; id: string }>;
-    const errorCode: WorkbenchThreadStateShadowStatus["errorCode"] = error instanceof SyntaxError
-      ? "invalid-source"
-      : isSqliteConstraintError(error)
-        ? "constraint-failure"
-        : "projection-failure";
-    const errorText = errorCode === "invalid-source"
-      ? "Thread-state projection failed: invalid source JSON."
-      : errorCode === "constraint-failure"
-        ? sqliteConstraintFailureText(error as Error)
-        : "Thread-state projection failed: unexpected projector failure.";
-    const row = {
-      id: 1,
-      generation: (previous?.generation ?? 0) + 1,
-      state: "failed",
-      source_project_count: sourceRows.length,
-      source_project_updated_at: Math.max(0, ...sourceRows.map(({ updated_at }) => updated_at)),
-      source_subagent_parent_count: request.parents.length,
-      source_subagent_count: relationships.length,
-      source_digest: sourceDigestWithParents(createSourceDigest(
-        sourceRows.map(({ document_json, project_id, updated_at }) => ({
-          documentJson: document_json,
-          projectId: project_id,
-          updatedAt: updated_at,
-        })),
-        globalRows.map(({ document_json, id }) => ({ documentJson: document_json, id })),
-        relationships,
-      ), request.parents),
-      projected_thread_count: previous?.projectedThreadCount ?? 0,
-      projected_subagent_count: previous?.projectedSubagentCount ?? 0,
-      mismatch_count: previous?.mismatchCount ?? 0,
-      completed_at: null,
-      error_code: errorCode,
-      error_text: errorText,
-      updated_at: request.now,
-    } satisfies SqlRow;
+  writeProject(projectId: string, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
     this.database.transaction(() => {
-      this.database.prepare(`DELETE FROM ${PROJECTION_STATUS_TABLE}`).run();
-      this.insert(PROJECTION_STATUS_TABLE, row);
+      for (const record of document.records) {
+        const identity = this.threadIdentity.resolve({ projectId, threadId: record.identity.threadId });
+        if (!identity || identity.threadId !== record.identity.threadId) throw new Error("Project state requires a canonical thread in its project.");
+      }
+      if (document.drafts.some(draft => draft.projectId !== projectId)) throw new Error("Draft belongs to another project.");
+      const retainedThreads = new Set(document.records.map(record => record.identity.threadId));
+      const removedThreads = (this.database.prepare(`
+        SELECT state.thread_id FROM workbench_thread_states state
+        JOIN workbench_threads thread ON thread.id = state.thread_id WHERE thread.project_id = ?
+      `).all(projectId) as Array<{ thread_id: string }>)
+        .filter(row => !retainedThreads.has(row.thread_id)).map(row => row.thread_id);
+      const retainedDrafts = new Set(document.drafts.map(draft => draft.draftId));
+      const removedDrafts = (this.database.prepare("SELECT draft_id FROM workbench_thread_drafts WHERE project_id = ?")
+        .all(projectId) as Array<{ draft_id: string }>)
+        .filter(row => !retainedDrafts.has(row.draft_id));
+      this.commit({
+        records: document.records,
+        drafts: document.drafts.map(({ pinned, snoozed, ...draft }) => ({ draft, pinned, snoozed })),
+        projectProfiles: [{ projectId, profile: document.newThreadProfile }],
+        layouts: [{ owner: { kind: "project", projectId }, revision: 0, displayOrder: document.displayOrder }],
+        deletedThreadIds: removedThreads,
+      });
+      for (const { draft_id: draftId } of removedDrafts) {
+        this.layouts.removeDraft(projectId, draftId);
+        this.database.prepare("DELETE FROM workbench_thread_drafts WHERE project_id = ? AND draft_id = ?").run(projectId, draftId);
+      }
+      if (titleHistories !== undefined) {
+        const desired = new Map<string, Map<string, number>>();
+        for (const history of titleHistories) {
+          const identity = this.threadIdentity.resolve({ projectId, ...history.identity });
+          if (!identity || identity.threadId !== history.identity.threadId) throw new Error("Title history requires a canonical thread in its project.");
+          const state = document.records.find(record => record.identity.threadId === identity.threadId);
+          if (state && state.identity.harness !== history.identity.harness) throw new Error("Title history does not match its thread.");
+          const titles = new Map(history.titles.map(entry => [entry.title, entry.usedAt]));
+          if (desired.has(identity.threadId) || titles.size !== history.titles.length
+            || history.titles.some(entry => !Number.isSafeInteger(entry.usedAt) || entry.usedAt < 0)) throw new Error("Title history contains invalid or duplicate facts.");
+          desired.set(identity.threadId, titles);
+        }
+        const existing = this.database.prepare(`
+          SELECT title.thread_id, title.title FROM workbench_thread_title_history title
+          JOIN workbench_threads thread ON thread.id = title.thread_id WHERE thread.project_id = ?
+        `).all(projectId) as Array<{ thread_id: string; title: string }>;
+        for (const row of existing) {
+          if (!desired.get(row.thread_id)?.has(row.title)) this.database.prepare("DELETE FROM workbench_thread_title_history WHERE thread_id = ? AND title = ?")
+            .run(row.thread_id, row.title);
+        }
+        for (const [threadId, titles] of desired) for (const [title, usedAt] of titles) {
+          this.writeDomainFact("workbench_thread_title_history", ["thread_id", "title"], { thread_id: threadId, title, used_at: usedAt });
+        }
+      }
     })();
-    return readStatusRow(row);
   }
 
-  private projectRows(
-    projects: readonly SourceProject[],
-    parents: readonly WorkbenchSubagentParentSnapshot[],
-    globals: ReadonlyMap<string, Record<string, unknown>>,
-  ) {
-    const relationships = sourceRelationships(parents);
-    const rows: RowSets = new Map(RELATIONAL_TABLES.map((table) => [table, []]));
-    const threads = new Map<string, SqlRow>();
-    const identities = new Map<string, SqlRow>();
-    const relationshipsByThread = new Map(relationships.flatMap((relationship) => relationship.kind === "active" ? [[
-      providerReferenceKey(relationship.projectId, relationship.harness, relationship.threadId), relationship,
-    ] as const] : []));
-    const ensureThread = (
-      projectId: string,
-      harness: "codex" | "copilot" | "opencode",
-      providerThreadId: string,
-      defaults: Partial<SqlRow> = {},
-    ) => {
-      const id = this.resolveThreadIdentity(projectId, harness, providerThreadId);
-      const existing = threads.get(id);
-      if (existing && defaults.thread_kind && defaults.thread_kind !== existing.thread_kind) {
-        throw new Error("One provider thread identity appeared with multiple thread kinds.");
-      }
-      if (!existing) {
-        threads.set(id, {
-          id,
-          project_id: projectId,
-          thread_kind: defaults.thread_kind ?? "topLevel",
-          visibility: defaults.visibility ?? "placeholder",
-          title: defaults.title ?? providerThreadId,
-          archived: defaults.archived ?? 0,
-          pinned: defaults.pinned ?? 0,
-          snoozed: defaults.snoozed ?? 0,
-          provider_observed: defaults.provider_observed ?? 0,
-          created_at: defaults.created_at ?? 0,
-          updated_at: defaults.updated_at ?? 0,
-          activity_at: defaults.activity_at ?? 0,
-          order_at: defaults.order_at ?? null,
-        });
-      } else {
-        threads.set(id, { ...existing, ...defaults, id, project_id: projectId });
-      }
-      identities.set(providerReferenceKey(projectId, harness, providerThreadId), {
-        thread_id: id, project_id: projectId, harness_id: harness, provider_thread_id: providerThreadId,
-      });
-      return id;
-    };
+  readGlobal(id: WorkbenchThreadStateGlobalDocument["id"]): WorkbenchThreadStateGlobalDocument | null {
+    return this.database.transaction(() => {
+      const layout = this.layouts.read({ kind: id === "pinnedLayout" ? "pinned" : "home" });
+      if (!layout) return null;
+      return id === "pinnedLayout"
+        ? { id, version: 1 as const, ...layout, importedProjectIds: this.readPinnedImports() }
+        : { id, version: 1 as const, ...layout };
+    })();
+  }
 
-    for (const { document, projectId } of projects) {
-      for (const record of document.records) {
-        const relationship = relationshipsByThread.get(providerReferenceKey(projectId, record.identity.harness, record.identity.threadId));
-        const metadata = record.entryKind === "thread"
-          ? record.metadata
-          : { archived: false as const, pinned: record.pinned, snoozed: false };
-        const createdAt = record.entryKind === "subagent" ? record.createdAt : record.orderAt ?? record.activityAt;
-        const updatedAt = record.entryKind === "subagent" ? record.updatedAt : record.activityAt;
-        const id = ensureThread(projectId, record.identity.harness, record.identity.threadId, {
-          thread_kind: record.entryKind === "subagent" ? "subagent" : "topLevel",
-          visibility: "visible",
-          title: record.title,
-          archived: metadata.archived ? 1 : 0,
-          pinned: metadata.pinned ? 1 : 0,
-          snoozed: metadata.snoozed ? 1 : 0,
-          provider_observed: record.providerObserved ? 1 : 0,
-          created_at: createdAt,
-          updated_at: updatedAt,
-          activity_at: record.activityAt,
-          order_at: record.entryKind === "thread" ? record.orderAt ?? null : null,
-        });
-        addRow(rows, LIFECYCLE_TABLE, { thread_id: id, ...lifecycleRow(record.lifecycle) });
-        if (record.gitHistoryCleanedAt !== null || record.settledAt !== null || record.mcpGeneration !== null) {
-          addRow(rows, RETENTION_TABLE, {
-            thread_id: id,
-            settled_at: record.settledAt,
-            git_history_cleaned_at: record.gitHistoryCleanedAt,
-            mcp_generation: record.mcpGeneration,
+  writeGlobal(document: WorkbenchThreadStateGlobalDocument) {
+    this.commit({
+      layouts: [{ owner: { kind: document.id === "pinnedLayout" ? "pinned" : "home" }, revision: document.revision, displayOrder: document.displayOrder }],
+      ...(document.id === "pinnedLayout" ? { pinnedImports: document.importedProjectIds } : {}),
+    });
+  }
+
+  commit(changes: WorkbenchThreadStateCommit) {
+    this.database.transaction(() => {
+      this.writeDrafts(changes.drafts ?? []);
+      this.writeRecords(changes.records ?? []);
+      for (const { projectId, profile } of changes.projectProfiles ?? []) {
+        if (profile) {
+          this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(profile.settings.harness);
+          this.writeDomainFact("workbench_project_thread_profiles", ["project_id"], {
+            project_id: projectId, ...profileRow(WorkbenchComposerProfileSelectionSchema.parse(profile)),
           });
+        } else {
+          this.database.prepare("DELETE FROM workbench_project_thread_profiles WHERE project_id = ?").run(projectId);
         }
-        if (record.profile) addRow(rows, PROFILE_TABLE, { thread_id: id, ...profileRow(record.profile) });
-        if (record.entryKind === "subagent") {
-          this.addSubagentRow(rows, relationship ?? {
-            createdAt: record.createdAt,
-            cwd: record.cwd,
-            directSubagentIndex: record.directSubagentIndex,
-            harness: record.identity.harness,
-            name: record.name,
-            parentThreadId: record.parentThreadId,
-            profileId: record.profileId,
-            profileName: record.profileName,
-            projectId,
-            threadId: record.identity.threadId,
-            title: record.title,
-            updatedAt: record.updatedAt,
-          }, id, ensureThread);
+      }
+      for (const layout of changes.layouts ?? []) this.layouts.replace(layout.owner, layout.revision, layout.displayOrder);
+      for (const draftId of changes.deletedDraftIds ?? []) {
+        const draft = this.database.prepare("SELECT project_id FROM workbench_thread_drafts WHERE draft_id = ?")
+          .get(draftId) as { project_id: string } | undefined;
+        if (draft) this.layouts.removeDraft(draft.project_id, draftId);
+        this.database.prepare("DELETE FROM workbench_thread_drafts WHERE draft_id = ?").run(draftId);
+      }
+      for (const threadId of changes.deletedThreadIds ?? []) {
+        this.database.prepare("DELETE FROM workbench_thread_states WHERE thread_id = ?").run(threadId);
+      }
+      if (changes.pinnedImports !== undefined) {
+        this.database.prepare("DELETE FROM workbench_sidebar_pinned_imports").run();
+        if (changes.pinnedImports.length) {
+          const pinned = this.database.prepare(`
+            SELECT layout_id FROM workbench_sidebar_global_layouts WHERE owner_kind = 'pinned'
+          `).get() as { layout_id: string } | undefined;
+          if (!pinned) throw new Error("Pinned imports require a pinned layout.");
+          const insert = this.database.prepare(`
+            INSERT INTO workbench_sidebar_pinned_imports(project_id, layout_id, owner_kind) VALUES (?, ?, 'pinned')
+          `);
+          for (const projectId of changes.pinnedImports) insert.run(projectId, pinned.layout_id);
         }
-        projectThreadStateQuestionnaires(rows, id, record,
-          (entry) => this.questionnaireIdentity(id, record.identity.threadId, entry));
       }
-      for (const draft of document.drafts) {
-        addRow(rows, DRAFT_TABLE, {
-          draft_id: draft.draftId,
-          project_id: projectId,
-          harness_id: draft.harness,
-          prompt: draft.prompt,
-          profile_id: draft.profileId,
-          agent_path: draft.composerSettings.agentPath,
-          agent_source: draft.composerSettings.agentSource,
-          model: draft.composerSettings.model,
-          reasoning_effort: draft.composerSettings.reasoningEffort,
-          service_tier: draft.composerSettings.serviceTier,
-          pinned: draft.pinned ? 1 : 0,
-          snoozed: draft.snoozed ? 1 : 0,
-          client_updated_at: draft.clientUpdatedAt,
-          created_at: draft.createdAt,
-          updated_at: draft.updatedAt,
-        });
-        draft.attachments.forEach((attachment, attachmentIndex) => addRow(rows, ATTACHMENT_TABLE, {
-          draft_id: draft.draftId,
-          attachment_index: attachmentIndex,
-          opaque_json: JSON.stringify(attachment),
-        }));
-      }
-      if (document.newThreadProfile) {
-        addRow(rows, PROJECT_PROFILE_TABLE, { project_id: projectId, ...profileRow(document.newThreadProfile) });
-      }
-    }
+    })();
+  }
 
-    for (const parent of parents) {
-      const parentThreadId = ensureThread(parent.projectId, parent.harness, parent.parentThreadId);
-      const parentIdentity = this.database.prepare(`
-        SELECT id, legacy_id FROM ${SUBAGENT_PARENT_TABLE}
-        WHERE project_id = ? AND harness_id = ? AND parent_thread_id = ?
-      `).get(parent.projectId, parent.harness, parentThreadId) as { id: string; legacy_id: string | null } | undefined;
-      const parentId = parentIdentity?.id ?? randomUUID();
-      addRow(rows, SUBAGENT_PARENT_TABLE, {
-        id: parentId, legacy_id: parentIdentity?.legacy_id ?? null, project_id: parent.projectId, harness_id: parent.harness,
-        parent_thread_id: parentThreadId, next_direct_subagent_index: parent.nextDirectSubagentIndex,
-      });
-      for (const relationship of parent.relationships) {
-        const relationshipIdentity = this.database.prepare(`
-          SELECT id, legacy_id FROM ${SUBAGENT_RELATIONSHIP_TABLE} WHERE parent_id = ? AND direct_subagent_index = ?
-        `).get(parentId, relationship.directSubagentIndex) as { id: string; legacy_id: string | null } | undefined;
-        const relationshipId = relationshipIdentity?.id ?? randomUUID();
-        const pending = relationship.kind === "reserved";
-        addRow(rows, SUBAGENT_RELATIONSHIP_TABLE, {
-          id: relationshipId, legacy_id: relationshipIdentity?.legacy_id ?? null,
-          parent_id: parentId, relationship_kind: pending ? "pending" : "active",
-          name_key: relationship.name.toLocaleLowerCase(), direct_subagent_index: relationship.directSubagentIndex,
-          created_at: relationship.createdAt, updated_at: relationship.updatedAt,
-        });
-        if (pending) {
-          addRow(rows, PENDING_SUBAGENT_RELATIONSHIP_TABLE, {
-            relationship_id: relationshipId, relationship_kind: "pending",
-            reservation_id: relationship.reservationId, cwd: relationship.cwd, name: relationship.name,
-            profile_id: relationship.profileId, profile_name: relationship.profileName, title: relationship.title,
-          });
-          continue;
-        }
-        const id = ensureThread(relationship.projectId, relationship.harness, relationship.threadId, {
-          thread_kind: "subagent", visibility: "visible", title: relationship.title,
-          created_at: relationship.createdAt, updated_at: relationship.updatedAt,
-          activity_at: relationship.updatedAt, order_at: null,
-        });
-        if (!(rows.get(SUBAGENT_TABLE) ?? []).some((row) => row.thread_id === id)) {
-          this.addSubagentRow(rows, relationship, id, ensureThread);
-        }
-        addRow(rows, ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, {
-          relationship_id: relationshipId, relationship_kind: "active", thread_id: id,
-        });
-      }
-    }
+  readPinnedImports(): string[] {
+    return (this.database.prepare("SELECT project_id FROM workbench_sidebar_pinned_imports ORDER BY project_id").all() as Array<{ project_id: string }>)
+      .map((row) => row.project_id);
+  }
 
-    for (const { document, projectId } of projects) {
-      for (const record of document.records) {
-        if (!record.snoozedUntil || record.entryKind !== "thread") continue;
-        const target = record.snoozedUntil;
-        addRow(rows, SNOOZE_TABLE, {
-          source_thread_id: ensureThread(projectId, record.identity.harness, record.identity.threadId),
-          source_thread_kind: "topLevel",
-          target_thread_id: ensureThread(target.projectId, target.identity.harness, target.identity.threadId),
-          target_thread_kind: "topLevel",
-        });
-      }
-      const identity = this.layoutIdentity("project", projectId);
-      projectThreadStateLayout(rows, {
-        displayOrder: document.displayOrder,
-        ensureThread,
-        identity,
-        ownerKind: "project",
-        projectId,
-        resolveItemIdentity: (target) => this.layoutItemIdentity(identity.id, target),
-        revision: 0,
-      });
-    }
-    const pinned = globals.get("pinnedLayout") ?? {};
-    const pinnedIdentity = this.layoutIdentity("pinned");
-    projectThreadStateLayout(rows, {
-      displayOrder: normalizeThreadDisplayLayout(asRecord(pinned.displayOrder)),
-      ensureThread,
-      identity: pinnedIdentity,
-      ownerKind: "pinned",
-      resolveItemIdentity: (target) => this.layoutItemIdentity(pinnedIdentity.id, target),
-      revision: typeof pinned.revision === "number" && Number.isSafeInteger(pinned.revision) && pinned.revision >= 0 ? pinned.revision : 0,
+  readProjectProfile(projectId: string): WorkbenchComposerProfileSelectionState | null {
+    const profile = this.database.prepare("SELECT * FROM workbench_project_thread_profiles WHERE project_id = ?")
+      .get(projectId) as Record<string, SqlValue> | undefined;
+    return profile ? WorkbenchComposerProfileSelectionSchema.parse({
+      kind: profile.selection_kind, ...(profile.selection_kind === "profile" ? { profileId: profile.profile_id } : {}),
+      settings: {
+        harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
+        model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
+      },
+    }) : null;
+  }
+
+  readDrafts(projectId: string): WorkbenchStoredThreadDraft[] {
+    const rows = this.database.prepare(`
+      SELECT * FROM workbench_thread_drafts WHERE project_id = ? ORDER BY updated_at DESC, draft_id
+    `).all(projectId) as Array<Record<string, SqlValue>>;
+    return rows.map((row) => {
+      const attachments = this.database.prepare(`
+        SELECT attachment_index, attachment_id, url FROM workbench_thread_draft_attachments
+        WHERE draft_id = ? ORDER BY attachment_index
+      `).all(row.id) as Array<{ attachment_index: number; attachment_id: string; url: string }>;
+      return {
+        pinned: Boolean(row.pinned), snoozed: Boolean(row.snoozed),
+        draft: WorkbenchThreadDraftSchema.parse({
+          draftId: row.draft_id, projectId: row.project_id,
+          prompt: row.prompt, profileId: row.profile_id,
+          composerSettings: {
+            harness: row.harness_id, agentPath: row.agent_path, agentSource: row.agent_source,
+            model: row.model, reasoningEffort: row.reasoning_effort, serviceTier: row.service_tier,
+          },
+          clientUpdatedAt: row.client_updated_at, createdAt: row.created_at, updatedAt: row.updated_at,
+          attachments: attachments.map((attachment, index) => {
+            if (attachment.attachment_index !== index) throw new Error("Draft has incomplete attachment ordering.");
+            return { id: attachment.attachment_id, url: attachment.url };
+          }),
+        }),
+      };
     });
-    const importedProjectIds = new Set(Array.isArray(pinned.importedProjectIds) ? pinned.importedProjectIds : []);
-    for (const projectId of importedProjectIds) {
-      if (typeof projectId === "string" && projectId) {
-        addRow(rows, PINNED_IMPORT_TABLE, { project_id: projectId, layout_id: pinnedIdentity.id });
+  }
+
+  writeDrafts(drafts: readonly WorkbenchStoredThreadDraft[]) {
+    this.database.transaction(() => {
+      for (const stored of drafts) {
+        const draft = WorkbenchThreadDraftSchema.parse(stored.draft);
+        this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(draft.composerSettings.harness);
+        const previous = this.database.prepare("SELECT id FROM workbench_thread_drafts WHERE draft_id = ?")
+          .get(draft.draftId) as { id: string } | undefined;
+        const id = previous?.id ?? randomUUID();
+        this.writeDomainFact("workbench_thread_drafts", ["id"], {
+          id, draft_id: draft.draftId, project_id: draft.projectId, harness_id: draft.composerSettings.harness,
+          prompt: draft.prompt, profile_id: draft.profileId, agent_path: draft.composerSettings.agentPath,
+          agent_source: draft.composerSettings.agentSource, model: draft.composerSettings.model,
+          reasoning_effort: draft.composerSettings.reasoningEffort, service_tier: draft.composerSettings.serviceTier,
+          pinned: Number(stored.pinned), snoozed: Number(stored.snoozed), client_updated_at: draft.clientUpdatedAt,
+          created_at: draft.createdAt, updated_at: draft.updatedAt,
+        });
+        const previousAttachments = this.database.prepare(`
+          SELECT attachment_id, url FROM workbench_thread_draft_attachments WHERE draft_id = ? ORDER BY attachment_index
+        `).all(id) as Array<{ attachment_id: string; url: string }>;
+        if (isDeepStrictEqual(previousAttachments.map((attachment) => ({
+          id: attachment.attachment_id, url: attachment.url,
+        })), draft.attachments)) continue;
+        this.database.prepare("DELETE FROM workbench_thread_draft_attachments WHERE draft_id = ?").run(id);
+        const insert = this.database.prepare(`
+          INSERT INTO workbench_thread_draft_attachments(draft_id, attachment_index, attachment_id, url) VALUES (?, ?, ?, ?)
+        `);
+        draft.attachments.forEach((attachment, index) => insert.run(id, index, attachment.id, attachment.url));
       }
+    })();
+  }
+
+  readRecords(query: WorkbenchThreadRecordQuery): WorkbenchThreadStateRecord[] {
+    const parameters: Array<string | number> = [];
+    let where: string;
+    switch (query.selection) {
+      case "threads":
+        if (!query.threadIds.length) return [];
+        where = `state.thread_id IN (${query.threadIds.map(() => "?").join(",")})`;
+        parameters.push(...query.threadIds);
+        if (query.projectId !== undefined) {
+          where += " AND thread.project_id = ?";
+          parameters.push(query.projectId);
+        }
+        break;
+      case "children":
+        where = "child.parent_thread_id = ?";
+        parameters.push(query.parentThreadId);
+        break;
+      case "parentStatus":
+        if (!query.parentThreadIds.length) return [];
+        where = `child.parent_thread_id IN (${query.parentThreadIds.map(() => "?").join(",")})
+          AND state.provider_observed = 1 AND lifecycle.settled = 0 AND lifecycle.lifecycle_kind IN ('working', 'needsAttention')`;
+        parameters.push(...query.parentThreadIds);
+        break;
+      case "live":
+        where = `thread.project_id = ? AND (
+          (top.archived = 0 AND (state.provider_observed = 1 OR lifecycle.settled = 1) AND (
+            lifecycle.settled = 0
+            OR (lifecycle.lifecycle_kind = 'completed' AND ${UNFINISHED_CHILD})
+          ))
+          OR (state.thread_kind = 'subagent' AND state.provider_observed = 1 AND lifecycle.settled = 0
+            AND lifecycle.lifecycle_kind IN ('working', 'needsAttention') AND EXISTS (
+            SELECT 1 FROM workbench_top_level_thread_states parent
+            JOIN workbench_thread_lifecycle parent_lifecycle ON parent_lifecycle.thread_id = parent.thread_id
+            JOIN workbench_thread_states parent_observation ON parent_observation.thread_id = parent.thread_id
+            WHERE parent.thread_id = child.parent_thread_id AND parent.archived = 0
+              AND (parent_observation.provider_observed = 1 OR parent_lifecycle.settled = 1)
+              AND (parent_lifecycle.settled = 0 OR parent_lifecycle.lifecycle_kind = 'completed')
+          ))
+        )`;
+        parameters.push(query.projectId);
+        break;
+      case "project":
+        where = "thread.project_id = ?";
+        parameters.push(query.projectId);
+        break;
+      case "gitRetention":
+        where = `thread.project_id = ? AND lifecycle.settled = 1 AND retention.settled_at <= ?
+          AND (retention.git_history_cleaned_at IS NULL OR retention.git_history_cleaned_at < retention.settled_at)`;
+        parameters.push(query.projectId, query.settledBefore);
+        break;
     }
-    const home = globals.get("homeDisplayOrder") ?? {};
-    const homeIdentity = this.layoutIdentity("home");
-    projectThreadStateLayout(rows, {
-      displayOrder: normalizeThreadDisplayLayout(asRecord(home.displayOrder)),
-      ensureThread,
-      identity: homeIdentity,
-      ownerKind: "home",
-      resolveItemIdentity: (target) => this.layoutItemIdentity(homeIdentity.id, target),
-      revision: typeof home.revision === "number" && Number.isSafeInteger(home.revision) && home.revision >= 0 ? home.revision : 0,
-    });
-
-    const projectedLifecycles = new Set((rows.get(LIFECYCLE_TABLE) ?? []).map((row) => row.thread_id));
-    for (const threadId of threads.keys()) {
-      if (projectedLifecycles.has(threadId)) continue;
-      addRow(rows, LIFECYCLE_TABLE, {
-        thread_id: threadId,
-        lifecycle_kind: "needsAttention",
-        reason: "noActiveTurn",
-        settled: 0,
-        provider_turn_id: null,
-        request_key: null,
-        agent_status: null,
-      });
-    }
-    for (const row of threads.values()) addRow(rows, THREAD_TABLE, row);
-    for (const row of identities.values()) addRow(rows, IDENTITY_TABLE, row);
-    return rows;
+    const rows = this.database.prepare(`${SELECT_THREAD_STATES} WHERE ${where}
+      ORDER BY COALESCE(top.order_at, state.activity_at) DESC, state.thread_id
+    `).all(...parameters) as ThreadStateRow[];
+    return rows.map((row) => this.readThreadState(row));
   }
 
-  private layoutIdentity(ownerKind: "project" | "pinned" | "home", projectId?: string): ThreadStateLayoutIdentity {
-    const row = (ownerKind === "project"
-      ? this.database.prepare(`
-          SELECT layout.id, layout.legacy_id FROM ${LAYOUT_TABLE} layout
-          JOIN ${PROJECT_LAYOUT_TABLE} owner ON owner.layout_id = layout.id WHERE owner.project_id = ?
-        `).get(projectId)
-      : this.database.prepare(`
-          SELECT layout.id, layout.legacy_id FROM ${LAYOUT_TABLE} layout
-          JOIN ${GLOBAL_LAYOUT_TABLE} owner ON owner.layout_id = layout.id WHERE owner.owner_kind = ?
-        `).get(ownerKind)) as { id: string; legacy_id: string | null } | undefined;
-    return row ? { id: row.id, legacyId: row.legacy_id } : { id: randomUUID(), legacyId: null };
+  readProjectActivity(projectId: string): number | null {
+    return (this.database.prepare(`
+      SELECT MAX(state.activity_at) AS activity_at FROM workbench_thread_states state
+      JOIN workbench_threads thread ON thread.id = state.thread_id WHERE thread.project_id = ?
+    `).get(projectId) as { activity_at: number | null }).activity_at;
   }
 
-  private resolveThreadIdentity(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string) {
-    const identity = this.threadIdentity.resolve({ projectId, harness, threadId });
-    if (!identity) throw new Error("Thread-state projection is awaiting canonical thread metadata.");
-    return identity.threadId;
+  readSnoozeSources(targetThreadId: string): Array<{ projectId: string; threadId: string }> {
+    return this.database.prepare(`
+      SELECT thread.project_id AS projectId, dependency.source_thread_id AS threadId
+      FROM workbench_thread_snooze_dependencies dependency
+      JOIN workbench_threads thread ON thread.id = dependency.source_thread_id
+      WHERE dependency.target_thread_id = ?
+    `).all(targetThreadId) as Array<{ projectId: string; threadId: string }>;
   }
 
-  private resolveQuestionnaireItemId(threadId: string, nativeThreadId: string, entry: WorkbenchDurableQuestionnaire) {
-    const turnId = entry.turnId === null ? null
-      : this.threadIdentity.resolveTurn({ threadId, turnId: entry.turnId })?.turnId;
-    if (turnId === undefined) throw new Error("Thread-state projection is awaiting canonical questionnaire turn metadata.");
-    if (!entry.itemId && !entry.turnId) throw new Error("Thread-state projection is awaiting canonical questionnaire item metadata.");
-    const reference = entry.itemId ?? resolveQuestionnaireHistoryItemId({
-      requestKey: entry.requestKey, threadId: nativeThreadId, turnId: entry.turnId!,
-    });
-    const identity = this.itemIdentity.resolve({ threadId, turnId, itemId: reference });
-    if (!identity) throw new Error("Thread-state projection is awaiting canonical questionnaire item metadata.");
-    return identity.itemId;
-  }
-
-  private questionnaireIdentity(threadId: string, nativeThreadId: string, entry: WorkbenchDurableQuestionnaire) {
-    const id = this.resolveQuestionnaireItemId(threadId, nativeThreadId, entry);
-    const existing = this.database.prepare(`
-      SELECT id, legacy_id FROM ${QUESTIONNAIRE_TABLE}
-      WHERE thread_id = ? AND (id = ? OR (provider_item_id IS ? AND provider_turn_id IS ? AND request_key = ?))
-    `).get(threadId, id, entry.itemId, entry.turnId, entry.requestKey) as { id: string; legacy_id: string | null } | undefined;
-    const legacyId = existing?.legacy_id ?? (existing && existing.id !== id ? existing.id : null);
-    if (existing && existing.id !== id) {
-      for (const table of [QUESTION_TABLE, OPTION_TABLE, ANSWER_TABLE]) {
-        this.database.prepare(`UPDATE ${table} SET questionnaire_id = ? WHERE questionnaire_id = ?`).run(id, existing.id);
-      }
-      this.database.prepare(`UPDATE ${QUESTIONNAIRE_TABLE} SET id = ?, legacy_id = ? WHERE id = ?`)
-        .run(id, legacyId, existing.id);
-    }
-    return { id, legacyId };
-  }
-
-  private normaliseThreadIdentities() {
-    const sources = this.database.prepare(`
-      SELECT thread_id, project_id, harness_id, provider_thread_id FROM ${IDENTITY_TABLE}
-    `).all() as Array<{
-      thread_id: string; project_id: string; harness_id: "codex" | "copilot" | "opencode"; provider_thread_id: string;
-    }>;
-    for (const source of sources) {
-      const id = this.resolveThreadIdentity(source.project_id, source.harness_id, source.provider_thread_id);
-      if (id === source.thread_id) continue;
-      this.threadIdentity.preserveLegacyAlias(id, source.thread_id);
-      const references = [
-        [IDENTITY_TABLE, "thread_id"], [LIFECYCLE_TABLE, "thread_id"],
-        [SUBAGENT_TABLE, "thread_id"], [SUBAGENT_TABLE, "parent_thread_id"],
-        [SUBAGENT_PARENT_TABLE, "parent_thread_id"], [ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "thread_id"],
-        [RETENTION_TABLE, "thread_id"], [PROFILE_TABLE, "thread_id"],
-        [SNOOZE_TABLE, "source_thread_id"], [SNOOZE_TABLE, "target_thread_id"],
-        [LAYOUT_THREAD_TABLE, "thread_id"], [QUESTIONNAIRE_TABLE, "thread_id"],
-      ] as const;
-      for (const [table, column] of references) {
-        this.database.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(id, source.thread_id);
-      }
-      this.database.prepare(`UPDATE ${THREAD_TABLE} SET id = ? WHERE id = ?`).run(id, source.thread_id);
-    }
-  }
-
-  private layoutItemIdentity(layoutId: string, target: ThreadStateLayoutTarget): ThreadStateLayoutIdentity {
-    const [table, column, targetId] = target.kind === "thread" ? [LAYOUT_THREAD_TABLE, "thread_id", target.threadId]
-      : target.kind === "draft" ? [LAYOUT_DRAFT_TABLE, "draft_id", target.draftId]
-      : [LAYOUT_FOLDER_TABLE, "folder_id", target.folderId];
+  readNextArchiveEligibility(): number | null {
     const row = this.database.prepare(`
-      SELECT item.id, item.legacy_id FROM ${LAYOUT_ITEM_TABLE} item
-      JOIN ${table} target ON target.item_id = item.id WHERE item.layout_id = ? AND target.${column} = ?
-    `).get(layoutId, targetId) as { id: string; legacy_id: string | null } | undefined;
-    return row ? { id: row.id, legacyId: row.legacy_id } : { id: randomUUID(), legacyId: null };
+      SELECT MIN(state.activity_at) AS activity_at FROM workbench_thread_states state
+      JOIN workbench_top_level_thread_states top ON top.thread_id = state.thread_id
+      JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = state.thread_id
+      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1
+    `).get() as { activity_at: number | null };
+    return row.activity_at;
   }
 
-  private normaliseOpaqueIdentities() {
-    const references = [
-      [SUBAGENT_PARENT_TABLE, [[SUBAGENT_RELATIONSHIP_TABLE, "parent_id"]]],
-      [SUBAGENT_RELATIONSHIP_TABLE, [
-        [PENDING_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id"], [ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id"],
-      ]],
-      [LAYOUT_TABLE, [
-        [PROJECT_LAYOUT_TABLE, "layout_id"], [GLOBAL_LAYOUT_TABLE, "layout_id"], [FOLDER_TABLE, "layout_id"],
-        [LAYOUT_ITEM_TABLE, "layout_id"], [LAYOUT_RELATION_TABLE, "layout_id"], [FOLDER_MEMBER_TABLE, "layout_id"],
-        [PINNED_IMPORT_TABLE, "layout_id"],
-      ]],
-      [LAYOUT_ITEM_TABLE, [
-        [LAYOUT_THREAD_TABLE, "item_id"], [LAYOUT_DRAFT_TABLE, "item_id"], [LAYOUT_FOLDER_TABLE, "item_id"],
-        [LAYOUT_RELATION_TABLE, "item_id"], [LAYOUT_RELATION_TABLE, "related_item_id"],
-        [FOLDER_MEMBER_TABLE, "folder_item_id"], [FOLDER_MEMBER_TABLE, "member_item_id"],
-      ]],
-    ] as const;
-    for (const [table, children] of references) {
-      const rows = this.database.prepare(`SELECT id FROM ${table}`).all() as Array<{ id: string }>;
-      for (const row of rows) {
-        if (z.uuid().safeParse(row.id).success) continue;
-        const id = randomUUID();
-        for (const [child, column] of children) {
-          this.database.prepare(`UPDATE ${child} SET ${column} = ? WHERE ${column} = ?`).run(id, row.id);
-        }
-        this.database.prepare(`UPDATE ${table} SET id = ?, legacy_id = COALESCE(legacy_id, ?) WHERE id = ?`)
-          .run(id, row.id, row.id);
-      }
+  readArchiveEligible(activeBefore: number): Array<{ projectId: string; record: WorkbenchThreadStateRecord }> {
+    if (!Number.isSafeInteger(activeBefore)) throw new Error("Archive eligibility boundary must be an integer timestamp.");
+    const rows = this.database.prepare(`${SELECT_THREAD_STATES}
+      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1 AND state.activity_at <= ?
+      ORDER BY state.activity_at, state.thread_id
+    `).all(activeBefore) as ThreadStateRow[];
+    return rows.map(row => ({ projectId: row.project_id, record: this.readThreadState(row) }));
+  }
+
+  writeRecords(records: readonly WorkbenchThreadStateRecord[]) {
+    this.database.transaction(() => {
+      for (const record of records) this.writeThreadIdentityState(record);
+      for (const record of records) this.writeThreadState(record);
+    })();
+  }
+
+  private writeThreadIdentityState(record: WorkbenchThreadStateRecord) {
+    const threadId = record.identity.threadId;
+    const existing = this.database.prepare("SELECT thread_kind FROM workbench_thread_states WHERE thread_id = ?")
+      .get(threadId) as { thread_kind: "topLevel" | "subagent" } | undefined;
+    const threadKind = record.entryKind === "thread" ? "topLevel" : "subagent";
+    if (existing?.thread_kind === "subagent" && threadKind !== "subagent") {
+      throw new Error("A subagent cannot be replaced by a provider discovery row.");
     }
-  }
-
-  private addSubagentRow(
-    rows: RowSets,
-    relationship: WorkbenchSubagentRelationship,
-    id: string,
-    ensureThread: (
-      projectId: string,
-      harness: "codex" | "copilot" | "opencode",
-      providerThreadId: string,
-      defaults?: Partial<SqlRow>,
-    ) => string,
-  ) {
-    const parentId = ensureThread(relationship.projectId, relationship.harness, relationship.parentThreadId);
-    addRow(rows, SUBAGENT_TABLE, {
-      thread_id: id,
-      thread_kind: "subagent",
-      parent_thread_id: parentId,
-      cwd: relationship.cwd,
-      name: relationship.name,
-      name_key: relationship.name.toLocaleLowerCase(),
-      profile_id: relationship.profileId,
-      profile_name: relationship.profileName,
-      direct_subagent_index: relationship.directSubagentIndex,
+    if (existing?.thread_kind === "topLevel" && threadKind === "subagent") {
+      this.database.prepare("DELETE FROM workbench_top_level_thread_states WHERE thread_id = ?").run(threadId);
+    }
+    if (record.entryKind === "subagent" && record.lifecycle.settled && record.pinned) {
+      throw new Error("Settled subagent cannot remain pinned.");
+    }
+    this.writeDomainFact("workbench_thread_states", ["thread_id"], {
+      thread_id: threadId, thread_kind: threadKind, harness_id: record.identity.harness,
+      title: record.title, activity_at: record.activityAt, provider_observed: Number(record.providerObserved !== false),
     });
+    if (record.entryKind === "thread") {
+      this.writeDomainFact("workbench_top_level_thread_states", ["thread_id"], {
+        thread_id: threadId, thread_kind: threadKind, archived: Number(record.metadata.archived),
+        pinned: Number(record.metadata.pinned), snoozed: Number(record.metadata.snoozed), order_at: record.orderAt ?? null,
+      });
+    } else {
+      const owner = this.database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
+        .get(threadId) as { project_id: string };
+      if (owner.project_id !== record.projectId) throw new Error("Subagent state belongs to another project.");
+      this.writeDomainFact("workbench_subagent_thread_states", ["thread_id"], {
+        thread_id: threadId, thread_kind: threadKind, parent_thread_id: record.parentThreadId,
+        cwd: record.cwd, name: record.name, profile_id: record.profileId, profile_name: record.profileName,
+        direct_subagent_index: record.directSubagentIndex ?? 0, created_at: record.createdAt,
+        updated_at: record.updatedAt, pinned: Number(record.pinned),
+      });
+    }
   }
 
-  private sourceCoverageMismatchCount(
-    rows: RowSets,
-    projects: readonly SourceProject[],
-    parents: readonly WorkbenchSubagentParentSnapshot[],
-  ) {
-    const relationships = sourceRelationships(parents);
-    const identityBySource = new Map((rows.get(IDENTITY_TABLE) ?? []).map((row) => [
-      providerReferenceKey(row.project_id as string, row.harness_id as string, row.provider_thread_id as string),
-      row.thread_id as string,
-    ]));
-    const lifecycles = new Set((rows.get(LIFECYCLE_TABLE) ?? []).map((row) => row.thread_id as string));
-    const subagents = new Set((rows.get(SUBAGENT_TABLE) ?? []).map((row) => row.thread_id as string));
-    const drafts = new Set((rows.get(DRAFT_TABLE) ?? []).map((row) => row.draft_id as string));
-    const questionnaires = new Set((rows.get(QUESTIONNAIRE_TABLE) ?? []).map((row) => row.id as string));
-    let mismatches = 0;
-    for (const { document, projectId } of projects) {
-      for (const record of document.records) {
-        const id = identityBySource.get(providerReferenceKey(projectId, record.identity.harness, record.identity.threadId));
-        if (!id) {
-          mismatches += 1;
-          continue;
-        }
-        if (!lifecycles.has(id)) mismatches += 1;
-        if (record.entryKind === "subagent" && !subagents.has(id)) mismatches += 1;
-        const entries = [
-          ...(record.pendingQuestionnaire ? [record.pendingQuestionnaire] : []),
-          ...(record.questionnaireHistory ?? []),
-        ];
-        for (const entry of entries) {
-          if (!questionnaires.has(this.resolveQuestionnaireItemId(id, record.identity.threadId, entry))) mismatches += 1;
-        }
+  private writeThreadState(record: WorkbenchThreadStateRecord) {
+    const threadId = record.identity.threadId;
+    const lifecycle = WorkbenchThreadLifecycleSchema.parse(record.lifecycle);
+    const agent = "agent" in lifecycle ? lifecycle.agent : undefined;
+    const lifecycleFacts = {
+      thread_id: threadId, lifecycle_kind: lifecycle.kind, reason: lifecycle.reason, settled: Number(lifecycle.settled),
+      turn_id: "turnId" in lifecycle ? lifecycle.turnId : agent?.turnId ?? null,
+      request_key: "requestKey" in lifecycle ? lifecycle.requestKey : null,
+      agent_status: agent?.agentStatus ?? null,
+    };
+    const previousLifecycle = this.database.prepare(`
+      SELECT thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status
+      FROM workbench_thread_lifecycle WHERE thread_id = ?
+    `).get(threadId);
+    if (!isDeepStrictEqual(previousLifecycle, lifecycleFacts)) {
+      this.writeDomainFact("workbench_thread_lifecycle", ["thread_id"], { ...lifecycleFacts, updated_at: record.activityAt });
+    }
+    this.writeDomainFact("workbench_thread_retention", ["thread_id"], {
+      thread_id: threadId, settled_at: record.settledAt ?? null, git_history_cleaned_at: record.gitHistoryCleanedAt ?? null,
+      mcp_generation: record.mcpGeneration ?? null,
+    });
+    if (record.profile) {
+      this.writeDomainFact("workbench_thread_profiles", ["thread_id"], {
+        thread_id: threadId, ...profileRow(WorkbenchComposerProfileSelectionSchema.parse(record.profile)),
+      });
+    } else {
+      this.database.prepare("DELETE FROM workbench_thread_profiles WHERE thread_id = ?").run(threadId);
+    }
+    if (record.snoozedUntil) {
+      const target = this.database.prepare(`
+        SELECT thread.project_id, state.harness_id FROM workbench_threads thread
+        JOIN workbench_thread_states state ON state.thread_id = thread.id WHERE thread.id = ?
+      `).get(record.snoozedUntil.identity.threadId) as { project_id: string; harness_id: string } | undefined;
+      if (!target || target.project_id !== record.snoozedUntil.projectId || target.harness_id !== record.snoozedUntil.identity.harness) {
+        throw new Error("Snooze dependency does not match its canonical thread.");
       }
-      for (const draft of document.drafts) {
-        if (!drafts.has(draft.draftId)) mismatches += 1;
+      this.writeDomainFact("workbench_thread_snooze_dependencies", ["source_thread_id"], {
+        source_thread_id: threadId, target_thread_id: record.snoozedUntil.identity.threadId,
+      });
+    } else {
+      this.database.prepare("DELETE FROM workbench_thread_snooze_dependencies WHERE source_thread_id = ?").run(threadId);
+    }
+    const observations = {
+      ...(record.gitArc === undefined ? {} : { gitArc: record.gitArc }),
+      ...(record.gitArcPlan === undefined ? {} : { gitArcPlan: record.gitArcPlan }),
+    };
+    if (!isDeepStrictEqual(this.git.read(threadId), observations)) this.git.replace(threadId, observations);
+    const requestedQuestionnaires = {
+      pending: record.pendingQuestionnaire ?? null, history: record.questionnaireHistory ?? [],
+    };
+    if (!isDeepStrictEqual(this.questionnaires.read(threadId), requestedQuestionnaires)) {
+      this.questionnaires.replace(threadId, requestedQuestionnaires);
+    }
+    if (record.titleHistory !== undefined) {
+      const titles = new Map(record.titleHistory.map((entry) => [entry.title, entry.usedAt]));
+      if (titles.size !== record.titleHistory.length) throw new Error("Thread title history contains duplicate titles.");
+      const previous = this.database.prepare("SELECT title FROM workbench_thread_title_history WHERE thread_id = ?")
+        .all(threadId) as Array<{ title: string }>;
+      for (const entry of previous) {
+        if (!titles.has(entry.title)) this.database.prepare("DELETE FROM workbench_thread_title_history WHERE thread_id = ? AND title = ?")
+          .run(threadId, entry.title);
+      }
+      for (const [title, usedAt] of titles) {
+        this.writeDomainFact("workbench_thread_title_history", ["thread_id", "title"], {
+          thread_id: threadId, title, used_at: usedAt,
+        });
       }
     }
-    for (const relationship of relationships) {
-      if (relationship.kind === "reserved") continue;
-      const id = identityBySource.get(providerReferenceKey(relationship.projectId, relationship.harness, relationship.threadId));
-      if (!id || !subagents.has(id)) mismatches += 1;
-    }
-    return mismatches + this.relationalInvariantMismatchCount(rows);
   }
 
-  private relationalInvariantMismatchCount(rows: RowSets) {
-    const rowIds = (table: string, column: string) => new Set((rows.get(table) ?? []).map((row) => row[column]));
-    const identities = rowIds(IDENTITY_TABLE, "thread_id");
-    const lifecycles = rowIds(LIFECYCLE_TABLE, "thread_id");
-    const subagents = rowIds(SUBAGENT_TABLE, "thread_id");
-    const pendingRelationships = rowIds(PENDING_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id");
-    const activeRelationships = rowIds(ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id");
-    const projectLayouts = rowIds(PROJECT_LAYOUT_TABLE, "layout_id");
-    const globalLayouts = rowIds(GLOBAL_LAYOUT_TABLE, "layout_id");
-    const threadItems = rowIds(LAYOUT_THREAD_TABLE, "item_id");
-    const draftItems = rowIds(LAYOUT_DRAFT_TABLE, "item_id");
-    const folderItems = rowIds(LAYOUT_FOLDER_TABLE, "item_id");
-    const answers = rowIds(ANSWER_TABLE, "questionnaire_id");
-    let mismatches = 0;
-    for (const thread of rows.get(THREAD_TABLE) ?? []) {
-      if (!identities.has(thread.id)) mismatches += 1;
-      if (!lifecycles.has(thread.id)) mismatches += 1;
-      if ((thread.thread_kind === "subagent") !== subagents.has(thread.id)) mismatches += 1;
+  private writeDomainFact(table: string, keys: readonly string[], row: SqlRow) {
+    const previous = this.database.prepare(`SELECT * FROM ${table} WHERE ${keys.map((key) => `${key} = ?`).join(" AND ")}`)
+      .get(...keys.map((key) => row[key]));
+    if (isDeepStrictEqual(previous, row)) return;
+    const columns = Object.keys(row);
+    const updated = columns.filter((column) => !keys.includes(column));
+    this.database.prepare(`
+      INSERT INTO ${table}(${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})
+      ON CONFLICT(${keys.join(",")}) DO UPDATE SET ${updated.map((column) => `${column} = excluded.${column}`).join(",")}
+    `).run(...columns.map((column) => row[column]));
+  }
+
+  private readThreadState(row: ThreadStateRow): WorkbenchThreadStateRecord {
+    const lifecycle = WorkbenchThreadLifecycleSchema.parse({
+      kind: row.lifecycle_kind, reason: row.reason, settled: Boolean(row.settled),
+      ...(row.agent_status === null ? {} : {
+        agent: { agentStatus: row.agent_status, ...(row.turn_id === null ? {} : { turnId: row.turn_id }) },
+      }),
+      ...(row.turn_id !== null && row.agent_status === null ? { turnId: row.turn_id } : {}),
+      ...(row.request_key === null ? {} : { requestKey: row.request_key }),
+    });
+    const profile = this.database.prepare("SELECT * FROM workbench_thread_profiles WHERE thread_id = ?").get(row.thread_id) as {
+      selection_kind: "custom" | "profile"; profile_id: string | null;
+      agent_path: string | null; agent_source: "library" | "project" | null; harness_id: "codex" | "copilot" | "opencode";
+      model: string; reasoning_effort: string | null; service_tier: "fast" | null;
+    } | undefined;
+    const questionnaires = this.questionnaires.read(row.thread_id);
+    const titles = this.database.prepare(`
+      SELECT title, used_at FROM workbench_thread_title_history WHERE thread_id = ? ORDER BY used_at DESC, title
+    `).all(row.thread_id) as Array<{ title: string; used_at: number }>;
+    const dependency = this.database.prepare(`
+      SELECT target.thread_id, target.harness_id, thread.project_id
+      FROM workbench_thread_snooze_dependencies dependency
+      JOIN workbench_thread_states target ON target.thread_id = dependency.target_thread_id
+      JOIN workbench_threads thread ON thread.id = target.thread_id WHERE dependency.source_thread_id = ?
+    `).get(row.thread_id) as { thread_id: string; harness_id: "codex" | "copilot" | "opencode"; project_id: string } | undefined;
+    const common = {
+      identity: { harness: row.harness_id, threadId: row.thread_id }, title: row.title,
+      activityAt: row.activity_at, lifecycle, providerObserved: Boolean(row.provider_observed),
+      settledAt: row.settled_at, gitHistoryCleanedAt: row.git_history_cleaned_at, mcpGeneration: row.mcp_generation,
+      titleHistory: titles.map((title) => ({ title: title.title, usedAt: title.used_at })),
+      profile: profile ? WorkbenchComposerProfileSelectionSchema.parse({
+        kind: profile.selection_kind, ...(profile.selection_kind === "profile" ? { profileId: profile.profile_id } : {}),
+        settings: {
+          harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
+          model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
+        },
+      }) : null,
+      snoozedUntil: dependency ? {
+        identity: { harness: dependency.harness_id, threadId: dependency.thread_id }, projectId: dependency.project_id,
+      } : null,
+      pendingQuestionnaire: questionnaires.pending, questionnaireHistory: questionnaires.history,
+      ...this.git.read(row.thread_id),
+    };
+    if (row.thread_kind === "topLevel") {
+      if (row.archived === null || row.pinned === null || row.snoozed === null) throw new Error("Top-level thread metadata is incomplete.");
+      return {
+        ...common, entryKind: "thread", ...(row.order_at === null ? {} : { orderAt: row.order_at }),
+        metadata: row.archived
+          ? { archived: true, pinned: false, snoozed: false }
+          : { archived: false, pinned: Boolean(row.pinned), snoozed: Boolean(row.snoozed) },
+      };
     }
-    for (const relationship of rows.get(SUBAGENT_RELATIONSHIP_TABLE) ?? []) {
-      const augmentationCount = Number(pendingRelationships.has(relationship.id))
-        + Number(activeRelationships.has(relationship.id));
-      if (augmentationCount !== 1) mismatches += 1;
-      if ((relationship.relationship_kind === "pending") !== pendingRelationships.has(relationship.id)) mismatches += 1;
-    }
-    for (const layout of rows.get(LAYOUT_TABLE) ?? []) {
-      const ownerCount = Number(projectLayouts.has(layout.id)) + Number(globalLayouts.has(layout.id));
-      if (ownerCount !== 1) mismatches += 1;
-    }
-    for (const item of rows.get(LAYOUT_ITEM_TABLE) ?? []) {
-      const augmentationCount = Number(threadItems.has(item.id))
-        + Number(draftItems.has(item.id))
-        + Number(folderItems.has(item.id));
-      if (augmentationCount !== 1) mismatches += 1;
-    }
-    for (const questionnaire of rows.get(QUESTIONNAIRE_TABLE) ?? []) {
-      if (questionnaire.state === "pending" && answers.has(questionnaire.id)) mismatches += 1;
-    }
-    return mismatches;
+    if (row.parent_thread_id === null || row.cwd === null || row.name === null || row.profile_id === null
+      || row.profile_name === null || row.direct_subagent_index === null || row.created_at === null
+      || row.updated_at === null || row.child_pinned === null) throw new Error("Subagent thread metadata is incomplete.");
+    if (lifecycle.settled && row.child_pinned) throw new Error("Settled subagent cannot remain pinned.");
+    return {
+      ...common, entryKind: "subagent", parentThreadId: row.parent_thread_id, projectId: row.project_id,
+      cwd: row.cwd, name: row.name, profileId: row.profile_id, profileName: row.profile_name,
+      directSubagentIndex: row.direct_subagent_index, createdAt: row.created_at,
+      updatedAt: row.updated_at, pinned: Boolean(row.child_pinned),
+    };
   }
 
   private insert(table: string, row: SqlRow) {
@@ -788,20 +652,4 @@ export default class WorkbenchThreadStateRelationalRepository {
     ).run(...columns.map((column) => row[column]));
   }
 
-  private delete(table: RelationalTableName, row: SqlRow) {
-    const keys = RELATIONAL_TABLE_KEYS[table];
-    this.database.prepare(
-      `DELETE FROM ${table} WHERE ${keys.map((column) => `${column} = ?`).join(" AND ")}`,
-    ).run(...keys.map((column) => row[column]));
-  }
-
-  private update(table: RelationalTableName, row: SqlRow) {
-    const keys = RELATIONAL_TABLE_KEYS[table];
-    const columns = Object.keys(row).filter((column) => !keys.includes(column));
-    if (columns.length === 0) return;
-    this.database.prepare(
-      `UPDATE ${table} SET ${columns.map((column) => `${column} = ?`).join(", ")}`
-      + ` WHERE ${keys.map((column) => `${column} = ?`).join(" AND ")}`,
-    ).run(...columns.map((column) => row[column]), ...keys.map((column) => row[column]));
-  }
 }

@@ -1,5 +1,4 @@
 /*
- * Keywords: sidebar, summaries, revisions, sparse activity, observation.
  * Exports:
  * - default ThreadSidebarProjectState: admit complete project state and replay uncovered activity fields.
  */
@@ -9,6 +8,8 @@ import {
   createWorkbenchProjectThreadSummary,
   type WorkbenchProjectThreadSummary,
   type WorkbenchThreadActivityUpdate,
+  type WorkbenchThreadStateDelta,
+  type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
 
@@ -29,23 +30,27 @@ export default class ThreadSidebarProjectState {
   private sidebarRevision = -1;
   private summaryRevision = -1;
   private readonly activity = new Map<string, ActivityFields>();
+  private readonly changedEntries = new Map<string, RevisedValue<WorkbenchThreadSidebarEntry | null>>();
+  private delivery: RevisedValue<Pick<WorkbenchThreadSidebarSnapshot, "error" | "freshness">> | null = null;
   private displayOrder: RevisedValue<NonNullable<WorkbenchThreadActivityUpdate["displayOrder"]>> | null = null;
 
   readonly getSnapshot = () => this.sidebar;
   readonly getSummary = () => this.summary;
-  readonly hasAdmission = () => this.sidebarRevision >= 0 || this.summaryRevision >= 0 || this.activity.size > 0 || this.displayOrder !== null;
+  readonly hasAdmission = () => this.sidebarRevision >= 0 || this.summaryRevision >= 0 || this.activity.size > 0 || this.changedEntries.size > 0 || this.displayOrder !== null;
 
   resetAdmission() {
     this.sidebarRevision = -1;
     this.summaryRevision = -1;
     this.activity.clear();
+    this.changedEntries.clear();
+    this.delivery = null;
     this.displayOrder = null;
   }
 
   acceptSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
     if (snapshot.revision <= this.sidebarRevision) return false;
     this.sidebarRevision = snapshot.revision;
-    this.sidebar = this.withActivity(snapshot);
+    this.sidebar = this.withActivity(snapshot, true);
     this.syncSummary();
     this.retireCoveredFields();
     return true;
@@ -94,6 +99,34 @@ export default class ThreadSidebarProjectState {
     return this.sidebar !== previousSidebar || this.summary !== previousSummary;
   }
 
+  acceptDelta(update: WorkbenchThreadStateDelta) {
+    let admitted = false;
+    const entries = new Map(this.sidebar?.entries.map(entry => [this.entryKey(entry), entry]) ?? []);
+    const accept = (key: string, value: WorkbenchThreadSidebarEntry | null) => {
+      if (update.revision <= Math.max(this.sidebarRevision, this.changedEntries.get(key)?.revision ?? -1)) return;
+      this.changedEntries.set(key, { revision: update.revision, value });
+      const local = entries.get(key);
+      if (!value) entries.delete(key);
+      else if (!(local?.entryKind === "draft" && value.entryKind === "draft"
+        && local.draft.clientUpdatedAt > value.draft.clientUpdatedAt)) entries.set(key, value);
+      admitted = true;
+    };
+    for (const entry of update.upserts) accept(this.entryKey(entry), entry);
+    for (const key of update.removedKeys) accept(key, null);
+    if (update.revision > Math.max(this.sidebarRevision, this.delivery?.revision ?? -1)) {
+      this.delivery = { revision: update.revision, value: { error: update.error, freshness: update.freshness } };
+      admitted = true;
+    }
+    if (update.displayOrder !== undefined && update.revision > Math.max(this.sidebarRevision, this.displayOrder?.revision ?? -1)) {
+      this.displayOrder = { revision: update.revision, value: update.displayOrder };
+      admitted = true;
+    }
+    if (!admitted || !this.sidebar) return false;
+    this.sidebar = this.withActivity({ ...this.sidebar, entries: [...entries.values()], revision: Math.max(this.sidebar.revision, update.revision) });
+    this.syncSummary();
+    return true;
+  }
+
   replaceLocalSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
     // Draft edits and accepted intents are local projections, not server receipts.
     this.sidebar = snapshot;
@@ -106,13 +139,27 @@ export default class ThreadSidebarProjectState {
     ));
   }
 
-  private withActivity(snapshot: WorkbenchThreadSidebarSnapshot): WorkbenchThreadSidebarSnapshot {
+  private withActivity(snapshot: WorkbenchThreadSidebarSnapshot, replayEntries = false): WorkbenchThreadSidebarSnapshot {
     let revision = snapshot.revision;
-    const entries = snapshot.entries.map((entry) => {
+    const merged = new Map(snapshot.entries.map(entry => [this.entryKey(entry), entry]));
+    for (const [key, change] of this.changedEntries) {
+      if (!replayEntries || change.revision <= this.sidebarRevision) continue;
+      revision = Math.max(revision, change.revision);
+      if (change.value === null) {
+        merged.delete(key);
+      } else {
+        const local = merged.get(key);
+        if (local?.entryKind === "draft" && change.value.entryKind === "draft"
+          && local.draft.clientUpdatedAt > change.value.draft.clientUpdatedAt) continue;
+        merged.set(key, change.value);
+      }
+    }
+    const entries = [...merged.values()].map((entry) => {
       if (entry.entryKind === "draft") return entry;
       const fields = this.activity.get(this.threadKey(entry.identity));
-      const activityAt = fields?.activityAt && fields.activityAt.revision > this.sidebarRevision ? fields.activityAt : null;
-      const orderAt = fields?.orderAt && fields.orderAt.revision > this.sidebarRevision ? fields.orderAt : null;
+      const floor = Math.max(this.sidebarRevision, this.changedEntries.get(this.entryKey(entry))?.revision ?? -1);
+      const activityAt = fields?.activityAt && fields.activityAt.revision > floor ? fields.activityAt : null;
+      const orderAt = fields?.orderAt && fields.orderAt.revision > floor ? fields.orderAt : null;
       if (!activityAt && (!orderAt || entry.entryKind !== "thread")) return entry;
       revision = Math.max(revision, activityAt?.revision ?? -1, orderAt?.revision ?? -1);
       return {
@@ -124,8 +171,11 @@ export default class ThreadSidebarProjectState {
     const displayOrder = this.displayOrder && this.displayOrder.revision > this.sidebarRevision
       ? this.displayOrder : null;
     if (displayOrder) revision = Math.max(revision, displayOrder.revision);
+    const delivery = this.delivery && this.delivery.revision > this.sidebarRevision ? this.delivery : null;
+    if (delivery) revision = Math.max(revision, delivery.revision);
     return {
       ...snapshot,
+      ...delivery?.value,
       ...resolveWorkbenchThreadDisplayOrder(entries, displayOrder?.value ?? snapshot.displayOrder),
       revision,
     };
@@ -151,6 +201,10 @@ export default class ThreadSidebarProjectState {
   }
 
   private retireCoveredFields() {
+    for (const [key, change] of this.changedEntries) {
+      if (change.revision <= this.sidebarRevision) this.changedEntries.delete(key);
+    }
+    if (this.delivery && this.delivery.revision <= this.sidebarRevision) this.delivery = null;
     const activityFloor = this.summary ? Math.min(this.sidebarRevision, this.summaryRevision) : this.sidebarRevision;
     for (const [key, fields] of this.activity) {
       if (fields.activityAt && fields.activityAt.revision <= activityFloor) delete fields.activityAt;
@@ -162,5 +216,9 @@ export default class ThreadSidebarProjectState {
 
   private threadKey(identity: WorkbenchThreadActivityUpdate["identity"]) {
     return `${identity.harness}:${identity.threadId}`;
+  }
+
+  private entryKey(entry: WorkbenchThreadSidebarEntry) {
+    return entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : this.threadKey(entry.identity);
   }
 }

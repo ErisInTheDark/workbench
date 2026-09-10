@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints. Keywords: database, worker, schema, transcript, search, test.
+ * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
@@ -801,30 +801,22 @@ test("workspace search ranks relational sources and keeps settled transcript bod
   }
 });
 
-test("shadow projection failures stay request-scoped and leave durable health", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-shadow-"));
+test("invalid thread-state commits stay request-scoped without poisoning worker readiness", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-thread-state-failure-"));
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
-    const complete = await controller.rebuildThreadStateShadow({ now: 10, parents: [] });
-    assert.equal(complete.state, "complete");
-    assert.match(complete.sourceDigest, /^[0-9a-f]{64}$/u);
-
-    await controller.executeTransaction([
-      insertRow(threadStateTables.workbenchThreadStateProjects, {
-        project_id: "project",
-        document_json: JSON.stringify({ drafts: [], newThreadProfile: null, records: [{}], version: 4 }),
-        updated_at: 11,
-      }),
-    ]);
-    const failed = await controller.rebuildThreadStateShadow({ now: 12, parents: [] });
+    await assert.rejects(controller.commitThreadState({ records: [{
+      entryKind: "thread", identity: { harness: "codex", threadId: "unadmitted" },
+      title: "not committed", activityAt: 1, providerObserved: true,
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      profile: null, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    }] }));
     assert.equal(controller.state, "ready");
     assert.doesNotThrow(() => controller.assertReady());
 
-    assert.equal(failed.state, "failed");
-    assert.equal(failed.sourceProjectCount, 1);
-    assert.equal(failed.errorCode, "projection-failure");
-    assert.equal(failed.errorText, "Thread-state projection failed: unexpected projector failure.");
-    assert.deepEqual(await controller.readThreadStateShadowStatus(), failed);
+    assert.deepEqual(await controller.readThreadStateRecords({ selection: "project", projectId: "project" }), []);
+    assert.equal(await controller.readThreadStateActivity("project"), null);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

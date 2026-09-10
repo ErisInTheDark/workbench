@@ -1,5 +1,4 @@
 /*
- * Keywords: draft, persistence, identity, materialisation, navigation, metadata.
  * No production exports. Tests exercise actual draft adapters with client-state storage and sidebar owner ports.
  */
 import assert from "node:assert/strict";
@@ -18,9 +17,9 @@ function sidebarFixture() {
   const owner: SidebarDraftPersistence = {
     read: (projectId, draftId) => records.get(`${projectId}:${draftId}`) ?? null,
     create: (projectId, draftId) => ({
-      agent: null, attachments: [], clientUpdatedAt: 0, createdAt: 1, draftId, harness: "codex",
+      attachments: [], clientUpdatedAt: 0, createdAt: 1, draftId,
       composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "model", reasoningEffort: null, serviceTier: null },
-      model: "model", profileId: "profile", projectId, prompt: "", reasoningEffort: null, serviceTier: null, updatedAt: 1,
+      profileId: "profile", projectId, prompt: "", updatedAt: 1,
     }),
     write: (draft) => { records.set(`${draft.projectId}:${draft.draftId}`, draft); },
     remove: async (projectId, draftId) => { records.delete(`${projectId}:${draftId}`); },
@@ -39,7 +38,7 @@ test("new drafts reuse their reserved identity and preserve existing metadata th
   assert.equal(store.records.size, 1);
   const original = store.owner.read(store.target.projectId, store.target.draftId);
   assert.ok(original);
-  store.records.set(`${original.projectId}:${original.draftId}`, { ...original, model: "updated model", profileId: "new profile" });
+  store.records.set(`${original.projectId}:${original.draftId}`, { ...original, composerSettings: { ...original.composerSettings, model: "updated model" }, profileId: "new profile" });
   await saveComposerDraft(state, store.target, (draft) => ({
     ...draft, attachments: [...draft.attachments, { id: "image", url: "image:pasted" }],
   }), { ...autosave, detached: true });
@@ -47,7 +46,7 @@ test("new drafts reuse their reserved identity and preserve existing metadata th
   const latest = store.owner.read(store.target.projectId, store.target.draftId);
   assert.ok(latest);
   assert.equal(latest.prompt, original.prompt);
-  assert.equal(latest.model, "updated model");
+  assert.equal(latest.composerSettings.model, "updated model");
   assert.equal(latest.profileId, "new profile");
   assert.equal(latest.createdAt, original.createdAt);
   assert.deepEqual(latest.attachments, [{ id: "image", url: "image:pasted" }]);

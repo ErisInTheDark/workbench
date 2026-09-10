@@ -1,5 +1,4 @@
 /*
- * Keywords: lifecycle, questionnaire, grouping, pinned summaries, ordering, drafts.
  * Exports: none. Tests protect state transitions, eligibility, durable schemas and sidebar projection.
  */
 import assert from "node:assert/strict";
@@ -173,9 +172,8 @@ test("settlement is available only for unsettled terminal rows without Git block
   const draft: WorkbenchThreadSidebarEntry = {
     activityAt: 2,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
-      draftId: "draft", harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Draft",
-      reasoningEffort: null, serviceTier: null, updatedAt: 2,
+      attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
+      draftId: "draft", profileId: null, projectId: "project", prompt: "Draft", updatedAt: 2,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: false, snoozed: false },
@@ -269,9 +267,8 @@ test("draft priority requests use draft identity and drive shared grouping and o
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
     activityAt: 1,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
-      draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Pinned draft",
-      reasoningEffort: null, serviceTier: null, updatedAt: 1,
+      attachments: [], clientUpdatedAt: 1, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
+      draftId, profileId: null, projectId: "project", prompt: "Pinned draft", updatedAt: 1,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: true, snoozed: true },
@@ -867,19 +864,14 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
     {
       activityAt: 3,
       draft: {
-        agent: null,
-        attachments: [{ private: "attachment body" }],
+        attachments: [{ id: "private-attachment", url: "https://example.invalid/private" }],
         clientUpdatedAt: 3,
         composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null },
         createdAt: 1,
         draftId,
-        harness: "codex",
-        model: null,
         profileId: null,
         projectId: "project",
         prompt: "private draft body",
-        reasoningEffort: null,
-        serviceTier: null,
         updatedAt: 3,
       },
       entryKind: "draft",

@@ -1,10 +1,9 @@
 "use client";
 
 /*
- * Keywords: workbench, project, draft, persistence, navigation, editor, thread, questionnaire.
  * Exports:
  * - default Workbench: domain-hook client shell and project-qualified draft persistence bindings.
- * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations. Keywords: navigation, interaction, rendering.
+ * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -1551,10 +1550,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           };
           const now = Date.now();
           return {
-            agent: settings.agentPath, attachments: [], clientUpdatedAt: now, composerSettings: settings,
-            createdAt: now, draftId: id, harness: settings.harness, model: settings.model || null,
+            attachments: [], clientUpdatedAt: now, composerSettings: settings,
+            createdAt: now, draftId: id,
             profileId: selection.kind === "profile" ? selection.profileId : null, projectId: ownerProjectId,
-            prompt: "", reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, updatedAt: now,
+            prompt: "", updatedAt: now,
           };
         },
         write: async (draft, folderId) => {
@@ -1566,7 +1565,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
         materialize: (draft) => {
           if (currentRouteRef.current !== route) return;
-          composerProfileController.materializeDraftSelection({ kind: "new-thread", projectId }, draft.draftId, draft.harness, projectId);
+          composerProfileController.materializeDraftSelection({ kind: "new-thread", projectId }, draft.draftId, draft.composerSettings.harness, projectId);
           navigateToRoute(!route.projectId
             ? createHomeThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" })
             : createThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" }), { replace: true });

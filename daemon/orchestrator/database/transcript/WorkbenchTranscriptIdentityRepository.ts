@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, identity, admission, same-fact correlation, aliases, SQLite.
  * Exports:
  * - default WorkbenchTranscriptIdentityRepository: own structural item identity independently of body recording.
  */
@@ -75,6 +74,12 @@ export default class WorkbenchTranscriptIdentityRepository {
         INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id)
         VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, turn_id, alias) DO NOTHING
       `).run(input.threadId, turnId, source.id, target.id);
+    }
+    if (this.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_thread_questionnaires'").get()) {
+      this.prepare("UPDATE workbench_thread_questionnaires SET item_id = ? WHERE item_id = ?")
+        .run(target.id, source.id);
+      this.prepare("UPDATE workbench_thread_questionnaires SET insert_after_item_id = ? WHERE insert_after_item_id = ?")
+        .run(target.id, source.id);
     }
     this.prepare("DELETE FROM workbench_transcript_item_identities WHERE id = ?").run(source.id);
     return this.read(target);

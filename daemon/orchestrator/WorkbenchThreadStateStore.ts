@@ -1,17 +1,20 @@
 /*
  * Exports:
- * Keywords: thread state, sqlite, history, transaction, persistence.
- * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStatePersistence/WorkbenchThreadStateStoreDatabase/WorkbenchThreadStateShadowNotifier: document, database, and shadow ports.
- * - WorkbenchStoredThreadTitleHistory: full distinct title history for one provider identity.
- * - default WorkbenchThreadStateStore: atomically persist project documents and relational title history through the shared worker.
+ * - WorkbenchThreadStateGlobalDocumentId: existing global layout document names.
+ * - WorkbenchStoredThreadTitleHistory: distinct titles for one canonical thread.
+ * - WorkbenchThreadStatePersistence: existing consumer document interface.
+ * - WorkbenchThreadStateStoreDatabase: typed relational worker operations.
+ * - default WorkbenchThreadStateStore: adapt consumer objects to relational persistence.
  */
-import { deleteRows, selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
-
-import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
-import { threadStateTables } from "../lib/workbench/database/schema/thread-state-schema";
-import { threadTitleHistoryTables } from "../lib/workbench/database/schema/thread-title-history-schema";
+import { z } from "zod";
 import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
+import { ThreadDisplayLayoutSchema } from "workbench-shared/workbench/thread/thread-display-layout";
+import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
+import type {
+  WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+} from "./database/thread-state/workbench-thread-state-persistence";
+import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 
 export type WorkbenchThreadStateGlobalDocumentId = "homeDisplayOrder" | "pinnedLayout";
 
@@ -21,6 +24,8 @@ export interface WorkbenchStoredThreadTitleHistory {
 }
 
 export interface WorkbenchThreadStatePersistence {
+  readNextArchiveEligibility(): Promise<number | null>;
+  readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: string; record: WorkbenchThreadStateRecord }>>;
   readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null>;
   readProject(projectId: string): Promise<unknown | null>;
   readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]>;
@@ -29,130 +34,59 @@ export interface WorkbenchThreadStatePersistence {
 }
 
 export interface WorkbenchThreadStateStoreDatabase {
-  executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
-  query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
+  readThreadStateArchiveDeadline(): Promise<number | null>;
+  readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: string; record: WorkbenchThreadStateRecord }>>;
+  readThreadStateProject(projectId: string): Promise<WorkbenchThreadStateProjectDocument>;
+  readThreadStateTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]>;
+  writeThreadStateProject(projectId: string, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
+  readThreadStateGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<WorkbenchThreadStateGlobalDocument | null>;
+  writeThreadStateGlobal(document: WorkbenchThreadStateGlobalDocument): Promise<void>;
 }
 
-export interface WorkbenchThreadStateShadowNotifier {
-  markGlobal(id: WorkbenchThreadStateGlobalDocumentId): void;
-  markProject(projectId: string): void;
-}
-
-function sanitizeIdentity(identity: string) {
-  return identity.replace(/[^a-zA-Z0-9_./:-]/gu, "?").slice(0, 160);
-}
-
-function encodeDocument(document: object, identity: string) {
-  const encoded = JSON.stringify(document);
-  if (!encoded) throw new Error(`Thread-state document could not be serialized: ${sanitizeIdentity(identity)}`);
-  return encoded;
-}
-
-function decodeDocument(encoded: string, identity: string): unknown {
-  try {
-    return JSON.parse(encoded) as unknown;
-  } catch {
-    throw new Error(`Stored SQLite thread-state document is invalid: ${sanitizeIdentity(identity)}`);
-  }
-}
+const GlobalDocumentSchema = z.discriminatedUnion("id", [
+  z.object({
+    id: z.literal("homeDisplayOrder"), version: z.literal(1),
+    revision: z.number().int().nonnegative(), displayOrder: ThreadDisplayLayoutSchema,
+  }).strict(),
+  z.object({
+    id: z.literal("pinnedLayout"), version: z.literal(1),
+    revision: z.number().int().nonnegative(), displayOrder: ThreadDisplayLayoutSchema,
+    importedProjectIds: z.array(z.string().min(1)),
+  }).strict(),
+]);
 
 export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePersistence {
-  constructor(
-    private readonly database: WorkbenchThreadStateStoreDatabase,
-    private readonly now: () => number = Date.now,
-    private readonly shadow?: WorkbenchThreadStateShadowNotifier,
-  ) {}
+  constructor(private readonly database: WorkbenchThreadStateStoreDatabase) {}
 
-  async readProject(projectId: string): Promise<unknown | null> {
-    const row = (await this.database.query(selectRows(threadStateTables.workbenchThreadStateProjects, {
-      where: { project_id: projectId },
-    })))[0];
-    return row ? decodeDocument(row.document_json, `project:${projectId}`) : null;
+  readNextArchiveEligibility() {
+    return this.database.readThreadStateArchiveDeadline();
+  }
+
+  readArchiveEligible(activeBefore: number) {
+    return this.database.readThreadStateArchiveEligible(activeBefore);
+  }
+
+  readProject(projectId: string) {
+    return this.database.readThreadStateProject(projectId);
   }
 
   async readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]> {
-    const rows = await this.database.query(selectRows(threadTitleHistoryTables.titles, {
-      where: { project_id: projectId },
-      orderBy: [{ column: "used_at", direction: "DESC" }, { column: "title" }],
-    }));
-    const histories = new Map<string, WorkbenchStoredThreadTitleHistory>();
-    for (const row of rows) {
-      const key = `${row.harness_id}:${row.thread_id}`;
-      let history = histories.get(key);
-      if (!history) {
-        history = { identity: { harness: row.harness_id, threadId: row.thread_id }, titles: [] };
-        histories.set(key, history);
-      }
-      history.titles.push({ title: row.title, usedAt: row.used_at });
-    }
-    return [...histories.values()];
+    return this.database.readThreadStateTitleHistories(projectId);
   }
 
   async writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
-    const statements: WorkbenchDatabaseMutation[] = [
-      upsertRow(threadStateTables.workbenchThreadStateProjects, {
-        project_id: projectId,
-        document_json: encodeDocument(document, `project:${projectId}`),
-        updated_at: this.now(),
-      }, {
-        conflictColumns: ["project_id"],
-        updateColumns: ["document_json", "updated_at"],
-      }),
-    ];
-    if (titleHistories) {
-      const existing = await this.readTitleHistories(projectId);
-      const remaining = new Map(existing.map((history) => [
-        `${history.identity.harness}:${history.identity.threadId}`,
-        { identity: history.identity, titles: new Map(history.titles.map((entry) => [entry.title, entry.usedAt])) },
-      ]));
-      for (const history of titleHistories) {
-        const previous = remaining.get(`${history.identity.harness}:${history.identity.threadId}`);
-        for (const entry of history.titles) {
-          if (previous?.titles.get(entry.title) !== entry.usedAt) {
-            statements.push(upsertRow(threadTitleHistoryTables.titles, {
-              project_id: projectId,
-              harness_id: history.identity.harness,
-              thread_id: history.identity.threadId,
-              title: entry.title,
-              used_at: entry.usedAt,
-            }, {
-              conflictColumns: ["project_id", "harness_id", "thread_id", "title"],
-              updateColumns: ["used_at"],
-            }));
-          }
-          previous?.titles.delete(entry.title);
-        }
-      }
-      for (const history of remaining.values()) {
-        for (const title of history.titles.keys()) {
-          statements.push(deleteRows(threadTitleHistoryTables.titles, {
-            project_id: projectId, harness_id: history.identity.harness, thread_id: history.identity.threadId, title,
-          }));
-        }
-      }
-    }
-    await this.database.executeTransaction(statements);
-    this.shadow?.markProject(projectId);
+    const parsed = parseProjectDocument(JSON.stringify(document), projectId);
+    await this.database.writeThreadStateProject(projectId, { version: 4, ...parsed }, titleHistories);
   }
 
-  async readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null> {
-    const row = (await this.database.query(selectRows(threadStateTables.workbenchThreadStateGlobals, {
-      where: { id },
-    })))[0];
-    return row ? decodeDocument(row.document_json, `global:${id}`) : null;
+  async readGlobal(id: WorkbenchThreadStateGlobalDocumentId) {
+    const document = await this.database.readThreadStateGlobal(id);
+    if (!document) return null;
+    const { id: _id, ...body } = document;
+    return body;
   }
 
   async writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object) {
-    await this.database.executeTransaction([
-      upsertRow(threadStateTables.workbenchThreadStateGlobals, {
-        id,
-        document_json: encodeDocument(document, `global:${id}`),
-        updated_at: this.now(),
-      }, {
-        conflictColumns: ["id"],
-        updateColumns: ["document_json", "updated_at"],
-      }),
-    ]);
-    this.shadow?.markGlobal(id);
+    await this.database.writeThreadStateGlobal(GlobalDocumentSchema.parse({ ...document, id }));
   }
 }

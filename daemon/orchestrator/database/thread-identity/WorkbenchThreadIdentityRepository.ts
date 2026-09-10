@@ -1,5 +1,4 @@
 /*
- * Keywords: thread identity, native lookup, catalog, SQLite, atomic relink.
  * Exports:
  * - default WorkbenchThreadIdentityRepository: own UUID allocation and pending/turn identity on the database connection.
  */
@@ -203,7 +202,17 @@ export default class WorkbenchThreadIdentityRepository {
         coreTables.threadTurns, coreTables.workbenchThreadLifecycle,
         transcriptIdentityTables.itemIdentities, evidenceTables.transcriptAssetRefs,
         evidenceTables.transcriptCaptureGaps, evidenceTables.transcriptNativeRecords,
-      ].some((table) => this.database.prepare(`SELECT 1 FROM ${table.name} WHERE thread_id = ? LIMIT 1`).get(binding.thread_id));
+      ].some((table) => this.database.prepare(`SELECT 1 FROM ${table.name} WHERE thread_id = ? LIMIT 1`).get(binding.thread_id))
+        || (this.hasThreadDomain() && [
+          ["workbench_thread_states", "thread_id"],
+          ["workbench_subagent_thread_states", "parent_thread_id"],
+          ["workbench_thread_title_history", "thread_id"],
+          ["workbench_subagent_parents", "parent_thread_id"],
+          ["workbench_active_subagent_relationships", "thread_id"],
+          ["workbench_sidebar_layout_threads", "thread_id"],
+        ].some(([table, column]) => this.database.prepare(
+          `SELECT 1 FROM ${table} WHERE ${column} = ? LIMIT 1`,
+        ).get(binding.thread_id)));
       if (ownsFacts) throw new Error("Duplicate pending thread owns durable facts and cannot be retired.");
       this.database.prepare(`
         UPDATE workbench_threads SET
@@ -378,6 +387,10 @@ export default class WorkbenchThreadIdentityRepository {
     if (row.identity_origin === "workbench") return this.turnRecord(row);
     const turnId = randomUUID();
     this.database.pragma("defer_foreign_keys = ON");
+    if (this.hasThreadDomain()) {
+      this.database.prepare("UPDATE workbench_thread_questionnaires SET turn_id = ? WHERE turn_id = ?")
+        .run(turnId, row.id);
+    }
     const statements = [
       updateRows(coreTables.threadTurnMaterializations, { turn_id: turnId }, { turn_id: row.id }),
       updateRows(coreTables.workbenchThreadLifecycle, { turn_id: turnId }, { turn_id: row.id }),
@@ -418,6 +431,27 @@ export default class WorkbenchThreadIdentityRepository {
     const threadId = randomUUID();
     // Preserve the FK graph with UPDATE, never delete/reinsert a cascading parent.
     this.database.pragma("defer_foreign_keys = ON");
+    if (this.hasThreadDomain()) {
+      for (const [table, column] of [
+        ["workbench_thread_states", "thread_id"],
+        ["workbench_top_level_thread_states", "thread_id"],
+        ["workbench_subagent_thread_states", "thread_id"],
+        ["workbench_subagent_thread_states", "parent_thread_id"],
+        ["workbench_thread_retention", "thread_id"],
+        ["workbench_thread_snooze_dependencies", "source_thread_id"],
+        ["workbench_thread_snooze_dependencies", "target_thread_id"],
+        ["workbench_thread_profiles", "thread_id"],
+        ["workbench_thread_questionnaires", "thread_id"],
+        ["workbench_subagent_parents", "parent_thread_id"],
+        ["workbench_subagent_relationships", "parent_thread_id"],
+        ["workbench_active_subagent_relationships", "thread_id"],
+        ["workbench_thread_git_observations", "thread_id"],
+        ["workbench_sidebar_layout_threads", "thread_id"],
+        ["workbench_thread_title_history", "thread_id"],
+      ]) {
+        this.database.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(threadId, previousId);
+      }
+    }
     const statements = [
       updateRows(coreTables.threadTurns, { thread_id: threadId }, { thread_id: previousId }),
       updateRows(coreTables.workbenchPendingImportThreads, { thread_id: threadId }, { thread_id: previousId }),
@@ -453,6 +487,29 @@ export default class WorkbenchThreadIdentityRepository {
   private threadRow(threadId: string) {
     return this.database.prepare("SELECT id, project_id, project_root, identity_origin FROM workbench_threads WHERE id = ?")
       .get(threadId) as ThreadRow | undefined;
+  }
+
+  admitRetainedReference(input: { reference: string; projectId: string; projectRoot: string }): WorkbenchThreadIdentityRecord {
+    return this.database.transaction(() => {
+      const existing = this.resolve({ threadId: input.reference, projectId: input.projectId });
+      if (existing) return existing;
+      const threadId = randomUUID();
+      // Retained relationship ownership is known; provider identity and metadata are not.
+      this.database.prepare(`
+        INSERT INTO workbench_threads(
+          id, identity_origin, project_id, project_root, title, transcript_content_version,
+          created_at, updated_at, activity_at
+        ) VALUES (?, 'workbench', ?, ?, '', 0, 0, 0, 0)
+      `).run(threadId, input.projectId, input.projectRoot);
+      this.database.prepare("INSERT INTO workbench_thread_legacy_aliases(alias, thread_id) VALUES (?, ?)")
+        .run(input.reference, threadId);
+      return this.read(threadId)!;
+    })();
+  }
+
+  private hasThreadDomain() {
+    // The same identity owner admits legacy source metadata before the cutover DDL.
+    return Boolean(this.database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_thread_states'").get());
   }
 
   private read(threadId: string): WorkbenchThreadIdentityRecord | null {

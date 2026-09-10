@@ -1,15 +1,14 @@
 /*
- * Keywords: orchestrator, registrations, lifecycle, typed ports.
  * Exports:
- * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges. Keywords: bridge, module, reload.
- * - OrchestratorProviderNotification: provider event routed into the core node. Keywords: provider, notification, thread state.
- * - OrchestratorCodexAppServerRuntime: persistent Codex app-server registration. Keywords: codex, runtime, lifecycle.
- * - OrchestratorBrowseExecution: warm Browse execution registration. Keywords: browse, runtime, lifecycle.
- * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle and typed statement registration. Keywords: database, readiness, lifecycle, statement.
- * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings. Keywords: Codex, sandbox, network, settings.
- * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration. Keywords: transcript, recovery, subscription.
- * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration. Keywords: transcript, diagnostics, log.
- * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes. Keywords: registry, ownership, graph, questionnaire.
+ * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges.
+ * - OrchestratorProviderNotification: provider event routed into the core node.
+ * - OrchestratorCodexAppServerRuntime: persistent Codex app-server registration.
+ * - OrchestratorBrowseExecution: warm Browse execution registration.
+ * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle and typed statement registration.
+ * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings.
+ * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration.
+ * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration.
+ * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
@@ -41,10 +40,6 @@ import type {
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
-import type {
-  WorkbenchThreadStateShadowRefresh,
-  WorkbenchThreadStateShadowStatus,
-} from "./database/thread-state/workbench-thread-state-shadow-types";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -76,6 +71,7 @@ import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireContr
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import type { WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/workbench-transcript-types";
@@ -117,7 +113,10 @@ export interface OrchestratorBrowseExecution {
   initialize(): Promise<void>;
 }
 
-export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase {
+export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase,
+  Pick<import("./database/thread-state/workbench-thread-state-persistence").WorkbenchSubagentPersistence,
+    "readSubagents" | "readOwnedSubagents" | "reserveSubagent" | "activateSubagent" | "removeSubagent">,
+  WorkbenchThreadStateStoreDatabase {
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   assertReady(): void;
@@ -136,8 +135,6 @@ export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentit
   settleStatsClaimImport(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number): Promise<WorkbenchStatsImportProgress>;
   repairStatsAttributions(now: number, threadId?: string | null): Promise<WorkbenchDatabaseMutationResult>;
   readStatsImportProgress(state: WorkbenchStatsImportProgress["state"], revision: number, unsupportedClaimCheckpoints?: number): Promise<WorkbenchStatsImportProgress>;
-  rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
-  readThreadStateShadowStatus(): Promise<WorkbenchThreadStateShadowStatus | null>;
   replaceSearchProjectFiles(projectId: string, paths: readonly string[]): Promise<void>;
   replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]): Promise<void>;
   recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;

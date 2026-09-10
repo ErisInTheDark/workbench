@@ -1,5 +1,4 @@
 /*
- * Keywords: database, releases, immutable history, version allocation.
  * Exports:
  * - default databaseReleases: append-only named orchestrator releases and independently sealed fingerprints.
  */
@@ -31,6 +30,7 @@ const databaseReleases = Object.freeze({
   scopedThreadStateRelationships: release(20, "fb49eb5fbd79a16df341ad37d1ef9fa9be677caad02353c49624c112a7327a77"),
   threadContextUsage: release(21, "dfe7da4ce567acdba3107c8490574f10a3ccf06fbf0e37af1e46f8b18f001e87"),
   nativeIdentityLookupIndexes: release(22, "39f98b5d26a877d9b823641be9385407a0577a282a10744652cc8e7cf68c6bcb"),
+  relationalThreadState: release(23, "b42b22c4cfc5b4d4dc491931c1fcd37a003c4dd6c23bc4f3cae756f3ac9355f4"),
 });
 
 export default databaseReleases;

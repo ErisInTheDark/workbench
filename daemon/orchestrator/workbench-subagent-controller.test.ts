@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire delivery ordering. Keywords: subagent, profile, controller, activity, authorization, questionnaire, native output, test.
+ * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire delivery ordering.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -17,6 +17,7 @@ import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 
 async function profileFixture(context: TestContext) {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
@@ -200,7 +201,7 @@ test("creates with one client and delivers native agent output before empty ques
     },
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -296,7 +297,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
-  const subagentStore = new WorkbenchSubagentStore(storageRoot);
+  const subagentStore = new WorkbenchSubagentStore(createThreadStateTestDatabase());
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
@@ -350,7 +351,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -388,7 +389,7 @@ test("delivers native output to an active direct parent and rejects callers with
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -429,7 +430,7 @@ test("keeps relationship storage independent from lifecycle through create, mess
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -473,7 +474,7 @@ test("keeps a created child durable when its first turn fails to start", async (
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(storageRoot),
+    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });

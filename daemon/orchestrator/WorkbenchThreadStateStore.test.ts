@@ -1,145 +1,87 @@
 /*
- * No production exports. Tests protect authoritative shared-worker thread-state document round trips, replacement, isolation, reopen durability, transcript-reset survival, and JSON constraints. Keywords: thread state, sqlite, authority, durability, test.
+ * No exports. Protect relational facade replacement, rollback, draft moves and cold readback.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
+import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
+import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 
-import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./database/WorkbenchDatabaseController";
-import { threadStateTables } from "./database/workbench-database-schema";
-import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory } from "./WorkbenchThreadStateStore";
-import { insertRow } from "workbench-shared/database/workbench-database-statements";
-
-test("title history updates and dismissals are isolated, atomic, and durable across reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-title-history-"));
+test("consumer objects retain thread facts, title replacement and project isolation across cold reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-relational-facade-"));
   const databasePath = join(directory, "workbench.sqlite3");
   const database = new WorkbenchDatabaseController({ databasePath });
   let reopened: WorkbenchDatabaseController | null = null;
-  const history: WorkbenchStoredThreadTitleHistory[] = [{
-    identity: { harness: "codex", threadId: "thread" },
-    titles: [{ title: "new", usedAt: 20 }, { title: "old", usedAt: 10 }],
-  }];
   try {
+    const identities = await database.observeThreadIdentities(["first", "second"].map(projectId => ({
+      native: { harness: "codex" as const, nativeLocation: join(directory, projectId), nativeThreadId: projectId },
+      projectId, projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
+    })));
     const store = new WorkbenchThreadStateStore(database);
-    const document = { drafts: [], records: [], version: 4 };
-    await store.writeProject("first", document, history);
-    await store.writeProject("second", document, history);
-    assert.deepEqual(await store.readTitleHistories("first"), history);
-    const updated = [{ ...history[0]!, titles: [{ title: "old", usedAt: 30 }] }];
-    await store.writeProject("first", document, updated);
+    const records = identities.map((identity): WorkbenchThreadStateRecord => ({
+      entryKind: "thread", identity: { harness: "codex", threadId: identity.threadId }, title: identity.projectId,
+      activityAt: 1, metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null, snoozedUntil: null,
+    }));
+    for (const [index, record] of records.entries()) {
+      await store.writeProject(identities[index]!.projectId, { version: 4, records: [record], drafts: [] },
+        [{ identity: record.identity, titles: [{ title: "old", usedAt: 1 }] }]);
+    }
+    const first = records[0]!;
+    const updated = [{ identity: first.identity, titles: [{ title: "renamed", usedAt: 3 }] }];
+    await store.writeProject("first", { version: 4, records: [{ ...first, title: "renamed" }], drafts: [] }, updated);
+    const before = await store.readProject("first");
+    await assert.rejects(store.writeProject("first", { version: 4, records: [records[1]], drafts: [] }), /project/i);
+    assert.deepEqual(await store.readProject("first"), before);
     assert.deepEqual(await store.readTitleHistories("first"), updated);
-    assert.deepEqual(await store.readTitleHistories("second"), history);
-    await assert.rejects(store.writeProject("first", { changed: true }, [{
-      ...history[0]!, titles: [{ title: "invalid", usedAt: -1 }],
-    }]));
-    assert.deepEqual(await store.readProject("first"), document);
-    assert.deepEqual(await store.readTitleHistories("first"), updated);
+    assert.deepEqual(await store.readTitleHistories("second"), [{ identity: records[1]!.identity, titles: [{ title: "old", usedAt: 1 }] }]);
     await database.close();
     reopened = new WorkbenchDatabaseController({ databasePath });
-    const reopenedStore = new WorkbenchThreadStateStore(reopened);
-    assert.deepEqual(await reopenedStore.readTitleHistories("first"), updated);
-    await reopenedStore.writeProject("first", document);
-    assert.deepEqual(await reopenedStore.readTitleHistories("first"), updated);
-    await reopenedStore.writeProject("first", document, []);
-    assert.deepEqual(await reopenedStore.readTitleHistories("first"), []);
-    assert.deepEqual(await reopenedStore.readTitleHistories("second"), history);
+    const cold = new WorkbenchThreadStateStore(reopened);
+    assert.deepEqual(await cold.readProject("first"), before);
+    assert.deepEqual(await cold.readTitleHistories("first"), updated);
+    await cold.writeProject("first", before, []);
+    assert.deepEqual(await cold.readTitleHistories("first"), []);
   } finally {
     await reopened?.close();
     await database.close();
-    await rm(directory, { force: true, recursive: true });
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("thread-state documents round trip, replace, stay isolated, and survive reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-thread-state-store-"));
-  const databasePath = join(directory, "workbench.sqlite3");
-  const database = new WorkbenchDatabaseController({ databasePath });
-  let reopened: WorkbenchDatabaseController | null = null;
-  try {
-    const store = new WorkbenchThreadStateStore(database, () => 10);
-    const firstProject = { drafts: [{ draftId: "draft" }], records: [], version: 4 };
-    const secondProject = { drafts: [], records: [{ title: "second" }], version: 4 };
-    const replacedProject = { drafts: [], records: [{ title: "replaced" }], version: 4 };
-    const home = { displayOrder: { attention: { thread: { above: [], below: [] } } }, revision: 2, version: 1 };
-    const pinned = { displayOrder: {}, importedProjectIds: ["first"], revision: 3, version: 1 };
-
-    assert.equal(await store.readProject("first"), null);
-    assert.equal(await store.readGlobal("homeDisplayOrder"), null);
-    await store.writeProject("first", firstProject);
-    await store.writeProject("second", secondProject);
-    await store.writeProject("first", replacedProject);
-    await store.writeGlobal("homeDisplayOrder", home);
-    await store.writeGlobal("pinnedLayout", pinned);
-
-    assert.deepEqual(await store.readProject("first"), replacedProject);
-    assert.deepEqual(await store.readProject("second"), secondProject);
-    assert.deepEqual(await store.readGlobal("homeDisplayOrder"), home);
-    assert.deepEqual(await store.readGlobal("pinnedLayout"), pinned);
-
-    await database.close();
-    reopened = new WorkbenchDatabaseController({ databasePath });
-    const reopenedStore = new WorkbenchThreadStateStore(reopened);
-    assert.deepEqual(await reopenedStore.readProject("first"), replacedProject);
-    assert.deepEqual(await reopenedStore.readProject("second"), secondProject);
-    assert.deepEqual(await reopenedStore.readGlobal("homeDisplayOrder"), home);
-    assert.deepEqual(await reopenedStore.readGlobal("pinnedLayout"), pinned);
-  } finally {
-    await reopened?.close();
-    await database.close();
-    await rm(directory, { force: true, recursive: true });
-  }
-});
-
-test("thread-state tables reject malformed JSON and unknown global document ids", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-thread-state-constraints-"));
+test("project-qualified draft replacement preserves a moved draft and removes deleted layout references", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-draft-facade-"));
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
-    await assert.rejects(
-      database.executeTransaction([
-        insertRow(threadStateTables.workbenchThreadStateProjects, {
-          project_id: "project",
-          document_json: "not-json",
-          updated_at: 1,
-        }),
-      ]),
-      (error) => error instanceof WorkbenchDatabaseRequestFailure && /CHECK constraint failed/u.test(error.message),
-    );
-    await assert.rejects(
-      database.executeTransaction([{
-        kind: "insert",
-        tableName: threadStateTables.workbenchThreadStateGlobals.name,
-        values: [["id", "unknown"], ["document_json", "{}"], ["updated_at", 1]],
-      }]),
-      (error) => error instanceof WorkbenchDatabaseRequestFailure && /CHECK constraint failed/u.test(error.message),
-    );
+    const store = new WorkbenchThreadStateStore(database);
+    const draft: WorkbenchThreadDraft = {
+      draftId: "00000000-0000-4000-8000-000000000001", projectId: "first",
+      attachments: [{ id: "attachment", url: "data:text/plain,kept" }],
+      composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
+      profileId: null, prompt: "kept", clientUpdatedAt: 2, createdAt: 1, updatedAt: 2,
+    };
+    const document = (drafts: WorkbenchThreadDraft[]) => ({ version: 4, records: [], drafts: drafts.map(value => ({ ...value, pinned: true, snoozed: false })) });
+    await store.writeProject("first", document([draft]));
+    await store.writeProject("second", document([{ ...draft, projectId: "second" }]));
+    await store.writeProject("first", document([]));
+    assert.equal((await store.readProject("second")).drafts[0]?.prompt, "kept");
+    const key = getProjectQualifiedThreadDisplayKey("second", `draft:${draft.draftId}`);
+    await store.writeGlobal("pinnedLayout", {
+      version: 1, revision: 2, importedProjectIds: ["second"],
+      displayOrder: { pinned: { [key]: { above: [], below: [] } } },
+    });
+    await store.writeProject("second", document([]));
+    const pinned = await store.readGlobal("pinnedLayout") as { displayOrder: { pinned?: object } };
+    assert.deepEqual(pinned.displayOrder.pinned ?? {}, {});
+    assert.deepEqual((await store.readProject("second")).drafts, []);
   } finally {
     await database.close();
-    await rm(directory, { force: true, recursive: true });
+    await rm(directory, { recursive: true, force: true });
   }
-});
-
-test("authoritative document commits precede shadow dirt notifications", async () => {
-  const events: string[] = [];
-  const database = {
-    executeTransaction: async () => {
-      events.push("authority");
-      return { changes: 1 };
-    },
-    query: async () => [],
-  };
-  const store = new WorkbenchThreadStateStore(database, () => 10, {
-    markGlobal: (id) => events.push(`shadow:global:${id}`),
-    markProject: (projectId) => events.push(`shadow:project:${projectId}`),
-  });
-
-  await store.writeProject("project", {});
-  await store.writeGlobal("pinnedLayout", {});
-  assert.deepEqual(events, [
-    "authority",
-    "shadow:project:project",
-    "authority",
-    "shadow:global:pinnedLayout",
-  ]);
 });

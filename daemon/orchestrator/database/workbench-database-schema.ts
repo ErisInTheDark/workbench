@@ -1,34 +1,34 @@
 /*
- * Keywords: database, schema inventory, history, typed tables.
- * WORKBENCH_DATABASE_TABLE_NAMES: exact current Workbench database table inventory. Keywords: database, schema, tables.
- * WORKBENCH_DATABASE_SCHEMA_VERSION: current global SQLite schema version. Keywords: database, schema, version.
- * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade. Keywords: database, schema, install.
- * coreTables: current core table map. Keywords: database, schema, core.
- * CoreSchemaRows: current core selected-row registry. Keywords: database, schema, types.
- * codexSandboxNetworkTables: current Codex sandbox network table map. Keywords: database, schema, Codex, network.
- * CodexSandboxNetworkSchemaRows: current Codex sandbox network selected-row registry. Keywords: database, schema, Codex, network.
- * itemTables: current item table map. Keywords: database, schema, item.
- * ItemSchemaRows: current item selected-row registry. Keywords: database, schema, types.
- * operationSourceTables: current operation source table map. Keywords: database, schema, operation.
- * OperationSourceSchemaRows: current operation source selected-row registry. Keywords: database, schema, types.
- * interactionTables: current interaction table map. Keywords: database, schema, interaction.
- * InteractionSchemaRows: current interaction selected-row registry. Keywords: database, schema, types.
- * evidenceTables: current evidence table map. Keywords: database, schema, evidence.
- * EvidenceSchemaRows: current evidence selected-row registry. Keywords: database, schema, types.
- * threadStateTables: current thread-state table map. Keywords: database, schema, thread state.
- * ThreadStateSchemaRows: current thread-state selected-row registry. Keywords: database, schema, thread state, types.
- * searchTables/SearchSchemaRows: current workspace-search projection registry. Keywords: database, schema, search.
- * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts. Keywords: database, schema, stats.
+ * WORKBENCH_DATABASE_TABLE_NAMES: exact current Workbench database table inventory.
+ * WORKBENCH_DATABASE_SCHEMA_VERSION: current global SQLite schema version.
+ * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade.
+ * coreTables: current core table map.
+ * CoreSchemaRows: current core selected-row registry.
+ * codexSandboxNetworkTables: current Codex sandbox network table map.
+ * CodexSandboxNetworkSchemaRows: current Codex sandbox network selected-row registry.
+ * itemTables: current item table map.
+ * ItemSchemaRows: current item selected-row registry.
+ * operationSourceTables: current operation source table map.
+ * OperationSourceSchemaRows: current operation source selected-row registry.
+ * interactionTables: current interaction table map.
+ * InteractionSchemaRows: current interaction selected-row registry.
+ * evidenceTables: current evidence table map.
+ * EvidenceSchemaRows: current evidence selected-row registry.
+ * threadStateTables: current thread-state table map.
+ * ThreadStateSchemaRows: current thread-state selected-row registry.
+ * searchTables/SearchSchemaRows: current workspace-search projection registry.
+ * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts.
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
- * workbenchDatabaseTables: every current table keyed by its SQLite name. Keywords: database, schema, statements.
+ * workbenchDatabaseTables: every current table keyed by its SQLite name.
  * workbenchDatabaseSchema: assembled history used by protected production migration.
  * validateWorkbenchDatabaseReleases: reject rewritten or unsealed releases before opening SQLite.
+ * defineRelationalThreadStateSchema: assemble the relational serving schema at its release version.
  */
 import type Database from "better-sqlite3";
 
 import { codexSandboxNetworkSchemaHistory } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
 import { composerProfileSchemaHistory } from "../../lib/workbench/database/schema/composer-profile-schema.ts";
-import { coreSchemaHistory } from "workbench-shared/workbench/database/schema/core-schema";
+import { defineThreadDomainCoreSchema } from "workbench-shared/workbench/database/schema/core-schema";
 import { evidenceSchemaHistory } from "workbench-shared/workbench/database/schema/evidence-schema";
 import { interactionSchemaHistory } from "workbench-shared/workbench/database/schema/interaction-schema";
 import { itemSchemaHistory } from "workbench-shared/workbench/database/schema/item-schema";
@@ -37,7 +37,11 @@ import { searchSchemaHistory } from "workbench-shared/workbench/database/schema/
 import { usageSchemaHistory } from "workbench-shared/workbench/database/schema/usage-schema";
 import { transcriptIdentitySchemaHistory } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 import { threadStateSchemaHistory } from "../../lib/workbench/database/schema/thread-state-schema.ts";
-import { threadTitleHistorySchemaHistory } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
+import { defineCanonicalThreadTitleHistorySchema } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
+import { defineThreadDomainSchema } from "../../lib/workbench/database/schema/thread-domain-schema.ts";
+import { defineSidebarLayoutSchema } from "../../lib/workbench/database/schema/sidebar-layout-schema.ts";
+import { defineThreadQuestionnaireSchema } from "../../lib/workbench/database/schema/thread-questionnaire-schema.ts";
+import { defineThreadGitObservationSchema } from "../../lib/workbench/database/schema/thread-git-observation-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
@@ -64,22 +68,30 @@ export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/
 export { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 
-export const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
-  subsystems: [
-    composerProfileSchemaHistory,
-    codexSandboxNetworkSchemaHistory,
-    coreSchemaHistory,
-    transcriptIdentitySchemaHistory,
-    itemSchemaHistory,
-    operationSourceSchemaHistory,
-    interactionSchemaHistory,
-    evidenceSchemaHistory,
-    threadStateSchemaHistory,
-    threadTitleHistorySchemaHistory,
-    searchSchemaHistory,
-    usageSchemaHistory,
-  ],
-});
+export const workbenchDatabaseSchema = defineRelationalThreadStateSchema(databaseReleases.relationalThreadState.version);
+
+export function defineRelationalThreadStateSchema(schemaVersion: number) {
+  return defineWorkbenchDatabaseSchema({
+    subsystems: [
+      composerProfileSchemaHistory,
+      codexSandboxNetworkSchemaHistory,
+      defineThreadDomainCoreSchema(schemaVersion).history,
+      transcriptIdentitySchemaHistory,
+      itemSchemaHistory,
+      operationSourceSchemaHistory,
+      interactionSchemaHistory,
+      evidenceSchemaHistory,
+      threadStateSchemaHistory,
+      defineCanonicalThreadTitleHistorySchema(schemaVersion).history,
+      searchSchemaHistory,
+      usageSchemaHistory,
+      defineThreadDomainSchema(schemaVersion).history,
+      defineSidebarLayoutSchema(schemaVersion).history,
+      defineThreadQuestionnaireSchema(schemaVersion).history,
+      defineThreadGitObservationSchema(schemaVersion).history,
+    ],
+  });
+}
 
 export const workbenchDatabaseTables = Object.freeze(Object.fromEntries(
   workbenchDatabaseSchema.currentTables.map((table) => [table.name, table]),

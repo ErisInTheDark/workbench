@@ -1,5 +1,4 @@
 /*
- * Keywords: native agent input, parent child authority, questionnaire handoff, harness boundary.
  * Exports: none. Tests protect message transport through the subagent owner.
  */
 import assert from "node:assert/strict";
@@ -63,6 +62,10 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     };
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
+    identities: { resolve: async ({ threadId }) => ({
+      threadId, projectId: "project", projectRoot: "C:/repo",
+      bindings: [{ harness, nativeThreadId: threadId, nativeLocation: "C:/repo", pending: true, turnIndex: null }],
+    }) },
     createHarnessClient: () => {
       assert.equal(nativePort, false, "Internal provider work must not connect through the public socket.");
       return provider;
@@ -102,9 +105,47 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     });
     return { message, requests, response };
   } finally {
-    controller.dispose();
+    await controller.dispose();
   }
 }
+
+test("subagent disposal drains admitted requests and rejects new admission", async () => {
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused", onRelationshipCommitted: async () => {},
+    profileStore: {
+      read: async () => { entered(); await gate; return { profiles: [] }; },
+      mutate: async () => { throw new Error("unexpected mutation"); },
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    subagentStore: {
+      getOwned: async () => null, getOwnedMany: async () => [], list: async () => ({ nextCursor: null, subagents: [] }),
+      remove: async () => {}, replace: async () => {}, reserve: async record => ({ ...record, directSubagentIndex: 0 }),
+    },
+  });
+  try {
+    const request = controller.handleRequest({ id: 1, method: "workbench/subagent/profiles", params: { cwd: "C:/repo" } });
+    await reading;
+    let disposed = false;
+    const disposal = controller.dispose().then(() => { disposed = true; });
+    const rejected = await controller.handleRequest({ id: 2, method: "workbench/subagent/profiles", params: { cwd: "C:/repo" } });
+    assert.match(rejected.error?.message ?? "", /draining/);
+    assert.equal(disposed, false);
+    release();
+    assert.equal((await request).error, undefined);
+    await disposal;
+  } finally {
+    release();
+    await controller.dispose();
+  }
+});
 
 for (const harness of ["codex", "copilot"] as const) {
   for (const route of ["create", "child-active", "child-idle", "parent-active", "parent-idle"] as const) {

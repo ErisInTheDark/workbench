@@ -1,5 +1,4 @@
 /*
- * Keywords: identity, provider boundary, opaque content, structural admission, projection diagnostics.
  * No exports. Tests protect canonical references, durable alias convergence, projection timing and body-free live projection.
  */
 import assert from "node:assert/strict";
@@ -631,41 +630,23 @@ test("public socket routing and reload handoff retain native request correlation
       params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, delta: "native-parent is text" } });
     const event = emitted.find((message) => message.method === "item/reasoning/textDelta");
     assert.deepEqual(event?.params, { threadId: parent.threadId, turnId: turn.turnId, itemId: admitted!.id, delta: "native-parent is text" });
-    let releaseLookup!: () => void;
-    const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
-    let lookupEntered!: () => void;
-    const entered = new Promise<void>((resolve) => { lookupEntered = resolve; });
-    const resolveThread = owners.threads.resolve.bind(owners.threads);
-    let firstLookup = true;
-    const lookup = t.mock.method(owners.threads, "resolve", async (input) => {
-      if (firstLookup) {
-        firstLookup = false;
-        lookupEntered();
-        await lookupGate;
-      }
-      return resolveThread(input);
+    const lookup = t.mock.method(owners.threads, "resolve", async () => {
+      throw new Error("Canonical thread-state delivery must not resolve provider identities");
     });
     const sidebarMessage = { method: "workbench/thread-state/updated", params: {
       projectId: "project", revision: 1, error: null, freshness: "fresh",
       entries: [{
         entryKind: "thread", activityAt: 1, title: native.nativeThreadId,
-        identity: { harness: "codex", threadId: native.nativeThreadId },
+        identity: { harness: "codex", threadId: parent.threadId },
         metadata: { archived: false, pinned: true, snoozed: false },
         lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
-          agent: { agentStatus: "working", turnId: native.nativeTurnId } },
+          agent: { agentStatus: "working", turnId: turn.turnId } },
       }],
-      displayOrder: { pinned: { [`codex:${native.nativeThreadId}`]: { above: [], below: [] } } },
+      displayOrder: { pinned: { [`codex:${parent.threadId}`]: { above: [], below: [] } } },
     } };
-    const sidebarSending = controller.sendJsonToClient(client, sidebarMessage);
-    await entered;
-    assert.equal(lines.filter(line => line.includes(" projection ")).length, 0);
-    now += 37;
-    releaseLookup();
-    await sidebarSending;
-    lookup.mock.restore();
+    await controller.sendJsonToClient(client, sidebarMessage);
     const projectionLines = lines.filter(line => line.includes(" projection "));
     assert.equal(projectionLines.length, 1);
-    assert.match(projectionLines[0]!, /projection in 37ms/);
     assert.match(projectionLines[0]!, /kind: sidebar, revision: 1, entries: 1/);
     assert.ok(!projectionLines[0]!.includes(native.nativeThreadId));
     const secondClient: BridgeClient = { ...client };
@@ -680,13 +661,6 @@ test("public socket routing and reload handoff retain native request correlation
       ...sidebarMessage,
       params: { ...sidebarMessage.params, entries: [...sidebarMessage.params.entries] },
     };
-    const lookupFailure = new Error("controlled identity lookup failure");
-    const failedLookup = t.mock.method(owners.threads, "resolve", async () => { throw lookupFailure; });
-    const sentBeforeFailure = emitted.length;
-    await assert.rejects(controller.sendJsonToClient(client, nextPublication), /controlled identity lookup failure/);
-    failedLookup.mock.restore();
-    assert.equal(emitted.length, sentBeforeFailure);
-    assert.equal(lines.filter(line => line.includes(" projection ")).length, 1);
     await controller.sendJsonToClient(client, nextPublication);
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 2);
     const summary = { projectId: "project", revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
@@ -701,6 +675,8 @@ test("public socket routing and reload handoff retain native request correlation
     assert.equal(sidebar.entries[0]?.lifecycle.agent.turnId, turn.turnId);
     assert.equal(sidebar.entries[0]?.title, native.nativeThreadId);
     assert.deepEqual(Object.keys(sidebar.displayOrder.pinned), [`codex:${parent.threadId}`]);
+    assert.equal(lookup.mock.callCount(), 0);
+    lookup.mock.restore();
     await controller.handleMessage(client, "socket", Buffer.from(JSON.stringify({
       id: 8, method: "turn/start", params: { threadId: parent.threadId, input: [] },
     })), false);

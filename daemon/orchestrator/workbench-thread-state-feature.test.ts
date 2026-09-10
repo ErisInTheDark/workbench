@@ -1,7 +1,6 @@
 /*
- * Keywords: provider, title provenance, fallback, lifecycle, reconciliation, persistence.
  * Exports:
- * - No production exports; tests protect provider normalization, SQLite store routing, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, sqlite, subagent, title, resume, reconciliation, git, retention, test.
+ * - No production exports; tests protect provider normalization, SQLite store routing, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,11 +10,10 @@ import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDatabaseRow, WorkbenchDatabaseValue } from "workbench-shared/database/workbench-database-statements";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
-import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -43,39 +41,7 @@ function createHarnesses(
 }
 
 function createThreadStateDatabase() {
-  const rowsByTable = new Map<string, Array<Record<string, WorkbenchDatabaseValue>>>();
-  const operations: string[] = [];
-  return {
-    executeTransaction: async (statements: readonly WorkbenchDatabaseMutation[]) => {
-      for (const statement of statements) {
-        operations.push(`${statement.kind}:${statement.tableName}`);
-        const rows = rowsByTable.get(statement.tableName) ?? [];
-        if (statement.kind === "delete") {
-          rowsByTable.set(statement.tableName, rows.filter((row) => !statement.where.every(([column, value]) => row[column] === value)));
-          continue;
-        }
-        if (statement.kind !== "upsert") throw new Error(`Unexpected test database mutation: ${statement.kind}`);
-        const incoming = Object.fromEntries(statement.values);
-        const existing = rows.find((row) => statement.conflictColumns.every((column) => row[column] === incoming[column]));
-        if (existing) {
-          for (const column of statement.updateColumns) existing[column] = incoming[column]!;
-        } else {
-          rows.push(incoming);
-          rowsByTable.set(statement.tableName, rows);
-        }
-      }
-      return { changes: statements.length };
-    },
-    query: async <Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>) => {
-      operations.push(`${statement.kind}:${statement.tableName}`);
-      const rows = rowsByTable.get(statement.tableName) ?? [];
-      return rows.filter((row) => (
-        statement.where.every(([column, value]) => row[column] === value)
-        && statement.whereIn.every(([column, values]) => values.includes(row[column] as Exclude<WorkbenchDatabaseValue, null>))
-      )).map((row) => ({ ...row }) as Row);
-    },
-    operations,
-  };
+  return createThreadStateTestDatabase();
 }
 
 async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
@@ -387,7 +353,6 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 test("provider notification observation returns the persisted lifecycle result", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
   const database = createThreadStateDatabase();
-  const shadowProjects: string[] = [];
   const feature = new WorkbenchThreadStateFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
@@ -402,10 +367,6 @@ test("provider notification observation returns the persisted lifecycle result",
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    shadow: {
-      markGlobal: () => undefined,
-      markProject: (projectId) => shadowProjects.push(projectId),
-    },
     transitions: { run: async (_key, operation) => await operation() },
   });
   await feature.controller.ensureProviderEntry("project", {
@@ -425,9 +386,9 @@ test("provider notification observation returns the persisted lifecycle result",
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     threadId: "thread",
   });
-  const projectWrites = database.operations.filter((operation) => operation === "upsert:workbench_thread_state_projects");
-  assert.equal(projectWrites.length > 0, true);
-  assert.deepEqual(shadowProjects, projectWrites.map(() => "project"));
+  assert.deepEqual((await database.readThreadStateRecords({
+    selection: "threads", projectId: "project", threadIds: ["thread"],
+  }))[0]?.lifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
@@ -983,7 +944,7 @@ test("expired settled threads reach repository retention through the feature bou
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-retention-feature-"));
   const identity = { harness: "codex" as const, threadId: "expired-thread" };
   const database = createThreadStateDatabase();
-  await new WorkbenchThreadStateStore(database).writeProject("project", {
+  await database.seedProject("project", {
     drafts: [],
     records: [{
       activityAt: 1,
