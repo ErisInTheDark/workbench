@@ -10,6 +10,14 @@ import { installWorkbenchDatabaseSchema } from "./database/workbench-database-sc
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchSubagentRelationshipRepository from "./database/thread-state/WorkbenchSubagentRelationshipRepository";
 import type { WorkbenchSubagentPersistence } from "./database/thread-state/workbench-thread-state-persistence";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "another": fixtureIdentitySchemas.ProjectIdSchema.parse("another"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function fixture() {
   const database = new Database(":memory:");
@@ -17,8 +25,8 @@ function fixture() {
   installWorkbenchDatabaseSchema(database);
   const identities = new WorkbenchThreadIdentityRepository(database);
   const observe = (nativeThreadId: string) => identities.observe({
-    native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId },
-    projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+    native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+    projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: nativeThreadId,
     createdAt: 1, updatedAt: 1, activityAt: 1,
   }).threadId;
   const repository = new WorkbenchSubagentRelationshipRepository(database);
@@ -29,15 +37,15 @@ function fixture() {
     activateSubagent: async (parent, reservation, record) => repository.activate(parent, reservation, record),
     removeSubagent: async (parent, identifier) => { repository.remove(parent, identifier); },
   };
-  const metadata = (parentThreadId: string, name: string, createdAt = 1) => ({
-    parentThreadId, reservationId: randomUUID(), projectId: "project", harness: "codex" as const,
+  const metadata = (parentThreadId: fixtureIdentitySchemas.WorkbenchThreadId, name: string, createdAt = 1) => ({
+    parentThreadId, reservationId: randomUUID(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" as const,
     cwd: "C:/project", name, title: `Task ${name}`, profileId: "profile", profileName: "reviewer",
     createdAt, updatedAt: createdAt,
   });
-  const add = async (store: WorkbenchSubagentStore, parent: string, name: string, createdAt = 1) => {
+  const add = async (store: WorkbenchSubagentStore, parent: fixtureIdentitySchemas.WorkbenchThreadId, name: string, createdAt = 1) => {
     const { reservationId, ...reserved } = await store.reserve(metadata(parent, name, createdAt));
     const record = { ...reserved, threadId: observe(name) };
-    await store.replace(parent, reservationId, record);
+    await store.replace(fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(parent), reservationId, record);
     return record;
   };
   return { database, observe, persistence, metadata, add };
@@ -54,22 +62,22 @@ test("SQL pages keep parent/project scope and do not repeat entries at equal tim
     children.push(await add(store, parent, `child-${index}`, Math.floor(index / 2)));
   }
   const other = await add(store, otherParent, "other-child");
-  const first = await store.list({ parentThreadId: parent, projectId: "project" });
+  const first = await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"] });
   assert.equal(first.subagents.length, 20);
   assert.ok(first.nextCursor);
-  const second = await store.list({ parentThreadId: parent, projectId: "project", cursor: first.nextCursor });
+  const second = await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor });
   assert.equal(second.subagents.length, 5);
   assert.equal(second.nextCursor, null);
   const combined = [...first.subagents, ...second.subagents];
   assert.deepEqual(new Set(combined.map(record => record.threadId)), new Set(children.map(record => record.threadId)));
   assert.ok(combined.every((record, index) => index === 0 || combined[index - 1]!.createdAt >= record.createdAt));
-  assert.equal((await store.list({ projectId: "project" })).subagents.length, 26);
-  assert.deepEqual((await store.list({ parentThreadId: otherParent, projectId: "project" })).subagents, [other]);
-  await assert.rejects(store.list({ parentThreadId: otherParent, projectId: "project", cursor: first.nextCursor }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: "another", cursor: first.nextCursor }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: "project", cursor: "not-json" }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: "project", limit: 21 }));
-  await assert.rejects(store.list({ projectId: "project", cursor: first.nextCursor }));
+  assert.equal((await store.list({ projectId: fixtureIdentityValues.ProjectId["project"] })).subagents.length, 26);
+  assert.deepEqual((await store.list({ parentThreadId: otherParent, projectId: fixtureIdentityValues.ProjectId["project"] })).subagents, [other]);
+  await assert.rejects(store.list({ parentThreadId: otherParent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["another"], cursor: first.nextCursor }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: "not-json" }));
+  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], limit: 21 }));
+  await assert.rejects(store.list({ projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor }));
 });
 
 test("fresh store wrappers share durable reservations and never reuse allocated indexes", async (context) => {
@@ -79,13 +87,13 @@ test("fresh store wrappers share durable reservations and never reuse allocated 
   const first = new WorkbenchSubagentStore(persistence);
   const second = new WorkbenchSubagentStore(persistence);
   const reserved = await first.reserve(metadata(parent, "held"));
-  assert.deepEqual((await second.list({ projectId: "project" })).subagents, []);
+  assert.deepEqual((await second.list({ projectId: fixtureIdentityValues.ProjectId["project"] })).subagents, []);
   await assert.rejects(second.reserve(metadata(parent, "HELD")));
   await second.remove(parent, reserved.reservationId);
   const children = await Promise.all([add(first, parent, "one"), add(second, parent, "two")]);
   assert.deepEqual(children.map(record => record.directSubagentIndex), [1, 2]);
   const reopened = new WorkbenchSubagentStore(persistence);
-  assert.deepEqual(new Set((await reopened.list({ projectId: "project" })).subagents.map(record => record.threadId)),
+  assert.deepEqual(new Set((await reopened.list({ projectId: fixtureIdentityValues.ProjectId["project"] })).subagents.map(record => record.threadId)),
     new Set(children.map(record => record.threadId)));
   assert.deepEqual(database.pragma("foreign_key_check"), []);
 });
@@ -98,13 +106,13 @@ test("ownership admission is all-or-nothing and wrong parents cannot remove memb
   const otherParent = observe("other-parent");
   const child = await add(store, parent, "child");
   const other = await add(store, otherParent, "other");
-  assert.deepEqual(await store.getOwned(parent, "project", child.threadId), child);
-  assert.equal(await store.getOwned(parent, "another", child.threadId), null);
-  assert.equal(await store.getOwned(otherParent, "project", child.threadId), null);
-  assert.equal(await store.getOwnedMany(parent, "project", [child.threadId, other.threadId]), null);
+  assert.deepEqual(await store.getOwned(parent, fixtureIdentityValues.ProjectId["project"], child.threadId), child);
+  assert.equal(await store.getOwned(parent, fixtureIdentityValues.ProjectId["another"], child.threadId), null);
+  assert.equal(await store.getOwned(otherParent, fixtureIdentityValues.ProjectId["project"], child.threadId), null);
+  assert.equal(await store.getOwnedMany(parent, fixtureIdentityValues.ProjectId["project"], [child.threadId, other.threadId]), null);
   await store.remove(otherParent, child.threadId);
-  assert.deepEqual(await store.getOwnedMany(parent, "project", [child.threadId]), [child]);
+  assert.deepEqual(await store.getOwnedMany(parent, fixtureIdentityValues.ProjectId["project"], [child.threadId]), [child]);
   await store.remove(parent, child.threadId);
-  assert.equal(await store.getOwned(parent, "project", child.threadId), null);
+  assert.equal(await store.getOwned(parent, fixtureIdentityValues.ProjectId["project"], child.threadId), null);
   assert.ok(database.prepare("SELECT id FROM workbench_threads WHERE id = ?").get(child.threadId));
 });

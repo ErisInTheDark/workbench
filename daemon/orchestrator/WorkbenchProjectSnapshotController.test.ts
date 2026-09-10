@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, mutation refresh, HTTP compatibility, and disposal. Keywords: project, snapshot, observe, replay, poll, lifecycle, test.
+ * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, mutation refresh, HTTP compatibility, and disposal.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -13,6 +13,7 @@ import { deleteProjectFile } from "../lib/project";
 import type { ProjectSnapshot } from "workbench-shared/types";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function deferred<TValue>() {
   let resolve = (_value: TValue) => undefined;
@@ -23,7 +24,7 @@ function deferred<TValue>() {
 function createSnapshot(projectId: string, fileName = "README.md"): ProjectSnapshot {
   return {
     changes: {},
-    projectId,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
     root: projectId,
     rootPath: `C:/projects/${projectId}`,
     roots: [{ id: projectId, isPrimary: true, name: projectId, relativePath: projectId, rootPath: `C:/projects/${projectId}` }],
@@ -111,7 +112,7 @@ function createHarness({
     resolveProjectById: async (projectId) => {
       resolvedProjectIds.push(projectId);
       return {
-        id: projectId || "default",
+        id: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId || "default"),
         kind: "git" as const,
         root: `C:/projects/${projectId || "default"}`,
         rootPath: `C:/projects/${projectId || "default"}`,
@@ -176,7 +177,7 @@ test("an observed project publishes only changed snapshots", async () => {
   const updates: WorkbenchProjectStateUpdate[] = [];
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
   await waitFor(() => updates.length === 1, "Initial observed snapshot was not published.");
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => harness.snapshotReads === 2, "Explicit refresh did not run.");
   assert.equal(updates.length, 1);
   stop();
@@ -205,7 +206,7 @@ test("project observations publish only to their own project", async () => {
   const stopBeta = harness.controller.observe("beta", (update) => betaUpdates.push(update));
   await waitFor(() => alphaUpdates.length === 1 && betaUpdates.length === 1, "Initial project snapshots were not published.");
   harness.setSnapshotReader(async (projectId) => createSnapshot(projectId || "default", projectId === "alpha" ? "changed.ts" : "README.md"));
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => alphaUpdates.length === 2, "Changed alpha snapshot was not published.");
   assert.equal(betaUpdates.length, 1);
   assert.equal(alphaUpdates[1]?.projectId, "alpha");
@@ -225,9 +226,9 @@ test("an explicit refresh during a build requests exactly one serialized follow-
     refreshCall += 1;
     return refreshCall === 1 ? await gate.promise : createSnapshot("alpha", "follow-up.ts");
   });
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => harness.snapshotReads === 2, "Explicit refresh did not start.");
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   gate.resolve(createSnapshot("alpha", "during-build.ts"));
   await waitFor(() => harness.snapshotReads === 3 && updates.length === 3, "Serialized follow-up did not finish.");
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -242,14 +243,14 @@ test("refresh failures keep the last snapshot, log once per streak, and retry", 
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
   await waitFor(() => updates.length === 1, "Initial snapshot was not published.");
   harness.setSnapshotReader(async () => { throw new Error("disk busy"); });
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => harness.snapshotReads === 2, "First failed refresh did not run.");
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => harness.snapshotReads === 3, "Second failed refresh did not run.");
   assert.equal(updates.length, 1);
   assert.equal(harness.errors.length, 1);
   harness.setSnapshotReader(async () => createSnapshot("alpha", "recovered.ts"));
-  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") });
   await waitFor(() => updates.length === 2, "Recovered snapshot was not published.");
   stop();
   harness.controller.dispose();
@@ -281,7 +282,7 @@ test("disposed project state rejects later bridge requests", async () => {
   harness.controller.dispose();
   await assert.rejects(harness.controller.handleRequest("alpha", {
     method: "workbench/thread-state/project/refresh",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   }), /disposed/u);
 });
 
@@ -295,7 +296,7 @@ test("bridge mutations return metadata and publish the resulting changed tree", 
     method: "workbench/thread-state/project/entry/create",
     name: "created.md",
     parentPath: "",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     type: "file",
   });
   assert.deepEqual(result, { path: "created.md", type: "file" });
@@ -311,13 +312,13 @@ test("untracked file deletion requires explicit confirmation", async () => {
   const result = await harness.controller.handleRequest("alpha", {
     method: "workbench/thread-state/project/file/delete",
     path: "notes.md",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   });
   assert.deepEqual(harness.deletedPaths, []);
   assert.deepEqual(result, {
     confirmationRequired: true,
     path: "notes.md",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     tracked: false,
   });
   harness.controller.dispose();
@@ -330,7 +331,7 @@ test("confirmed untracked file deletion proceeds", async () => {
     confirmUntracked: true,
     method: "workbench/thread-state/project/file/delete",
     path: "notes.md",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   });
   assert.deepEqual(harness.deletedPaths, ["notes.md"]);
   assert.deepEqual(result, { path: "notes.md", tracked: false });
@@ -343,7 +344,7 @@ test("the dormant HTTP compatibility adapter delegates to the same mutation owne
     await harness.controller.handleTreeHttpRequest(createRequest("POST", "/orchestrator/tree", JSON.stringify({
       name: "created",
       parentPath: "",
-      projectId: "alpha",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
       type: "file",
     })) as never, captured as never);
   });

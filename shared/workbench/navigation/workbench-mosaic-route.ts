@@ -1,12 +1,16 @@
 /*
  * Exports:
- * - WorkbenchMosaicPanelTarget/WorkbenchMosaicNode/WorkbenchMosaicParseResult: URL-safe mosaic route tree contracts. Keywords: workbench, mosaic, route, split.
- * - createWorkbenchMosaicTarget/createWorkbenchMosaicSplit: construct normalized mosaic route nodes. Keywords: mosaic, builder, normalize.
- * - parseWorkbenchMosaicRouteExpression/serializeWorkbenchMosaicRouteExpression: parse and write bracketed mosaic URL expressions. Keywords: parser, serializer, URL.
+ * - WorkbenchMosaicPanelTarget/WorkbenchMosaicNode/WorkbenchMosaicParseResult: URL-safe mosaic route tree contracts.
+ * - WorkbenchMosaicNodeOptions: panel sizing and presentation options.
+ * - createWorkbenchMosaicTarget/createWorkbenchMosaicSplit: construct route nodes.
+ * - parseWorkbenchMosaicRouteExpression/serializeWorkbenchMosaicRouteExpression: parse and write bracketed URL expressions.
  */
 
 import type { WorkbenchPanelTarget } from "../layout/workbench-layout.ts";
-import { WorkbenchThreadTargetSchema, type WorkbenchThreadTarget } from "../thread/thread-state.ts";
+import { z } from "zod";
+import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
+
+const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 
 export type WorkbenchMosaicPanelTarget = Extract<WorkbenchPanelTarget, { readonly kind: "file" } | { readonly kind: "thread" }>;
 
@@ -87,21 +91,21 @@ function parseMosaicTarget(rawValue: string): WorkbenchMosaicPanelTarget | null 
   if (rawValue.startsWith("thread/")) {
     const rawThread = rawValue.slice("thread/".length);
     const rawSegments = rawThread.split("/");
-    let target: WorkbenchThreadTarget | null = null;
+    let target: WorkbenchThreadRouteTarget | null = null;
     if (rawSegments[0] === "new") {
       if (rawSegments.length === 1) target = { kind: "new" };
       if (rawSegments.length === 2) {
         const draftId = decodeMosaicValue(rawSegments[1] ?? "");
-        const parsed = WorkbenchThreadTargetSchema.safeParse({ draftId, kind: "draft" });
+        const parsed = WorkbenchThreadRouteTargetSchema.safeParse({ draftId, kind: "draft" });
         if (parsed.success) target = parsed.data;
       }
     } else if (rawSegments.length === 3 && rawSegments[1] === "sub") {
       const parentThreadId = decodeMosaicValue(rawSegments[0] ?? "");
       const threadId = decodeMosaicValue(rawSegments[2] ?? "");
-      if (parentThreadId && threadId) target = { kind: "subagent", parentThreadId, threadId };
+      if (parentThreadId && threadId) target = { kind: "subagent", parentThreadId: RouteThreadReferenceSchema.parse(parentThreadId), threadId: RouteThreadReferenceSchema.parse(threadId) };
     } else if (rawSegments.length === 1) {
       const threadId = decodeMosaicValue(rawThread);
-      if (threadId) target = { kind: "provider", threadId };
+      if (threadId) target = { kind: "provider", threadId: RouteThreadReferenceSchema.parse(threadId) };
     }
     return target ? { kind: "thread", target } : null;
   }

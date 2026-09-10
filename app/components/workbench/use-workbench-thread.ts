@@ -1,12 +1,11 @@
 /*
- * Keywords: thread identity, shared controller, React, consumer lease.
  * Exports:
  * - useWorkbenchThread: select one thread's domain state and bind stable actions to its identity.
  */
 "use client";
 
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
 import type { ThreadControllerSnapshot } from "../../workbench/WorkbenchThreadController";
 import { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";

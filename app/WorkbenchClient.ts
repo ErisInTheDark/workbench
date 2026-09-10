@@ -52,6 +52,7 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
+import { DraftIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchOrchestratorRuntimeClient from "./workbench/WorkbenchOrchestratorRuntimeClient";
@@ -797,7 +798,7 @@ export async function WorkbenchClient(
         entry.entryKind === "thread" && entry.identity.harness === identity.harness && entry.identity.threadId === identity.threadId
       ));
     if (!isForeignPin) return;
-    const result = await readPinnedThreadContext(projectId, { kind: "provider", ...identity });
+    const result = await readPinnedThreadContext(projectId, { kind: "provider", ...identity, threadId: ThreadReferenceSchema.parse(identity.threadId) });
     if (!result.ok) throw new Error(result.error);
   }
 
@@ -1022,7 +1023,7 @@ export async function WorkbenchClient(
         const references = new Set(workbenchBindings.clientStateController?.getSnapshot().records.flatMap((record) => (
           (record.kind === "composerDraft" || record.kind === "questionnaireDraft") && record.projectId === projectId ? [record.threadId] : []
         )));
-        const resolvedDrafts = await Promise.allSettled([...references].map((threadId) => threadIdentity.resolve({ threadId, projectId })));
+        const resolvedDrafts = await Promise.allSettled([...references].map((threadId) => threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: projectId || undefined })));
         if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
         if (resolvedDrafts.some((result) => result.status === "rejected")) {
           reportStatusMessage("Some saved draft identities could not be resolved. Their stored drafts remain unchanged.");
@@ -1058,7 +1059,7 @@ export async function WorkbenchClient(
 
     if (route.view === "thread") {
       void hydrateProjectSidebarData(route, routeGeneration);
-      const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
+      const target = route.threadTarget ?? { kind: "provider" as const, threadId: ThreadReferenceSchema.parse(route.threadId) };
       const ownerProjectId = route.threadOwnerProjectId || route.projectId;
       const isHomeThread = !route.projectId;
       const isForeignPin = !isHomeThread && ownerProjectId !== route.projectId;
@@ -1086,7 +1087,7 @@ export async function WorkbenchClient(
         if (isForeignPin) {
           return { error: "Pinned routes cannot open a new thread.", ok: false };
         }
-        const draft = threadClient.createThread("codex", crypto.randomUUID(), {
+        const draft = threadClient.createThread("codex", DraftIdSchema.parse(crypto.randomUUID()), {
           project: ownerProject,
         });
         applyThreadPayloadToCurrentView(draft);
@@ -1125,7 +1126,7 @@ export async function WorkbenchClient(
     let result: WorkbenchRouteLoadResult = { ok: false };
     await threadSidebarClient.guardNavigation(async () => { result = await applyRouteOwned(route); });
     if (route.view === "thread" && activeRoute === route && !result.ok && result.error) {
-      const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
+      const target = route.threadTarget ?? { kind: "provider" as const, threadId: ThreadReferenceSchema.parse(route.threadId) };
       if (target.kind !== "new") {
         threadClient.getThreadController(route.threadOwnerProjectId || route.projectId, target.kind === "subagent"
           ? { kind: "provider", threadId: target.parentThreadId } : target).fail(new Error(result.error));
@@ -1237,7 +1238,7 @@ export async function WorkbenchClient(
       if (parsed.data.identity.harness !== request.harness || parsed.data.identity.threadId !== request.threadId) {
         throw new Error("The thread title response did not match the requested thread.");
       }
-      threadClient.applyAcceptedThreadTitle(request.threadId, request.harness, parsed.data.title);
+      threadClient.applyAcceptedThreadTitle(parsed.data.identity.threadId, parsed.data.identity.harness, parsed.data.title);
       return parsed.data.title;
     },
     compactThread,

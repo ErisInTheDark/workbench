@@ -1,6 +1,6 @@
 /*
- * CodexTranscriptSqliteImportInput: one hydrated Codex turn window plus its scoped Workbench facts. Keywords: codex, transcript, import, window.
- * createCodexTranscriptSqliteImport: convert one hydrated Codex turn window into stable Workbench observations. Keywords: codex, sqlite, transcript, import, window.
+ * CodexTranscriptSqliteImportInput: one hydrated Codex turn window plus its scoped Workbench facts.
+ * createCodexTranscriptSqliteImport: convert one hydrated Codex turn window into stable Workbench observations.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
@@ -17,17 +17,18 @@ import type {
   WorkbenchSteerHistoryEntry,
 } from "workbench-shared/types";
 import type {
-  WorkbenchTranscriptAtomicObservation,
-  WorkbenchTranscriptObservation,
+  NativeTranscriptAtomicObservation,
+  NativeTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
 import {
   createCodexTranscriptProviderItemObservation,
   type CodexTranscriptProviderContext,
 } from "./codex-transcript-provider-observations.ts";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
+import { NativeThreadIdSchema, NativeTurnIdSchema } from "workbench-shared/workbench/identity";
 
 export interface CodexTranscriptSqliteImportInput {
-  browseAssets?: ReadonlyMap<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>;
+  browseAssets?: ReadonlyMap<string, Extract<NativeTranscriptAtomicObservation, { kind: "browse" }>["asset"]>;
   browseResultEntries: WorkbenchBrowseResultEntry[];
   context: CodexTranscriptProviderContext;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
@@ -61,7 +62,7 @@ export function createCodexTranscriptSqliteImport({
   questionnaireEntries,
   steerEntries,
   thread,
-}: CodexTranscriptSqliteImportInput): WorkbenchTranscriptObservation {
+}: CodexTranscriptSqliteImportInput): NativeTranscriptObservation {
   const payload = applySteerHistoryToThread(
     applyQuestionnaireHistoryToThread(toThreadPayload(thread), questionnaireEntries),
     steerEntries,
@@ -71,9 +72,9 @@ export function createCodexTranscriptSqliteImport({
     entry,
   ]));
   const steerBySyntheticId = new Map(steerEntries.map((entry) => [resolveSteerHistoryItemId(entry), entry]));
-  const observations: WorkbenchTranscriptAtomicObservation[] = [{
+  const observations: NativeTranscriptAtomicObservation[] = [{
     kind: "thread",
-    threadId: thread.id,
+    threadId: NativeThreadIdSchema.parse(thread.id),
     projectId: context.projectId,
     projectRoot: context.projectRoot,
     title: context.title,
@@ -90,13 +91,13 @@ export function createCodexTranscriptSqliteImport({
     const turn = loadedTurnsById.get(history.turnId);
     observations.push({
       kind: "turn",
-      threadId: thread.id,
-      turnId: history.turnId,
+      threadId: NativeThreadIdSchema.parse(thread.id),
+      turnId: NativeTurnIdSchema.parse(history.turnId),
       turnIndex,
       harnessId: "codex",
       nativeLocation: context.nativeLocation,
-      nativeThreadId: thread.id,
-      nativeTurnId: history.turnId,
+      nativeThreadId: NativeThreadIdSchema.parse(thread.id),
+      nativeTurnId: NativeTurnIdSchema.parse(history.turnId),
       state: turn?.status ?? history.status ?? "completed",
       createdAt: Math.round((turn?.startedAt ?? history.startedAt ?? thread.createdAt) * 1_000),
       startedAt: (turn?.startedAt ?? history.startedAt) === null
@@ -113,12 +114,16 @@ export function createCodexTranscriptSqliteImport({
       if (ownerTurnId && ownerTurnId !== turn.id) continue;
       const questionnaire = questionnaireBySyntheticId.get(item.id);
       if (questionnaire) {
-        observations.push({ kind: "questionnaire", entry: questionnaire, observedAt: questionnaire.resolvedAt });
+        observations.push({ kind: "questionnaire", entry: {
+          ...questionnaire, threadId: NativeThreadIdSchema.parse(questionnaire.threadId), turnId: NativeTurnIdSchema.parse(questionnaire.turnId),
+        }, observedAt: questionnaire.resolvedAt });
         continue;
       }
       const steer = steerBySyntheticId.get(item.id);
       if (steer) {
-        observations.push({ kind: "steer", entry: steer, observedAt: steer.attemptedAt });
+        observations.push({ kind: "steer", entry: {
+          ...steer, threadId: NativeThreadIdSchema.parse(steer.threadId), turnId: NativeTurnIdSchema.parse(steer.turnId),
+        }, observedAt: steer.attemptedAt });
         continue;
       }
       const timeline = itemTimeline(
@@ -140,13 +145,15 @@ export function createCodexTranscriptSqliteImport({
   }
   for (const entry of browseResultEntries) {
     const asset = browseAssets.get(entry.entryKey);
-    observations.push({ kind: "browse", entry, ...(asset ? { asset } : {}) });
+    observations.push({ kind: "browse", entry: {
+      ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId),
+    }, ...(asset ? { asset } : {}) });
   }
   return {
     kind: "canonicalWindow",
     contentVersion: 3,
-    materializedTurnIds: payload.turns.map(({ id }) => id),
-    threadId: thread.id,
+    materializedTurnIds: payload.turns.map(({ id }) => NativeTurnIdSchema.parse(id)),
+    threadId: NativeThreadIdSchema.parse(thread.id),
     observations,
   };
 }

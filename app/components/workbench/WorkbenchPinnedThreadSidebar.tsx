@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadSidebar: render the filtered global pinned disclosure above project navigation. Keywords: pinned, sidebar, projects, placement, route.
+ * - default WorkbenchPinnedThreadSidebar: render the filtered global pinned disclosure above project navigation.
  */
 "use client";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 

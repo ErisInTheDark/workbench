@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, canonical cache, provider compatibility, render invalidation.
  * No exports. Tests protect thread loading and turn reuse when provider item shapes change.
  */
 import assert from "node:assert/strict";
@@ -10,6 +9,7 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { ThreadPayload } from "workbench-shared/types";
 import ThreadCanonicalLayer from "./ThreadCanonicalLayer";
 import { getThreadItemRenderSignature } from "./thread-item-signature";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function thread(item: ThreadItem): ThreadPayload {
   const turn = (id: string, items: ThreadItem[]): Turn => ({
@@ -17,7 +17,7 @@ function thread(item: ThreadItem): ThreadPayload {
     startedAt: 1, completedAt: 2, durationMs: 1000,
   });
   return {
-    id: "thread", harness: "codex", name: null, preview: "", createdAt: 1, updatedAt: 2,
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), harness: "codex", name: null, preview: "", createdAt: 1, updatedAt: 2,
     status: "idle", cwd: "/repo", source: "appServer", path: null, agentNickname: null, agentRole: null,
     model: null, reasoningEffort: null, serviceTier: null, agentPath: null, isDraft: false,
     tokenUsage: null, turnHistory: [],

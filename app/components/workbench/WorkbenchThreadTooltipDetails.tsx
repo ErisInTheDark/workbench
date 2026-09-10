@@ -1,11 +1,11 @@
 /*
- * Keywords: sidebar, tooltip, questionnaire, draft identity, proposal, preview.
  * Exports:
- * - default WorkbenchThreadTooltipDetails: select compact plan, questionnaire, and proposal presentation for one sidebar thread. Keywords: sidebar, tooltip, plan, questionnaire, proposal, ownership.
+ * - default WorkbenchThreadTooltipDetails: select compact plan, questionnaire, and proposal presentation for one sidebar thread.
  */
 "use client";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
@@ -35,11 +35,11 @@ export default function WorkbenchThreadTooltipDetails({
   onQuestionnaireError?: (message: string) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   projectFilePaths?: readonly string[];
-  projectId: string;
+  projectId: ProjectId | "";
   projectRootPath?: string;
   spellCheck: boolean;
-  threadId: string;
-  parentThreadId?: string;
+  threadId: WorkbenchThreadId;
+  parentThreadId?: WorkbenchThreadId;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId

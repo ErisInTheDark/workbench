@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - OpenCodeBridgeOptions: bridge dependencies and notification callbacks. Keywords: opencode, configuration.
- * - OpenCodeBridgeState: reload handoff state. Keywords: opencode, reload, lifecycle.
- * - createOpenCodeReasoningConfig: map Workbench reasoning effort into SDK variant input. Keywords: opencode, reasoning, adapter.
- * - readOpenCodeSessionReasoningEffort: read admitted SDK reasoning variant. Keywords: opencode, reasoning, session.
- * - OpenCodeRecoveryDisposition: completed, busy, or prompt recovery result. Keywords: opencode, recovery, state.
- * - getOpenCodeRecoveryDisposition: decide interrupted-session continuation. Keywords: opencode, recovery, dedupe.
- * - createOpenCodeRecoveryStartRequest: construct deterministic recovery input. Keywords: opencode, recovery, request.
- * - OpenCodeBridge: own SDK client, event pump, session state, pending input, recovery, and notifications. Keywords: opencode, sdk, bridge, session, events.
+ * - OpenCodeBridgeOptions: bridge dependencies and notification callbacks.
+ * - OpenCodeBridgeState: reload handoff state.
+ * - createOpenCodeReasoningConfig: map Workbench reasoning effort into SDK variant input.
+ * - readOpenCodeSessionReasoningEffort: read admitted SDK reasoning variant.
+ * - OpenCodeRecoveryDisposition: completed, busy, or prompt recovery result.
+ * - getOpenCodeRecoveryDisposition: decide interrupted-session continuation.
+ * - createOpenCodeRecoveryStartRequest: construct deterministic recovery input.
+ * - OpenCodeBridge: own SDK client, events, session state, pending input, recovery and notifications.
  */
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -53,6 +53,7 @@ import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecov
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+import { NativeThreadIdSchema, NativeTurnIdSchema, NativeItemIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 
 export type OpenCodeBridgeOptions = {
   appServer: OpenCodeAppServer;
@@ -61,7 +62,7 @@ export type OpenCodeBridgeOptions = {
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
   identities?: NativeTranscriptIdentityOwners;
-  resolveProject?: (cwd: string) => Promise<{ projectId: string; projectRoot: string }>;
+  resolveProject?: (cwd: string) => Promise<{ projectId: ProjectId; projectRoot: string }>;
 };
 
 type OpenCodeSessionResponse = {
@@ -785,7 +786,7 @@ export class OpenCodeBridge {
       thread,
       metadata: {
         ...await resolveProject(thread.cwd),
-        native: { harness: "opencode", nativeLocation: thread.cwd, nativeThreadId: thread.id },
+        native: { harness: "opencode", nativeLocation: thread.cwd, nativeThreadId: NativeThreadIdSchema.parse(thread.id) },
         title: thread.name ?? "", createdAt: thread.createdAt * 1_000,
         updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
       },
@@ -800,16 +801,16 @@ export class OpenCodeBridge {
     if (!this.identities) return;
     for (const [nativeThreadId, session] of this.liveThreadState.sessions) {
       signal.throwIfAborted();
-      const native = this.identities.threads.knownNativeBinding("opencode", nativeThreadId);
+      const native = this.identities.threads.knownNativeBinding("opencode", NativeThreadIdSchema.parse(nativeThreadId));
       const threadId = this.identities.threads.workbenchIdForNative(native);
-      if (session.currentTurnId && !await this.identities.threads.resolveTurn({ threadId, turnId: session.currentTurnId })) {
+      if (session.currentTurnId && !await this.identities.threads.resolveTurn({ threadId, turnId: NativeTurnIdSchema.parse(session.currentTurnId) })) {
         throw new Error("OpenCode live turn has no retained identity.");
       }
       for (const item of session.startedItems.values()) {
         signal.throwIfAborted();
-        const turn = await this.identities.threads.resolveTurn({ threadId, turnId: item.turnId });
+        const turn = await this.identities.threads.resolveTurn({ threadId, turnId: NativeTurnIdSchema.parse(item.turnId) });
         signal.throwIfAborted();
-        if (!turn || !await this.identities.items.resolve({ threadId, turnId: turn.turnId, itemId: item.itemId })) {
+        if (!turn || !await this.identities.items.resolve({ threadId, turnId: turn.turnId, itemId: NativeItemIdSchema.parse(item.itemId) })) {
           throw new Error("OpenCode live item has no retained identity.");
         }
       }
@@ -827,7 +828,7 @@ export class OpenCodeBridge {
     if (this.identities && notifications.length) {
       const threadId = eventThreadId(event);
       if (!threadId) throw new Error("OpenCode live event has no thread identity.");
-      const native = this.identities.threads.knownNativeBinding("opencode", threadId);
+      const native = this.identities.threads.knownNativeBinding("opencode", NativeThreadIdSchema.parse(threadId));
       await this.persist(() => admitProviderNotifications(this.identities!, native, notifications as ServerNotification[]));
     }
     signal.throwIfAborted();
@@ -1041,7 +1042,7 @@ export class OpenCodeBridge {
     const signal = this.generation.signal;
     const untrustedPromptContext = readWorkbenchPromptContext(message);
     const publicThreadId = this.identities ? this.identities.threads.workbenchIdForNative(
-      this.identities.threads.knownNativeBinding("opencode", threadId),
+      this.identities.threads.knownNativeBinding("opencode", NativeThreadIdSchema.parse(threadId)),
     ) : threadId;
     let systemPrompt: string | null;
     const promptContext = untrustedPromptContext

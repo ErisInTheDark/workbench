@@ -1,17 +1,16 @@
 /*
- * Keywords: domain hooks, client, project identity, thread state, title history.
  * Exports:
- * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces. Keywords: lifecycle, bootstrap, client.
- * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace. Keywords: threads, runtime, controller.
- * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode. Keywords: project, sidebar, snapshot.
- * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity. Keywords: thread, sidebar, lifecycle.
- * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent. Keywords: title, history, project.
- * - useWorkbenchProjectThreadSidebars: read the aggregate project sidebar projection. Keywords: home, projects, sidebar.
- * - useWorkbenchProjectThreadSummaries: read the aggregate project summary projection. Keywords: project, summary, status.
- * - useWorkbenchHomeThreadDisplayOrder: read global home thread ordering. Keywords: home, order, sidebar.
- * - useWorkbenchHomeThreadDisplayOrderSupported: read global home ordering capability. Keywords: home, capability, ordering.
- * - useWorkbenchPinnedThreadLayout: read global pinned thread layout. Keywords: pinned, layout, sidebar.
- * - useWorkbenchThreadTextPresentationField: subscribe to one exact streaming text field. Keywords: thread, text, presentation, leaf.
+ * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces.
+ * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace.
+ * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode.
+ * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity.
+ * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent.
+ * - useWorkbenchProjectThreadSidebars: read the aggregate project sidebar projection.
+ * - useWorkbenchProjectThreadSummaries: read the aggregate project summary projection.
+ * - useWorkbenchHomeThreadDisplayOrder: read global home thread ordering.
+ * - useWorkbenchHomeThreadDisplayOrderSupported: read global home ordering capability.
+ * - useWorkbenchPinnedThreadLayout: read global pinned thread layout.
+ * - useWorkbenchThreadTextPresentationField: subscribe to one exact streaming text field.
  */
 "use client";
 
@@ -52,6 +51,7 @@ import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
 import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 import { useWorkbenchThread } from "./use-workbench-thread";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   changes: {},
@@ -199,7 +199,7 @@ function useWorkbenchThreadSidebarStore(explicitClient?: WorkbenchClientControll
   return useWorkbenchClientController(explicitClient).mounted?.threadSidebar ?? null;
 }
 
-export function useWorkbenchProjectThreadSidebar(projectId: string | null | undefined, explicitClient?: WorkbenchClientController) {
+export function useWorkbenchProjectThreadSidebar(projectId: ProjectId | "" | null | undefined, explicitClient?: WorkbenchClientController) {
   const store = useWorkbenchThreadSidebarStore(explicitClient);
   const getSnapshot = useCallback(
     () => projectId ? store?.getProjectSnapshot(projectId) ?? null : null,
@@ -209,7 +209,7 @@ export function useWorkbenchProjectThreadSidebar(projectId: string | null | unde
 }
 
 export function useWorkbenchThreadSidebarEntry(
-  projectId: string | null | undefined,
+  projectId: ProjectId | "" | null | undefined,
   harness: WorkbenchHarness,
   threadId: string,
   explicitClient?: WorkbenchClientController,
@@ -231,7 +231,7 @@ export function useWorkbenchProjectThreadSidebars(explicitClient?: WorkbenchClie
   );
 }
 
-export function useWorkbenchThreadTitleHistory(projectId: string, harness: WorkbenchHarness, threadId: string) {
+export function useWorkbenchThreadTitleHistory(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
   const client = useWorkbenchClientController();
   const thread = useWorkbenchThread(projectId, { kind: "provider", harness, threadId });
   const entry = thread.state.entry;

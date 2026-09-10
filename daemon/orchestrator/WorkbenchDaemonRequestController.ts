@@ -1,10 +1,37 @@
 /*
- * Keywords: daemon, rpc, stats, dispatch, ownership.
  * Exports:
- * - WorkbenchBrowseSessionPort: replaceable Browse session request boundary. Keywords: browse, reload, port.
- * - default WorkbenchDaemonRequestController: dispatch semantic browser daemon requests to their real owners. Keywords: daemon, rpc, registry.
+ * - WorkbenchBrowseSessionPort: replaceable Browse session request boundary.
+ * - default WorkbenchDaemonRequestController: dispatch semantic browser daemon requests to their real owners.
  */
+import type {
+    OpenFileInEditorRequest,
+    ResolveExternalFileLinkRootsRequest,
+    RevealProjectEntryRequest,
+    WorkbenchComposerProfileSlot,
+} from "workbench-shared/types";
+import {
+    WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
+    type WorkbenchDaemonGitArcMethod,
+} from "workbench-shared/workbench/daemon/workbench-daemon-requests";
+import {
+    GitCheckpointCompareResultSchema,
+    GitCheckpointProposalSchema,
+} from "workbench-shared/workbench/git/checkpoint-contracts";
+import {
+    createGitArcOperationRejected,
+    GitArcFailureException,
+    parseGitArcFailureEnvelope,
+} from "workbench-shared/workbench/git/git-arc-failures";
+import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
+import {
+    WorkbenchThreadIdentityResolutionSchema,
+    WorkbenchThreadIdentityResolveRequestSchema,
+} from "workbench-shared/workbench/thread/workbench-thread-identity";
+import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -12,37 +39,9 @@ import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
-import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
-import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
-import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import {
-  WorkbenchThreadIdentityResolutionSchema,
-  WorkbenchThreadIdentityResolveRequestSchema,
-} from "workbench-shared/workbench/thread/workbench-thread-identity";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
-import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
-import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
-import {
-  GitCheckpointCompareResultSchema,
-  GitCheckpointProposalSchema,
-} from "workbench-shared/workbench/git/checkpoint-contracts";
-import {
-  createGitArcOperationRejected,
-  GitArcFailureException,
-  parseGitArcFailureEnvelope,
-} from "workbench-shared/workbench/git/git-arc-failures";
-import {
-  WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
-  type WorkbenchDaemonGitArcMethod,
-} from "workbench-shared/workbench/daemon/workbench-daemon-requests";
-import type {
-  OpenFileInEditorRequest,
-  ResolveExternalFileLinkRootsRequest,
-  RevealProjectEntryRequest,
-  WorkbenchComposerProfileSlot,
-} from "workbench-shared/types";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
@@ -149,12 +148,11 @@ export default class WorkbenchDaemonRequestController {
   accepts(method: string) { return METHODS.has(method); }
   registerBrowse(port: WorkbenchBrowseSessionPort) { this.browse = port; return () => { if (this.browse === port) this.browse = null; }; }
 
-  private async nativeProfileSlot(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileSlot> {
+  private async resolveProfileSlot(slot: ReturnType<typeof WorkbenchComposerProfileSlotInputSchema.parse>): Promise<WorkbenchComposerProfileSlot> {
     if (slot.kind !== "thread") return slot;
     const thread = await this.owners.threadIdentity.resolve({ threadId: slot.threadId, projectId: slot.projectId, harness: slot.harness });
-    const binding = thread?.bindings[0];
-    if (!binding) throw new InvalidParamsError("Composer thread has no native profile destination.");
-    return WorkbenchComposerProfileSlotSchema.parse({ ...slot, threadId: binding.nativeThreadId, harness: binding.harness });
+    if (!thread) throw new InvalidParamsError("Composer thread identity is unavailable.");
+    return { ...slot, threadId: thread.threadId };
   }
 
   async handle(request: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -290,18 +288,18 @@ export default class WorkbenchDaemonRequestController {
         case "native/file/link-roots": result = await this.owners.nativeFiles.linkRoots(linkRootsRequest(params)); break;
         case "profiles/read": result = await this.owners.profiles.read(); break;
         case "profiles/target/read": {
-          const slot = WorkbenchComposerProfileSlotSchema.safeParse(params.slot);
+          const slot = WorkbenchComposerProfileSlotInputSchema.safeParse(params.slot);
           if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
-          result = { selection: await this.owners.profileTargets.readComposerProfileTarget(await this.nativeProfileSlot(slot.data)) };
+          result = { selection: await this.owners.profileTargets.readComposerProfileTarget(await this.resolveProfileSlot(slot.data)) };
           break;
         }
         case "profiles/target/set": {
-          const slot = WorkbenchComposerProfileSlotSchema.safeParse(params.slot);
+          const slot = WorkbenchComposerProfileSlotInputSchema.safeParse(params.slot);
           const selection = WorkbenchComposerProfileSelectionSchema.safeParse(params.selection);
           if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
           if (!selection.success) throw new InvalidParamsError("selection must contain exact composer settings.");
           const ok = await this.owners.profileTargets.setComposerProfileTarget(
-            await this.nativeProfileSlot(slot.data),
+            await this.resolveProfileSlot(slot.data),
             selection.data,
           );
           if (!ok) throw new InvalidParamsError("The composer profile target does not exist or rejects these settings.");

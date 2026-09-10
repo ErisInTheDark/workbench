@@ -5,13 +5,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
 import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "00000000-0000-4000-8000-000000000001": fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+  },
+  ProjectId: {
+    "beta": fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
+    "foreign": fixtureIdentitySchemas.ProjectIdSchema.parse("foreign"),
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "newer": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("newer"),
+    "newer-turn": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("newer-turn"),
+    "older-turn": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("older-turn"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "old-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("old-turn"),
+  },
+};
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
   attachments: [], clientUpdatedAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
-  draftId: "00000000-0000-4000-8000-000000000001",
-  profileId: null, projectId: "project", prompt, updatedAt: clientUpdatedAt,
+  draftId: fixtureIdentityValues.DraftId["00000000-0000-4000-8000-000000000001"],
+  profileId: null, projectId: fixtureIdentityValues.ProjectId["project"], prompt, updatedAt: clientUpdatedAt,
 });
-const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
+const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision });
 const pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };
 const counts = (working = 0) => ({
   completed: 0,
@@ -29,7 +51,7 @@ const projectSummary = (
   counts: counts(working),
   lastThreadUpdateAt: null,
   pinnedThreads: [],
-  projectId,
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
   revision,
   unsettledThreads: [],
 });
@@ -39,7 +61,7 @@ for (const mode of ["project", "global"] as const) {
     const makeSidebar = (revision: number, title: string): WorkbenchThreadSidebarSnapshot => ({
       ...snapshot(revision),
       entries: [{
-        entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+        entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
         activityAt: 1, title, metadata: { archived: false, pinned: false, snoozed: false },
         lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       }],
@@ -56,29 +78,29 @@ for (const mode of ["project", "global"] as const) {
           const current = await read();
           return {
             homeThreadDisplayOrder: null, pinnedThreadLayout,
-            projectSidebars: { projects: opens === 1 ? [current, { ...current, projectId: "retired" }] : [current] },
+            projectSidebars: { projects: opens === 1 ? [current, { ...current, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("retired") }] : [current] },
           };
         },
       },
     });
     if (mode === "global") await client.openGlobal();
-    else await client.open("project");
+    else await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
     const pending = client.reopen();
     const pushed = makeSidebar(2, "pushed after reconnect");
     if (mode === "global") client.acceptProjectThreadSidebar({ updateKind: "projectThreadSidebar", sidebar: pushed });
     else client.accept(pushed);
-    client.acceptActivity({ activityAt: 30, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 3, updateKind: "activity" });
+    client.acceptActivity({ activityAt: 30, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, projectId: fixtureIdentityValues.ProjectId["project"], revision: 3, updateKind: "activity" });
     reopened.resolve(makeSidebar(1, "stale bootstrap"));
     await pending;
-    const current = client.getProjectSnapshot("project")!;
+    const current = client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("project"))!;
     assert.equal(current.entries[0]!.title, "pushed after reconnect");
     assert.equal(current.entries[0]!.activityAt, 30);
     assert.equal(client.getProjectThreadSidebars().projects[0], current);
-    assert.equal(client.getProjectSnapshot("retired"), null);
+    assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("retired")), null);
     if (mode === "project") assert.equal(client.getSnapshot(), current);
     else assert.equal(client.getSnapshot(), null);
-    client.acceptActivity({ activityAt: 99, identity: { harness: "codex", threadId: "thread" }, projectId: "foreign", revision: 99, updateKind: "activity" });
-    assert.equal(client.getProjectSnapshot("project"), current);
+    client.acceptActivity({ activityAt: 99, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, projectId: fixtureIdentityValues.ProjectId["foreign"], revision: 99, updateKind: "activity" });
+    assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), current);
     assert.equal(client.getProjectThreadSummaries().projects.find((value) => value.projectId === "project")!.unsettledThreads[0]!.title, "pushed after reconnect");
   });
 }
@@ -87,8 +109,8 @@ test("project summaries bootstrap together, merge by revision, and follow select
   const stoppedEntry: WorkbenchThreadSidebarSnapshot["entries"][number] = {
     activityAt: 1,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] },
     metadata: { archived: false, pinned: true, snoozed: false },
     title: "Thread",
   };
@@ -111,7 +133,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
     },
   });
 
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   assert.deepEqual(client.getProjectThreadSummaries().projects, [
     {
       counts: { ...counts(), stopped: 1 },
@@ -127,7 +149,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
         status: "stopped",
         title: "Thread",
       }],
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       revision: 1,
       unsettledThreads: [{
         activityAt: 1,
@@ -148,7 +170,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
   });
   assert.deepEqual(client.getProjectThreadSummaries().projects[1], projectSummary("other", 2, 3));
 
-  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: "new-turn" });
+  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new-turn") });
   const optimisticSummary = client.getProjectThreadSummaries().projects[0]!;
   assert.deepEqual({
     ...optimisticSummary,
@@ -169,7 +191,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
       status: "working",
       title: "Thread",
     }],
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 1,
     unsettledThreads: [{
       activityAt: 0,
@@ -197,7 +219,7 @@ test("a pushed project summary received before open resolves survives the bootst
     },
   });
 
-  const opening = client.open("project");
+  const opening = client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   client.acceptProjectThreadSummary({ summary: projectSummary("other", 2, 4), updateKind: "projectThreadSummary" });
   resolveOpen?.({
     pinnedThreadLayout,
@@ -226,8 +248,8 @@ test("a pushed global pinned layout received before open resolves survives an ol
       upsertDraft: async () => undefined,
     },
   });
-  const opening = client.open("project");
-  const pushed = { displayOrder: { folders: [{ folderId: "00000000-0000-4000-8000-000000000031", section: "pinned" as const, threadKeys: ["project/codex%3Athread"], title: "Global" }] }, revision: 2, updateKind: "pinnedThreadLayout" as const };
+  const opening = client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  const pushed = { displayOrder: { folders: [{ folderId: fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000031"), section: "pinned" as const, threadKeys: ["project/codex%3Athread"], title: "Global" }] }, revision: 2, updateKind: "pinnedThreadLayout" as const };
   client.acceptPinnedThreadLayout(pushed);
   resolveOpen?.({ pinnedThreadLayout: { displayOrder: {}, revision: 1, updateKind: "pinnedThreadLayout" }, projectThreads: { projects: [] }, sidebar: snapshot(1) });
   await opening;
@@ -247,8 +269,8 @@ test("optimistic edits keep the newest value through one single-flight flush", a
       upsertDraft: async (_projectId, value) => { writes.push(value); if (writes.length === 1) await first; },
     },
   });
-  await client.open("project");
-  client.edit(draft("first value here", 2));
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.edit(draft(fixtureIdentitySchemas.ProjectIdSchema.parse("first value here"), 2));
   const flushing = client.flush();
   await new Promise((resolve) => setTimeout(resolve, 0));
   client.edit(draft("newest value here", 3));
@@ -268,8 +290,8 @@ test("optimistic draft edits preserve pushed pin and snooze metadata", async () 
     onChange: () => undefined,
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
-  await client.open("project");
-  client.edit(draft("keep newer priority", 2));
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.edit(draft(fixtureIdentitySchemas.ProjectIdSchema.parse("keep newer priority"), 2));
   const optimistic = client.getSnapshot()?.entries[0];
   assert.deepEqual(optimistic?.entryKind === "draft" ? optimistic.metadata : null, { archived: false, pinned: true, snoozed: true });
 });
@@ -287,9 +309,9 @@ test("a profile target flush waits for its draft without flushing another draft"
       upsertDraft: async (_projectId, value) => { writes.push(value); await saving; },
     },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   const selected = draft("selected draft", 2);
-  const other = { ...draft("other draft", 2), draftId: "00000000-0000-4000-8000-000000000099" };
+  const other = { ...draft("other draft", 2), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000099") };
   client.edit(selected);
   client.edit(other);
   try {
@@ -318,17 +340,17 @@ test("project-qualified snapshots preserve the route snapshot identity in projec
     },
   });
 
-  await client.open("project");
-  assert.equal(client.getProjectSnapshot("project"), client.getSnapshot());
-  assert.equal(client.getProjectSnapshot("other"), null);
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), client.getSnapshot());
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("other")), null);
 });
 
 test("folder draft creation is optimistic, carries one placement write, and transfers pinned membership on materialization", async () => {
-  const folderId = "00000000-0000-4000-8000-000000000010";
+  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000010");
   const source = {
     activityAt: 1,
     entryKind: "thread" as const,
-    identity: { harness: "codex" as const, threadId: "source" },
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") },
     lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
     metadata: { archived: false as const, pinned: true, snoozed: false },
     orderAt: 1,
@@ -349,7 +371,7 @@ test("folder draft creation is optimistic, carries one placement write, and tran
       upsertDraft: async (_projectId, _draft, placement) => { placements.push(placement); },
     },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   const pending = draft("folder draft", 2);
   client.edit(pending, { folderId });
   const optimistic = client.getSnapshot();
@@ -358,7 +380,7 @@ test("folder draft creation is optimistic, carries one placement write, and tran
   assert.deepEqual(optimistic?.displayOrder?.folders?.[0]?.threadKeys, [`draft:${pending.draftId}`, "codex:source"]);
   await client.flush();
   assert.deepEqual(placements, [folderId]);
-  await client.acceptIntent({ draftId: pending.draftId, identity: { harness: "codex", threadId: "materialized" }, title: "Materialized", turnId: "turn" });
+  await client.acceptIntent({ draftId: pending.draftId, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("materialized") }, title: "Materialized", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
   assert.deepEqual(client.getSnapshot()?.displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:source"]);
 });
 
@@ -368,9 +390,9 @@ test("newer pushed revisions win and foreign project revisions are ignored", asy
     onChange: (value) => installed.push(value),
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => snapshot(2), upsertDraft: async () => undefined },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   client.accept(snapshot(1));
-  client.accept({ ...snapshot(3), projectId: "other" });
+  client.accept({ ...snapshot(3), projectId: fixtureIdentityValues.ProjectId["other"] });
   client.accept(snapshot(3));
   assert.deepEqual(installed.map((value) => value?.revision), [undefined, 2, 3]);
 });
@@ -380,7 +402,7 @@ test("activity updates preserve turn order until a new turn-start order arrives"
   const entry = (threadId: string, activityAt: number, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
     activityAt,
     entryKind: "thread",
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     orderAt,
@@ -394,12 +416,12 @@ test("activity updates preserve turn order until a new turn-start order arrives"
     onChange: (value) => installed.push(value),
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
-  await client.open("project");
-  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "older-turn" }, projectId: "project", revision: 2, updateKind: "activity" });
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["older-turn"] }, projectId: fixtureIdentityValues.ProjectId["project"], revision: 2, updateKind: "activity" });
   assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["newer-turn", "older-turn"]);
-  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: "older-turn" }, orderAt: 30, projectId: "project", revision: 3, updateKind: "activity" });
+  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["older-turn"] }, orderAt: 30, projectId: fixtureIdentityValues.ProjectId["project"], revision: 3, updateKind: "activity" });
   assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
-  client.acceptActivity({ activityAt: 70, identity: { harness: "codex", threadId: "newer-turn" }, projectId: "project", revision: 4, updateKind: "activity" });
+  client.acceptActivity({ activityAt: 70, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["newer-turn"] }, projectId: fixtureIdentityValues.ProjectId["project"], revision: 4, updateKind: "activity" });
   assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
 });
 
@@ -418,8 +440,8 @@ test("optimistic sidebar updates preserve pushed reload dirt", async () => {
       upsertDraft: async () => undefined,
     },
   });
-  await client.open("project");
-  client.edit(draft("preserve reload dirt", 2));
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.edit(draft(fixtureIdentitySchemas.ProjectIdSchema.parse("preserve reload dirt"), 2));
   assert.deepEqual(client.getSnapshot()?.reloadDirt, reloadDirt);
 });
 
@@ -427,7 +449,7 @@ test("activity updates project pinned rows through durable user ordering", async
   const entry = (threadId: string, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
     activityAt: orderAt,
     entryKind: "thread",
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: true, snoozed: false },
     orderAt,
@@ -442,8 +464,8 @@ test("activity updates project pinned rows through durable user ordering", async
     onChange: () => undefined,
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
-  await client.open("project");
-  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: "newer" }, orderAt: 5, projectId: "project", revision: 2, updateKind: "activity" });
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["newer"] }, orderAt: 5, projectId: fixtureIdentityValues.ProjectId["project"], revision: 2, updateKind: "activity" });
   assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older", "newer"]);
 });
 
@@ -451,7 +473,7 @@ test("authoritative arrivals refresh complete user-order snapshots before later 
   const entry = (threadId: string, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
     activityAt: orderAt,
     entryKind: "thread",
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: true, snoozed: false },
     orderAt,
@@ -467,14 +489,14 @@ test("authoritative arrivals refresh complete user-order snapshots before later 
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
 
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["arrival", "older", "newer"]);
   assert.deepEqual(client.getSnapshot()?.displayOrder?.pinned?.["codex:older"], {
     above: ["codex:arrival"],
     below: ["codex:newer"],
   });
 
-  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: "newer" }, orderAt: 5, projectId: "project", revision: 2, updateKind: "activity" });
+  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["newer"] }, orderAt: 5, projectId: fixtureIdentityValues.ProjectId["project"], revision: 2, updateKind: "activity" });
   assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["arrival", "older", "newer"]);
 });
 
@@ -484,7 +506,7 @@ test("external-store subscribers receive each installed snapshot and can unsubsc
     entries: [{
       activityAt: 1,
       entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
+      identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       title: "Thread",
@@ -494,19 +516,19 @@ test("external-store subscribers receive each installed snapshot and can unsubsc
     onChange: () => undefined,
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   let notifications = 0;
   const unsubscribe = client.subscribe(() => { notifications += 1; });
 
-  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity" });
+  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, projectId: fixtureIdentityValues.ProjectId["project"], revision: 2, updateKind: "activity" });
   assert.equal(notifications, 1);
   assert.equal(client.getSnapshot()?.revision, 2);
   assert.equal(client.getSnapshot()?.entries[0]?.activityAt, 50);
-  assert.equal(client.getProjectSnapshot("project"), client.getSnapshot());
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), client.getSnapshot());
   assert.equal(client.getProjectThreadSidebars().projects[0], client.getSnapshot());
 
   unsubscribe();
-  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 3, updateKind: "activity" });
+  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, projectId: fixtureIdentityValues.ProjectId["project"], revision: 3, updateKind: "activity" });
   assert.equal(notifications, 1);
   assert.equal(client.getSnapshot()?.revision, 3);
 });
@@ -527,11 +549,11 @@ test("open reports observation admission while retaining bounded failure state",
       upsertDraft: async () => undefined,
     },
   });
-  assert.equal(await client.open("project"), false);
+  assert.equal(await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), false);
   assert.equal(client.getSnapshot()?.freshness, "partial");
   assert.match(client.getSnapshot()?.error ?? "", /Observation unavailable/u);
   shouldFail = false;
-  assert.equal(await client.open("project"), true);
+  assert.equal(await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), true);
   assert.equal(openAttempts, 2);
   assert.equal(client.getSnapshot()?.error, null);
 });
@@ -555,15 +577,15 @@ test("materialized draft becomes a working thread before its in-flight save sett
       upsertDraft: async () => { markSaveStarted(); await save; },
     },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   client.edit({ ...source, prompt: "edited before materialisation", clientUpdatedAt: 3 });
   const flushing = client.flush();
   await saveStarted;
   const accepting = client.acceptIntent({
     draftId: draft("", 2).draftId,
-    identity: { harness: "codex", threadId: "materialized" },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("materialized") },
     title: "Materialized thread",
-    turnId: "turn",
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
   });
   const optimisticEntries = installed.at(-1)?.entries ?? [];
   assert.equal(optimisticEntries.some((entry) => entry.entryKind === "draft"), false);
@@ -585,8 +607,8 @@ test("accepted intent immediately revives a stopped thread and a newer snapshot 
   const stoppedEntry: WorkbenchThreadSidebarSnapshot["entries"][number] = {
     activityAt: 1,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] },
     metadata: { archived: false, pinned: true, snoozed: true },
     orderAt: 1,
     title: "Thread",
@@ -595,8 +617,8 @@ test("accepted intent immediately revives a stopped thread and a newer snapshot 
     onChange: (value) => installed.push(value),
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => ({ ...snapshot(1), entries: [stoppedEntry] }), upsertDraft: async () => undefined },
   });
-  await client.open("project");
-  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: "new-turn" });
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new-turn") });
   const optimistic = installed.at(-1)?.entries[0];
   assert.equal(optimistic?.entryKind, "thread");
   if (optimistic?.entryKind === "thread") {
@@ -627,8 +649,8 @@ test("failed navigation flush preserves the route and re-enters the same debounc
       },
     },
   });
-  await client.open("project");
-  client.edit(draft("keep this route here", 2));
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.edit(draft(fixtureIdentitySchemas.ProjectIdSchema.parse("keep this route here"), 2));
   await assert.rejects(client.guardNavigation(() => { navigated = true; }), /disk busy/u);
   assert.equal(navigated, false);
 
@@ -648,8 +670,8 @@ test("close flushes the newest draft before releasing project observation", asyn
       upsertDraft: async (_projectId, value) => { events.push(`save:${value.prompt}`); },
     },
   });
-  await client.open("project");
-  client.edit(draft("persist before close", 2));
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  client.edit(draft(fixtureIdentitySchemas.ProjectIdSchema.parse("persist before close"), 2));
   await client.close();
   assert.deepEqual(events, ["save:persist before close", "close"]);
 });
@@ -658,7 +680,7 @@ test("global observation owns full project sidebars and project-qualified draft 
   const sourceDraft = {
     ...draft("move this", 2),
     profileId: "profile-one",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   };
   const saved: string[] = [];
   const moved: string[] = [];
@@ -681,10 +703,10 @@ test("global observation owns full project sidebars and project-qualified draft 
               entries: [{ activityAt: 2, draft: sourceDraft, entryKind: "draft", metadata: { archived: false, pinned: false, snoozed: false }, title: "move this" }],
               error: null,
               freshness: "fresh",
-              projectId: "alpha",
+              projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
               revision: 1,
             },
-            { entries: [], error: null, freshness: "fresh", projectId: "beta", revision: 1 },
+            { entries: [], error: null, freshness: "fresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), revision: 1 },
           ],
         },
       }),
@@ -697,9 +719,9 @@ test("global observation owns full project sidebars and project-qualified draft 
   assert.equal(client.getHomeThreadDisplayOrderSupported(), true);
   assert.equal(client.getHomeThreadDisplayOrder().revision, 1);
   assert.deepEqual(client.getProjectThreadSidebars().projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
-  assert.equal(client.getProjectSnapshot("alpha"), client.getProjectThreadSidebars().projects[0]);
-  assert.equal(client.getProjectSnapshot("beta"), client.getProjectThreadSidebars().projects[1]);
-  assert.equal(client.getProjectSnapshot("missing"), null);
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("alpha")), client.getProjectThreadSidebars().projects[0]);
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("beta")), client.getProjectThreadSidebars().projects[1]);
+  assert.equal(client.getProjectSnapshot(fixtureIdentitySchemas.ProjectIdSchema.parse("missing")), null);
   client.acceptHomeThreadDisplayOrder({
     displayOrder: { pinned: { "alpha/codex%3Athread": { above: [], below: [] } } },
     revision: 2,
@@ -707,18 +729,18 @@ test("global observation owns full project sidebars and project-qualified draft 
   });
   assert.equal(client.getHomeThreadDisplayOrder().revision, 2);
 
-  client.edit({ ...draft("beta edit", 3), projectId: "beta" });
+  client.edit({ ...draft("beta edit", 3), projectId: fixtureIdentityValues.ProjectId["beta"] });
   await client.flush();
   assert.deepEqual(saved, ["beta:beta edit"]);
 
-  await client.moveDraft("alpha", "beta", sourceDraft.draftId);
+  await client.moveDraft(fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), sourceDraft.draftId);
   assert.deepEqual(moved, [`alpha:beta:${sourceDraft.draftId}`]);
   const sidebars = client.getProjectThreadSidebars().projects;
   assert.equal(sidebars.find(({ projectId }) => projectId === "alpha")?.entries.some((entry) => entry.entryKind === "draft"), false);
   const movedEntry = sidebars.find(({ projectId }) => projectId === "beta")?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === sourceDraft.draftId);
   assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.projectId : null, "beta");
   assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.profileId : null, "profile-one");
-  assert.equal(client.getDraft("beta", sourceDraft.draftId)?.profileId, "profile-one");
+  assert.equal(client.getDraft(fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), sourceDraft.draftId)?.profileId, "profile-one");
 });
 
 test("global observation surfaces transport failure and remains recoverable", async () => {
@@ -741,7 +763,7 @@ test("global observation surfaces transport failure and remains recoverable", as
 
   await assert.rejects(client.openGlobal(), /server core is stale/u);
   assert.deepEqual(client.getProjectThreadSidebars(), { projects: [] });
-  assert.equal(await client.open("project"), true);
+  assert.equal(await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), true);
   assert.equal(projectOpenCount, 1);
 });
 
@@ -761,12 +783,12 @@ for (const destination of ["closed", "other project"] as const) {
         },
       },
     });
-    await client.open("project");
+    await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
     const initial = { ...draft("first draft", 2), profileId: "keep-profile" };
     client.edit(initial);
     await client.flushDraft(initial.projectId, initial.draftId);
     if (destination === "closed") await client.close();
-    else await client.open("other");
+    else await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("other"));
     assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), initial);
     const next = { ...client.getDraft(initial.projectId, initial.draftId)!, prompt: "later text", clientUpdatedAt: 3, updatedAt: 3 };
     client.edit(next);
@@ -853,7 +875,7 @@ test("newer observed content replaces a clean draft baseline before detaching", 
       upsertDraft: async () => undefined,
     },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   const initial = draft("local", 2);
   client.edit(initial);
   await client.flush();
@@ -879,7 +901,7 @@ test("newer observed content received during a save survives its older acknowled
       upsertDraft: async () => await acknowledgement,
     },
   });
-  await client.open("project");
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   const initial = draft("saving locally", 2);
   client.edit(initial);
   const saving = client.flush();
@@ -911,7 +933,7 @@ for (const retirement of ["delete", "admission"] as const) {
     await client.flush();
     assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), initial);
     if (retirement === "delete") await client.delete(initial.draftId, 3, initial.projectId);
-    else await client.acceptIntent({ projectId: initial.projectId, draftId: initial.draftId, identity: { harness: "codex", threadId: "sent" }, title: "sent", turnId: "turn" });
+    else await client.acceptIntent({ projectId: initial.projectId, draftId: initial.draftId, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("sent") }, title: "sent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
     assert.equal(client.getDraft(initial.projectId, initial.draftId), null);
   });
 }

@@ -1,7 +1,6 @@
 /*
- * Keywords: daemon, rpc, dispatch, stats, compatibility, tests.
  * Exports:
- * - No production exports; tests protect semantic dispatch, parameter errors, and replaceable Browse ownership. Keywords: daemon, rpc, dispatch, browse, test.
+ * - No production exports; tests protect semantic dispatch, parameter errors, and replaceable Browse ownership.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -13,12 +12,18 @@ import type { WorkbenchComposerProfile } from "workbench-shared/types";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
 import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchThreadStateController from "./WorkbenchThreadStateController.ts";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore.ts";
+import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
+  profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
 } = {}) {
   let globalNetworkEnabled = false;
@@ -39,10 +44,10 @@ function createController(options: {
       readSkills: async () => ({ data: [], instructionPacks: [], instructions: "" }),
     },
     files: {
-      read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId, updatedAt: "" }),
+      read: async ({ path, projectId }) => ({ content: "", headContent: null, mtimeMs: 1, path, projectId: projectId == null ? undefined : ProjectIdSchema.parse(projectId), updatedAt: "" }),
       write: async (request) => {
         fileWrites.push(request);
-        return { changes: {}, mtimeMs: 2, path: request.path, projectId: request.projectId, updatedAt: "" };
+        return { changes: {}, mtimeMs: 2, path: request.path, projectId: request.projectId == null ? undefined : ProjectIdSchema.parse(request.projectId), updatedAt: "" };
       },
     },
     gitArc: {
@@ -53,8 +58,8 @@ function createController(options: {
     },
     nativeFiles: {
       linkRoots: async () => ({ roots: [] }),
-      open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId ?? null, target: request.path }),
-      reveal: async (request) => ({ ok: true, path: request.path, projectId: request.projectId }),
+      open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? null : ProjectIdSchema.parse(request.projectId), target: request.path }),
+      reveal: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? undefined : ProjectIdSchema.parse(request.projectId) }),
     },
     codexSandboxNetwork: {
       read: async (projectId) => {
@@ -80,7 +85,7 @@ function createController(options: {
       mutate: async () => ({ profiles: [] }),
       read: async () => ({ profiles: [] }),
     },
-    profileTargets: {
+    profileTargets: options.profileTargets ?? {
       readComposerProfileTarget: async (slot) => {
         targetReads.push(slot);
         return null;
@@ -94,7 +99,7 @@ function createController(options: {
       readCatalog: async () => ({ data: [], rootPath: "" }),
       resolveProjectById: async (projectId) => {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
-        return { id: projectId, kind: "git", root: "", rootPath: "", roots: [] };
+        return { id: projectId == null ? undefined : ProjectIdSchema.parse(projectId), kind: "git", root: "", rootPath: "", roots: [] };
       },
     },
     search: {
@@ -183,8 +188,8 @@ test("thread lookup resolves native and WB inputs without publishing native bind
     installWorkbenchDatabaseSchema(database);
     const identities = new WorkbenchThreadIdentityRepository(database);
     const identity = identities.observe({
-      native: { harness: "codex", nativeLocation: "private-home", nativeThreadId: "native-thread" },
-      projectId: "project", projectRoot: "C:/project", title: "Thread",
+      native: { harness: "codex", nativeLocation: "private-home", nativeThreadId: NativeThreadIdSchema.parse("native-thread") },
+      projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/project", title: "Thread",
       createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const { controller, targetReads } = createController({
@@ -192,19 +197,19 @@ test("thread lookup resolves native and WB inputs without publishing native bind
     });
     for (const threadId of ["native-thread", identity.threadId]) {
       assert.deepEqual(await controller.handle({
-        id: 1, method: "thread/identity/resolve", params: { threadId, projectId: "project" },
+        id: 1, method: "thread/identity/resolve", params: { threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
       }), {
-        id: 1, result: { data: { threadId: identity.threadId, projectId: "project", harness: "codex" } },
+        id: 1, result: { data: { threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" } },
       });
       await controller.handle({ id: 4, method: "profiles/target/read", params: {
-        slot: { kind: "thread", threadId, projectId: "project", harness: "codex" },
+        slot: { kind: "thread", threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" },
       } });
     }
     assert.deepEqual(targetReads, [0, 1].map(() => ({
-      kind: "thread", threadId: "native-thread", projectId: "project", harness: "codex",
+      kind: "thread", threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex",
     })));
     const wrongProject = await controller.handle({
-      id: 2, method: "thread/identity/resolve", params: { threadId: identity.threadId, projectId: "elsewhere" },
+      id: 2, method: "thread/identity/resolve", params: { threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("elsewhere") },
     });
     assert.ok(wrongProject.error);
     assert.deepEqual(await controller.handle({
@@ -221,7 +226,7 @@ test("dispatch validates semantic parameters without corrupting valid empty file
   const invalid = await controller.handle({
     id: 1,
     method: "project/file/save",
-    params: { content: "", path: "note.md", projectId: "project" },
+    params: { content: "", path: "note.md", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
   });
   assert.equal(invalid.error?.code, -32602);
   assert.equal(fileWrites.length, 0);
@@ -229,7 +234,7 @@ test("dispatch validates semantic parameters without corrupting valid empty file
   const valid = await controller.handle({
     id: 2,
     method: "project/file/save",
-    params: { content: "", expectedMtimeMs: 1, path: "note.md", projectId: "project" },
+    params: { content: "", expectedMtimeMs: 1, path: "note.md", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
   });
   assert.equal(valid.error, undefined);
   assert.deepEqual(fileWrites, [{
@@ -237,7 +242,7 @@ test("dispatch validates semantic parameters without corrupting valid empty file
     expectedMtimeMs: 1,
     force: false,
     path: "note.md",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     resetToHead: false,
   }]);
 });
@@ -301,15 +306,15 @@ test("profile RPC preserves field intent and rejects malformed changes instead o
 test("search query dispatch preserves empty text and validates project ids", async () => {
   const { controller, searchRequests } = createController({ rejectProjectId: "missing" });
   assert.deepEqual(
-    (await controller.handle({ id: 1, method: "search/query", params: { projectId: "project", query: "" } })).result,
+    (await controller.handle({ id: 1, method: "search/query", params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "" } })).result,
     { results: [] },
   );
-  assert.deepEqual(searchRequests, [{ projectId: "project", query: "" }]);
+  assert.deepEqual(searchRequests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "" }]);
 
   const invalid = await controller.handle({
     id: 2,
     method: "search/query",
-    params: { projectId: "missing", query: "nope" },
+    params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), query: "nope" },
   });
   assert.equal(invalid.error?.code, -32602);
   assert.equal(searchRequests.length, 1);
@@ -326,18 +331,18 @@ test("stats dispatch validates project scope and keeps rate refresh account-wide
   const project = await controller.handle({
     id: 2,
     method: "stats/read",
-    params: { projectId: "project", range: "30d" },
+    params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "30d" },
   });
   assert.equal((project.result as { projectId: string | null }).projectId, "project");
   const rejected = await controller.handle({
     id: 3,
     method: "stats/read",
-    params: { projectId: "missing", range: "7d" },
+    params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), range: "7d" },
   });
   assert.equal(rejected.error?.code, -32602);
   assert.deepEqual(statsRequests, [
     { model: null, projectId: null, provider: null, range: "7d" },
-    { model: null, projectId: "project", provider: null, range: "30d" },
+    { model: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), provider: null, range: "30d" },
   ]);
   assert.deepEqual(
     (await controller.handle({ id: 4, method: "stats/rate-limits/refresh", params: {} })).result,
@@ -350,8 +355,8 @@ test("detailed stats validate selection and project before invoking the owner, p
   for (const method of ["stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
     const { controller, statsRequests } = createController({ rejectProjectId: "missing" });
     for (const params of [
-      { projectId: "missing", range: "7d", tokenTypes: ["output"] },
-      { projectId: "project", range: "7d", tokenTypes: ["all"] },
+      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), range: "7d", tokenTypes: ["output"] },
+      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d", tokenTypes: ["all"] },
     ]) {
       const response = await controller.handle({ id: 1, method, params });
       assert.equal(response.error?.code, -32602);
@@ -359,10 +364,10 @@ test("detailed stats validate selection and project before invoking the owner, p
     assert.deepEqual(statsRequests, []);
     const response = await controller.handle({
       id: 2, method,
-      params: { projectId: "project", range: "90d", tokenTypes: [] },
+      params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "90d", tokenTypes: [] },
     });
     assert.ok(response.error);
-    assert.deepEqual(statsRequests, [{ projectId: "project", range: "90d", tokenTypes: [], model: null, provider: null }]);
+    assert.deepEqual(statsRequests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "90d", tokenTypes: [], model: null, provider: null }]);
   }
 });
 
@@ -376,14 +381,14 @@ test("cache efficiency uses the detailed owner while older routes keep their exa
   const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
   const enriched = { ...detailed, cacheEfficiency: {
     totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }, buckets: [],
-    worstThreads: [{ projectId: "project", threadId: "thread", title: "Thread",
+    worstThreads: [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId: "thread", title: "Thread",
       inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }],
   } };
   const current = { ...enriched, cacheEfficiency: { ...enriched.cacheEfficiency,
     worstThreads: enriched.cacheEfficiency.worstThreads.map((thread) => ({ ...thread, cacheWriteInputTokens: 10 })),
   } };
   const { controller, statsRequests } = createController({ readDetailed: async () => current });
-  const params = { projectId: "project", provider: "codex", model: "gpt-5.4", range: "7d", tokenTypes: ["output"] };
+  const params = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), provider: "codex", model: "gpt-5.4", range: "7d", tokenTypes: ["output"] };
   assert.equal(controller.accepts("stats/read/efficiency"), true);
   assert.deepEqual((await controller.handle({ id: 1, method: "stats/read/efficiency", params })).result, enriched);
   assert.deepEqual((await controller.handle({ id: 2, method: "stats/read/detailed", params })).result, detailed);
@@ -397,7 +402,7 @@ test("Codex sandbox network requests validate project ownership and preserve exp
   const rejected = await controller.handle({
     id: 1,
     method: "codex-sandbox-network/update",
-    params: { enabled: true, projectId: "missing", scope: "project" },
+    params: { enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), scope: "project" },
   });
   assert.match(rejected.error?.message ?? "", /Unknown project/u);
   assert.deepEqual(networkWrites, []);
@@ -405,13 +410,13 @@ test("Codex sandbox network requests validate project ownership and preserve exp
   const global = await controller.handle({
     id: 2,
     method: "codex-sandbox-network/update",
-    params: { enabled: true, projectId: "project", scope: "global" },
+    params: { enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "global" },
   });
   assert.deepEqual(global.result, {
     codexSandboxNetwork: {
       effectiveEnabled: true,
       globalEnabled: true,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       projectOverride: null,
     },
   });
@@ -419,26 +424,116 @@ test("Codex sandbox network requests validate project ownership and preserve exp
   const disabled = await controller.handle({
     id: 3,
     method: "codex-sandbox-network/update",
-    params: { enabled: false, projectId: "project", scope: "project" },
+    params: { enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
   });
   assert.equal((disabled.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, false);
 
   const inherited = await controller.handle({
     id: 4,
     method: "codex-sandbox-network/update",
-    params: { enabled: null, projectId: "project", scope: "project" },
+    params: { enabled: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
   });
   assert.equal((inherited.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, true);
   assert.deepEqual(networkWrites, [
     { enabled: true, scope: "global" },
-    { enabled: false, projectId: "project", scope: "project" },
-    { enabled: null, projectId: "project", scope: "project" },
+    { enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
+    { enabled: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
   ]);
 });
 
+for (const harness of ["codex", "copilot", "opencode"] as const) {
+  test(`${harness} thread profile dispatch persists and reopens the canonical owner`, async () => {
+    const sqlite = new Database(":memory:");
+    installWorkbenchDatabaseSchema(sqlite);
+    const identities = new WorkbenchThreadIdentityRepository(sqlite);
+    const projectId = ProjectIdSchema.parse("profile-project");
+    const nativeThreadId = NativeThreadIdSchema.parse("a116df94-9125-43c6-ae1f-898fbd140cd0");
+    const admitted = identities.observe({
+      native: { harness, nativeLocation: "C:/profile-project", nativeThreadId },
+      projectId, projectRoot: "C:/profile-project", title: "Profile owner",
+      createdAt: 1, updatedAt: 1, activityAt: 1,
+    });
+    assert.notEqual(String(admitted.threadId), String(nativeThreadId));
+    const repository = new WorkbenchThreadStateRelationalRepository(sqlite, identities);
+    const persistence = new WorkbenchThreadStateStore({
+      readThreadStateProject: async id => repository.readProject(id),
+      readThreadStateTitleHistories: async id => repository.readTitleHistories(id),
+      writeThreadStateProject: async (id, document, histories) => { repository.writeProject(id, document, histories); },
+      readThreadStateGlobal: async id => repository.readGlobal(id),
+      writeThreadStateGlobal: async document => { repository.writeGlobal(document); },
+      readThreadStateArchiveDeadline: async () => repository.readNextArchiveEligibility(),
+      readThreadStateArchiveEligible: async before => repository.readArchiveEligible(before),
+    });
+    const settings = {
+      harness, model: "selected-model", agentPath: null, agentSource: null,
+      reasoningEffort: null, serviceTier: null,
+    };
+    const selection = { kind: "profile", profileId: "selected-profile", settings } as const;
+    const states: WorkbenchThreadStateController[] = [];
+    const createState = () => {
+      const state = new WorkbenchThreadStateController({
+        threadStateStore: persistence,
+        getProjectCatalog: () => ({ data: [], rootPath: "C:/" }),
+        readComposerProfiles: async () => ({ profiles: [{
+          ...settings, id: selection.profileId, name: "Selected profile",
+          scope: { kind: "global" }, createdAt: 1, updatedAt: 1,
+        }] }),
+        hasLiveGitArcClaims: async () => false,
+        projectState: {
+          getCurrentUpdate: () => null,
+          handleRequest: async () => { throw new Error("Unexpected project request."); },
+          observe: () => () => {},
+        },
+        publish: () => {},
+        reconcileProject: async () => [],
+        resolveGitArc: async () => null,
+        resolveGitArcPlan: async () => null,
+        runGitArcReadTransition: async (_id, operation) => operation(),
+      });
+      states.push(state);
+      return state;
+    };
+    try {
+      const state = createState();
+      await state.ensureProviderEntry(projectId, {
+        entryKind: "thread", identity: { harness, threadId: admitted.threadId },
+        activityAt: 1, orderAt: 1, title: "Profile owner",
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+        metadata: { archived: false, pinned: false, snoozed: false },
+      });
+      const slot = { kind: "thread", harness, projectId, threadId: admitted.threadId } as const;
+      const { controller } = createController({
+        threadIdentity: { resolve: async input => identities.resolve(input) },
+        profileTargets: state,
+      });
+      const written = await controller.handle({
+        id: 1, method: "profiles/target/set", params: { slot, selection },
+      });
+      assert.equal(written.error, undefined, written.error?.message);
+      assert.deepEqual(written.result, { ok: true });
+      assert.deepEqual((await controller.handle({
+        id: 2, method: "profiles/target/read", params: { slot },
+      })).result, { selection });
+      const rejected = await controller.handle({
+        id: 3, method: "profiles/target/set",
+        params: { slot: { ...slot, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("different-project") }, selection },
+      });
+      assert.ok(rejected.error);
+      await state.dispose();
+      const reopened = createState();
+      assert.deepEqual(await reopened.readComposerProfileTarget(slot), selection);
+      assert.equal(repository.readProject(projectId).records[0]?.identity.threadId, admitted.threadId);
+      assert.equal(identities.list().length, 1);
+    } finally {
+      await Promise.all(states.map(state => state.dispose()));
+      sqlite.close();
+    }
+  });
+}
+
 test("profile target dispatch preserves exact slot and settings contracts", async () => {
   const { controller, targetReads, targetWrites } = createController();
-  const slot = { draftId: "draft", harness: "codex", kind: "draft", projectId: "project" };
+  const slot = { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), harness: "codex", kind: "draft", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
   const selection = {
     kind: "profile",
     profileId: "profile",

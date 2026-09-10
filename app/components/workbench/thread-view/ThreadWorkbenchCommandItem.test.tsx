@@ -1,7 +1,6 @@
 /*
- * Keywords: MCP, Git arc, diagnostics, routing, proposal failure.
  * Exports:
- * - No production exports; tests prove specialized wb MCP operations enter the existing dedicated renderers. Keywords: MCP, Git arc, title, subagent, rendering.
+ * - No production exports; tests prove specialized wb MCP operations enter the existing dedicated renderers.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -19,6 +18,7 @@ import type { WorkbenchClientController } from "../workbench-client-context";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -154,7 +154,7 @@ function threadEntry(
     entryKind: "thread",
     gitArc,
     gitArcPlan,
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     title: threadId,
@@ -251,7 +251,7 @@ test("Git arc waits use live intersections while running and the start card afte
       entries: [owner, blocker],
       error: null,
       freshness: "fresh" as const,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       revision: 1,
   };
   const store = {
@@ -262,7 +262,7 @@ test("Git arc waits use live intersections while running and the start card afte
   const presentation = {
     harness: "codex" as const,
     onOpenThread: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   };
   const runningHtml = renderSpecialized(
     makeItem("git_arc_wait", { ref: "a".repeat(40) }, "", "inProgress"),

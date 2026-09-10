@@ -7,6 +7,13 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadStateGitRepository, { type WorkbenchThreadGitObservations } from "./WorkbenchThreadStateGitRepository";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function fixture() {
   const database = new Database(":memory:");
@@ -15,8 +22,8 @@ function fixture() {
   const identities = new WorkbenchThreadIdentityRepository(database);
   const threadIds = ["first", "second"].map((nativeThreadId) => {
     const { threadId } = identities.observe({
-      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId },
-      projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: nativeThreadId,
       createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     database.prepare(`

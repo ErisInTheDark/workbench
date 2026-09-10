@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect harness registration, routing, and recovery. Keywords: harness, controller, recovery, test.
+ * - No production exports; Node tests protect harness registration, routing, and recovery.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,6 +8,13 @@ import test from "node:test";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { JsonRpcRequest } from "./bridge-types";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread-one": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread-one"),
+  },
+};
 
 function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHarnessAdapter {
   return {
@@ -79,13 +86,13 @@ test("dispatches internal, server, Browse, and recovery work through the registe
   const controller = createController(calls);
   const request: JsonRpcRequest = { id: 2, method: "thread/read" };
   assert.deepEqual(await controller.requestServer("opencode", request), { id: 2, result: { id: "opencode" } });
-  await controller.readThread("opencode", "thread-one");
-  assert.equal(await controller.steerTurn("opencode", "thread-one", "turn-one", []), "next-turn");
+  await controller.readThread("opencode", fixtureIdentityValues.NativeThreadId["thread-one"]);
+  assert.equal(await controller.steerTurn("opencode", fixtureIdentityValues.NativeThreadId["thread-one"], fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn-one"), []), "next-turn");
   controller.observeNotification("opencode", { method: "turn/started", params: {} });
-  await controller.resumeThread("opencode", "thread-one");
+  await controller.resumeThread("opencode", fixtureIdentityValues.NativeThreadId["thread-one"]);
   await controller.request("copilot", { id: 3, method: "turn/start", params: { input: [], threadId: "thread-two" } });
   controller.observeNotification("copilot", { method: "turn/started", params: { threadId: "thread-two" } });
-  await assert.rejects(() => controller.resumeThread("copilot", "thread-one"), /unavailable for copilot/u);
+  await assert.rejects(() => controller.resumeThread("copilot", fixtureIdentityValues.NativeThreadId["thread-one"]), /unavailable for copilot/u);
   await assert.rejects(() => controller.requestServer("copilot", { method: "codex/only" }), /not allowed for copilot/u);
   assert.deepEqual(calls, [
     "recovery:opencode:thread/read",

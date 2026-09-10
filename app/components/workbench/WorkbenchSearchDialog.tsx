@@ -1,13 +1,13 @@
 /*
- * Keywords: search, dialog, listbox, keyboard, project row, thread row.
  * Exports:
- * - default WorkbenchSearchDialog: full-screen accessible search dialog and keyboard-driven result list. Keywords: search, dialog, listbox, keyboard.
+ * - default WorkbenchSearchDialog: full-screen accessible search dialog and keyboard-driven result list.
  */
 "use client";
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
@@ -135,11 +135,11 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
                     compact
                     dimmedOverride={false}
                     entry={thread}
-                    href={createThreadHref(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: result.threadId })}
+                    href={createThreadHref(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId })}
                     id={id}
                     onActivate={() => controller.activate(result)}
                     project={project}
-                    projectId={result.projectId}
+                    projectId={ProjectIdSchema.parse(result.projectId)}
                     role="option"
                     secondaryRow={(
                       <span className="flex min-w-0 gap-2 pl-5 text-[0.72rem] leading-4 text-muted">

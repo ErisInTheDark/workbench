@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect durable shadow gaps, provider recovery selection, and cutover-only failure. Keywords: transcript, capture gap, recovery, test.
+ * No production exports. Tests protect durable shadow gaps, provider recovery selection, and cutover-only failure.
  */
 import assert from "node:assert/strict";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -10,6 +10,18 @@ import test from "node:test";
 import WorkbenchTranscriptCaptureGapController, {
   type WorkbenchTranscriptCaptureGapMarker,
 } from "./WorkbenchTranscriptCaptureGapController.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "canonical": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("canonical"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+    "thread-a": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a"),
+  },
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 test("marker conversion preserves unknown and unrecoverable obligations across aliases and reopening", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-gap-identity-"));
@@ -32,7 +44,7 @@ test("marker conversion preserves unknown and unrecoverable obligations across a
     await controller.start();
     assert.deepEqual(controller.pendingRecoveryThreadIds, ["unobserved"]);
     assert.equal(controller.hasGap("canonical"), true);
-    assert.throws(() => controller.requireRecovery("canonical"), /not provider-recoverable/);
+    assert.throws(() => controller.requireRecovery(fixtureIdentityValues.WorkbenchThreadId["canonical"]), /not provider-recoverable/);
     const saved = JSON.parse(await readFile(markerPath, "utf8")) as WorkbenchTranscriptCaptureGapMarker;
     assert.equal(saved.entries.length, 2);
     const converted = saved.entries.find(({ threadId }) => threadId === "canonical")!;
@@ -99,7 +111,7 @@ test("capture-gap markers merge threads while only provider gaps enter recovery"
     const replacement = new WorkbenchTranscriptCaptureGapController({ markerPath });
     await replacement.start();
     assert.deepEqual(replacement.pendingRecoveryThreadIds, ["thread-a"]);
-    const recovery = replacement.requireRecovery("thread-a");
+    const recovery = replacement.requireRecovery(fixtureIdentityValues.WorkbenchThreadId["thread-a"]);
     await replacement.completeRecovery(recovery);
     assert.deepEqual(replacement.pendingRecoveryThreadIds, []);
     assert.throws(() => replacement.assertCutoverReady(), /capture gaps for 1 thread/u);
@@ -129,8 +141,8 @@ test("the final provider recovery removes the marker and opens cutover readiness
       threadId: "thread",
       turnId: "turn",
     });
-    const entry = controller.requireRecovery("thread");
-    assert.equal(controller.createRecoveryObservation(entry, "turn").state, "reconciled");
+    const entry = controller.requireRecovery(fixtureIdentityValues.WorkbenchThreadId["thread"]);
+    assert.equal(controller.createRecoveryObservation(entry, fixtureIdentityValues.WorkbenchTurnId["turn"]).state, "reconciled");
     await controller.completeRecovery(entry);
     controller.assertCutoverReady();
     await assert.rejects(access(markerPath), (error: NodeJS.ErrnoException) => error.code === "ENOENT");

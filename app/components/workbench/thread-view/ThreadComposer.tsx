@@ -1,7 +1,6 @@
 /*
- * Keywords: composer, thread, questionnaire, model, agent, attachments, sticky composer.
  * Exports:
- * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff. Keywords: composer, thread, questionnaire, model, agent.
+ * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff.
  */
 "use client";
 
@@ -37,7 +36,7 @@ import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
 import { PlayIcon, SnoozedThreadIcon, StopIcon } from "../workbench-icons";

@@ -1,5 +1,4 @@
 /*
- * Keywords: thread, title, history, tooltip, reapply, dismiss.
  * Exports:
  * - default WorkbenchThreadTitleHistory: show previous titles with rename/dismiss intent and local action feedback.
  */
@@ -7,13 +6,14 @@
 
 import { useState } from "react";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { useWorkbenchThreadTitleHistory } from "./use-workbench-client";
 import { PanelCloseIcon } from "./workbench-icons";
 
 export default function WorkbenchThreadTitleHistory({ projectId, harness, threadId }: {
-  projectId: string;
+  projectId: ProjectId;
   harness: WorkbenchHarness;
-  threadId: string;
+  threadId: WorkbenchThreadId;
 }) {
   const history = useWorkbenchThreadTitleHistory(projectId, harness, threadId);
   const [pending, setPending] = useState(false);

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: render project-owned main, snoozed, and settled threads with optional pinned priority rows. Keywords: workbench, project, pinned, threads, folders, sidebar.
- * - Local helpers: derive thread targets and stable mixed-item keys and counts. Keywords: thread, draft, folder, identity, pagination.
+ * - default WorkbenchThreadList: render project-owned main, snoozed, and settled threads with optional pinned priority rows.
+ * - Local helpers: derive thread targets and stable mixed-item keys and counts.
  */
 "use client";
 
@@ -35,9 +35,10 @@ import {
   groupWorkbenchThreadSidebarEntries,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadPriority,
-  type WorkbenchThreadTarget,
+  type WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import type { FolderId, ProjectId, ThreadDisplayKey, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
@@ -55,7 +56,7 @@ import DropTargetBoundary from "./drag/DropTargetBoundary";
 const SETTLED_THREAD_PAGE_SIZE = 50;
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 
-function targetForEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget {
+function targetForEntry(entry: WorkbenchThreadSidebarEntry): import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
@@ -103,20 +104,20 @@ export default function WorkbenchThreadList({
   displayOrder?: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
   getThreadHref: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string;
-  getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: string, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
+  getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
   activeDragPayload?: WorkbenchDragPayload | null;
   nowMs?: number;
-  onAction?: (entry: WorkbenchThreadSidebarEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: string) => void;
+  onAction?: (entry: WorkbenchThreadSidebarEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: ProjectId) => void;
   onAutoFocusFolderComplete?: () => void;
-  onCreateThread: (folderId?: string) => void;
+  onCreateThread: (folderId?: FolderId) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
-  onMove?: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null) => void;
+  onMove?: (sourceKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
-  onProjectFolderDrop?: (payload: WorkbenchThreadRowDragPayload, targetKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
+  onProjectFolderDrop?: (payload: WorkbenchThreadRowDragPayload, targetKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
   onRenameFolder?: (folderId: string, title: string) => Promise<string>;
   onSetPriority?: (payload: WorkbenchThreadRowDragPayload, priority: WorkbenchThreadPriority) => void;
-  onSnoozeUntil?: (payload: WorkbenchThreadRowDragPayload, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: string }) => void;
-  projectId: string;
+  onSnoozeUntil?: (payload: WorkbenchThreadRowDragPayload, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId }) => void;
+  projectId: ProjectId;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   showPinnedThreadsInMain?: boolean;
 }) {
@@ -347,7 +348,7 @@ export default function WorkbenchThreadList({
     </ul>
   );
 
-  const renderFolderCreateThread = (folderId: string) => {
+  const renderFolderCreateThread = (folderId: FolderId) => {
     const target = { folderId, kind: "new" as const };
     const selected = isWorkbenchThreadTargetSelected(target, currentTarget);
     return (

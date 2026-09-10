@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect recovery identity, classification, and collision behavior. Keywords: thread, recovery, test.
+ * No production exports. Node tests protect recovery identity, classification, and collision behavior.
  */
 
 import assert from "node:assert/strict";
@@ -21,6 +21,13 @@ import {
   isWorkbenchThreadRecoveryUserMessage,
   isWorkbenchUnfinishedTurnInput,
 } from "./thread-recovery-message.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 function userItem(overrides: Partial<Extract<ThreadItem, { type: "userMessage" }>> = {}) {
   return {
@@ -43,7 +50,7 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, false), true);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "stopped", reason: "userMarkedStopped", settled: false }, false), true);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, true), false);
-  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" }, false), false);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, false), false);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "completed", reason: "userCompleted", settled: false }, false), false);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, false, "comment"), false);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }, attention, false), false);

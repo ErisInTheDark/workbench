@@ -1,16 +1,15 @@
 /*
- * Keywords: thread, timeline, timing, overlay.
  * Exports:
- * - WorkbenchThreadItemTimelineEntry: Workbench-owned item timing metadata carried with hydrated thread turns. Keywords: thread, timeline, timing.
- * - normalizeWorkbenchThreadItemTimeline: validate and normalize raw item timeline metadata from hydrated payloads. Keywords: thread, timeline, payload.
- * - findWorkbenchThreadItemTimelineEntry: resolve one item's timeline entry by canonical id or alias. Keywords: thread, timeline, alias, lookup.
- * - upsertWorkbenchThreadItemTimelineEntry: merge one live lifecycle observation into the owned item timeline. Keywords: thread, timeline, lifecycle, merge.
- * - getThreadItemTimelineDurationMs: compute a duration for a set of thread items from timeline metadata. Keywords: thread, duration, compaction.
+ * - WorkbenchThreadItemTimelineEntry: Workbench-owned item timing metadata carried with hydrated thread turns.
+ * - normalizeWorkbenchThreadItemTimeline: validate and normalize raw item timeline metadata from hydrated payloads.
+ * - findWorkbenchThreadItemTimelineEntry: resolve one item's timeline entry by canonical id or alias.
+ * - upsertWorkbenchThreadItemTimelineEntry: merge one live lifecycle observation into the owned item timeline.
+ * - getThreadItemTimelineDurationMs: compute a duration for a set of thread items from timeline metadata.
  * - projectWorkbenchThreadItemTimelines: add overlay timing to hydrated turn history without replacing existing observations.
  */
 
 import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
-import type { ThreadPayload, WorkbenchThreadTurnHistoryEntry } from "../../types.ts";
+import type { ThreadPayloadData, WorkbenchThreadTurnHistoryEntry } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 
 export interface WorkbenchThreadItemTimelineEntry {
@@ -120,10 +119,10 @@ export function upsertWorkbenchThreadItemTimelineEntry(
   return currentTimeline.map((entry, index) => index === existingIndex ? mergedEntry : entry);
 }
 
-export function projectWorkbenchThreadItemTimelines(
-  thread: ThreadPayload,
+export function projectWorkbenchThreadItemTimelines<Payload extends ThreadPayloadData<string> & { isDraft: boolean }>(
+  thread: Payload,
   entriesForTurn: (turn: Turn) => readonly WorkbenchThreadItemTimelineEntry[],
-): ThreadPayload {
+): Payload {
   const updates = new Map<string, WorkbenchThreadTurnHistoryEntry>();
   let hasTiming = false;
   for (const turn of thread.turns) {

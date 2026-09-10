@@ -1,15 +1,16 @@
 /*
- * Keywords: thread observation, leases, external store, reconnect, readiness.
  * Exports:
  * - ThreadObservationState: explicit availability of one observed thread family.
  * - ThreadObservationTransport: shared socket request boundary.
  * - getThreadObservationKey: stable project/root-family key.
  * - default ThreadObservationController: share consumer-owned observations and fence retired replies.
  */
-import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchObservedThreadTarget, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadRouteTarget, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { z } from "zod";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+
+type WorkbenchObservedThreadTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" | "draft" }>;
 
 export interface ThreadObservationState {
   status: "idle" | "loading" | "ready" | "absent" | "failed";

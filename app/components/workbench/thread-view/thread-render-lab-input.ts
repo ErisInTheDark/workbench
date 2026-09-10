@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - parseThreadRenderInput: parse canonical thread payloads/items without rewriting them, while adapting shorthand lab fixtures into renderable thread data. Keywords: thread, render lab, JSON, canonical, fixture, command action.
+ * - parseThreadRenderInput: parse canonical thread payloads/items without rewriting them, while adapting shorthand lab fixtures into renderable thread data.
  */
 
 import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
@@ -10,6 +10,11 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
+import { z } from "zod";
+import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
+
+const LabThreadIdSchema = z.string().brand<"WorkbenchThreadId">();
+const LabDraftIdSchema = z.string().brand<"DraftId">();
 
 type JsonObject = { [key: string]: JsonValue | undefined };
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
@@ -259,9 +264,9 @@ function createLabTurn(items: ThreadItem[]): Turn {
   };
 }
 
-function createLabThreadPayload(turns: Turn[], cwd = "c:/git/web/workbench"): ThreadPayload {
+function createLabThreadPayload(turns: Turn[], cwd = "c:/git/web/workbench"): ThreadPayload<WorkbenchThreadId> {
   return {
-    id: "thread-render-lab",
+    id: LabThreadIdSchema.parse("thread-render-lab"),
     harness: "codex",
     name: "Thread render lab",
     preview: "Pasted thread data",
@@ -331,7 +336,9 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
 
   return {
     ...payload,
-    id: readString(record, "id") ?? payload.id,
+    ...(record.isDraft === true
+      ? { id: LabDraftIdSchema.parse(readString(record, "id") ?? payload.id), isDraft: true as const }
+      : { id: LabThreadIdSchema.parse(readString(record, "id") ?? payload.id), isDraft: false as const }),
     harness: readHarness(record, "harness"),
     name: readString(record, "name"),
     preview: readString(record, "preview") ?? payload.preview,
@@ -347,7 +354,6 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
     serviceTier: readString(record, "serviceTier"),
     agentPath: readString(record, "agentPath"),
     browseResultEntries: readBrowseResultEntries(record),
-    isDraft: record.isDraft === true,
   };
 }
 
@@ -369,7 +375,7 @@ function normalizeThreadPayload(value: JsonValue): ThreadPayload | null {
   }
 
   if (value.status !== undefined && isJsonObject(value.status)) {
-    return toThreadPayload(value as Thread, "codex");
+    return toThreadPayload({ ...value as Thread, id: LabThreadIdSchema.parse(value.id) }, "codex");
   }
 
   const turns = value.turns

@@ -9,6 +9,17 @@ import type { WorkbenchComposerProfile, WorkbenchHarness, WorkbenchSubagentRelat
 import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import type { JsonRpcRequest } from "./bridge-types";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+  },
+};
 
 function thread(id: string, active: boolean): Thread {
   return {
@@ -27,13 +38,31 @@ type Route = "create" | "child-active" | "child-idle" | "parent-active" | "paren
 
 async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery = false, nativePort = false) {
   const requests: JsonRpcRequest[] = [];
+  const identities = new Map(["parent", "child"].map(name => {
+    const record = {
+      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(nativePort ? `public-${name}` : name),
+      projectId: fixtureIdentityValues.ProjectId.project,
+      projectRoot: "C:/repo",
+      bindings: [{
+        harness, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(`native-${name}`),
+        nativeLocation: "C:/repo", pending: true, turnIndex: null,
+      }],
+    };
+    return [name, record] as const;
+  }));
+  const knownThread = (reference: string) => {
+    const record = [...identities.values()].find(record => record.threadId === reference || record.bindings[0].nativeThreadId === reference)
+      ?? identities.get(reference);
+    if (!record) throw new Error(`Unknown fixture thread ${reference}`);
+    return record;
+  };
   const profile: WorkbenchComposerProfile = {
     agentPath: null, agentSource: null, createdAt: 1, harness, id: "profile", model: "test-model", name: "test profile",
     reasoningEffort: "low", scope: { kind: "global" }, serviceTier: null, updatedAt: 1,
   };
   const relationship: WorkbenchSubagentRelationship = {
-    createdAt: 1, cwd: "C:/repo", directSubagentIndex: 1, harness, name: "iris", parentThreadId: "parent",
-    profileId: profile.id, profileName: profile.name, projectId: "project", threadId: "child", title: "review", updatedAt: 1,
+    createdAt: 1, cwd: "C:/repo", directSubagentIndex: 1, harness, name: "iris", parentThreadId: knownThread("parent").threadId,
+    profileId: profile.id, profileName: profile.name, projectId: fixtureIdentityValues.ProjectId["project"], threadId: knownThread("child").threadId, title: "review", updatedAt: 1,
   };
   let relationships = route === "create" ? [] : [relationship];
   const provider = {
@@ -62,17 +91,22 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     };
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
-    identities: { resolve: async ({ threadId }) => ({
-      threadId, projectId: "project", projectRoot: "C:/repo",
-      bindings: [{ harness, nativeThreadId: threadId, nativeLocation: "C:/repo", pending: true, turnIndex: null }],
-    }) },
+    identities: { resolve: async ({ threadId }) => knownThread(threadId), knownThread },
+    publicThreadId: async threadId => knownThread(threadId).threadId,
     createHarnessClient: () => {
       assert.equal(nativePort, false, "Internal provider work must not connect through the public socket.");
       return provider;
     },
     ...(nativePort ? {
-      requestNativeHarness: (providerHarness: WorkbenchHarness, request: JsonRpcRequest) => provider.sendRequest<object>({ ...request, workbenchHarness: providerHarness }),
-      publicThreadId: async (threadId: string) => threadId === "parent" ? "public-parent" : "public-child",
+      requestNativeHarness: (providerHarness: WorkbenchHarness, request: JsonRpcRequest) => {
+        const params = request.params as Record<string, unknown> | undefined;
+        return provider.sendRequest<object>({
+          ...request, workbenchHarness: providerHarness,
+          ...(typeof params?.threadId === "string"
+            ? { params: { ...params, threadId: knownThread(params.threadId).bindings[0].nativeThreadId } }
+            : {}),
+        });
+      },
     } : {}),
     onRelationshipCommitted: async () => {},
     profileStore: {
@@ -81,7 +115,7 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     subagentStore: {
@@ -116,13 +150,18 @@ test("subagent disposal drains admitted requests and rejects new admission", asy
   const gate = new Promise<void>(resolve => { release = resolve; });
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused", onRelationshipCommitted: async () => {},
+    identities: {
+      resolve: async () => { throw new Error("Profiles do not resolve thread identities."); },
+      knownThread: () => { throw new Error("Profiles do not resolve thread identities."); },
+    },
+    publicThreadId: async () => { throw new Error("Profiles do not publish thread identities."); },
     profileStore: {
       read: async () => { entered(); await gate; return { profiles: [] }; },
       mutate: async () => { throw new Error("unexpected mutation"); },
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     subagentStore: {
@@ -188,7 +227,7 @@ test("the native subagent port keeps native destinations and canonical prompt/se
     assert.equal(response.error, undefined);
     const delivery = requests.find(({ method }) => method === "turn/start")!;
     const params = delivery.params as TurnStartParams;
-    assert.equal(params.threadId, "child");
+    assert.equal(params.threadId, "native-child");
     assert.equal((delivery.workbenchPromptContext as { threadId: string }).threadId, "public-child");
     const sender = readWorkbenchAgentMessageText(params.toolOutput!.output as string);
     assert.equal(sender?.senderThreadId, "public-parent");

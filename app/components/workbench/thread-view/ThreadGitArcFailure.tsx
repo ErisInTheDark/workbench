@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcFailure: render integrated typed or generic Git arc failures with recovery, live conflict threads, and bounded structured facts. Keywords: thread, git, arc, failure, conflict, recovery.
+ * - default ThreadGitArcFailure: render integrated typed or generic Git arc failures with recovery, live conflict threads, and bounded structured facts.
  */
 "use client";
 
@@ -15,6 +15,7 @@ import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
@@ -37,7 +38,7 @@ export default function ThreadGitArcFailure({
 }) {
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
-  const snapshot = useWorkbenchProjectThreadSidebar(resolvedProjectId);
+  const snapshot = useWorkbenchProjectThreadSidebar(resolvedProjectId ? ProjectIdSchema.parse(resolvedProjectId) : null);
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
   const conflictKeys = new Set(conflicts.map(({ owner }) => identityKey(owner.harness, owner.threadId)));

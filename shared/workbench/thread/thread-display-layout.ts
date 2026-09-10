@@ -1,11 +1,16 @@
 /*
  * Exports:
- * - ThreadDisplayLayout schemas and types: define key-based one-level folders and relative section order. Keywords: thread, layout, folder, order.
- * - getProjectQualifiedThreadDisplayKey/parseProjectQualifiedThreadDisplayKey: encode and decode collision-safe global members. Keywords: project, identity, key.
- * - normalize/reconcile/project/create/rename/move/replace/remove helpers: own reusable layout mechanics for project and global pinned adapters. Keywords: layout, projection, mutation, sparse.
+ * - ThreadDisplayLayout schemas and types: define key-based one-level folders and relative section order.
+ * - getProjectQualifiedThreadDisplayKey/parseProjectQualifiedThreadDisplayKey: encode and decode collision-safe global members.
+ * - getThreadDisplayThreadKey/getThreadDisplayDraftKey/getThreadDisplayFolderKey: construct local display keys from distinct entity IDs.
+ * - normalize/reconcile/project/create/rename/move/replace/remove helpers: own reusable layout mechanics for project and global pinned adapters.
  */
 
 import { z } from "zod";
+import {
+  ProjectIdSchema, ProjectThreadDisplayKeySchema, ThreadDisplayKeySchema,
+  type DraftId, type FolderId, type ProjectId, type ThreadDisplayKey, type WorkbenchThreadId,
+} from "../identity.ts";
 
 export const THREAD_DISPLAY_LAYOUT_SECTIONS = ["pinned", "snoozed", "settled"] as const;
 export type ThreadDisplayLayoutSection = typeof THREAD_DISPLAY_LAYOUT_SECTIONS[number];
@@ -16,7 +21,7 @@ const ThreadDisplayPositionSchema = z.object({
 }).strict();
 
 export const ThreadDisplayFolderSchema = z.object({
-  folderId: z.uuid(),
+  folderId: z.uuid().brand<"FolderId">(),
   section: z.enum(THREAD_DISPLAY_LAYOUT_SECTIONS),
   threadKeys: z.array(z.string().min(1)).min(1),
   title: z.string().trim().min(1).max(80),
@@ -32,8 +37,8 @@ export const ThreadDisplayLayoutSchema = z.object({
 }).strict();
 export type ThreadDisplayLayout = z.infer<typeof ThreadDisplayLayoutSchema>;
 
-export interface ThreadDisplayLayoutEntry {
-  key: string;
+export interface ThreadDisplayLayoutEntry<Key extends string = string> {
+  key: Key;
   section: ThreadDisplayLayoutSection;
 }
 
@@ -41,12 +46,20 @@ export type ThreadDisplayLayoutItem<T> =
   | { entry: T; itemKind: "thread" }
   | { entries: T[]; folder: ThreadDisplayFolder; itemKind: "folder" };
 
-export function getThreadDisplayFolderKey(folderId: string) {
-  return `folder:${folderId}`;
+export function getThreadDisplayFolderKey(folderId: FolderId) {
+  return ThreadDisplayKeySchema.parse(`folder:${folderId}`);
 }
 
-export function getProjectQualifiedThreadDisplayKey(projectId: string, threadKey: string) {
-  return `${encodeURIComponent(projectId)}/${encodeURIComponent(threadKey)}`;
+export function getThreadDisplayThreadKey(harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId) {
+  return ThreadDisplayKeySchema.parse(`${harness}:${threadId}`);
+}
+
+export function getThreadDisplayDraftKey(draftId: DraftId) {
+  return ThreadDisplayKeySchema.parse(`draft:${draftId}`);
+}
+
+export function getProjectQualifiedThreadDisplayKey(projectId: ProjectId, threadKey: ThreadDisplayKey) {
+  return ProjectThreadDisplayKeySchema.parse(`${encodeURIComponent(projectId)}/${encodeURIComponent(threadKey)}`);
 }
 
 export function parseProjectQualifiedThreadDisplayKey(key: string) {
@@ -55,7 +68,7 @@ export function parseProjectQualifiedThreadDisplayKey(key: string) {
   try {
     const projectId = decodeURIComponent(key.slice(0, separatorIndex));
     const threadKey = decodeURIComponent(key.slice(separatorIndex + 1));
-    return projectId && threadKey ? { projectId, threadKey } : null;
+    return projectId && threadKey ? { projectId: ProjectIdSchema.parse(projectId), threadKey: ThreadDisplayKeySchema.parse(threadKey) } : null;
   } catch {
     return null;
   }
@@ -205,8 +218,8 @@ export function createThreadDisplayFolder(
   const rootKeys = projectKeys(sectionItemKeys(entries, order.folders ?? [], entry.section), order[entry.section]);
   const sourceIndex = rootKeys.indexOf(sourceKey);
   if (sourceIndex < 0) return null;
-  rootKeys.splice(sourceIndex, 1, getThreadDisplayFolderKey(folderId));
-  const positioned = new Set([...Object.keys(order[entry.section] ?? {}).filter((key) => key !== sourceKey), getThreadDisplayFolderKey(folderId)]);
+  rootKeys.splice(sourceIndex, 1, getThreadDisplayFolderKey(parsedFolder.data.folderId));
+  const positioned = new Set([...Object.keys(order[entry.section] ?? {}).filter((key) => key !== sourceKey), getThreadDisplayFolderKey(parsedFolder.data.folderId)]);
   return reconcileThreadDisplayLayout(entries, {
     ...order,
     folders: [...(order.folders ?? []), parsedFolder.data],

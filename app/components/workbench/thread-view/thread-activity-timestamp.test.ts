@@ -4,6 +4,7 @@ import test from "node:test";
 
 import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
 import resolveThreadActivityTimestampMs from "./thread-activity-timestamp.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function summary(id: string, updatedAt: number): ThreadSummary {
   return {
@@ -12,7 +13,7 @@ function summary(id: string, updatedAt: number): ThreadSummary {
     createdAt: 1,
     cwd: "C:/repo",
     harness: "codex",
-    id,
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id),
     name: id,
     path: null,
     preview: id,

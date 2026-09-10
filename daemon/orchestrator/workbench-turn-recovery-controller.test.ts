@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect live-only admission, goal exclusion, recency caps, and progress retirement. Keywords: recovery, registry, test.
+ * No production exports. Node tests protect live-only admission, goal exclusion, recency caps, and progress retirement.
  */
 
 import assert from "node:assert/strict";
@@ -11,6 +11,7 @@ import test from "node:test";
 import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import WorkbenchTurnRecoveryController, { MAX_AUTOMATIC_RECOVERY_THREADS } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
+import { WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 
 for (const cancelledOwner of ["controller", "bridge"] as const) {
 test(`${cancelledOwner} expiry cannot settle a late provider result after rollback resumes the owner`, async () => {
@@ -170,9 +171,9 @@ test("normally completed unfinished turns start one exact hidden continuation", 
 
 test("unfinished-turn continuation rejects every legitimate terminal owner", async () => {
   const lifecycles = [
-    { agent: { agentStatus: "completed", turnId: "turn" }, kind: "completed", reason: "agentCompleted", settled: false } as const,
-    { agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false } as const,
-    { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false, turnId: "turn" } as const,
+    { agent: { agentStatus: "completed", turnId: WorkbenchTurnIdSchema.parse("turn") }, kind: "completed", reason: "agentCompleted", settled: false } as const,
+    { agent: { agentStatus: "blocked", turnId: WorkbenchTurnIdSchema.parse("turn") }, kind: "needsAttention", reason: "agentBlocked", settled: false } as const,
+    { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false, turnId: WorkbenchTurnIdSchema.parse("turn") } as const,
   ];
   for (const [index, lifecycle] of lifecycles.entries()) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `workbench-unfinished-gate-${index}-`));

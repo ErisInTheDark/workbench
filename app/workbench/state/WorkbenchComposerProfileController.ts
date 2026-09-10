@@ -1,8 +1,7 @@
 /*
- * Keywords: composer, profile, persistence, connection, projection.
  * Exports:
- * - default WorkbenchComposerProfileController: own daemon profile definitions and guarded daemon-target projections. Keywords: composer, profile, controller, daemon, projection.
- * - WorkbenchComposerProfileSnapshot: immutable React-facing profile, selection, and failure snapshot. Keywords: composer, profile, snapshot, error.
+ * - default WorkbenchComposerProfileController: own daemon profiles and guarded target projections.
+ * - WorkbenchComposerProfileSnapshot: immutable profile, selection, and failure snapshot.
  */
 import type {
   WorkbenchComposerProfile,
@@ -15,6 +14,7 @@ import type {
   ThreadPayload,
 } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
+import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   normalizeComposerProfile,
 } from "workbench-shared/workbench/state/composer-profile-state";
@@ -168,7 +168,7 @@ export default class WorkbenchComposerProfileController {
     void this.persistSelection(slot, { kind: "profile", profileId, settings: cloneSettings(profile) });
     return true;
   }
-  materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: string, harness: WorkbenchHarness) {
+  materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: WorkbenchThreadId, harness: WorkbenchHarness) {
     const selection = this.getSelection(sourceSlot);
     const settings = selection.settings;
     if (!settings || settings.harness !== harness) return;
@@ -178,7 +178,7 @@ export default class WorkbenchComposerProfileController {
       : { kind: "custom", settings });
   }
 
-  materializeDraftSelection(sourceSlot: WorkbenchComposerProfileSlot, draftId: string, harness: WorkbenchHarness, projectId: string) {
+  materializeDraftSelection(sourceSlot: WorkbenchComposerProfileSlot, draftId: DraftId, harness: WorkbenchHarness, projectId: ProjectId) {
     const selection = this.getSelection(sourceSlot);
     const settings = selection.settings;
     if (settings?.harness !== harness) return;

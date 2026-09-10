@@ -25,6 +25,19 @@ import {
   type WorkbenchThreadDisplayOrder,
 } from "./thread-display-order.ts";
 import type { WorkbenchThreadLifecycle, WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project/a": fixtureIdentitySchemas.ProjectIdSchema.parse("project/a"),
+    "project/b": fixtureIdentitySchemas.ProjectIdSchema.parse("project/b"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+  },
+};
 
 function thread(
   id: string,
@@ -47,7 +60,7 @@ function thread(
         phase: "active", proposals: [], updatedAt: "2026-08-25T00:00:00.000Z",
       },
     } : {}),
-    identity: { harness: "codex", threadId: id },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id) },
     lifecycle,
     metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
     orderAt,
@@ -60,7 +73,7 @@ function draft(id: string, createdAt: number, options: { pinned?: boolean; snooz
     activityAt: createdAt,
     draft: {
       attachments: [], clientUpdatedAt: createdAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt,
-      draftId: id, profileId: null, projectId: "project", prompt: id, updatedAt: createdAt,
+      draftId: fixtureIdentitySchemas.DraftIdSchema.parse(id), profileId: null, projectId: fixtureIdentityValues.ProjectId["project"], prompt: id, updatedAt: createdAt,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
@@ -73,7 +86,7 @@ function ids(entries: readonly WorkbenchThreadSidebarEntry[]) {
 }
 
 const attention = (): WorkbenchThreadLifecycle => ({ kind: "needsAttention", reason: "noActiveTurn", settled: false });
-const working = (turnId: string): WorkbenchThreadLifecycle => ({ agent: { agentStatus: "working", turnId }, kind: "working", reason: "acceptedIntent", settled: false });
+const working = (turnId: string): WorkbenchThreadLifecycle => ({ agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId) }, kind: "working", reason: "acceptedIntent", settled: false });
 
 test("archives follow settled layout and snoozed claims stay below working threads", () => {
   const archived = { ...thread("archive", 999), metadata: { archived: true as const, pinned: false as const, snoozed: false as const } };
@@ -149,14 +162,14 @@ test("project layout keys stay aligned when non-layout rows precede reorderable 
     cwd: "C:/project",
     directSubagentIndex: 0,
     entryKind: "subagent",
-    identity: { harness: "codex", threadId: "child" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["child"] },
     lifecycle: working("child-turn"),
     name: "child",
-    parentThreadId: "parent",
+    parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"],
     pinned: false,
     profileId: "default",
     profileName: "Default",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     title: "child",
     updatedAt: 4,
   };
@@ -262,15 +275,15 @@ test("invalid stored ordering safely becomes empty ordering", () => {
 });
 
 test("global pinned keys keep equal provider identities distinct across projects", () => {
-  const left = getProjectQualifiedThreadDisplayKey("project/a", "codex:thread");
-  const right = getProjectQualifiedThreadDisplayKey("project/b", "codex:thread");
+  const left = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project/a"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread"));
+  const right = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project/b"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread"));
   assert.notEqual(left, right);
-  assert.deepEqual(parseProjectQualifiedThreadDisplayKey(left), { projectId: "project/a", threadKey: "codex:thread" });
+  assert.deepEqual(parseProjectQualifiedThreadDisplayKey(left), { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project/a"), threadKey: "codex:thread" });
 });
 
 test("global pinned folders accept mixed projects without pruning a cold project member", () => {
-  const left = getProjectQualifiedThreadDisplayKey("project/a", "codex:left");
-  const right = getProjectQualifiedThreadDisplayKey("project/b", "codex:right");
+  const left = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project/a"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:left"));
+  const right = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project/b"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:right"));
   const folderId = "00000000-0000-4000-8000-000000000030";
   const entries = [{ key: left, section: "pinned" as const }, { key: right, section: "pinned" as const }];
   const created = createThreadDisplayFolder(entries, {}, folderId, left, "Everywhere", { preserveMissing: true });

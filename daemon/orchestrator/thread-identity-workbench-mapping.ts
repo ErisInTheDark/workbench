@@ -6,11 +6,12 @@
  * - mapNativeThreadStateResult: derive draft wire aliases in canonical open and context responses.
  * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation and observation targets.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
+ * - createNativeQuestionnaireStatePorts: bridge native questionnaire ownership to canonical thread state.
  */
 import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import { serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -23,10 +24,77 @@ import type {
 } from "workbench-shared/workbench/thread/thread-state";
 import {
   getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
+  getThreadDisplayThreadKey,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import { z } from "zod";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
+import { ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchItemIdSchema } from "workbench-shared/workbench/identity";
+import type { NativeThreadId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type { WorkbenchQuestionnaireControllerOptions } from "./WorkbenchQuestionnaireController";
+
+export function createNativeQuestionnaireStatePorts(
+  threads: WorkbenchThreadIdentityController,
+  state: Pick<WorkbenchThreadStateController, "observeLifecycle" | "getSnapshot" | "subscribe">,
+  resolveProject: (cwd: string) => Promise<ProjectId>,
+): Pick<WorkbenchQuestionnaireControllerOptions, "clearPending" | "publishPending" | "resolveThread" | "subscribePending"> {
+  const resolveThread = async (threadId: NativeThreadId, projectId?: ProjectId) => {
+    const thread = await threads.resolve({ threadId, harness: "codex", ...(projectId ? { projectId } : {}) });
+    if (!thread) throw new Error("The questionnaire caller has no admitted thread identity.");
+    return thread;
+  };
+  const nativeTurn = async (threadId: WorkbenchThreadId, nativeThreadId: NativeThreadId, turnId: WorkbenchTurnId) => {
+    const turn = await threads.resolveTurn({ threadId, turnId });
+    if (!turn || turn.native.harness !== "codex" || turn.native.nativeThreadId !== nativeThreadId || turn.native.nativeTurnId === null) {
+      throw new Error("The questionnaire turn does not belong to the caller's native execution.");
+    }
+    return turn.native.nativeTurnId;
+  };
+  return {
+    clearPending: async (threadId, requestKey) => {
+      const thread = await resolveThread(threadId);
+      await state.observeLifecycle("codex", thread.threadId, { kind: "inputResolved", requestKey });
+    },
+    publishPending: async (threadId, questionnaire) => {
+      const thread = await resolveThread(threadId);
+      const turn = questionnaire.turnId === null ? null : await threads.resolveTurn({ threadId: thread.threadId, turnId: questionnaire.turnId });
+      if (questionnaire.turnId !== null && !turn) throw new Error("The questionnaire turn has no admitted identity.");
+      const canonical = { ...questionnaire, turnId: turn?.turnId ?? null };
+      await state.observeLifecycle("codex", thread.threadId, {
+        kind: "pendingInput", questionnaire: canonical, requestKey: questionnaire.requestKey, turnId: canonical.turnId,
+      });
+    },
+    resolveThread: async (cwd, threadId) => {
+      const projectId = await resolveProject(cwd);
+      const thread = await resolveThread(threadId, projectId);
+      const snapshot = await state.getSnapshot(projectId);
+      const entry = snapshot.entries.find(candidate => candidate.entryKind !== "draft"
+        && candidate.identity.harness === "codex" && candidate.identity.threadId === thread.threadId);
+      if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
+      const turnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
+      if (!turnId) throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
+      const pending = entry.pendingQuestionnaire;
+      return {
+        projectId,
+        turnId: await nativeTurn(thread.threadId, threadId, turnId),
+        pendingQuestionnaire: pending ? {
+          ...pending,
+          turnId: pending.turnId === null ? null : await nativeTurn(thread.threadId, threadId, pending.turnId),
+        } : pending === null ? null : undefined,
+      };
+    },
+    subscribePending: listener => state.subscribe((projectId, entry) => {
+      if (entry.entryKind === "draft" || entry.identity.harness !== "codex") return;
+      const thread = threads.knownThread(entry.identity.threadId);
+      if (thread.projectId !== projectId) throw new Error("Questionnaire observation crossed project ownership.");
+      for (const binding of thread.bindings) {
+        if (binding.harness !== "codex") continue;
+        listener({ projectId: thread.projectId, requestKey: entry.pendingQuestionnaire?.requestKey ?? null, threadId: binding.nativeThreadId });
+      }
+    }),
+  };
+}
 
 export type NativeThreadStateIdentityOwners = NativeTranscriptIdentityOwners
   & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
@@ -40,7 +108,7 @@ const admissionRequests = {
 type ThreadIdentity = { harness: WorkbenchHarness; threadId: string };
 
 async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, identity: { threadId: string; harness?: WorkbenchHarness }, projectId?: string) {
-  const input = { ...identity, ...(projectId ? { projectId } : {}) };
+  const input = { ...identity, threadId: ThreadReferenceSchema.parse(identity.threadId), ...(projectId ? { projectId: ProjectIdSchema.parse(projectId) } : {}) };
   try {
     const thread = await owners.threads.resolve(input)
       ?? (identity.harness ? await owners.resolveThreadIdentity?.(input) : null);
@@ -61,25 +129,26 @@ async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, i
 
 async function mapNativeTurnReference(owners: NativeThreadStateIdentityOwners, identity: ThreadIdentity, turnId: string) {
   const thread = await resolveNativeReference(owners, identity);
-  const turn = await owners.threads.resolveTurn({ threadId: thread.threadId, turnId })
-    ?? await owners.resolveTurnIdentity?.({ ...identity, turnId });
+  const turn = await owners.threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId) })
+    ?? await owners.resolveTurnIdentity?.({ ...identity, threadId: ThreadReferenceSchema.parse(identity.threadId), turnId: TurnReferenceSchema.parse(turnId) });
   if (!turn) throw new Error("Turn metadata has not been admitted for public projection.");
   return turn.turnId;
 }
 
-async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, questionnaire: WorkbenchDurableQuestionnaire) {
+async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, questionnaire: Omit<WorkbenchDurableQuestionnaire, "turnId"> & { turnId: string | null }) {
   const thread = await resolveNativeReference(owners, identity);
   const turnId = questionnaire.turnId === null ? null : await mapNativeTurnReference(owners, identity, questionnaire.turnId);
   let itemId = questionnaire.itemId;
   if (itemId !== null) {
-    const known = turnId ? owners.items.findItemIdForReference(thread.threadId, turnId, itemId) : undefined;
-    const existing = known ? null : await owners.items.resolve({ threadId: thread.threadId, itemId, ...(turnId ? { turnId } : {}) });
+    const reference = ItemReferenceSchema.parse(itemId);
+    const known = turnId ? owners.items.findItemIdForReference(thread.threadId, turnId, reference) : undefined;
+    const existing = known ? null : await owners.items.resolve({ threadId: thread.threadId, itemId: reference, ...(turnId ? { turnId } : {}) });
     if (known || existing) itemId = known ?? existing!.itemId;
     else {
       if (!turnId && !z.uuid().safeParse(itemId).success) throw new Error("Legacy questionnaire item has no owning turn.");
       const [admitted] = await owners.items.admit([{
         threadId: thread.threadId,
-        ...(z.uuid().safeParse(itemId).success ? { itemId } : {}),
+        ...(z.uuid().safeParse(itemId).success ? { itemId: WorkbenchItemIdSchema.parse(itemId) } : {}),
         sources: turnId ? [{ turnId, kind: "stable", sourceId: itemId }] : [],
         legacyAliases: [],
       }]);
@@ -95,8 +164,9 @@ async function mapNativeQuestionnaireHistory(owners: NativeTranscriptIdentityOwn
   const turnId = questionnaire.turnId!;
   let insertAfterItemId = entry.insertAfterItemId;
   if (insertAfterItemId !== null) {
-    const known = owners.items.findItemIdForReference(thread.threadId, turnId, insertAfterItemId);
-    const existing = known ? null : await owners.items.resolve({ threadId: thread.threadId, turnId, itemId: insertAfterItemId });
+    const reference = ItemReferenceSchema.parse(insertAfterItemId);
+    const known = owners.items.findItemIdForReference(thread.threadId, turnId, reference);
+    const existing = known ? null : await owners.items.resolve({ threadId: thread.threadId, turnId, itemId: reference });
     if (!known && !existing && entry.insertAfterItemIndex === null) throw new Error("Legacy questionnaire placement has no resolved item or position.");
     insertAfterItemId = known ?? existing?.itemId ?? null;
   }
@@ -108,11 +178,14 @@ async function mapThreadDisplayKey(
   owners: NativeTranscriptIdentityOwners, key: string, projectId: string | undefined,
 ): Promise<string> {
   const qualified = projectId ? null : parseProjectQualifiedThreadDisplayKey(key);
-  if (qualified) return getProjectQualifiedThreadDisplayKey(qualified.projectId, await mapThreadDisplayKey(owners, qualified.threadKey, qualified.projectId));
-  const reference = /^(codex|copilot|opencode):(.+)$/u.exec(key);
+  const localKey = qualified?.threadKey ?? key;
+  const ownerProjectId = qualified?.projectId ?? projectId;
+  const reference = /^(codex|copilot|opencode):(.+)$/u.exec(localKey);
   if (!reference) return key;
   const harness = WorkbenchHarnessSchema.parse(reference[1]);
-  return `${harness}:${(await resolveNativeReference(owners, { harness, threadId: reference[2]! }, projectId)).threadId}`;
+  const thread = await resolveNativeReference(owners, { harness, threadId: reference[2]! }, ownerProjectId);
+  const mapped = getThreadDisplayThreadKey(harness, thread.threadId);
+  return qualified ? getProjectQualifiedThreadDisplayKey(qualified.projectId, mapped) : mapped;
 }
 
 function mapNativeSidebar(sidebar: WorkbenchThreadSidebarSnapshot): WorkbenchThreadSidebarSnapshot {
@@ -177,7 +250,7 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
   if ("identity" in request) {
     const thread = await resolveNativeReference(owners, request.identity, projectId);
     const turn = "turnId" in request && request.turnId
-      ? await owners.threads.resolveTurn({ threadId: thread.threadId, turnId: request.turnId }) : null;
+      ? await owners.threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(request.turnId) }) : null;
     if ("turnId" in request && request.turnId && !turn) throw new Error("Requested turn does not belong to the thread.");
     result = { ...result, identity: { ...request.identity, threadId: thread.threadId },
       ...("turnId" in request ? { turnId: turn?.turnId ?? request.turnId } : {}),
@@ -224,11 +297,11 @@ export async function mapNativeProviderResponse(
     ? request.params as Record<string, unknown> : {};
   const native = () => {
     if (typeof params.threadId !== "string") throw new Error("Provider response requires its originating thread.");
-    return owners.threads.knownNativeBinding(harness, params.threadId);
+    return owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(params.threadId));
   };
   let mapped = { ...result };
   if (typeof result.threadId === "string") {
-    mapped.threadId = owners.threads.workbenchIdForNative(owners.threads.knownNativeBinding(harness, result.threadId));
+    mapped.threadId = owners.threads.workbenchIdForNative(owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(result.threadId)));
   }
   if (result.thread) {
     const thread = result.thread as Thread;
@@ -250,24 +323,29 @@ export async function mapNativeProviderResponse(
   }
   if (result.turn) mapped.turn = mapProviderTurn(owners, native(), result.turn as Turn);
   if (typeof result.turnId === "string") {
-    mapped.turnId = owners.threads.workbenchTurnIdForNative({ ...native(), nativeTurnId: result.turnId });
+    mapped.turnId = owners.threads.workbenchTurnIdForNative({ ...native(), nativeTurnId: NativeTurnIdSchema.parse(result.turnId) });
   }
   if (request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
     const context = result as unknown as WorkbenchThreadContextReadResponse;
     const binding = native();
-    const mapTurn = (nativeTurnId: string) => owners.threads.workbenchTurnIdForNative({ ...binding, nativeTurnId });
+    const mapTurn = (nativeTurnId: string) => owners.threads.workbenchTurnIdForNative({ ...binding, nativeTurnId: NativeTurnIdSchema.parse(nativeTurnId) });
     mapped = {
       ...mapped,
       questionnaireEntries: await Promise.all(context.questionnaireEntries.map((entry) => (
         mapNativeQuestionnaireHistory(owners, { harness, threadId: binding.nativeThreadId }, entry)
       ))),
       steerEntries: context.steerEntries.map((entry) => {
-        const fact = mapNativeTranscriptObservation(owners, binding, { kind: "steer", entry, observedAt: entry.resolvedAt ?? entry.attemptedAt });
+        const fact = mapNativeTranscriptObservation(owners, binding, {
+          kind: "steer", entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
+          observedAt: entry.resolvedAt ?? entry.attemptedAt,
+        });
         if (fact.kind !== "steer") throw new Error("Steer mapping changed its kind.");
         return fact.entry;
       }),
       browseResultEntries: context.browseResultEntries.map((entry) => {
-        const fact = mapNativeTranscriptObservation(owners, binding, { kind: "browse", entry });
+        const fact = mapNativeTranscriptObservation(owners, binding, {
+          kind: "browse", entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
+        });
         if (fact.kind !== "browse") throw new Error("Browse mapping changed its kind.");
         return fact.entry;
       }),
@@ -287,8 +365,8 @@ export async function mapWorkbenchProviderRequest(
   const params = request.params as Record<string, unknown>;
   if (typeof params.threadId !== "string" || !params.threadId.trim()) return { harness, request };
   const thread = await threads.resolve({
-    threadId: params.threadId.trim(), harness,
-    ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}),
+    threadId: ThreadReferenceSchema.parse(params.threadId), harness,
+    ...(typeof params.projectId === "string" ? { projectId: ProjectIdSchema.parse(params.projectId) } : {}),
   });
   if (!thread) throw new Error("Workbench thread identity has not been observed.");
   const turnFields = request.method === WORKBENCH_THREAD_PAGE_READ_METHOD
@@ -297,7 +375,7 @@ export async function mapWorkbenchProviderRequest(
     const reference = params[field];
     if (typeof reference !== "string" || !reference.trim()) return [];
     return [(async () => {
-      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId: reference.trim() });
+      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(reference.trim()) });
       if (!turn) throw new Error("Requested turn does not belong to the Workbench thread.");
       if (turn.native.nativeTurnId === null) throw new Error("Requested Workbench turn has no native execution.");
       return { field, turn };
@@ -306,7 +384,7 @@ export async function mapWorkbenchProviderRequest(
   const requestedTurnIds = request.method === "workbench/transcript/materialize" && Array.isArray(params.turnIds)
     ? await Promise.all(params.turnIds.map(async (turnId) => {
       if (typeof turnId !== "string") throw new Error("Transcript turn references must be strings.");
-      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId });
+      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId) });
       if (!turn?.native.nativeTurnId) throw new Error("Requested transcript turn has no native execution.");
       return turn;
     })) : [];

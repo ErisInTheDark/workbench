@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - No production exports; tests protect agent duplication and skill instruction assembly. Keywords: agent, skill, instructions, test.
+ * - No production exports; tests protect agent duplication and skill instruction assembly.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("catalog delegates source reads and excludes globally installed instruction-pack bodies", async () => {
   const agent = { description: "Lily", name: "Lily", path: "agents/lily.md", prompt: "LILY PREFIX" };
@@ -22,7 +23,7 @@ test("catalog delegates source reads and excludes globally installed instruction
   ];
   let bootstrapOptions: { skipInstructionPackContents?: readonly string[] } | undefined;
   const project = {
-    id: "project",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     kind: "git" as const,
     root: "C:/repo",
     rootPath: "C:/repo",

@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - WorkbenchProjectState: owned project list, selected tree, and explorer persistence state for the workbench. Keywords: workbench, project, tree, state.
- * - WorkbenchProjectSnapshot: readonly projection of the project list and selected project state. Keywords: workbench, project, snapshot, explorer.
- * - WorkbenchProjectListener: subscriber signature for project client state changes. Keywords: workbench, project, subscribe.
- * - WorkbenchProjectTransport: project mutation and refresh requests carried by the existing Workbench bridge. Keywords: workbench, project, transport, websocket.
- * - WorkbenchProjectClientOptions: injected project transport and error boundary. Keywords: workbench, project, client, options.
- * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots. Keywords: workbench, project, tree, clone.
- * - WorkbenchProjectClient: public surface for the workbench project sub-client. Keywords: workbench, project, client, dispose, select.
- * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, explicit projectless state, tree refresh, entry creation/deletion, and directory expansion state. Keywords: workbench, project, home, tree, entries, delete, default export.
+ * - WorkbenchProjectState: owned project list, selected tree, and explorer persistence state for the workbench.
+ * - WorkbenchProjectSnapshot: readonly projection of the project list and selected project state.
+ * - WorkbenchProjectListener: subscriber signature for project client state changes.
+ * - WorkbenchProjectTransport: project mutation and refresh requests carried by the existing Workbench bridge.
+ * - WorkbenchProjectClientOptions: injected project transport and error boundary.
+ * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots.
+ * - WorkbenchProjectClient: public surface for the workbench project sub-client.
+ * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, explicit projectless state, tree refresh, entry creation/deletion, and directory expansion state.
  */
 
 import type { ChangeSummary, CreateEntryPayload, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "workbench-shared/types";
@@ -17,6 +17,7 @@ import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFi
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { ProjectIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
   return nodes.map((node) => {
@@ -33,7 +34,7 @@ export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
 
 export interface WorkbenchProjectState {
   changes: Record<string, ChangeSummary>;
-  currentProjectId: string;
+  currentProjectId: ProjectId | "";
   expandedDirectories: Set<string>;
   fileIndex: ProjectTreeFileIndexRecord;
   hasLoadedProject: boolean;
@@ -48,7 +49,7 @@ export interface WorkbenchProjectState {
 
 export interface WorkbenchProjectSnapshot {
   changes: Record<string, ChangeSummary>;
-  currentProjectId: string;
+  currentProjectId: ProjectId | "";
   expandedDirectories: string[];
   isLoading: boolean;
   projectFileCandidates: readonly ProjectTreeFileCandidate[];
@@ -285,7 +286,7 @@ function WorkbenchProjectClient({
     const project = state.projects.find((candidate) => candidate.id === nextProjectId);
     if (project) applyProjectOption(project, { loading: true });
     else {
-      state.currentProjectId = nextProjectId;
+      state.currentProjectId = ProjectIdSchema.parse(nextProjectId);
       state.root = nextProjectId;
       state.rootPath = "";
       state.roots = [];

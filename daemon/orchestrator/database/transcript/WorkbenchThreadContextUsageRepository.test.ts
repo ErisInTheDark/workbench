@@ -1,5 +1,4 @@
 /*
- * Keywords: thread, context, sqlite, recovery, race.
  * No production exports. Tests protect durable measurements, negative recovery and live-first ordering.
  */
 import assert from "node:assert/strict";
@@ -8,13 +7,23 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 function setup() {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
   new WorkbenchTranscriptRepository(database).settle([{
-    kind: "thread", threadId: "thread", projectId: "project", projectRoot: "C:/repo",
+    kind: "thread", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo",
     title: "", createdAt: 1, updatedAt: 1, activityAt: 1,
   }]);
   return { database, repository: new WorkbenchThreadContextUsageRepository(database) };

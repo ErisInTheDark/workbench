@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover catalog-aware Browse project resolution, session queue isolation, observation, and recovery. Keywords: browse, runtime, project, fifo, session, timeout, test.
+ * - No production exports; Node tests cover catalog-aware Browse project resolution, session queue isolation, observation, and recovery.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -12,11 +12,12 @@ import {
   WorkbenchBrowseDaemonTimeoutError,
   type WorkbenchBrowseDaemonRequestWithoutId,
 } from "./WorkbenchBrowseDaemonClient.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function createResolvedProject(id: string) {
   const rootPath = `C:/projects/${id}`;
   return {
-    id,
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
     kind: "git" as const,
     root: rootPath,
     rootPath,
@@ -82,7 +83,7 @@ test("executes with a supplied project context without resolving the project aga
   const result = await runtime.run(command, {
     cwd: "C:/projects/workbench",
     owningRootPath: "C:/projects/workbench",
-    projectId: "workbench",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("workbench"),
     projectRootPath: "C:/projects/workbench",
     workspaceRoots: [{ id: "workbench", name: "workbench", rootPath: "C:/projects/workbench" }],
     workspaceRootPaths: ["C:/projects/workbench"],
@@ -101,7 +102,7 @@ test("resolves project-ID execution contexts through the injected catalog port",
     },
   });
 
-  const context = await runtime.resolveExecutionContext({ cwd: null, projectId: "beta" });
+  const context = await runtime.resolveExecutionContext({ cwd: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") });
 
   assert.deepEqual(requestedIds, ["beta"]);
   assert.equal(context.projectId, "beta");
@@ -256,7 +257,7 @@ test("run keeps its session lease through retirement while other sessions procee
   }, {
     cwd: "/work",
     owningRootPath: "/work",
-    projectId: "work",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"),
     projectRootPath: "/work",
     workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }],
     workspaceRootPaths: ["/work"],
@@ -350,7 +351,7 @@ test("an unresponsive recorded process retires before replacement preparation an
       },
       session: "research",
     }, {
-      cwd: "/work", owningRootPath: "/work", projectId: "work", projectRootPath: "/work",
+      cwd: "/work", owningRootPath: "/work", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"), projectRootPath: "/work",
       workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
     });
     assert.equal(result.ok, false);
@@ -379,7 +380,7 @@ test("cancellation during failed retirement cannot trigger another retirement at
         commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
         runtimeRequest: { kind: "stop", session: "other", timeoutMs: 5_000, force: true },
       }, {
-        cwd: "/work", owningRootPath: "/work", projectId: "work", projectRootPath: "/work",
+        cwd: "/work", owningRootPath: "/work", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"), projectRootPath: "/work",
         workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
       }, abort.signal);
       assert.equal(result.ok, false);

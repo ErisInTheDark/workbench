@@ -6,6 +6,10 @@ import { randomUUID } from "node:crypto";
 
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import {
+  WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  type WorkbenchItemId, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 
 import type {
     WorkbenchTranscriptItemIdentity,
@@ -41,7 +45,7 @@ export default class WorkbenchTranscriptIdentityRepository {
     return this.database.transaction(() => inputs.map((input) => this.admitInTransaction(input)))();
   }
 
-  merge(input: { threadId: string; turnId: string; fromItemId: string; toItemId: string }) {
+  merge(input: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; fromItemId: WorkbenchItemId; toItemId: WorkbenchItemId }) {
     if (!this.database.inTransaction) throw new Error("Item identity reconciliation requires a transaction.");
     this.assertTurnOwner(input.threadId, input.turnId);
     const source = this.row(input.fromItemId);
@@ -158,7 +162,7 @@ export default class WorkbenchTranscriptIdentityRepository {
     `).all(...owners) as Array<{ public_id: string; turn_id: string; type: string; client_id: string | null }>;
     const body = bodies[0];
     if (bodies.length !== 1 || !body) return null;
-    const turnId = body.turn_id;
+    const turnId = WorkbenchTurnIdSchema.parse(body.turn_id);
     if (input.sources.some((source) => source.turnId !== turnId)
       || input.legacyAliases.some((alias) => alias.turnId !== turnId)) return null;
     const identities = owners.map((id) => this.row(id)).map((row) => row ? this.read(row) : null);
@@ -193,7 +197,7 @@ export default class WorkbenchTranscriptIdentityRepository {
     return target.itemId;
   }
 
-  private sourceOwners(threadId: string, source: WorkbenchTranscriptItemSource) {
+  private sourceOwners(threadId: WorkbenchThreadId, source: WorkbenchTranscriptItemSource) {
     const rows = this.prepare(`
       SELECT DISTINCT a.item_identity_id FROM workbench_transcript_item_source_aliases a
       JOIN thread_turns recorded ON recorded.id = a.turn_id
@@ -236,18 +240,20 @@ export default class WorkbenchTranscriptIdentityRepository {
   }
 
   private read(row: IdentityRow): WorkbenchTranscriptItemIdentity {
+    const sources = this.prepare(`
+      SELECT turn_id AS turnId, source_kind AS kind, source_id AS sourceId
+      FROM workbench_transcript_item_source_aliases WHERE item_identity_id = ?
+      ORDER BY turn_id, source_kind, source_id
+    `).all(row.id) as Array<{ turnId: string; kind: WorkbenchTranscriptItemSource["kind"]; sourceId: string }>;
+    const legacyAliases = this.prepare(`
+      SELECT turn_id AS turnId, alias FROM workbench_transcript_item_legacy_aliases
+      WHERE item_identity_id = ? ORDER BY turn_id, alias
+    `).all(row.id) as Array<{ turnId: string; alias: string }>;
     return {
-      itemId: row.id,
-      threadId: row.thread_id,
-      sources: this.prepare(`
-        SELECT turn_id AS turnId, source_kind AS kind, source_id AS sourceId
-        FROM workbench_transcript_item_source_aliases WHERE item_identity_id = ?
-        ORDER BY turn_id, source_kind, source_id
-      `).all(row.id) as WorkbenchTranscriptItemIdentity["sources"],
-      legacyAliases: this.prepare(`
-        SELECT turn_id AS turnId, alias FROM workbench_transcript_item_legacy_aliases
-        WHERE item_identity_id = ? ORDER BY turn_id, alias
-      `).all(row.id) as WorkbenchTranscriptItemIdentity["legacyAliases"],
+      itemId: WorkbenchItemIdSchema.parse(row.id),
+      threadId: WorkbenchThreadIdSchema.parse(row.thread_id),
+      sources: sources.map(source => ({ ...source, turnId: WorkbenchTurnIdSchema.parse(source.turnId) })),
+      legacyAliases: legacyAliases.map(alias => ({ ...alias, turnId: WorkbenchTurnIdSchema.parse(alias.turnId) })),
     };
   }
 }

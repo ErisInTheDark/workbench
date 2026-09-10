@@ -1,14 +1,13 @@
 /*
- * Keywords: codex, transcript, provider, usage, model, catalog.
  * Exports:
- * - CodexTranscriptProviderContext: Workbench identity and timestamps attached to provider transcript facts. Keywords: codex, transcript, provider, context.
- * - createCodexTranscriptProviderThreadObservation: project one provider thread into its atomic Workbench metadata fact. Keywords: codex, transcript, provider, thread.
- * - createCodexTranscriptProviderTurnObservation: project one provider turn into its atomic Workbench lifecycle fact. Keywords: codex, transcript, provider, turn.
- * - createCodexTranscriptProviderItemObservation: project one provider item lifecycle without reading storage. Keywords: codex, transcript, provider, item.
- * - createCodexTranscriptProviderDynamicToolObservation: project one provider dynamic-tool request without reading storage. Keywords: codex, transcript, provider, tool.
- * - createCodexTranscriptProviderTurnScopeObservation: project one complete provider turn into a replacement boundary. Keywords: codex, transcript, provider, replacement.
- * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts. Keywords: codex, transcript, provider, snapshot.
- * - createCodexTranscriptProviderThreadScopeObservation: project complete turns from one provider thread response into a replacement boundary. Keywords: codex, transcript, provider, replacement.
+ * - CodexTranscriptProviderContext: Workbench identity and timestamps attached to provider transcript facts.
+ * - createCodexTranscriptProviderThreadObservation: project one provider thread into its atomic Workbench metadata fact.
+ * - createCodexTranscriptProviderTurnObservation: project one provider turn into its atomic Workbench lifecycle fact.
+ * - createCodexTranscriptProviderItemObservation: project one provider item lifecycle without reading storage.
+ * - createCodexTranscriptProviderDynamicToolObservation: project one provider dynamic-tool request without reading storage.
+ * - createCodexTranscriptProviderTurnScopeObservation: project one complete provider turn into a replacement boundary.
+ * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts.
+ * - createCodexTranscriptProviderThreadScopeObservation: project complete turns from one provider thread response into a replacement boundary.
  * - createCodexTurnUsageContextObservation: project observed turn pricing context.
  * - createCodexTurnTokenUsageObservation: project cumulative token counts.
  * - createCodexTurnTokenUsageObservationFromNotification: decode native token notifications.
@@ -22,10 +21,10 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { TokenUsageBreakdown } from "workbench-shared/codex/generated/app-server/v2/TokenUsageBreakdown";
 import type {
-  WorkbenchTranscriptAtomicObservation,
+  NativeTranscriptAtomicObservation,
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
-  WorkbenchTranscriptObservation,
+  NativeTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
 import type { CodexTranscriptRawEvent, CodexTranscriptTurnIndexEntry } from "./codex-transcript-types.ts";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
@@ -37,12 +36,13 @@ import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts"
 import { mergeThreadItem } from "./codex-transcript-item-merge.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
 import { createDynamicToolCallItem } from "./codex-transcript-timeline.ts";
+import { NativeThreadIdSchema, NativeTurnIdSchema, type NativeThreadId, type NativeTurnId, type ProjectId } from "workbench-shared/workbench/identity";
 
 export interface CodexTranscriptProviderContext {
   activityAt: number;
   createdAt: number;
   nativeLocation: string;
-  projectId: string;
+  projectId: ProjectId;
   projectRoot: string;
   title: string;
   updatedAt: number;
@@ -55,8 +55,8 @@ export function createCodexTurnUsageContextObservation(input: {
   serviceTier: string | null;
   threadId: string;
   turnId: string;
-}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnUsageContext" }> {
-  return { kind: "turnUsageContext", ...input };
+}): Extract<NativeTranscriptAtomicObservation, { kind: "turnUsageContext" }> {
+  return { kind: "turnUsageContext", ...input, threadId: NativeThreadIdSchema.parse(input.threadId), turnId: NativeTurnIdSchema.parse(input.turnId) };
 }
 
 export function readCodexUsageContext(value: unknown) {
@@ -85,19 +85,19 @@ export function createCodexUsageImport(input: {
   thread: Thread;
   turnIndex: readonly CodexTranscriptTurnIndexEntry[];
   events: readonly CodexTranscriptRawEvent[];
-}): Extract<WorkbenchTranscriptObservation, { kind: "usageWindow" }> {
-  const threadId = input.thread.id;
-  const catalog: Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }>[] = [
+}): Extract<NativeTranscriptObservation, { kind: "usageWindow" }> {
+  const threadId = NativeThreadIdSchema.parse(input.thread.id);
+  const catalog: Extract<NativeTranscriptAtomicObservation, { kind: "thread" | "turn" }>[] = [
     createCodexTranscriptProviderThreadObservation(threadId, input.context),
-    ...input.turnIndex.map((turn, turnIndex): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> => ({
-      kind: "turn", threadId, turnId: turn.turnId, turnIndex, harnessId: "codex",
-      nativeLocation: input.context.nativeLocation, nativeThreadId: threadId, nativeTurnId: turn.turnId,
+    ...input.turnIndex.map((turn, turnIndex): Extract<NativeTranscriptAtomicObservation, { kind: "turn" }> => ({
+      kind: "turn", threadId, turnId: NativeTurnIdSchema.parse(turn.turnId), turnIndex, harnessId: "codex",
+      nativeLocation: input.context.nativeLocation, nativeThreadId: threadId, nativeTurnId: NativeTurnIdSchema.parse(turn.turnId),
       state: turn.status ?? "admitted", createdAt: Math.round((turn.startedAt ?? input.thread.createdAt) * 1_000),
       startedAt: secondsToMilliseconds(turn.startedAt), endedAt: secondsToMilliseconds(turn.completedAt), durationMs: null,
     })),
   ];
   const turns = new Set(input.turnIndex.map(({ turnId }) => turnId));
-  const observations: Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnUsageContext" | "turnTokenUsage" }>[] = [];
+  const observations: Extract<NativeTranscriptAtomicObservation, { kind: "turnUsageContext" | "turnTokenUsage" }>[] = [];
   let context: ReturnType<typeof readCodexUsageContext> | null = null;
   let activeTurnId: string | null = null;
   for (const event of [...input.events].sort((left, right) => left.receivedAt - right.receivedAt)) {
@@ -143,7 +143,7 @@ export function createCodexTurnTokenUsageObservation(input: {
   threadId: string;
   turnId: string;
   usage: TokenUsageBreakdown;
-}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnTokenUsage" }> {
+}): Extract<NativeTranscriptAtomicObservation, { kind: "turnTokenUsage" }> {
   return {
     cumulative: {
       cacheWriteInputTokens: input.usage.cacheWriteInputTokens,
@@ -155,8 +155,8 @@ export function createCodexTurnTokenUsageObservation(input: {
     },
     kind: "turnTokenUsage",
     observedAt: input.observedAt,
-    threadId: input.threadId,
-    turnId: input.turnId,
+    threadId: NativeThreadIdSchema.parse(input.threadId),
+    turnId: NativeTurnIdSchema.parse(input.turnId),
     usageDataVersion: WORKBENCH_STATS_USAGE_DATA_VERSION,
   };
 }
@@ -203,14 +203,14 @@ function normalizeProviderTurn(turn: Turn): Turn {
 export function createCodexTranscriptProviderThreadObservation(
   threadId: string,
   context: CodexTranscriptProviderContext,
-): Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" }> {
+): Extract<NativeTranscriptAtomicObservation, { kind: "thread" }> {
   return {
     activityAt: context.activityAt,
     createdAt: context.createdAt,
     kind: "thread",
     projectId: context.projectId,
     projectRoot: context.projectRoot,
-    threadId,
+    threadId: NativeThreadIdSchema.parse(threadId),
     title: context.title,
     updatedAt: context.updatedAt,
   };
@@ -226,7 +226,7 @@ export function createCodexTranscriptProviderTurnObservation({
   threadId: string;
   turn: Turn;
   turnIndex?: number;
-}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> {
+}): Extract<NativeTranscriptAtomicObservation, { kind: "turn" }> {
   const startedAt = secondsToMilliseconds(turn.startedAt);
   return {
     createdAt: startedAt ?? context.createdAt,
@@ -235,12 +235,12 @@ export function createCodexTranscriptProviderTurnObservation({
     harnessId: "codex",
     kind: "turn",
     nativeLocation: context.nativeLocation,
-    nativeThreadId: threadId,
-    nativeTurnId: turn.id,
+    nativeThreadId: NativeThreadIdSchema.parse(threadId),
+    nativeTurnId: NativeTurnIdSchema.parse(turn.id),
     startedAt,
     state: turn.status,
-    threadId,
-    turnId: turn.id,
+    threadId: NativeThreadIdSchema.parse(threadId),
+    turnId: NativeTurnIdSchema.parse(turn.id),
     ...(turnIndex === undefined ? {} : { turnIndex }),
   };
 }
@@ -261,7 +261,7 @@ export function createCodexTranscriptProviderItemObservation({
   startedAtMs?: number | null;
   threadId: string;
   turnId: string;
-}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> {
+}): Extract<NativeTranscriptAtomicObservation, { kind: "item" }> {
   const hasTimeline = startedAtMs !== undefined || completedAtMs !== undefined;
   return {
     item: withWorkbenchThreadItemIdentity(item, getCodexItemIdentityKind(item)),
@@ -277,15 +277,15 @@ export function createCodexTranscriptProviderItemObservation({
         startedAt: startedAtMs ?? null,
       },
     } : {}),
-    threadId,
-    turnId,
+    threadId: NativeThreadIdSchema.parse(threadId),
+    turnId: NativeTurnIdSchema.parse(turnId),
   };
 }
 
 export function createCodexTranscriptProviderDynamicToolObservation(
   request: JsonRpcRequest,
   observedAt: number,
-): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> | null {
+): Extract<NativeTranscriptAtomicObservation, { kind: "item" }> | null {
   if (request.method !== "item/tool/call") return null;
   const params = asRecord(request.params);
   const threadId = asString(params?.threadId);
@@ -313,13 +313,13 @@ export function createCodexTranscriptProviderDynamicToolObservation(
 export function createCodexTranscriptProviderThreadObservations(
   thread: Thread,
   context: CodexTranscriptProviderContext,
-): WorkbenchTranscriptAtomicObservation[] {
+): NativeTranscriptAtomicObservation[] {
   const turns = thread.turns.map(normalizeProviderTurn);
   const itemOwners = createFirstTurnItemOwners(turns.map((turn) => ({
     itemIds: turn.items.map(({ id }) => id),
     turnId: turn.id,
   })));
-  const observations: WorkbenchTranscriptAtomicObservation[] = [
+  const observations: NativeTranscriptAtomicObservation[] = [
     createCodexTranscriptProviderThreadObservation(thread.id, context),
   ];
   for (const [turnIndex, turn] of turns.entries()) {
@@ -353,10 +353,10 @@ export function createCodexTranscriptProviderTurnScopeObservation({
   threadId: string;
   turn: Turn;
   turnIndex?: number;
-}): WorkbenchTranscriptProviderTurnScopeObservation {
+}): WorkbenchTranscriptProviderTurnScopeObservation<NativeThreadId, NativeTurnId> {
   const normalizedTurn = normalizeProviderTurn(turn);
   return {
-    completeTurnIds: [normalizedTurn.id],
+    completeTurnIds: [NativeTurnIdSchema.parse(normalizedTurn.id)],
     kind: "providerTurnScope",
     observations: [
       createCodexTranscriptProviderTurnObservation({
@@ -375,17 +375,17 @@ export function createCodexTranscriptProviderTurnScopeObservation({
         turnId: normalizedTurn.id,
       })),
     ],
-    threadId,
+    threadId: NativeThreadIdSchema.parse(threadId),
   };
 }
 
 export function createCodexTranscriptProviderThreadScopeObservation(
   thread: Thread,
   context: CodexTranscriptProviderContext,
-): WorkbenchTranscriptProviderTurnScopeObservation {
+): WorkbenchTranscriptProviderTurnScopeObservation<NativeThreadId, NativeTurnId> {
   const completeTurnIds = thread.turns
     .filter(({ itemsView }) => itemsView === "full")
-    .map(({ id }) => id);
+    .map(({ id }) => NativeTurnIdSchema.parse(id));
   const completeTurnIdSet = new Set(completeTurnIds);
   return {
     completeTurnIds,
@@ -393,9 +393,9 @@ export function createCodexTranscriptProviderThreadScopeObservation(
     observations: createCodexTranscriptProviderThreadObservations({
       ...thread,
       turns: thread.turns.map((turn) => (
-        completeTurnIdSet.has(turn.id) ? turn : { ...turn, items: [] }
+        completeTurnIdSet.has(NativeTurnIdSchema.parse(turn.id)) ? turn : { ...turn, items: [] }
       )),
     }, context),
-    threadId: thread.id,
+    threadId: NativeThreadIdSchema.parse(thread.id),
   };
 }

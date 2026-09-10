@@ -1,13 +1,13 @@
 /*
- * Keywords: composer, profile, daemon, draft, persistence, boundary.
  * Exports:
- * - ComposerProfilePersistence: typed browser boundary for daemon-owned composer profiles. Keywords: composer, profile, daemon, api.
- * - ComposerProfileTargetPersistence: typed browser boundary for daemon-owned target profile snapshots. Keywords: composer, profile, target, daemon.
- * - createComposerProfilePersistence: create the daemon-backed composer-profile persistence adapter. Keywords: composer, profile, daemon, boundary.
- * - createComposerProfileTargetPersistence: create the daemon-backed target-profile persistence adapter. Keywords: composer, profile, target, daemon.
+ * - ComposerProfilePersistence: typed browser boundary for daemon-owned composer profiles.
+ * - ComposerProfileTargetPersistence: typed browser boundary for daemon-owned target profile snapshots.
+ * - createComposerProfilePersistence: create the daemon-backed composer-profile persistence adapter.
+ * - createComposerProfileTargetPersistence: create the daemon-backed target-profile persistence adapter.
  */
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
 
 export interface ComposerProfilePersistence {
   mutate: (mutation: WorkbenchComposerProfileMutation) => Promise<WorkbenchComposerProfileStorePayload>;
@@ -30,7 +30,7 @@ export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient):
 
 export function createComposerProfileTargetPersistence(
   daemon: Pick<WorkbenchDaemonClient, "request">,
-  flushDraft: (projectId: string, draftId: string) => Promise<void>,
+  flushDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>,
 ): ComposerProfileTargetPersistence {
   return {
     read: async (slot) => {

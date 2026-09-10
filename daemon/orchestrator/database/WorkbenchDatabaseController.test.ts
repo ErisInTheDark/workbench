@@ -22,6 +22,30 @@ import { insertRow, selectRows, upsertRow } from "workbench-shared/database/work
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { TranscriptQuerySchema } from "./transcript/transcript-query-contract";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+  NativeTurnId: {
+    "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "active-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("active-thread"),
+    "settled-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("settled-thread"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+    "unadmitted": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("unadmitted"),
+  },
+  WorkbenchTurnId: {
+    "active-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("active-turn"),
+    "settled-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("settled-turn"),
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 test("stored transcript queries cross the worker boundary and preserve invalid-id failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "transcript-query-worker-"));
@@ -106,8 +130,8 @@ test("the database worker opens, proves readiness, reports all tables, and close
     assert.deepEqual(coalescedInventory, inventory);
     assert.deepEqual(implicitInventory, inventory);
     const catalog = ["first", "second"].map((nativeThreadId) => ({
-      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId },
-      projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/project", title: nativeThreadId,
       createdAt: 1, updatedAt: 2, activityAt: 2,
     }));
     const identities = await controller.observeThreadIdentities(catalog);
@@ -241,19 +265,19 @@ test("database worker records claim snapshots and returns bounded stats", async 
     await controller.recordStatsClaimSnapshot({
       harness: "codex",
       observedAt: now - 60_000,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       roots: [{ paths: ["src"], rootId: "root" }],
       threadId: "thread",
     });
-    const result = await controller.readStats({ projectId: "project", range: "7d" }, now);
+    const result = await controller.readStats({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d" }, now);
     assert.equal(result.claimHotspots[0]?.path, "src");
     assert.equal(result.claimHotspots[0]?.threadCount, 1);
     const detailed = WorkbenchStatsDetailedResponseSchema.parse(await controller.readStatsDetailed({
-      projectId: "project", range: "7d", tokenTypes: [],
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d", tokenTypes: [],
     }, now));
     assert.deepEqual(legacyStatsResponse(detailed), result);
     const claims = await controller.readClaimStats({
-      projectId: "project", range: "7d", file: { rootId: "root", path: "src" }, page: 1,
+      projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", file: { rootId: "root", path: "src" }, page: 1,
     }, now);
     assert.equal(claims.kind, "threads");
     if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
@@ -270,9 +294,9 @@ test("mixed-model schema addition preserves usage counters, attribution and unre
     database.pragma("foreign_keys = ON");
     const repository = new WorkbenchTranscriptRepository(database);
     repository.settle([
-      { kind: "thread", threadId: "thread", projectId: "project", projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1 },
-      { kind: "turn", threadId: "thread", turnId: "turn", turnIndex: 0, harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "thread", nativeTurnId: "turn", state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1_000 },
-      { kind: "turnTokenUsage", threadId: "thread", turnId: "turn", observedAt: 2, usageDataVersion: 2,
+      { kind: "thread", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1 },
+      { kind: "turn", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], turnIndex: 0, harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"], nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"], state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1_000 },
+      { kind: "turnTokenUsage", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], observedAt: 2, usageDataVersion: 2,
         cumulative: { inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 10, totalTokens: 150 } },
     ]);
     database.prepare("INSERT INTO thread_usage_model_attributions (turn_id, model, source, policy_version, updated_at) VALUES ('turn', 'model', 'thread', 1, 2)").run();
@@ -288,7 +312,7 @@ test("mixed-model schema addition preserves usage counters, attribution and unre
       thread: { ...beforeTranscript!.thread, identity_origin: "legacy" },
       turns: beforeTranscript!.turns.map((turn) => ({ ...turn, identity_origin: "legacy" })),
     });
-    repository.settle([{ kind: "turnUsageContext", threadId: "thread", turnId: "turn", observedAt: 3, model: "rerouted", serviceTier: null, modelChanged: true }]);
+    repository.settle([{ kind: "turnUsageContext", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], observedAt: 3, model: "rerouted", serviceTier: null, modelChanged: true }]);
     assert.deepEqual(database.prepare("SELECT model, model_is_mixed, cumulative_total_tokens FROM thread_turn_usage").get(), {
       model: "rerouted", model_is_mixed: 1, cumulative_total_tokens: 150,
     });
@@ -340,7 +364,7 @@ test("tool schema upgrade preserves collaboration children and callable sources"
     assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
     const repository = new WorkbenchTranscriptRepository(database);
     repository.settle([{
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 3,
       item: {
         type: "collabAgentToolCall", id: "interrupted", tool: "sendMessage", status: "interrupted",
         senderThreadId: "thread", receiverThreadIds: ["child"], prompt: null, model: null, reasoningEffort: null, agentsStates: {},
@@ -619,8 +643,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
     const observations = [
       {
         kind: "thread" as const,
-        threadId: "active-thread",
-        projectId: "project",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
         projectRoot: "C:/project",
         title: "Active search thread",
         createdAt: 1,
@@ -629,13 +653,13 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "turn" as const,
-        threadId: "active-thread",
-        turnId: "active-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["active-turn"],
         turnIndex: 0,
         harnessId: "codex",
         nativeLocation: "C:/project",
-        nativeThreadId: "active-native",
-        nativeTurnId: "active-turn",
+        nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("active-native"),
+        nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("active-turn"),
         state: "completed" as const,
         createdAt: 1,
         startedAt: 1,
@@ -644,8 +668,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "item" as const,
-        threadId: "active-thread",
-        turnId: "active-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["active-turn"],
         lifecycle: "completed" as const,
         observedAt: 2,
         item: {
@@ -657,8 +681,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "item" as const,
-        threadId: "active-thread",
-        turnId: "active-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["active-turn"],
         lifecycle: "completed" as const,
         observedAt: 3,
         item: {
@@ -673,8 +697,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "item" as const,
-        threadId: "active-thread",
-        turnId: "active-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["active-turn"],
         lifecycle: "completed" as const,
         observedAt: 4,
         item: {
@@ -689,8 +713,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "thread" as const,
-        threadId: "settled-thread",
-        projectId: "project",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
         projectRoot: "C:/project",
         title: "Settled archive",
         createdAt: 1,
@@ -699,13 +723,13 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "turn" as const,
-        threadId: "settled-thread",
-        turnId: "settled-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["settled-turn"],
         turnIndex: 0,
         harnessId: "codex",
         nativeLocation: "C:/project",
-        nativeThreadId: "settled-native",
-        nativeTurnId: "settled-turn",
+        nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("settled-native"),
+        nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("settled-turn"),
         state: "completed" as const,
         createdAt: 1,
         startedAt: 1,
@@ -714,8 +738,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "item" as const,
-        threadId: "settled-thread",
-        turnId: "settled-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["settled-turn"],
         lifecycle: "completed" as const,
         observedAt: 2,
         item: {
@@ -727,8 +751,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       },
       {
         kind: "item" as const,
-        threadId: "settled-thread",
-        turnId: "settled-turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["settled-turn"],
         lifecycle: "completed" as const,
         observedAt: 3,
         item: {
@@ -746,16 +770,16 @@ test("workspace search ranks relational sources and keeps settled transcript bod
       {
         kind: "canonicalWindow",
         contentVersion: 3,
-        materializedTurnIds: ["active-turn"],
+        materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["active-turn"]],
         observations: observations.filter((observation) => observation.threadId === "active-thread"),
-        threadId: "active-thread",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
       },
       {
         kind: "canonicalWindow",
         contentVersion: 3,
-        materializedTurnIds: ["settled-turn"],
+        materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["settled-turn"]],
         observations: observations.filter((observation) => observation.threadId === "settled-thread"),
-        threadId: "settled-thread",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
       },
     ]);
     await controller.executeTransaction([
@@ -787,14 +811,14 @@ test("workspace search ranks relational sources and keeps settled transcript bod
     await controller.replaceSearchProjectFiles("project", ["src/lowestvalue-needle.ts"]);
     await controller.replaceSearchProjectFiles("other", ["src/other-only.ts"]);
 
-    assert.equal((await controller.search({ projectId: "project", query: "search" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: "project", query: "narwhal" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: "project", query: "comet" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: "project", query: "settled archive" })).results[0]?.title, "Settled archive");
-    assert.deepEqual((await controller.search({ projectId: "project", query: "sleepyhidden" })).results, []);
-    assert.deepEqual((await controller.search({ projectId: "project", query: "finalsecret" })).results, []);
-    assert.equal((await controller.search({ projectId: "project", query: "\"lowestvalue\"" })).results[0]?.kind, "file");
-    assert.deepEqual((await controller.search({ projectId: "project", query: "other-only" })).results, []);
+    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "search" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "narwhal" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "comet" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "settled archive" })).results[0]?.title, "Settled archive");
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "sleepyhidden" })).results, []);
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "finalsecret" })).results, []);
+    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "\"lowestvalue\"" })).results[0]?.kind, "file");
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "other-only" })).results, []);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
@@ -806,7 +830,7 @@ test("invalid thread-state commits stay request-scoped without poisoning worker 
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
     await assert.rejects(controller.commitThreadState({ records: [{
-      entryKind: "thread", identity: { harness: "codex", threadId: "unadmitted" },
+      entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["unadmitted"] },
       title: "not committed", activityAt: 1, providerObserved: true,
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
@@ -815,8 +839,8 @@ test("invalid thread-state commits stay request-scoped without poisoning worker 
     assert.equal(controller.state, "ready");
     assert.doesNotThrow(() => controller.assertReady());
 
-    assert.deepEqual(await controller.readThreadStateRecords({ selection: "project", projectId: "project" }), []);
-    assert.equal(await controller.readThreadStateActivity("project"), null);
+    assert.deepEqual(await controller.readThreadStateRecords({ selection: "project", projectId: fixtureIdentityValues.ProjectId["project"] }), []);
+    assert.equal(await controller.readThreadStateActivity(fixtureIdentityValues.ProjectId["project"]), null);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
@@ -850,13 +874,13 @@ test("terminal transcript turns may preserve missing native timestamps without p
     await controller.settleTranscript([{
       kind: "canonicalWindow",
       contentVersion: 3,
-      materializedTurnIds: ["turn"],
-      threadId: "thread",
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn"]],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       observations: [
       {
         kind: "thread",
-        threadId: "thread",
-        projectId: "project",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        projectId: fixtureIdentityValues.ProjectId["project"],
         projectRoot: "C:/project",
         title: "Thread",
         createdAt: 1,
@@ -865,13 +889,13 @@ test("terminal transcript turns may preserve missing native timestamps without p
       },
       {
         kind: "turn",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         turnIndex: 0,
         harnessId: "codex",
         nativeLocation: "C:/project",
-        nativeThreadId: "thread",
-        nativeTurnId: "turn",
+        nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"],
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
         state: "completed",
         createdAt: 1,
         startedAt: null,

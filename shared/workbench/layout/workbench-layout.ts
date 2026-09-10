@@ -1,17 +1,18 @@
 /*
  * Exports:
- * - WorkbenchPanelTarget: serializable target rendered by a workbench main panel. Keywords: workbench, layout, panel target.
- * - WorkbenchMainLayoutNode/WorkbenchMainLayout: recursive split tree for the desktop main area. Keywords: workbench, split, tree.
- * - WorkbenchDropPlacement/WorkbenchMainLayoutDrop: typed drop intent for panel replacement or directional splitting. Keywords: drag, drop, split.
- * - default WorkbenchMainLayout: namespace of layout creation, traversal, mutation, normalization, and persistence-safe helpers. Keywords: layout model, split operations.
+ * - WorkbenchPanelTarget: serializable target rendered by a workbench main panel.
+ * - WorkbenchMainLayoutNode/WorkbenchMainLayout: recursive desktop split tree.
+ * - WorkbenchDropPlacement/WorkbenchMainLayoutDrop: panel replacement or directional split intent.
+ * - WorkbenchPanelReference: panel ID and target.
+ * - default WorkbenchMainLayout: layout creation, traversal, mutation, normalization and persistence helpers.
  */
 
 import type { WorkbenchSettingsScope } from "../navigation/workbench-route.ts";
-import { WorkbenchThreadTargetSchema, type WorkbenchThreadTarget } from "../thread/thread-state.ts";
+import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
 
 // @ts-ignore see user-to-implementer-communication.md
 
-function threadTargetsEqual (left: WorkbenchThreadTarget, right: WorkbenchThreadTarget) {
+function threadTargetsEqual (left: WorkbenchThreadRouteTarget, right: WorkbenchThreadRouteTarget) {
   if (left.kind !== right.kind) return false;
   if (left.kind === "new" && right.kind === "new") return true;
   if (left.kind === "draft" && right.kind === "draft") return left.draftId === right.draftId;
@@ -37,7 +38,7 @@ export type WorkbenchPanelTarget =
   }
   | {
     readonly kind: "thread";
-    readonly target: WorkbenchThreadTarget;
+    readonly target: WorkbenchThreadRouteTarget;
   };
 
 export type WorkbenchMainLayoutNode =
@@ -101,7 +102,7 @@ function normalizePanelTarget(value: unknown): WorkbenchPanelTarget | null {
   }
   if (candidate.kind === "thread") {
     const raw = value as { target?: unknown; threadId?: unknown };
-    const parsed = WorkbenchThreadTargetSchema.safeParse(raw.target ?? (typeof raw.threadId === "string" ? { kind: "provider", threadId: raw.threadId } : null));
+    const parsed = WorkbenchThreadRouteTargetSchema.safeParse(raw.target ?? (typeof raw.threadId === "string" ? { kind: "provider", threadId: raw.threadId } : null));
     return parsed.success ? { kind: "thread", target: parsed.data } : null;
   }
   if (candidate.kind === "settings") {

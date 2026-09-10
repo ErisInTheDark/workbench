@@ -1,5 +1,4 @@
 /*
- * Keywords: thread identity, connection, native alias, canonical selection.
  * Exports:
  * - default ThreadIdentityController: own connection-scoped, metadata-only identity resolution.
  */
@@ -7,7 +6,8 @@ import type {
   WorkbenchThreadIdentityResolution,
   WorkbenchThreadIdentityResolveRequest,
 } from "workbench-shared/workbench/thread/workbench-thread-identity";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadTarget, WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { getWorkbenchThreadTargetRootId } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchMosaicNode } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
@@ -43,13 +43,14 @@ export default class ThreadIdentityController {
     if (this.requests) this.requests = new Map();
   }
 
-  async resolveTarget(projectId: string, target: WorkbenchThreadTarget): Promise<WorkbenchThreadTarget> {
+  async resolveTarget(projectId: string, target: WorkbenchThreadRouteTarget): Promise<WorkbenchThreadTarget> {
     if (target.kind === "draft" || target.kind === "new") return target;
-    const identity = await this.resolve({ projectId, threadId: target.threadId, harness: target.harness });
+    const ownerProjectId = ProjectIdSchema.parse(projectId);
+    const identity = await this.resolve({ projectId: ownerProjectId, threadId: target.threadId, harness: target.harness });
     if (!identity) throw new Error("Thread identity has not been observed in this project.");
     const harness = target.harness ? { harness: identity.harness } : {};
     if (target.kind === "provider") return { ...target, threadId: identity.threadId, ...harness };
-    const parent = await this.resolve({ projectId, threadId: target.parentThreadId, harness: target.harness });
+    const parent = await this.resolve({ projectId: ownerProjectId, threadId: target.parentThreadId, harness: target.harness });
     if (!parent) throw new Error("Parent thread identity has not been observed in this project.");
     return { ...target, threadId: identity.threadId, parentThreadId: parent.threadId, ...harness };
   }

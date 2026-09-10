@@ -1,9 +1,9 @@
 /*
- * Keywords: browse, reversible handoff, registration, results, cancellation.
  * Exports:
- * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement. Keywords: browse, drain, reload.
+ * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement.
  */
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
+import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorBrowseExecution, OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -109,22 +109,22 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         const project = request.cwd
           ? await projects.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse" }) : null;
         const thread = await harnesses.resolveThreadIdentity({
-          threadId: request.threadId,
-          ...(project ? { projectId: project.project.id } : request.projectId ? { projectId: request.projectId } : {}),
+          threadId: ThreadReferenceSchema.parse(request.threadId),
+          ...(project ? { projectId: project.project.id } : request.projectId ? { projectId: ProjectIdSchema.parse(request.projectId) } : {}),
         });
         const binding = thread?.bindings[0];
         if (!binding) throw new Error("Browse target has no native execution.");
         return { threadId: binding.nativeThreadId, projectId: thread.projectId, cwd: request.cwd ?? binding.nativeLocation };
       },
       publicThreadId: async (threadId, projectId) => {
-        const thread = await threads.resolve({ threadId, ...(projectId ? { projectId } : {}) });
+        const thread = await threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), ...(projectId ? { projectId: ProjectIdSchema.parse(projectId) } : {}) });
         if (!thread) throw new Error("Browse session has no observed Workbench thread identity.");
         return thread.threadId;
       },
     };
     const publicTurnId = async (threadId: string, turnId: string) => {
       const canonicalThreadId = await identity.publicThreadId(threadId);
-      const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId });
+      const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId: TurnReferenceSchema.parse(turnId) });
       if (!turn) throw new Error("Browse result has no observed Workbench turn identity.");
       return turn.turnId;
     };

@@ -15,30 +15,31 @@ import type {
   WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
 } from "./database/thread-state/workbench-thread-state-persistence";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export type WorkbenchThreadStateGlobalDocumentId = "homeDisplayOrder" | "pinnedLayout";
 
 export interface WorkbenchStoredThreadTitleHistory {
-  identity: { harness: WorkbenchHarnessId; threadId: string };
+  identity: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId };
   titles: WorkbenchThreadTitleHistoryEntry[];
 }
 
 export interface WorkbenchThreadStatePersistence {
   readNextArchiveEligibility(): Promise<number | null>;
-  readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: string; record: WorkbenchThreadStateRecord }>>;
+  readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null>;
-  readProject(projectId: string): Promise<unknown | null>;
-  readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]>;
+  readProject(projectId: ProjectId): Promise<unknown | null>;
+  readTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]>;
   writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object): Promise<void>;
-  writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
+  writeProject(projectId: ProjectId, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
 }
 
 export interface WorkbenchThreadStateStoreDatabase {
   readThreadStateArchiveDeadline(): Promise<number | null>;
-  readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: string; record: WorkbenchThreadStateRecord }>>;
-  readThreadStateProject(projectId: string): Promise<WorkbenchThreadStateProjectDocument>;
-  readThreadStateTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]>;
-  writeThreadStateProject(projectId: string, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
+  readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
+  readThreadStateProject(projectId: ProjectId): Promise<WorkbenchThreadStateProjectDocument>;
+  readThreadStateTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]>;
+  writeThreadStateProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
   readThreadStateGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<WorkbenchThreadStateGlobalDocument | null>;
   writeThreadStateGlobal(document: WorkbenchThreadStateGlobalDocument): Promise<void>;
 }
@@ -51,7 +52,7 @@ const GlobalDocumentSchema = z.discriminatedUnion("id", [
   z.object({
     id: z.literal("pinnedLayout"), version: z.literal(1),
     revision: z.number().int().nonnegative(), displayOrder: ThreadDisplayLayoutSchema,
-    importedProjectIds: z.array(z.string().min(1)),
+    importedProjectIds: z.array(z.string().min(1).brand<"ProjectId">()),
   }).strict(),
 ]);
 
@@ -66,15 +67,15 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
     return this.database.readThreadStateArchiveEligible(activeBefore);
   }
 
-  readProject(projectId: string) {
+  readProject(projectId: ProjectId) {
     return this.database.readThreadStateProject(projectId);
   }
 
-  async readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]> {
+  async readTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]> {
     return this.database.readThreadStateTitleHistories(projectId);
   }
 
-  async writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
+  async writeProject(projectId: ProjectId, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
     const parsed = parseProjectDocument(JSON.stringify(document), projectId);
     await this.database.writeThreadStateProject(projectId, { version: 4, ...parsed }, titleHistories);
   }

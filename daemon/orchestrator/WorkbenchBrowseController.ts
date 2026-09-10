@@ -1,10 +1,10 @@
 /*
- * Keywords: browse, cancellation, generation, HTTP, results, reload.
  * Exports:
- * - default WorkbenchBrowseController: own command tracking, cancellation, session access, HTTP adaptation, result-drain coordination, and reload state. Keywords: browse, orchestrator, controller, cancel, streaming, result, reload.
+ * - default WorkbenchBrowseController: own command tracking, cancellation, session access, HTTP adaptation, result draining and reload state.
  * - WorkbenchBrowseIdentityPort: map declared public targets and native session results without touching browser payloads.
  */
 import type http from "node:http";
+import type { NativeThreadId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import type { WorkbenchBrowseSessionControlRequest, WorkbenchBrowseSessionListRequest } from "workbench-shared/types";
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
@@ -13,9 +13,9 @@ import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRunti
 
 export interface WorkbenchBrowseIdentityPort {
   nativeTarget(request: { threadId: string; cwd?: string | null; projectId?: string | null }): Promise<{
-    threadId: string; cwd?: string | null; projectId?: string | null;
+    threadId: NativeThreadId; cwd?: string | null; projectId?: ProjectId | null;
   }>;
-  publicThreadId(threadId: string, projectId?: string | null): Promise<string>;
+  publicThreadId(threadId: string, projectId?: string | null): Promise<WorkbenchThreadId>;
 }
 
 const SESSION_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,80}$/u;

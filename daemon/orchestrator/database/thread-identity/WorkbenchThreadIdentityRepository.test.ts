@@ -10,11 +10,38 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadIdentityRepository from "./WorkbenchThreadIdentityRepository.ts";
 import type { WorkbenchThreadIdentityMetadata, WorkbenchTurnIdentityMetadata } from "./workbench-thread-identity-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "foreign-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("foreign-thread"),
+    "same-native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("same-native"),
+    "secondary-native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("secondary-native"),
+  },
+  NativeTurnId: {
+    "existing-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("existing-turn"),
+    "known-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("known-turn"),
+    "legacy-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("legacy-turn"),
+    "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
+    "secondary-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("secondary-turn"),
+  },
+  ProjectId: {
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("other-project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchTurnId: {
+    "existing-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("existing-turn"),
+    "known-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("known-turn"),
+    "legacy-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("legacy-turn"),
+    "secondary-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("secondary-turn"),
+  },
+};
 
 function metadata(nativeThreadId = "native-thread", nativeLocation = "C:/project"): WorkbenchThreadIdentityMetadata {
   return {
-    native: { harness: "codex", nativeLocation, nativeThreadId },
-    projectId: "project",
+    native: { harness: "codex", nativeLocation, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+    projectId: fixtureIdentityValues.ProjectId["project"],
     projectRoot: "C:/project",
     title: "Existing thread",
     activityAt: 20,
@@ -33,11 +60,11 @@ function setup() {
 test("retained parent references acquire real provider bindings without changing canonical ownership", () => {
   const { database, identity } = setup();
   try {
-    const retained = identity.admitRetainedReference({ reference: "missing-parent", projectId: "project", projectRoot: "C:/project" });
+    const retained = identity.admitRetainedReference({ reference: fixtureIdentitySchemas.ThreadReferenceSchema.parse("missing-parent"), projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project" });
     assert.deepEqual(retained.bindings, []);
     assert.notEqual(retained.threadId, "missing-parent");
     assert.equal(database.prepare("SELECT count(*) FROM workbench_thread_states").pluck().get(), 0);
-    assert.throws(() => identity.admitRetainedReference({ reference: "missing-parent", projectId: "other", projectRoot: "C:/other" }), /project/);
+    assert.throws(() => identity.admitRetainedReference({ reference: fixtureIdentitySchemas.ThreadReferenceSchema.parse("missing-parent"), projectId: fixtureIdentityValues.ProjectId["other"], projectRoot: "C:/other" }), /project/);
     const observed = identity.observe(metadata("missing-parent"));
     assert.equal(observed.threadId, retained.threadId);
     assert.equal(observed.bindings[0]?.harness, "codex");
@@ -53,7 +80,7 @@ test("Windows metadata and turn catalogs reuse retained identities across equiva
     const original = metadata("native-thread", "C:\\Project");
     const thread = identity.observe(original);
     const turn = (nativeLocation: string, nativeTurnId: string): WorkbenchTurnIdentityMetadata => ({
-      kind: "turn", threadId: thread.threadId, turnId: nativeTurnId, nativeTurnId,
+      kind: "turn", threadId: thread.threadId, turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId), nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId),
       harnessId: "codex", nativeLocation, nativeThreadId: original.native.nativeThreadId,
       state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
     });
@@ -81,7 +108,7 @@ test("Linux metadata never merges case-distinct provider locations", () => {
     assert.notEqual(first.threadId, second.threadId);
     assert.equal(identity.resolveNative(metadata("same-native", "/repo/Project").native)?.threadId, first.threadId);
     assert.equal(identity.resolveNative(metadata("same-native", "/repo/project").native)?.threadId, second.threadId);
-    assert.throws(() => identity.resolve({ threadId: "same-native" }), /ambiguous/);
+    assert.throws(() => identity.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("same-native") }), /ambiguous/);
   } finally { database.close(); }
 });
 
@@ -90,8 +117,8 @@ function retainedPendingDuplicate(database: Database.Database) {
   const previous = new WorkbenchThreadIdentityRepository(database, "linux");
   const durable = previous.observe(metadata("same-native", "C:\\Project"));
   const turn = previous.observeTurn({
-    kind: "turn", threadId: durable.threadId, turnId: "native-turn", nativeTurnId: "native-turn",
-    harnessId: "codex", nativeLocation: "C:\\Project", nativeThreadId: "same-native",
+    kind: "turn", threadId: durable.threadId, turnId: fixtureIdentityValues.NativeTurnId["native-turn"], nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"],
+    harnessId: "codex", nativeLocation: "C:\\Project", nativeThreadId: fixtureIdentityValues.NativeThreadId["same-native"],
     state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
   });
   database.prepare("INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at) VALUES (?, ?, ?)")
@@ -141,7 +168,8 @@ test("a converted metadata-only row keeps its identity when native metadata arri
   const { database, identity } = setup();
   try {
     const input = metadata();
-    new WorkbenchTranscriptRepository(database).settle([{ kind: "thread", threadId: input.native.nativeThreadId, ...input }]);
+    // Legacy storage used the provider ID as its primary key before canonical admission.
+    new WorkbenchTranscriptRepository(database).settle([{ kind: "thread", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(input.native.nativeThreadId), ...input }]);
     const converted = identity.resolve({ threadId: input.native.nativeThreadId });
     assert.ok(converted);
     assert.deepEqual(converted.bindings, []);
@@ -159,7 +187,7 @@ test("historical catalog inserts missing turns before known successors without m
     const input = metadata();
     const thread = identity.observe(input);
     const turn = (nativeTurnId: string): WorkbenchTurnIdentityMetadata => ({
-      kind: "turn", threadId: thread.threadId, turnId: nativeTurnId, nativeTurnId,
+      kind: "turn", threadId: thread.threadId, turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId), nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId),
       harnessId: input.native.harness, nativeLocation: input.native.nativeLocation,
       nativeThreadId: input.native.nativeThreadId, state: "completed",
       createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
@@ -186,7 +214,7 @@ test("thread catalog admission rolls back earlier metadata and allocations on a 
     const catalog = [
       { ...metadata("existing"), title: "Changed", updatedAt: 30 },
       metadata("new"),
-      { ...metadata("existing"), projectId: "other" },
+      { ...metadata("existing"), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") },
     ];
     assert.throws(() => identity.observeMany(catalog), /project owner/iu);
     assert.equal(identity.resolveNative(metadata("new").native), null);
@@ -207,13 +235,13 @@ test("turn catalog identity admission rolls back every new identity on ownership
     const input = metadata();
     const thread = identity.observe(input);
     const turn = (nativeTurnId: string): WorkbenchTurnIdentityMetadata => ({
-      kind: "turn", threadId: thread.threadId, turnId: nativeTurnId, nativeTurnId,
+      kind: "turn", threadId: thread.threadId, turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId), nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(nativeTurnId),
       harnessId: input.native.harness, nativeLocation: input.native.nativeLocation,
       nativeThreadId: input.native.nativeThreadId, state: "completed",
       createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
     });
     assert.throws(() => identity.observeTurns([
-      turn("first"), { ...turn("second"), nativeThreadId: "foreign-thread" },
+      turn("first"), { ...turn("second"), nativeThreadId: fixtureIdentityValues.NativeThreadId["foreign-thread"] },
     ]), /owner/iu);
     assert.deepEqual(database.prepare("SELECT id FROM thread_turns").all(), []);
     assert.deepEqual(identity.resolve({ threadId: thread.threadId }), thread);
@@ -249,16 +277,16 @@ test("thread identity relinks an existing transcript without changing its items 
   try {
     const transcript = new WorkbenchTranscriptRepository(database);
     const input = metadata();
-    const threadId = input.native.nativeThreadId;
+    const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(input.native.nativeThreadId);
     transcript.settle([
       { kind: "thread", threadId, ...input },
       {
-        kind: "turn", threadId, turnId: "existing-turn", harnessId: "codex",
-        nativeLocation: input.native.nativeLocation, nativeThreadId: threadId, nativeTurnId: "existing-turn",
+        kind: "turn", threadId, turnId: fixtureIdentityValues.WorkbenchTurnId["existing-turn"], harnessId: "codex",
+        nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId, nativeTurnId: fixtureIdentityValues.NativeTurnId["existing-turn"],
         state: "completed", createdAt: 2, startedAt: 2, endedAt: 10, durationMs: 8,
       },
       {
-        kind: "item", threadId, turnId: "existing-turn", lifecycle: "completed", observedAt: 5,
+        kind: "item", threadId, turnId: fixtureIdentityValues.WorkbenchTurnId["existing-turn"], lifecycle: "completed", observedAt: 5,
         item: {
           id: "existing-item", type: "agentMessage", text: "Keep this history",
           phase: "commentary", memoryCitation: null, delivery: null, questions: null,
@@ -303,7 +331,7 @@ test("native-id fallback rejects ambiguity rather than selecting another locatio
     const first = identity.observe(firstInput);
     const second = identity.observe(secondInput);
     assert.notEqual(first.threadId, second.threadId);
-    assert.throws(() => identity.resolve({ threadId: "shared-native" }), /ambiguous/);
+    assert.throws(() => identity.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("shared-native") }), /ambiguous/);
     assert.equal(identity.resolveNative(firstInput.native)?.threadId, first.threadId);
     assert.equal(identity.resolveNative(secondInput.native)?.threadId, second.threadId);
   } finally {
@@ -316,11 +344,11 @@ test("a legacy primary key must not outrank an ambiguous native-id fallback", ()
   try {
     const input = metadata("legacy-native");
     new WorkbenchTranscriptRepository(database).settle([
-      { kind: "thread", threadId: input.native.nativeThreadId, ...input },
+      { kind: "thread", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(input.native.nativeThreadId), ...input },
       {
-        kind: "turn", threadId: input.native.nativeThreadId, turnId: "legacy-turn", harnessId: "codex",
+        kind: "turn", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(input.native.nativeThreadId), turnId: fixtureIdentityValues.WorkbenchTurnId["legacy-turn"], harnessId: "codex",
         nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId,
-        nativeTurnId: "legacy-turn", state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["legacy-turn"], state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
       },
     ]);
     identity.observe(metadata(input.native.nativeThreadId, "C:/project/other"));
@@ -336,9 +364,9 @@ test("recording a durable turn transfers identity out of the pending row", () =>
     const input = metadata();
     const { threadId } = identity.observe(input);
     new WorkbenchTranscriptRepository(database).settle([{
-      kind: "turn", threadId, turnId: "known-turn", harnessId: "codex",
+      kind: "turn", threadId, turnId: fixtureIdentityValues.WorkbenchTurnId["known-turn"], harnessId: "codex",
       nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId,
-      nativeTurnId: "known-turn", state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["known-turn"], state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
     }]);
     const resolved = new WorkbenchThreadIdentityRepository(database).resolveNative(input.native);
     assert.equal(resolved?.threadId, threadId);
@@ -354,19 +382,19 @@ test("an encoded former Workbench key remains a private alias after relinking", 
   const { database, identity } = setup();
   try {
     const input = metadata();
-    const previousId = "thread:7:project5:codex13:native-thread";
+    const previousId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread:7:project5:codex13:native-thread");
     new WorkbenchTranscriptRepository(database).settle([
       { kind: "thread", threadId: previousId, ...input },
       {
-        kind: "turn", threadId: previousId, turnId: "legacy-turn", harnessId: "codex",
+        kind: "turn", threadId: previousId, turnId: fixtureIdentityValues.WorkbenchTurnId["legacy-turn"], harnessId: "codex",
         nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId,
-        nativeTurnId: "native-turn", state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
       },
     ]);
     const canonical = identity.resolveNative(input.native)!;
     assert.notEqual(canonical.threadId, previousId);
     assert.equal(new WorkbenchThreadIdentityRepository(database).resolve({ threadId: previousId })?.threadId, canonical.threadId);
-    assert.throws(() => identity.resolve({ threadId: previousId, projectId: "other-project" }), /project/iu);
+    assert.throws(() => identity.resolve({ threadId: previousId, projectId: fixtureIdentityValues.ProjectId["other-project"] }), /project/iu);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally {
     database.close();
@@ -378,12 +406,12 @@ test("turn identity relinks its FK graph while retaining native and old public r
   try {
     const input = metadata();
     const { threadId } = identity.observe(input);
-    const previousTurnId = "opencode:turn:native-thread:first";
+    const previousTurnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("opencode:turn:native-thread:first");
     new WorkbenchTranscriptRepository(database).settle([
       {
         kind: "turn", threadId, turnId: previousTurnId, harnessId: "codex",
         nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId,
-        nativeTurnId: "native-turn", state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
       },
       {
         kind: "item", threadId, turnId: previousTurnId, lifecycle: "completed", observedAt: 3,
@@ -400,7 +428,7 @@ test("turn identity relinks its FK graph while retaining native and old public r
     assert.equal(canonical.native.nativeTurnId, "native-turn");
     assert.equal(canonical.turnIndex, 0);
     assert.equal(identity.resolveTurn({ threadId, turnId: previousTurnId })?.turnId, canonical.turnId);
-    assert.equal(identity.resolveTurn({ threadId, turnId: "native-turn" })?.turnId, canonical.turnId);
+    assert.equal(identity.resolveTurn({ threadId, turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse("native-turn") })?.turnId, canonical.turnId);
     assert.equal(identity.resolveTurn({ threadId, turnId: canonical.turnId })?.turnId, canonical.turnId);
     assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(),
       beforeItems.map((row) => ({ ...row, turn_id: canonical.turnId })));
@@ -418,9 +446,9 @@ test("metadata-only turn admission is stable and rejects a borrowed turn from an
     const input = metadata();
     const { threadId } = identity.observe(input);
     const turn = {
-      kind: "turn" as const, threadId, turnId: "native-turn", harnessId: "codex",
+      kind: "turn" as const, threadId, turnId: fixtureIdentityValues.NativeTurnId["native-turn"], harnessId: "codex",
       nativeLocation: input.native.nativeLocation, nativeThreadId: input.native.nativeThreadId,
-      nativeTurnId: "native-turn", state: "inProgress" as const, createdAt: 2,
+      nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"), state: "inProgress" as const, createdAt: 2,
       startedAt: 2, endedAt: null, durationMs: null,
     };
     const admitted = identity.observeTurn(turn);
@@ -429,10 +457,10 @@ test("metadata-only turn admission is stable and rejects a borrowed turn from an
     assert.deepEqual(database.prepare("SELECT turn_id FROM thread_turn_materializations").all(), []);
     assert.equal(identity.resolveNative(input.native)?.bindings[0]?.pending, false);
     new WorkbenchTranscriptRepository(database).settle([{
-      ...turn, turnId: "secondary-turn", nativeThreadId: "secondary-native", nativeTurnId: "secondary-turn",
+      ...turn, turnId: fixtureIdentityValues.WorkbenchTurnId["secondary-turn"], nativeThreadId: fixtureIdentityValues.NativeThreadId["secondary-native"], nativeTurnId: fixtureIdentityValues.NativeTurnId["secondary-turn"],
     }]);
     assert.throws(() => identity.observeTurn({
-      ...turn, turnId: admitted.turnId, nativeThreadId: "secondary-native", nativeTurnId: null,
+      ...turn, turnId: admitted.turnId, nativeThreadId: fixtureIdentityValues.NativeThreadId["secondary-native"], nativeTurnId: null,
     }), /native|owner/iu);
     assert.deepEqual(identity.resolveTurn({ threadId, turnId: admitted.turnId }), admitted);
   } finally {

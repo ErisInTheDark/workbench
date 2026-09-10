@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover native steer identity and canonical context position. Keywords: thread, context, steer, test.
+ * - No production exports; Node tests cover native steer identity and canonical context position.
  */
 
 import assert from "node:assert/strict";
@@ -12,11 +12,12 @@ import { renderWorkbenchThreadContextPieceMarkdown } from "./thread-context-mark
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function thread(): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "idle", tokenUsage: null, turnHistory: [], updatedAt: 1,
     turns: [{ completedAt: 3, durationMs: 2, error: null, id: "turn", items: [
       { clientId: "native-a", content: [{ text: "same", text_elements: [], type: "text" }], id: "canonical-a", type: "userMessage" },

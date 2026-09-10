@@ -1,14 +1,14 @@
 /*
- * Keywords: thread row, tooltip, title history, navigation, actions, listbox.
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact, drag.
- * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content. Keywords: thread, draft, target, tooltip, status, secondary row.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access.
+ * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content.
  */
 "use client";
 
 import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   getThreadSidebarGroup,
   type WorkbenchPinnedThreadSummaryEntry,
@@ -93,13 +93,13 @@ function ThreadTooltipContent({
   exactTime: string;
   extraDetails?: ReactNode;
   Icon: ThreadStatusIcon;
-  projectId: string;
+  projectId: ProjectId;
   relativeTime: string;
   snoozed: boolean;
   status: string;
   statusClassName: string;
   title: string;
-  identity?: { harness: "codex" | "copilot" | "opencode"; threadId: string };
+  identity?: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId };
 }) {
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
@@ -178,7 +178,7 @@ export default function WorkbenchThreadListItem({
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
   project?: WorkbenchProjectOption;
-  projectId: string;
+  projectId: ProjectId;
   role?: "tab" | "option";
   selected?: boolean;
   secondaryRow?: ReactNode;

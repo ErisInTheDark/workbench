@@ -10,10 +10,41 @@ import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
+import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import WorkbenchThreadStateFeature, { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNotification as mapLifecycle, normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const canonicalFixtureLookup = {
+  knownThread: (reference: fixtureIdentitySchemas.ThreadReference) => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(reference) }),
+  knownTurn: (reference: fixtureIdentitySchemas.TurnReference) => ({ turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(reference) }),
+};
+const storedRecordDefaults = {
+  gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null, snoozedUntil: null,
+};
+const mapProviderActivityNotification = (notification: JsonRpcNotification) => mapActivity(notification, canonicalFixtureLookup);
+const mapProviderLifecycleNotification = (notification: JsonRpcNotification) => mapLifecycle(notification, canonicalFixtureLookup);
+const normalizeProviderSidebarEntry = (harness: WorkbenchHarness, value: unknown) => normalizeSidebar(harness, value, canonicalFixtureLookup);
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project-a": fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"),
+    "project-b": fixtureIdentitySchemas.ProjectIdSchema.parse("project-b"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -40,8 +71,29 @@ function createHarnesses(
   };
 }
 
-function createThreadStateDatabase() {
-  return createThreadStateTestDatabase();
+function createThreadStateDatabase(cwd?: string, threads: readonly [string, WorkbenchHarness][] = []) {
+  const database = createThreadStateTestDatabase();
+  for (const [threadId, harness] of threads) {
+    database.admitThread("project", threadId, harness, `native:${threadId}`, cwd);
+  }
+  return database;
+}
+
+function providerThread(cwd: string, threadId: string, fields: Partial<ThreadReadResponse["thread"]> = {}): ThreadReadResponse["thread"] {
+  return {
+    cwd, id: `native:${threadId}`, projectId: null, status: { type: "idle" }, turns: [], updatedAt: 1,
+    agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "", createdAt: 1,
+    ephemeral: false, extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy",
+    model: null, modelProvider: "openai", name: null, parentThreadId: null, path: null, preview: "",
+    reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,
+    sessionId: `native:${threadId}`, source: "cli", threadSource: null, ...fields,
+  };
+}
+
+function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThreadStateFeature>[0], "identities" | "database"> & {
+  database: ReturnType<typeof createThreadStateDatabase>;
+}) {
+  return new WorkbenchThreadStateFeature({ ...options, identities: options.database.identities });
 }
 
 async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
@@ -50,19 +102,19 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   const questionnaire: WorkbenchDurableQuestionnaire = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
     requestKey: "workbench-mcp:question",
-    turnId: "turn",
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     request: {
       id: "question", title: "Choose", summary: "", submitLabel: "Submit",
       questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
     },
   };
   const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, entryKind: "thread", identity: { harness, threadId: "thread" },
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId: "turn" },
+    activityAt: 1, entryKind: "thread", identity: { harness, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     metadata: { archived: false, pinned: false, snoozed: false }, title: "Task", pendingQuestionnaire: questionnaire,
   };
   const state = {
-    turn: { id: "turn", status: "inProgress" },
+    turn: { id: "native:turn", status: "inProgress", items: [] },
     failInterrupt: false,
     beforeRelease: async () => {},
   };
@@ -80,35 +132,55 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     harnesses: createHarnesses(async (_harness, request) => {
       requests.push(request);
       if (request.method === "thread/turns/list") return { id: request.id ?? null, result: { data: [state.turn], nextCursor: null } };
-      if (request.method === "thread/read") return { id: request.id ?? null, result: { thread: { turns: [state.turn] } } };
+      if (request.method === "thread/read") return { id: request.id ?? null, result: { thread:
+        { ...providerThread("C:/workspace", "thread"), turns: [state.turn] },
+      } };
       if (request.method === "thread/list" && _harness === harness) {
-        return { id: request.id ?? null, result: { data: [{ id: "thread", name: "Task", status: { type: "active" }, currentTurnId: state.turn.id, updatedAt: 1 }], nextCursor: null } };
+        return { id: request.id ?? null, result: { data: [{
+          id: "native:thread", cwd: "C:/workspace", createdAt: 1, name: "Task", status: { type: "active" },
+          currentTurnId: state.turn.id, turns: [state.turn], updatedAt: 1,
+        }], nextCursor: null } };
       }
       if (request.method === "turn/interrupt" && state.failInterrupt) throw new Error("interrupt failed");
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }),
-    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: "project", rootPath: cwd } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: cwd } }),
     transitions: { run: async <T>(_: string, operation: () => Promise<T>) => await operation() },
   };
-  const feature = new WorkbenchThreadStateFeature(options);
-  await feature.controller.open("observer", "project");
-  await feature.controller.refresh("project");
-  await feature.controller.ensureProviderEntry("project", provider);
-  await feature.controller.observeLifecycle(harness, "thread", {
-    kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: "turn",
+  options.database.admitThread("project", "thread", harness, "native:thread", "C:/workspace");
+  options.database.admitThread("project", "parent", harness, "native:parent", "C:/workspace");
+  options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true });
+  for (const turnId of ["new-turn", "resumed"]) {
+    options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true,
+      lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
+        agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId) } },
+    });
+  }
+  await options.database.identities.threads.start();
+  for (const turnId of ["turn", "new-turn", "resumed"]) {
+    await options.database.identities.threads.resolveTurn({
+      threadId: provider.identity.threadId, turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse(turnId),
+    });
+  }
+  const feature = createFeature(options);
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.refresh(fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
+  await feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], {
+    kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
   });
   requests.length = 0;
   return {
     feature, provider, questionnaire, releases, requests, state,
-    read: async () => (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread"),
+    read: async () => (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind === "thread"),
     complete: () => feature.controller.handleRequest("observer", {
-      identity: provider.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
+      identity: provider.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), status: "completed",
     }),
     timeout: () => feature.observeProviderNotification("codex", {
       method: "item/completed",
       params: {
-        threadId: "thread", turnId: "turn",
+        threadId: "native:thread", turnId: "native:turn",
         item: { type: "mcpToolCall", id: "call", server: "wb", tool: "request_user_input", status: "failed", error: { message: "tool call error: tool call failed for `wb/request_user_input`\n\nCaused by:\n    timed out awaiting tools/call after 21600s" } },
       },
     }),
@@ -121,7 +193,7 @@ test("questionnaire timeout releases the live wait and stops only its owning sid
     await h.timeout();
     assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
     assert.deepEqual(h.requests.map((request) => request.method), ["thread/turns/list", "thread/goal/clear", "turn/interrupt"]);
-    assert.deepEqual(h.requests.at(-1)?.params, { cwd: "C:/workspace", threadId: "thread", turnId: "turn" });
+    assert.deepEqual(h.requests.at(-1)?.params, { cwd: "C:/workspace", threadId: "native:thread", turnId: "native:turn" });
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
     assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
@@ -132,10 +204,10 @@ test("manual questionnaire completion preserves its question and survives a late
   const h = await questionnaireHarness();
   try {
     const response = await h.complete();
-    assert.deepEqual(response, { result: { accepted: true, revision: (await h.feature.controller.getSnapshot("project")).revision } });
+    assert.deepEqual(response, { result: { accepted: true, revision: (await h.feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).revision } });
     assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
     await h.feature.observeProviderNotification("codex", {
-      method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } },
+      method: "turn/completed", params: { threadId: "native:thread", turn: { id: "native:turn", status: "interrupted", items: [] } },
     });
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
@@ -147,10 +219,10 @@ test("manual questionnaire completion preserves its question and survives a late
 test("completing an agent-blocked sidebar questionnaire fences late events from its interrupted turn", async () => {
   const h = await questionnaireHarness();
   try {
-    await h.feature.controller.observeLifecycle("codex", "thread", { kind: "agentStatus", status: "blocked", turnId: "turn" });
+    await h.feature.controller.observeLifecycle("codex", fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "agentStatus", status: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
     await h.complete();
     await h.feature.observeProviderNotification("codex", {
-      method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } },
+      method: "turn/completed", params: { threadId: "native:thread", turn: { id: "native:turn", status: "interrupted", items: [] } },
     });
     assert.equal((await h.read())?.lifecycle.kind, "completed");
   } finally { await h.feature.dispose(); }
@@ -174,10 +246,10 @@ test("composer snooze preserves provider questionnaires and fences failures or r
       try {
         h.state.failInterrupt = outcome === "fail";
         if (outcome === "answer" && harness === "codex") h.state.beforeRelease = async () => {
-          await h.feature.controller.observeLifecycle(harness, "thread", { kind: "inputResolved", requestKey: h.questionnaire.requestKey });
+          await h.feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "inputResolved", requestKey: h.questionnaire.requestKey });
         };
         const snooze = h.feature.controller.handleRequest("observer", {
-          method: "workbench/thread-state/questionnaire/snooze", projectId: "project",
+          method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
           identity: { harness, threadId: "thread" }, requestKey: h.questionnaire.requestKey,
         });
         if (outcome === "fail") await assert.rejects(snooze, /interrupt failed/u);
@@ -191,7 +263,7 @@ test("composer snooze preserves provider questionnaires and fences failures or r
         assert.equal(entry.metadata.snoozed, outcome !== "fail" && !answered);
         if (!answered) assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
         if (outcome === "snooze") {
-          await h.feature.controller.observeLifecycle(harness, "thread", { kind: "acceptedIntent", turnId: "resumed" });
+          await h.feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "acceptedIntent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("resumed") });
           const resumed = await h.read();
           assert.ok(resumed?.entryKind === "thread");
           assert.equal(resumed.metadata.snoozed, false);
@@ -206,7 +278,7 @@ test("a retained questionnaire can be snoozed after its thread was marked comple
   try {
     await h.complete();
     const response = await h.feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/snooze", projectId: "project",
+      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
     });
     assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
@@ -234,7 +306,7 @@ test("questionnaire completion does not interrupt ended turns or newer active tu
   for (const newer of [false, true]) {
     const h = await questionnaireHarness();
     try {
-      h.state.turn = newer ? { id: "new-turn", status: "inProgress" } : { id: "turn", status: "interrupted" };
+      h.state.turn = newer ? { id: "native:new-turn", status: "inProgress", items: [] } : { id: "native:turn", status: "interrupted", items: [] };
       const response = await h.complete();
       assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, !newer);
       assert.deepEqual(h.requests.map(request => request.method), ["thread/turns/list"]);
@@ -257,9 +329,9 @@ test("questionnaire timeout leaves subagent turns and waiters under their existi
   const h = await questionnaireHarness();
   try {
     const { metadata: _metadata, ...common } = h.provider;
-    await h.feature.controller.ensureProviderEntry("project", {
+    await h.feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], {
       ...common, entryKind: "subagent", createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
-      name: "child", parentThreadId: "parent", pinned: false, profileId: "profile", profileName: "profile", projectId: "project",
+      name: "child", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"), pinned: false, profileId: "profile", profileName: "profile", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     });
     h.requests.length = 0;
     await h.timeout();
@@ -273,9 +345,9 @@ test("answer or newer-turn observations during release prevent stale completion 
     const h = await questionnaireHarness();
     try {
       h.state.beforeRelease = async () => {
-        await h.feature.controller.observeLifecycle("codex", "thread", answer
+        await h.feature.controller.observeLifecycle("codex", fixtureIdentityValues.WorkbenchThreadId["thread"], answer
           ? { kind: "inputResolved", requestKey: h.questionnaire.requestKey }
-          : { kind: "acceptedIntent", turnId: "new-turn" });
+          : { kind: "acceptedIntent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new-turn") });
       };
       const response = await h.complete();
       assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, false);
@@ -320,7 +392,7 @@ test("inactive subagents remain completed but unsettled until an explicit settle
     reason: "providerInactive",
     settled: false,
   });
-  const explicitlySettled = { agent: { agentStatus: "completed" as const, turnId: "turn" }, kind: "completed" as const, reason: "agentCompleted" as const, settled: true };
+  const explicitlySettled = { agent: { agentStatus: "completed" as const, turnId: fixtureIdentityValues.WorkbenchTurnId.turn }, kind: "completed" as const, reason: "agentCompleted" as const, settled: true };
   assert.equal(normalizeSubagentProviderLifecycle(explicitlySettled), explicitlySettled);
 });
 
@@ -352,8 +424,18 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 
 test("provider notification observation returns the persisted lifecycle result", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
-  const database = createThreadStateDatabase();
-  const feature = new WorkbenchThreadStateFeature({
+  const database = createThreadStateDatabase(storageRoot, [["thread", "codex"]]);
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
+    lifecycle: { agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  };
+  database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true });
+  await database.identities.threads.start();
+  const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
@@ -365,29 +447,22 @@ test("provider notification observation returns the persisted lifecycle result",
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
-  await feature.controller.ensureProviderEntry("project", {
-    activityAt: 1,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
-    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Thread",
-  });
+  await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
 
   assert.deepEqual(await feature.observeProviderNotification("codex", {
     method: "turn/completed",
-    params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
+    params: { threadId: "native:thread", turn: { id: "native:turn", status: "completed", items: [] } },
   }), {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     threadId: "thread",
   });
   assert.deepEqual((await database.readThreadStateRecords({
-    selection: "threads", projectId: "project", threadIds: ["thread"],
+    selection: "threads", projectId: fixtureIdentityValues.ProjectId["project"], threadIds: [fixtureIdentityValues.WorkbenchThreadId["thread"]],
   }))[0]?.lifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
 
   await feature.dispose();
@@ -411,7 +486,7 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
   const requests: JsonRpcRequest[] = [];
   const resolvedCwds: string[] = [];
-  const feature = new WorkbenchThreadStateFeature({
+  const feature = createFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
@@ -420,14 +495,14 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
       return {
         id: request.id ?? null,
         result: {
-          thread: {
-            cwd: storageRoot,
+          thread: providerThread(storageRoot, "thread", {
             id: "thread",
             name: "Thread",
             status: { type: "idle" },
             turns: [],
             updatedAt: 1,
-          },
+            createdAt: 1,
+          }),
         },
       };
     }),
@@ -438,18 +513,18 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => {
       resolvedCwds.push(cwd);
       if (cwd !== storageRoot) throw new Error("Unowned cwd");
-      return { cwd, project: { id: "project", rootPath: storageRoot } };
+      return { cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } };
     },
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  assert.deepEqual(await feature.getCodexMcpState("thread"), {
+  assert.deepEqual(await feature.getCodexMcpState(fixtureIdentityValues.NativeThreadId["thread"]), {
     generation: null,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   });
   assert.deepEqual(requests, [{
     id: 0,
@@ -463,12 +538,17 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
       model: "daemon-model", reasoningEffort: null, serviceTier: null,
     },
   };
-  await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId: "project" }, selection);
-  const provider = {
-    cwd: storageRoot, id: "thread", projectId: "untrusted-provider-project", status: { type: "notLoaded" }, turns: [], updatedAt: 1,
-  } as ThreadReadResponse["thread"];
+  await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project"] }, selection);
+  const provider: ThreadReadResponse["thread"] = {
+    cwd: storageRoot, id: "thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("untrusted-provider-project"), status: { type: "notLoaded" }, turns: [], updatedAt: 1,
+    agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "", createdAt: 1,
+    ephemeral: false, extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy",
+    model: null, modelProvider: "openai", name: null, parentThreadId: null, path: null, preview: "",
+    reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,
+    sessionId: "thread", source: "cli", threadSource: null,
+  };
   assert.deepEqual(await feature.prepareCodexProfile(provider), {
-    cwd: storageRoot, projectId: "project", selection, subagentName: null,
+    cwd: storageRoot, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), selection, subagentName: null,
   });
   assert.equal(resolvedCwds.at(-1), storageRoot);
   await assert.rejects(feature.prepareCodexProfile({ ...provider, cwd: "/unowned" }), /Unowned cwd/u);
@@ -488,25 +568,25 @@ test("a relationship committed during provider pagination remains a subagent aft
     directSubagentIndex: 0,
     harness: "codex",
     name: "Mimi",
-    parentThreadId: "parent",
+    parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"],
     profileId: "profile",
     profileName: "Lily",
-    projectId: "project",
-    threadId: "child",
+    projectId: fixtureIdentityValues.ProjectId["project"],
+    threadId: fixtureIdentityValues.WorkbenchThreadId["child"],
     title: "Inspect code",
     updatedAt: 2,
   };
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const feature = createFeature({
+    database: createThreadStateDatabase(storageRoot, [["child", "codex"], ["parent", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/read") {
-        return { id: request.id ?? null, result: { thread: { cwd: storageRoot, id: "child", name: "Child", status: { type: "idle" }, turns: [], updatedAt: 2 } } };
+        return { id: request.id ?? null, result: { thread: providerThread(storageRoot, "child", { name: "Child", updatedAt: 2 }) } };
       }
       const cursor = (request.params as { cursor?: string | null }).cursor ?? null;
       if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
-      if (!cursor) return { id: request.id ?? null, result: { data: [{ id: "child", name: "Child", status: { type: "idle" }, updatedAt: 2 }], nextCursor: "next" } };
+      if (!cursor) return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "child", { name: "Child", updatedAt: 2 })], nextCursor: "next" } };
       secondPageStarted.resolve();
       await releaseSecondPage.promise;
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
@@ -518,18 +598,18 @@ test("a relationship committed during provider pagination remains a subagent aft
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await secondPageStarted.promise;
   relationships = [relationship];
   await feature.installSubagentRelationship(relationship);
   releaseSecondPage.resolve();
-  await waitFor(async () => (await feature.controller.getSnapshot("project")).freshness === "fresh", "Final provider reconciliation did not finish.");
-  const child = (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "child");
+  await waitFor(async () => (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).freshness === "fresh", "Final provider reconciliation did not finish.");
+  const child = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "child");
   assert.equal(child?.entryKind, "subagent");
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
@@ -554,7 +634,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     proposalId: "proposal-one",
     proposalStatus: "proposed" as const,
     reloadScopes: ["server:mcp" as const],
-    threadId: "parent",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.parent,
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
   const lifecycleState = {
@@ -569,7 +649,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       { proposalId: "proposal-two", status: "committed" as const },
     ],
     reloadScopes: ["server:mcp" as const],
-    threadId: "parent",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.parent,
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
   const planState = {
@@ -579,7 +659,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentName: "planned overlap",
     scopePaths: ["one.txt", "two.txt"],
     reloadScopes: ["server:core" as const],
-    threadId: "parent",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.parent,
     updatedAt: "2026-08-20T00:00:00.000Z",
   };
   let lifecycleListCalls = 0;
@@ -591,8 +671,8 @@ test("provider reconciliation starts concurrently and publishes each successful 
     listLifecycleStates: async () => { lifecycleListCalls += 1; return [lifecycleState]; },
     listPlanStates: async () => [planState],
   };
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const feature = createFeature({
+    database: createThreadStateDatabase(storageRoot, [["parent", "codex"], ["child", "codex"], ["copilot-thread", "copilot"]]),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs,
     listSubagents: async () => ({
@@ -602,11 +682,11 @@ test("provider reconciliation starts concurrently and publishes each successful 
         directSubagentIndex: 0,
         harness: "codex",
         name: "Child",
-        parentThreadId: "parent",
+        parentThreadId: fixtureIdentityValues.WorkbenchThreadId.parent,
         profileId: "default",
         profileName: "Default",
-        projectId: "project",
-        threadId: "child",
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+        threadId: fixtureIdentityValues.WorkbenchThreadId.child,
         title: "Child",
         updatedAt: 2,
       }],
@@ -625,22 +705,22 @@ test("provider reconciliation starts concurrently and publishes each successful 
         codexCursors.push(params.cursor ?? null);
         if (params.cursor) {
           await codexNextGate;
-          return { id: request.id ?? null, result: { data: [{ id: "parent", name: "Parent", status: { type: "idle" }, updatedAt: 3 }], nextCursor: null } };
+          return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "parent", { name: "Parent", updatedAt: 3 })], nextCursor: null } };
         }
-        return { id: request.id ?? null, result: { data: [{ id: "child", name: "Child provider", status: { type: "idle" }, updatedAt: 2 }], nextCursor: "codex-next" } };
+        return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "child", { name: "Child provider", updatedAt: 2 })], nextCursor: "codex-next" } };
       }
       if (harness === "copilot") {
         await copilotGate;
-        return { id: request.id ?? null, result: { data: [{ id: "copilot-thread", name: "Copilot", status: { type: "idle" }, updatedAt: 4 }], nextCursor: null } };
+        return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "copilot-thread", { name: "Copilot", updatedAt: 4 })], nextCursor: null } };
       }
       return { error: { code: -32000, message: "OpenCode unavailable" }, id: request.id ?? null };
     }),
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => starts.length === 3, "Provider reconciliations did not start concurrently.");
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "Codex snapshot did not publish while Copilot remained pending.");
   assert.deepEqual(new Set(starts), new Set(["codex", "copilot", "opencode"]));
@@ -689,7 +769,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     },
     lifecycleListCalls: 2,
   });
-  const refreshedParent = await feature.controller.refreshGitArcState("project", "codex", "parent");
+  const refreshedParent = await feature.controller.refreshGitArcState(fixtureIdentityValues.ProjectId["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"));
   assert.equal(refreshedParent?.identity.threadId, "parent");
   assert.deepEqual((refreshedParent as { gitArc?: unknown } | null)?.gitArc, {
     checkpointCommit: lifecycleState.checkpointCommit,
@@ -724,7 +804,7 @@ test("deep provider pages serialize across projects while both newest pages star
   const deepPages: string[] = [];
   let activeDeepPages = 0;
   let maximumActiveDeepPages = 0;
-  const feature = new WorkbenchThreadStateFeature({
+  const feature = createFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
@@ -749,12 +829,12 @@ test("deep provider pages serialize across projects while both newest pages star
       activeDeepPages -= 1;
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }),
-    resolveProjectById: async (projectId) => ({ id: projectId, rootPath: projectRoots.get(projectId) ?? storageRoot }),
+    resolveProjectById: async (projectId) => ({ id: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), rootPath: projectRoots.get(projectId) ?? storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await Promise.all([feature.controller.open("a", "project-a"), feature.controller.open("b", "project-b")]);
+  await Promise.all([feature.controller.open("a", fixtureIdentityValues.ProjectId["project-a"]), feature.controller.open("b", fixtureIdentityValues.ProjectId["project-b"])]);
   await waitFor(() => firstPages.length === 2 && deepPages.length === 1, "Newest pages did not start before serialized continuation work.");
   assert.deepEqual(new Set(firstPages), new Set(projectRoots.values()));
   assert.equal(maximumActiveDeepPages, 1);
@@ -771,8 +851,8 @@ test("managed title commands use the validated provider title as the mutation pr
   const requests: Array<{ harness: string; method: string; params: unknown }> = [];
   let providerName: string | null = "Current task";
   let providerPreview: string | null = "Initial request";
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const feature = createFeature({
+    database: createThreadStateDatabase("C:/workspace", [["thread-one", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -792,17 +872,15 @@ test("managed title commands use the validated provider title as the mutation pr
       return {
         id: request.id ?? null,
         result: {
-          thread: {
-            cwd: "C:/workspace",
-            id: "thread-one",
+          thread: providerThread("C:/workspace", "thread-one", {
             name: providerName,
-            preview: providerPreview,
-          },
+            preview: providerPreview ?? "",
+          }),
         },
       };
     }),
-    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -819,7 +897,7 @@ test("managed title commands use the validated provider title as the mutation pr
   assert.deepEqual(requests[0], {
     harness: "codex",
     method: "thread/read",
-    params: { cwd: "C:/workspace", includeTurns: false, threadId: "thread-one" },
+    params: { cwd: "C:/workspace", includeTurns: false, threadId: "native:thread-one" },
   });
   await waitFor(() => requests.length === 4, "Provider reconciliation did not run after the managed title read.");
   assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
@@ -871,7 +949,7 @@ test("managed title commands use the validated provider title as the mutation pr
   });
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 1);
 
-  const titleEntry = (await feature.controller.getSnapshot("project")).entries.find((entry) => (
+  const titleEntry = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => (
     entry.entryKind !== "draft" && entry.identity.threadId === "thread-one"
   ));
   assert.deepEqual(
@@ -910,7 +988,7 @@ test("managed title commands use the validated provider title as the mutation pr
 test("Git snapshot reconciliation failures reach the bounded feature log", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-failure-"));
   const logs: string[] = [];
-  const feature = new WorkbenchThreadStateFeature({
+  const feature = createFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: {
@@ -927,15 +1005,15 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
     },
     publish: () => undefined,
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
-    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => logs.length === 1, "Git snapshot reconciliation failure was not logged.");
   assert.match(logs[0] ?? "", /reconciliation failed project=project error=Git snapshot exploded\./u);
-  assert.equal((await feature.controller.getSnapshot("project")).error, "Git snapshot exploded.");
+  assert.equal((await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).error, "Git snapshot exploded.");
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
@@ -959,7 +1037,7 @@ test("expired settled threads reach repository retention through the feature bou
     version: 3,
   });
   const pruned: Array<{ cwd: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
-  const feature = new WorkbenchThreadStateFeature({
+  const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
@@ -976,12 +1054,12 @@ test("expired settled threads reach repository retention through the feature bou
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => pruned.length === 1, "Expired thread did not reach Git retention through the feature.");
   assert.deepEqual(pruned, [{ cwd: "C:/workspace", identities: [identity] }]);
   await feature.dispose();
@@ -997,7 +1075,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   const activeClaim = {
     checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], harness: "codex" as const,
     intentDescription: "", intentName: "settle projection", proposalId: "proposal-one",
-    proposalStatus: "proposed" as const, threadId: "thread-one", updatedAt: "2026-08-23T00:00:00.000Z",
+    proposalStatus: "proposed" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"), updatedAt: "2026-08-23T00:00:00.000Z",
   };
   const lifecycleState = () => ({
     checkpointCommit: resolved ? "b".repeat(40) : activeClaim.checkpointCommit,
@@ -1009,15 +1087,15 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     proposals: resolved
       ? [{ proposalId: "proposal-two", status: "committed" as const }]
       : [{ proposalId: "proposal-one", status: "proposed" as const }],
-    threadId: "thread-one",
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"),
     updatedAt: resolved ? "2026-08-23T00:01:00.000Z" : activeClaim.updatedAt,
   });
   const planState = {
     checkpointCommit: "c".repeat(40), harness: "codex" as const, intentDescription: "",
-    intentName: "old plan", scopePaths: ["owned.ts"], threadId: "thread-one", updatedAt: "2026-08-23T00:00:00.000Z",
+    intentName: "old plan", scopePaths: ["owned.ts"], threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"), updatedAt: "2026-08-23T00:00:00.000Z",
   };
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const feature = createFeature({
+    database: createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
       findActiveClaim: async () => resolved ? null : activeClaim,
@@ -1044,11 +1122,11 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
       }
       return {
         id: request.id ?? null,
-        result: { data: [{ id: "thread-one", name: "Thread one", status: { type: "idle" }, updatedAt: 1 }], nextCursor: "next" },
+        result: { data: [providerThread(storageRoot, "thread-one", { name: "Thread one" })], nextCursor: "next" },
       };
     }),
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: {
       run: async (_key, operation) => {
         transitionCount += 1;
@@ -1057,7 +1135,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     },
   });
 
-  await feature.controller.ensureProviderEntry("project", {
+  await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], {
     activityAt: 1,
     entryKind: "thread",
     gitArc: {
@@ -1068,30 +1146,30 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
       checkpointCommit: "e".repeat(40), intentDescription: "", intentName: "stale plan",
       scopePaths: ["stale.ts"], updatedAt: "2026-08-22T00:00:00.000Z",
     },
-    identity: { harness: "codex", threadId: "thread-one" },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Thread one",
   });
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(async () => {
-    const snapshot = await feature.controller.getSnapshot("project");
+    const snapshot = await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"]);
     const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread-one");
     return transitionCount === 1 && secondPageStarted && entry?.entryKind === "thread"
       && entry.gitArc?.checkpointCommit === activeClaim.checkpointCommit
       && entry.gitArcPlan?.checkpointCommit === planState.checkpointCommit;
   }, "The initial Git snapshot did not repair stale state before provider pagination.");
   resolved = true;
-  const refreshed = await feature.controller.refreshGitArcState("project", "codex", "thread-one");
+  const refreshed = await feature.controller.refreshGitArcState(fixtureIdentityValues.ProjectId["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"));
   assert.equal(refreshed?.entryKind === "thread" ? refreshed.gitArc?.phase : null, "resolved");
   secondPageGate.resolve();
   await waitFor(async () => {
-    const snapshot = await feature.controller.getSnapshot("project");
+    const snapshot = await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"]);
     const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread-one");
     return transitionCount === 2 && entry?.entryKind === "thread" && entry.gitArc?.phase === "resolved" && entry.gitArcPlan === null;
   }, "The final reconciliation did not preserve the resolved Git projection.");
   assert.equal(transitionCount, 2);
-  const final = await feature.controller.getSnapshot("project");
+  const final = await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"]);
   const thread = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
   assert.ok(thread && thread.entryKind === "thread");
   assert.deepEqual(thread.gitArc, {
@@ -1106,8 +1184,17 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
 test("managed resume validates the provider thread before requesting lifecycle-owned replacement", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-resume-"));
   const resumes: Array<{ harness: string; threadId: string }> = [];
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const database = createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]);
+  database.admitRecord({
+    ...storedRecordDefaults,
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
+    entryKind: "thread", activityAt: 1, title: "Current task", providerObserved: true,
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
+      agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-one") } },
+  });
+  const feature = createFeature({
+    database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -1120,31 +1207,29 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/turns/list") {
         assert.deepEqual(request.params, {
-          cwd: storageRoot, threadId: "thread-one", itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+          cwd: storageRoot, threadId: "native:thread-one", itemsView: "notLoaded", limit: 1, sortDirection: "desc",
         });
-        return { id: request.id ?? null, result: { data: [{ id: "turn-one", status: "inProgress", items: [] }], nextCursor: null } };
+        return { id: request.id ?? null, result: { data: [{ id: "native:turn-one", status: "inProgress", items: [] }], nextCursor: null } };
       }
       if (request.method === "thread/read" && harness === "codex") {
         assert.equal((request.params as { includeTurns: boolean }).includeTurns, false);
         return {
           id: request.id ?? null,
           result: {
-            thread: {
-              cwd: storageRoot,
-              id: "thread-one",
+            thread: providerThread(storageRoot, "thread-one", {
               name: "Current task",
               preview: "Initial request",
-              status: { type: "active" },
+              status: { type: "active", activeFlags: [] },
               turns: [],
               updatedAt: 1,
-            },
+            }),
           },
         };
       }
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }, async (harness, threadId) => { resumes.push({ harness, threadId }); }),
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -1158,7 +1243,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     id: 2,
     result: { accepted: true, threadId: "thread-one", turnId: "turn-one" },
   });
-  assert.deepEqual(resumes, [{ harness: "codex", threadId: "thread-one" }]);
+  assert.deepEqual(resumes, [{ harness: "codex", threadId: "native:thread-one" }]);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
@@ -1168,8 +1253,8 @@ test("observed title mutations update the provider and published sidebar togethe
   const publications: WorkbenchThreadStateSnapshot[] = [];
   const titleRequests: Array<{ harness: string; params: unknown }> = [];
   let rejectTitle = false;
-  const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+  const feature = createFeature({
+    database: createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -1190,18 +1275,18 @@ test("observed title mutations update the provider and published sidebar togethe
         id: request.id ?? null,
         result: {
           data: harness === "codex"
-            ? [{ id: "thread-one", name: "Old title", status: { type: "idle" }, updatedAt: 1 }]
+            ? [providerThread(storageRoot, "thread-one", { name: "Old title" })]
             : [],
           nextCursor: null,
         },
       };
     }),
-    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", "project");
+  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => publications.some((snapshot) => (
     "entries" in snapshot
     && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")
@@ -1211,7 +1296,7 @@ test("observed title mutations update the provider and published sidebar togethe
   const renamed = await feature.controller.handleRequest("observer", {
     identity: { harness: "codex", threadId: "thread-one" },
     method: "workbench/thread-state/title/set",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     title: '  "Renamed   thread..."  ',
   });
 
@@ -1220,9 +1305,9 @@ test("observed title mutations update the provider and published sidebar togethe
   });
   assert.deepEqual(titleRequests, [{
     harness: "codex",
-    params: { cwd: storageRoot, name: "Renamed thread", threadId: "thread-one" },
+    params: { cwd: storageRoot, name: "Renamed thread", threadId: "native:thread-one" },
   }]);
-  const renamedEntry = (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
+  const renamedEntry = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
   assert.equal(renamedEntry?.title, "Renamed thread");
   const lastPublication = publications.at(-1);
   const publishedEntry = lastPublication && "entries" in lastPublication
@@ -1235,12 +1320,12 @@ test("observed title mutations update the provider and published sidebar togethe
   const rejected = await feature.controller.handleRequest("observer", {
     identity: { harness: "codex", threadId: "thread-one" },
     method: "workbench/thread-state/title/set",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     title: "Rejected title",
   });
   assert.deepEqual(rejected, { error: { code: "threadTitleMutationFailed", message: "Provider rejected title" } });
   assert.equal(publications.length, publicationCount);
-  assert.equal((await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")?.title, "Renamed thread");
+  assert.equal((await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")?.title, "Renamed thread");
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct request adapters, concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior. Keywords: browse, controller, direct, concurrency, cancel, sessions, result, reload, test.
+ * - No production exports; Node tests cover direct request adapters, concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -12,6 +12,13 @@ import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-r
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "public": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("public"),
+  },
+};
 
 function deferred() {
   let resolve = () => undefined;
@@ -57,8 +64,8 @@ test("expired identity lookup cannot launch work after rollback resumes admissio
     controlSession: async () => ({ result: null, session: null, stopped: false }),
     findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
   }, {
-    nativeTarget: async () => { entered.resolve(); await release.promise; return { threadId: "native" }; },
-    publicThreadId: async () => "public",
+    nativeTarget: async () => { entered.resolve(); await release.promise; return { threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native") }; },
+    publicThreadId: async () => fixtureIdentityValues.WorkbenchThreadId["public"],
   });
   const command = controller.executeBrowseRequest(Buffer.from('{"threadId":"public"}'), new AbortController().signal);
   const rejected = assert.rejects(command, /reload/);
@@ -119,22 +126,29 @@ test("direct Browse request execution uses the same handler and cancellation sig
 
 test("Browse translates only declared targets and returns public session identities", async () => {
   const received: object[] = [];
-  const session = { name: "default", threadId: "native", projectId: "project" } as WorkbenchBrowseSessionSummary;
+  const session: WorkbenchBrowseSessionSummary = {
+    name: "default", threadId: "native", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    browserConnected: null, cwd: null, inactiveSince: null, initialized: null, lastActionAt: null,
+    mode: null, pid: null, projectRootPath: null, source: "registry", state: "unknown", statusError: null,
+  };
   const identity = {
     nativeTarget: async (request: { threadId: string; cwd?: string | null; projectId?: string | null }) => {
       assert.equal(request.threadId, "public");
-      return { ...request, threadId: "native" };
+      return {
+        ...request, threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native"),
+        projectId: request.projectId == null ? undefined : fixtureIdentitySchemas.ProjectIdSchema.parse(request.projectId),
+      };
     },
     publicThreadId: async (threadId: string) => {
       assert.equal(threadId, "native");
-      return "public";
+      return fixtureIdentityValues.WorkbenchThreadId.public;
     },
   };
   const controller = new WorkbenchBrowseController({
     record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
   }, new WorkbenchBrowseRuntime(), {
     handle: async (body) => { received.push(JSON.parse(body.toString())); return Response.json({ ok: true }); },
-    listSessions: async (request) => { received.push(request); return { generatedAt: "", projectId: "project", sessions: [session] }; },
+    listSessions: async (request) => { received.push(request); return { generatedAt: "", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sessions: [session] }; },
     controlSession: async (request) => { received.push(request); return { result: null, session, stopped: true }; },
     findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
   }, identity);
@@ -179,8 +193,8 @@ test("Browse reload waits for admitted identity lookups and rejects later comman
       controlSession: async () => ({ result: null, session: null, stopped: false }),
       findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
     }, {
-      nativeTarget: async () => { entered.resolve(); await gate.promise; return { threadId: "native" }; },
-      publicThreadId: async () => "public",
+      nativeTarget: async () => { entered.resolve(); await gate.promise; return { threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native") }; },
+      publicThreadId: async () => fixtureIdentityValues.WorkbenchThreadId["public"],
     });
     const active = operation === "browse"
       ? controller.executeBrowseRequest(Buffer.from('{"threadId":"public"}'), new AbortController().signal)

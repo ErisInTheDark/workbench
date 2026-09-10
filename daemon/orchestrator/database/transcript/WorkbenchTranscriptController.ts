@@ -1,10 +1,9 @@
 /*
- * Keywords: transcript lifecycle, recovery, subscription, Workbench item facts.
  * Exports:
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, and disposal. Keywords: transcript, controller, lifecycle, recovery.
- * Local helpers: derive settlement identity, refresh boundaries, and recovered turn coverage. Keywords: transcript, observation, subscription, recovery.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions and disposal.
  */
 import { logError } from "../../process-helpers.ts";
+import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
@@ -19,8 +18,8 @@ import type {
 } from "./workbench-transcript-types.ts";
 
 function observationIdentity(observations: readonly WorkbenchTranscriptObservation[]) {
-  const threadIds = new Set<string>();
-  const turnIds = new Set<string>();
+  const threadIds = new Set<WorkbenchThreadId>();
+  const turnIds = new Set<WorkbenchTurnId>();
   for (const observation of observations) {
     if (observation.kind === "usageWindow" || observation.kind === "turnCatalog") {
       threadIds.add(observation.threadId);
@@ -97,18 +96,18 @@ function requestsSubscriptionRefresh(
   });
 }
 
-function observationContainsTurn(
+function observedTurnId(
   observation: WorkbenchTranscriptObservation,
   turnId: string,
 ) {
-  if (observation.kind === "turn") return observation.turnId === turnId;
+  if (observation.kind === "turn") return observation.turnId === turnId ? observation.turnId : null;
   if (observation.kind === "canonicalWindow") {
-    return observation.materializedTurnIds.includes(turnId);
+    return observation.materializedTurnIds.find(id => id === turnId) ?? null;
   }
   if (observation.kind === "providerTurnScope") {
-    return observation.completeTurnIds.includes(turnId);
+    return observation.completeTurnIds.find(id => id === turnId) ?? null;
   }
-  return false;
+  return null;
 }
 
 export default class WorkbenchTranscriptController {
@@ -178,10 +177,8 @@ export default class WorkbenchTranscriptController {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");
       }
       const marker = this.#captureGaps.requireRecovery(identity.threadId);
-      const recoveredMarkerTurn = marker.turnId && observations.some((observation) => (
-        observationContainsTurn(observation, marker.turnId!)
-      ))
-        ? marker.turnId
+      const recoveredMarkerTurn = marker.turnId
+        ? observations.map(observation => observedTurnId(observation, marker.turnId!)).find(turnId => turnId !== null) ?? null
         : null;
       const recoveryObservations = [
         ...observations,

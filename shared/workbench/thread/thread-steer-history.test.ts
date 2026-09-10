@@ -1,7 +1,6 @@
 /*
- * Keywords: steer, history, identity, submission time, tests.
  * Exports:
- * - No production exports; Node tests cover native steer-history ordering and exact rendering. Keywords: steer, history, identity, test.
+ * - No production exports; Node tests cover native steer-history ordering and exact rendering.
  */
 
 import assert from "node:assert/strict";
@@ -11,6 +10,7 @@ import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { applySteerHistoryToThread } from "./thread-steer-history.ts";
 import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
 import { getWorkbenchInputState, withWorkbenchInputState } from "./thread-input-item.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function entry(id: string, sequence: number, status: WorkbenchSteerHistoryEntry["status"]): WorkbenchSteerHistoryEntry {
   return {
@@ -23,7 +23,7 @@ function entry(id: string, sequence: number, status: WorkbenchSteerHistoryEntry[
 function thread(): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items: [], itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };

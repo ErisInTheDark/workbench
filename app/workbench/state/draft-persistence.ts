@@ -12,24 +12,25 @@
 import type { WorkbenchComposerInputDraft, WorkbenchQuestionnaireDraft } from "workbench-shared/types";
 import { countDraftPromptTokens, type WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchClientStateController from "./WorkbenchClientStateController";
+import type { DraftId, FolderId, ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export interface ClientDraftIdentity {
   daemonRegistrationId: string;
-  projectId: string;
-  threadId: string;
+  projectId: ProjectId;
+  threadId: ThreadReference | WorkbenchThreadId;
 }
 
 export interface SidebarDraftPersistence {
-  read: (projectId: string, draftId: string) => WorkbenchThreadDraft | null;
-  create: (projectId: string, draftId: string) => WorkbenchThreadDraft;
-  write: (draft: WorkbenchThreadDraft, folderId?: string) => Promise<void> | void;
-  remove: (projectId: string, draftId: string) => Promise<void>;
+  read: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
+  create: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft;
+  write: (draft: WorkbenchThreadDraft, folderId?: FolderId) => Promise<void> | void;
+  remove: (projectId: ProjectId, draftId: DraftId) => Promise<void>;
   materialize: (draft: WorkbenchThreadDraft) => void;
 }
 
 export type ComposerDraftTarget =
   | (ClientDraftIdentity & { kind: "thread" })
-  | { kind: "sidebar"; projectId: string; draftId: string; isNew: boolean; folderId?: string; owner: SidebarDraftPersistence };
+  | { kind: "sidebar"; projectId: ProjectId; draftId: DraftId; isNew: boolean; folderId?: FolderId; owner: SidebarDraftPersistence };
 
 export function sidebarDraftToInput(draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft {
   return {

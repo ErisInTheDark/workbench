@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect current feature and project-catalog ownership across a stable Codex bridge. Keywords: codex, feature, project, catalog, reload, ownership, test.
+ * No production exports. Node tests protect current feature and project-catalog ownership across a stable Codex bridge.
  */
 
 import assert from "node:assert/strict";
@@ -13,13 +13,14 @@ import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thre
 import type CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import type { JsonRpcRequest } from "./bridge-types";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function createResolution(projectId: string, cwd: string): AgentEndpointProjectResolution {
   const rootPath = `C:/projects/${projectId}`;
   return {
     cwd,
     project: {
-      id: projectId,
+      id: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
       kind: "git",
       root: rootPath,
       rootPath,

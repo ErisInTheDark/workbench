@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchHomeThreadDisplayOrderStore: own revisioned home priority order and authoritative SQLite persistence. Keywords: home, thread, order, storage, sqlite.
+ * - default WorkbenchHomeThreadDisplayOrderStore: own revisioned home priority order and SQLite persistence.
  */
 
 import { z } from "zod";
+import type { ProjectId, ThreadDisplayKey } from "workbench-shared/workbench/identity";
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -66,7 +67,7 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
     });
   }
 
-  async remove(projectId: string, threadKey: string) {
+  async remove(projectId: ProjectId, threadKey: ThreadDisplayKey) {
     return await this.enqueue(async () => {
       const state = await this.load();
       const next = removeWorkbenchHomeThreadDisplayMember(
@@ -78,9 +79,9 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
   }
 
   async replace(
-    sourceProjectId: string,
-    sourceThreadKey: string,
-    replacementThreadKey: string,
+    sourceProjectId: ProjectId,
+    sourceThreadKey: ThreadDisplayKey,
+    replacementThreadKey: ThreadDisplayKey,
     replacementProjectId = sourceProjectId,
   ) {
     return await this.enqueue(async () => {

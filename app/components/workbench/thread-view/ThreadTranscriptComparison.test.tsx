@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect item alignment, source gaps, shared live reasoning omission, and relational fallback rendering. Keywords: transcript, parity, comparison, reasoning, React.
+ * No production exports. Tests protect item alignment, source gaps, shared live reasoning omission, and relational fallback rendering.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,6 +15,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
 import { ThreadTranscriptItemDetails } from "./thread-view-items";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("native and projected sleep items share presentation without exposing their transport payload", () => {
   const native: ThreadItem = { id: "sleep", type: "sleep", durationMs: 60_000 };
@@ -54,7 +55,7 @@ function createThread(items: ThreadItem[]): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id: "thread",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     isDraft: false,
     model: null,
     name: "Thread",
@@ -110,7 +111,7 @@ function createProjection(items: WorkbenchProjectedTranscriptItem[]): WorkbenchT
       activityAt: 3_000,
       createdAt: 1_000,
       id: "thread",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       projectRoot: "C:/project",
       title: "Thread",
       updatedAt: 3_000,

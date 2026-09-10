@@ -1,13 +1,12 @@
 /*
- * Keywords: questionnaire, history, identity, answer time.
  * Exports:
- * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
- * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
- * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into thread turns. Keywords: questionnaire, thread, overlay, persisted history.
+ * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries.
+ * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn.
+ * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into thread turns.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
+import type { ThreadPayload, ThreadPayloadData, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import {
   resolveQuestionnaireHistoryItemId,
@@ -289,8 +288,8 @@ function applyQuestionnaireHistoryToItems(
     : nextItems;
 }
 
-export function applyQuestionnaireHistoryToThread(
-  thread: ThreadPayload,
+export function applyQuestionnaireHistoryToThread<Payload extends ThreadPayloadData<string> & { isDraft: boolean }>(
+  thread: Payload,
   entries: WorkbenchQuestionnaireHistoryEntry[],
 ) {
   const entriesByTurnId = new Map<string, WorkbenchQuestionnaireHistoryEntry[]>();

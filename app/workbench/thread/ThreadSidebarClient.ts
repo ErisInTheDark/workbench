@@ -11,6 +11,8 @@ import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "workbench-shared/workbench/thread/thread-display-order";
 import { createDraftTitle, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import ThreadSidebarProjectState from "./ThreadSidebarProjectState";
+import type { DraftId, FolderId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
 
 export interface ThreadSidebarOpenResult {
   pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot;
@@ -25,13 +27,13 @@ export interface ThreadSidebarGlobalOpenResult {
 }
 
 export interface ThreadSidebarTransport {
-  close(projectId: string): Promise<void>;
+  close(projectId: ProjectId): Promise<void>;
   closeGlobal?(): Promise<void>;
-  deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number): Promise<void>;
-  moveDraft?(sourceProjectId: string, destinationProjectId: string, draftId: string): Promise<void>;
-  open(projectId: string): Promise<ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot>;
+  deleteDraft(projectId: ProjectId, draftId: DraftId, clientUpdatedAt: number): Promise<void>;
+  moveDraft?(sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId): Promise<void>;
+  open(projectId: ProjectId): Promise<ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot>;
   openGlobal?(): Promise<ThreadSidebarGlobalOpenResult>;
-  upsertDraft(projectId: string, draft: WorkbenchThreadDraft, folderId?: string): Promise<void>;
+  upsertDraft(projectId: ProjectId, draft: WorkbenchThreadDraft, folderId?: FolderId): Promise<void>;
 }
 export interface ThreadSidebarClientOptions {
   onChange: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
@@ -39,20 +41,20 @@ export interface ThreadSidebarClientOptions {
 }
 export interface ThreadSidebarAcceptedIntent {
   activityAt?: number;
-  draftId?: string;
-  identity: { harness: WorkbenchHarnessId; threadId: string };
-  projectId?: string;
+  draftId?: DraftId;
+  identity: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId };
+  projectId?: ProjectId;
   title: string;
-  turnId: string;
+  turnId: WorkbenchTurnId;
 }
 
 interface DraftQueue {
   // Observation can disappear while an originating form still has edits or image reads.
   draft: WorkbenchThreadDraft | null;
   savedDraft: WorkbenchThreadDraft | null;
-  folderId: string | null;
+  folderId: FolderId | null;
   inFlight: Promise<void> | null;
-  projectId: string;
+  projectId: ProjectId;
   retired: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -63,10 +65,10 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private homeThreadDisplayOrderSupported = false;
   private mode: "closed" | "global" | "project" = "closed";
   private pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };
-  private projectId: string | null = null;
+  private projectId: ProjectId | null = null;
   private projectThreadSidebars: WorkbenchProjectThreadSidebars = { projects: [] };
   private projectThreadSummaries: WorkbenchProjectThreadSummaries = { projects: [] };
-  private readonly projects = new Map<string, ThreadSidebarProjectState>();
+  private readonly projects = new Map<ProjectId, ThreadSidebarProjectState>();
   private readonly listeners = new Set<() => void>();
   private readonly queues = new Map<string, DraftQueue>();
   constructor(private readonly options: ThreadSidebarClientOptions) {}
@@ -75,8 +77,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   readonly getHomeThreadDisplayOrder = () => this.homeThreadDisplayOrder;
   readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
-  readonly getProjectSnapshot = (projectId: string) => this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
-  readonly getDraft = (projectId: string, draftId: string): WorkbenchThreadDraft | null => {
+  readonly getProjectSnapshot = (projectId: ProjectId) => this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
+  readonly getDraft = (projectId: ProjectId, draftId: DraftId): WorkbenchThreadDraft | null => {
     const queue = this.queues.get(this.queueKey(projectId, draftId));
     if (queue) return queue.retired ? null : queue.draft;
     const entry = this.getProjectSnapshot(projectId)?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draftId);
@@ -91,7 +93,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     };
   };
 
-  async open(projectId: string) {
+  async open(projectId: ProjectId) {
     if (this.mode === "project" && this.projectId === projectId && this.getSnapshot() && this.isOpen) return true;
     if (this.mode !== "closed") await this.close();
     this.mode = "project";
@@ -188,7 +190,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       queue.savedDraft = draft;
     }
   }
-  edit(draft: WorkbenchThreadDraft, options: { folderId?: string } = {}) {
+  edit(draft: WorkbenchThreadDraft, options: { folderId?: FolderId } = {}) {
     const queueKey = this.queueKey(draft.projectId, draft.draftId);
     const queue = this.queues.get(queueKey) ?? { draft: null, savedDraft: null, folderId: null, inFlight: null, projectId: draft.projectId, retired: false, timer: null };
     if (queue.retired) return;
@@ -241,7 +243,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         title: existing?.entryKind === "thread" ? existing.title : intent.title,
       };
       const displayOrder = intent.draftId
-        ? replaceWorkbenchThreadFolderMember(current.displayOrder, `draft:${intent.draftId}`, `${intent.identity.harness}:${intent.identity.threadId}`)
+        ? replaceWorkbenchThreadFolderMember(current.displayOrder, getThreadDisplayDraftKey(intent.draftId), getThreadDisplayThreadKey(intent.identity.harness, intent.identity.threadId))
         : current.displayOrder;
       const resolved = resolveWorkbenchThreadDisplayOrder([
           ...current.entries.filter((candidate) => {
@@ -257,7 +259,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     }
     return inFlight;
   }
-  async delete(draftId: string, clientUpdatedAt = Date.now(), projectId = this.projectId ?? this.findDraftProjectId(draftId)) {
+  async delete(draftId: DraftId, clientUpdatedAt = Date.now(), projectId = this.projectId ?? this.findDraftProjectId(draftId)) {
     if (!projectId) return;
     const queueKey = this.queueKey(projectId, draftId);
     const queue = this.queues.get(queueKey);
@@ -281,7 +283,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       this.publish();
     }
   }
-  async moveDraft(sourceProjectId: string, destinationProjectId: string, draftId: string) {
+  async moveDraft(sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) {
     const queueKey = this.queueKey(sourceProjectId, draftId);
     const queue = this.queues.get(queueKey);
     if (queue) await this.flushQueue(queueKey, queue);
@@ -316,7 +318,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   async flush() { for (const [id, queue] of this.queues) await this.flushQueue(id, queue); }
-  async flushDraft(projectId: string, draftId: string) {
+  async flushDraft(projectId: ProjectId, draftId: DraftId) {
     const id = this.queueKey(projectId, draftId);
     const queue = this.queues.get(id);
     if (queue) await this.flushQueue(id, queue);
@@ -404,7 +406,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.projectState(snapshot.projectId).replaceLocalSidebar(snapshot);
     this.syncProjectViews();
   }
-  private projectState(projectId: string) {
+  private projectState(projectId: ProjectId) {
     let state = this.projects.get(projectId);
     if (!state) {
       state = new ThreadSidebarProjectState();
@@ -429,23 +431,23 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       this.projectThreadSummaries = { projects: summaries };
     }
   }
-  private getProjectSidebar(projectId: string) {
+  private getProjectSidebar(projectId: ProjectId) {
     return this.getProjectSnapshot(projectId);
   }
-  private findDraftProjectId(draftId: string) {
+  private findDraftProjectId(draftId: DraftId) {
     return [...this.queues.values()].find((queue) => !queue.retired && queue.draft?.draftId === draftId)?.projectId
       ?? this.projectThreadSidebars.projects.find(({ entries }) => entries.some((entry) => (
       entry.entryKind === "draft" && entry.draft.draftId === draftId
     )))?.projectId ?? null;
   }
-  private queueKey(projectId: string, draftId: string) {
+  private queueKey(projectId: ProjectId, draftId: DraftId) {
     return `${encodeURIComponent(projectId)}:${draftId}`;
   }
-  private installOptimisticDraft(draft: WorkbenchThreadDraft, folderId: string | null) {
+  private installOptimisticDraft(draft: WorkbenchThreadDraft, folderId: FolderId | null) {
     const current = this.getProjectSidebar(draft.projectId);
     if (!current) return;
     const existing = current.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
-    const currentFolder = findWorkbenchThreadFolder(current.displayOrder, `draft:${draft.draftId}`);
+    const currentFolder = findWorkbenchThreadFolder(current.displayOrder, getThreadDisplayDraftKey(draft.draftId));
     const targetFolder = folderId ? current.displayOrder?.folders?.find((candidate) => candidate.folderId === folderId) : null;
     const entry = {
       activityAt: draft.updatedAt,
@@ -461,7 +463,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         entry,
       ];
     const displayOrder = targetFolder && currentFolder?.folderId !== targetFolder.folderId
-      ? moveWorkbenchThreadDisplayItem(sortThreadSidebarEntries(entries), current.displayOrder, targetFolder.section, `draft:${draft.draftId}`, targetFolder.folderId, targetFolder.threadKeys[0] ?? null) ?? current.displayOrder
+      ? moveWorkbenchThreadDisplayItem(sortThreadSidebarEntries(entries), current.displayOrder, targetFolder.section, getThreadDisplayDraftKey(draft.draftId), targetFolder.folderId, targetFolder.threadKeys[0] ?? null) ?? current.displayOrder
       : current.displayOrder;
     const resolved = resolveWorkbenchThreadDisplayOrder(entries, displayOrder);
     this.replaceProjectSidebar({ ...current, ...resolved });

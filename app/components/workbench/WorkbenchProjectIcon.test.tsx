@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports. Tests protect discovered project assets, stable initial fallbacks, and icon presence in every canonical label variant. Keywords: project, icon, fallback, label, test.
+ * - No production exports. Tests protect discovered project assets, stable initial fallbacks, and icon presence in every canonical label variant.
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -10,10 +10,11 @@ import { test } from "node:test";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon.tsx";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel.tsx";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function project(overrides: Partial<WorkbenchProjectOption> = {}): WorkbenchProjectOption {
   return {
-    id: "team/alpha",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("team/alpha"),
     kind: "git",
     lastCommitTimeMs: null,
     name: "alpha",

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover exact-key raw thread source ownership. Keywords: thread, source, revision, test.
+ * - No production exports; Node tests cover exact-key raw thread source ownership.
  */
 
 import assert from "node:assert/strict";
@@ -8,11 +8,12 @@ import { test } from "node:test";
 
 import type { ThreadPayload } from "workbench-shared/types";
 import ThreadSourceStore from "./ThreadSourceStore.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
-function thread(harness: ThreadPayload["harness"], id = "same"): ThreadPayload {
+function thread(harness: ThreadPayload["harness"], id = "same"): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness, id, isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
+    harness, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id), isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
     serviceTier: null, source: harness, status: "active", tokenUsage: null, turnHistory: [], turns: [], updatedAt: 1,
   };
 }
@@ -39,7 +40,9 @@ test("ThreadSourceStore rejects null and key-changing updates without mutation",
   store.install(source);
   assert.equal(store.update("codex:thread", () => null), false);
   assert.equal(store.getRevision("codex:thread"), 1);
-  assert.throws(() => store.update("codex:thread", (value) => ({ ...value, id: "other" })));
+  assert.throws(() => store.update("codex:thread", (value) => value.isDraft
+    ? { ...value, id: fixtureIdentitySchemas.DraftIdSchema.parse("other") }
+    : { ...value, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other") }));
   assert.equal(store.get("codex:thread"), source);
 });
 

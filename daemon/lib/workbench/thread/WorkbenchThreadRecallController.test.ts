@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect incremental SQLite history, exact-turn materialisation, search, expansion, validation, and cancellation. Keywords: thread recall, SQLite, pagination, materialisation, test.
+ * No production exports. Tests protect incremental SQLite history, exact-turn materialisation, search, expansion, validation, and cancellation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -17,15 +17,28 @@ import type {
 } from "../../../orchestrator/database/transcript/workbench-transcript-types.ts";
 import WorkbenchThreadRecallController from "./WorkbenchThreadRecallController";
 import { createSqliteWorkbenchThreadRecallRef, createWorkbenchThreadRecallCursor } from "./thread-context-recall.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread-one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"),
+  },
+};
 
 function thread(): WorkbenchTranscriptAtomicObservation {
   return {
     activityAt: 10,
     createdAt: 1,
     kind: "thread",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     projectRoot: "C:/workspace",
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
     title: "Recall test",
     updatedAt: 10,
   };
@@ -39,12 +52,12 @@ function turn(turnId: string, turnIndex: number): WorkbenchTranscriptAtomicObser
     harnessId: "codex",
     kind: "turn",
     nativeLocation: "C:/workspace",
-    nativeThreadId: "native-thread",
-    nativeTurnId: turnId,
+    nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(turnId),
     startedAt: turnIndex + 1,
     state: "completed",
-    threadId: "thread-one",
-    turnId,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
     turnIndex,
   };
 }
@@ -76,8 +89,8 @@ function item(
     kind: "item",
     lifecycle: "completed",
     observedAt: 5,
-    threadId: "thread-one",
-    turnId,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   };
 }
 
@@ -88,9 +101,9 @@ function window(
   return {
     contentVersion: 3,
     kind: "canonicalWindow",
-    materializedTurnIds,
+    materializedTurnIds: materializedTurnIds.map((id) => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id)),
     observations,
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
   };
 }
 
@@ -183,7 +196,7 @@ test("retained Recall references and cursor offsets survive identity conversion 
   };
   const oldResponse = await harness.controller.execute(request, new AbortController().signal);
   const oldText = await oldResponse.text();
-  const identity = new WorkbenchThreadIdentityRepository(harness.database).resolve({ threadId: "thread-one" });
+  const identity = new WorkbenchThreadIdentityRepository(harness.database).resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread-one") });
   assert.ok(identity);
   const reopened = new Database(harness.database.serialize());
   reopened.pragma("foreign_keys = ON");
@@ -196,10 +209,10 @@ test("retained Recall references and cursor offsets survive identity conversion 
     readTranscript: async (input) => repository.read(input),
     resolveProjectFromCwd: async () => {},
     resolveReference: async (threadId, reference) => {
-      const turn = threads.resolveTurn({ threadId, turnId: reference.turnId });
+      const turn = threads.resolveTurn({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse(reference.turnId) });
       assert.ok(turn);
       repository.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
-      const item = items.resolve({ threadId, turnId: turn.turnId, itemId: reference.itemId });
+      const item = items.resolve({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(reference.itemId) });
       assert.ok(item);
       return { ...reference, turnId: turn.turnId, itemId: item.itemId };
     },

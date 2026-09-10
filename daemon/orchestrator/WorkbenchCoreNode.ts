@@ -5,7 +5,9 @@
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
-import { getWorkbenchLifecycleTurnId, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import { createNativeQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
+import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchProjectsPayload } from "workbench-shared/types";
@@ -271,7 +273,7 @@ function createWorkbenchCoreFeature(
         if (result.thread) await harnesses.admitThreads(harness, [result.thread]);
         if (result.turn && request.params && typeof request.params === "object" && "threadId" in request.params
           && typeof request.params.threadId === "string") {
-          await harnesses.admitNotifications(harness, request.params.threadId, [{
+          await harnesses.admitNotifications(harness, NativeThreadIdSchema.parse(request.params.threadId), [{
             method: "turn/started", params: { threadId: request.params.threadId, turn: result.turn },
           }]);
         }
@@ -311,9 +313,10 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   const questionnaires = new WorkbenchQuestionnaireController({
-    clearPending: async (threadId, requestKey) => {
-      await threadState!.controller.observeLifecycle("codex", threadId, { kind: "inputResolved", requestKey });
-    },
+    ...createNativeQuestionnaireStatePorts(threadIdentity, threadState.controller, async cwd => {
+      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
+      return ProjectIdSchema.parse(resolved.project.id);
+    }),
     logError: (message) => {
       transcriptShadowLog.write({
         event: "questionnaire",
@@ -322,41 +325,6 @@ function createWorkbenchCoreFeature(
         source: "questionnaire",
       });
     },
-    publishPending: async (threadId, questionnaire) => {
-      await threadState!.controller.observeLifecycle("codex", threadId, {
-        kind: "pendingInput",
-        questionnaire,
-        requestKey: questionnaire.requestKey,
-        turnId: questionnaire.turnId,
-      });
-    },
-    resolveThread: async (cwd, threadId) => {
-      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
-        endpointName: "Questionnaire",
-      });
-      const snapshot = await threadState!.controller.getSnapshot(resolved.project.id);
-      const entry = snapshot.entries.find((candidate) => (
-        candidate.entryKind !== "draft"
-        && candidate.identity.harness === "codex"
-        && candidate.identity.threadId === threadId
-      ));
-      if (!entry || entry.entryKind === "draft") {
-        throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
-      }
-      const turnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
-      if (!turnId) {
-        throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
-      }
-      return { projectId: resolved.project.id, turnId, pendingQuestionnaire: entry.pendingQuestionnaire };
-    },
-    subscribePending: (listener) => threadState!.controller.subscribe((projectId, entry) => {
-      if (entry.entryKind === "draft" || entry.identity.harness !== "codex") return;
-      listener({
-        projectId,
-        requestKey: entry.pendingQuestionnaire?.requestKey ?? null,
-        threadId: entry.identity.threadId,
-      });
-    }),
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
   const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({

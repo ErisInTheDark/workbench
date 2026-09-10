@@ -1,7 +1,6 @@
 /*
- * Keywords: sidebar, claims, drafts, settlement, priority, drag.
  * Exports:
- * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets. Keywords: sidebar, thread, claim, composer, draft, settlement, priority, drag, folder, snooze.
+ * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -28,6 +27,26 @@ import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "alpha": fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
+    "beta": fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "alpha-pinned": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("alpha-pinned"),
+    "beta-pinned": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("beta-pinned"),
+    "remote-pin": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("remote-pin"),
+    "source": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source"),
+  },
+  WorkbenchTurnId: {
+    "turn-one": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-one"),
+    "turn-remote": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-remote"),
+  },
+};
 
 test("draft composer controls render project rotation immediately before harness rotation", () => {
   const markup = renderToStaticMarkup(createElement(ThreadRateLimits, {
@@ -70,8 +89,8 @@ function createThreadEntry({
         updatedAt: "2026-08-20T00:00:00.000Z",
       },
     } : {}),
-    identity: { harness: "codex", threadId },
-    lifecycle: { agent: { agentStatus: "completed", turnId: "turn-one" }, kind: "completed", reason: "agentCompleted", settled: false },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
+    lifecycle: { agent: { agentStatus: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["turn-one"] }, kind: "completed", reason: "agentCompleted", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     title,
   };
@@ -101,11 +120,11 @@ function renderThreads(
             onProjectFolderDrop: () => undefined,
             onSetPriority: () => undefined,
             onSnoozeUntil: () => undefined,
-            projectId: "project",
+            projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
             showPinnedThreadsInMain,
           })),
       ),
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     },
   ));
 }
@@ -140,13 +159,13 @@ function renderPinnedThreads(
           },
           currentTarget: null,
           onOpenThread: () => undefined,
-          projectId: "project",
+          projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
           projects,
           selectedProjectPinPlacement,
           selectedOwnerProjectId: "project",
         })),
       ),
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     },
   ));
 }
@@ -224,7 +243,7 @@ function renderThreadItem(
       entry,
       href: "/agent/thread/thread-one",
       ...(project ? { project } : {}),
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       showActions: true,
       showPinPriorityIcon,
     }),
@@ -240,7 +259,7 @@ async function renderThreadItemWithComposerDraft(
   await controller.put({
     daemonRegistrationId: "memory",
     kind: "composerDraft",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     threadId: entry.identity.threadId,
     value,
   });
@@ -256,7 +275,7 @@ async function renderThreadItemWithComposerDraft(
             createElement(WorkbenchThreadListItem, {
               entry,
               href: "/agent/thread/thread-one",
-              projectId: rowProjectId,
+              projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(rowProjectId),
             }),
           ),
         },
@@ -335,7 +354,7 @@ test("compact sidebar rows hide metadata only while a real action is available",
   const html = renderThreadItem({
     ...entry,
     lifecycle: {
-      agent: { agentStatus: "completed", turnId: "turn-one" },
+      agent: { agentStatus: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["turn-one"] },
       kind: "completed",
       reason: "agentCompleted",
       settled: true,
@@ -418,15 +437,15 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
   });
   const cases = [
     {
-      entry: { ...proposed, lifecycle: { agent: { agentStatus: "working" as const, turnId: "turn-two" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const } },
+      entry: { ...proposed, lifecycle: { agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-two") }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const } },
       label: "Working",
     },
     {
-      entry: { ...proposed, lifecycle: { kind: "needsAttention" as const, reason: "pendingInput" as const, requestKey: "questionnaire:one", settled: false as const, turnId: "turn-two" } },
+      entry: { ...proposed, lifecycle: { kind: "needsAttention" as const, reason: "pendingInput" as const, requestKey: "questionnaire:one", settled: false as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-two") } },
       label: "Needs attention",
     },
     {
-      entry: { ...proposed, lifecycle: { kind: "stopped" as const, reason: "providerInterrupted" as const, settled: false as const, turnId: "turn-two" } },
+      entry: { ...proposed, lifecycle: { kind: "stopped" as const, reason: "providerInterrupted" as const, settled: false as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-two") } },
       label: "Stopped",
     },
   ];
@@ -455,14 +474,14 @@ test("thread rows expose explicit context-menu access alongside interactive tool
 test("global pinned disclosure starts open, omits thread creation, and identifies each project", () => {
   const localPinned = {
     ...createThreadEntry({ threadId: "local-pin", title: "Local pin" }),
-    lifecycle: { agent: { agentStatus: "working" as const, turnId: "turn-local" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
+    lifecycle: { agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-local") }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
     metadata: { archived: false as const, pinned: true, snoozed: false },
   };
   const projects: WorkbenchProjectOption[] = [{
-    id: "project", kind: "git", lastCommitTimeMs: null, name: "Workbench", relativePath: "web/workbench",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", lastCommitTimeMs: null, name: "Workbench", relativePath: "web/workbench",
     rootPath: "C:/git/web/workbench", roots: [{ id: "workbench", isPrimary: true, name: "workbench", relativePath: "web/workbench", rootPath: "C:/git/web/workbench" }],
   }, {
-    id: "other", kind: "git", lastCommitTimeMs: null, name: "Other", relativePath: "web/other",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), kind: "git", lastCommitTimeMs: null, name: "Other", relativePath: "web/other",
     rootPath: "C:/git/web/other", roots: [{ id: "other", isPrimary: true, name: "other", relativePath: "web/other", rootPath: "C:/git/web/other" }],
   }];
   const projectThreadSummaries: WorkbenchProjectThreadSummaries = {
@@ -479,7 +498,7 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
         status: "working",
         title: localPinned.title,
       }],
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       revision: 1,
       unsettledThreads: [{ activityAt: localPinned.activityAt, identity: localPinned.identity, status: "working", title: localPinned.title }],
     }, {
@@ -489,15 +508,15 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
         activityAt: localPinned.activityAt,
         canCompleteQuestionnaire: false,
         entryKind: "thread",
-        identity: { harness: "codex", threadId: "remote-pin" },
-        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn-remote" },
+        identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["remote-pin"] },
+        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-remote"] },
         metadata: { archived: false, pinned: true, snoozed: false },
         status: "stopped",
         title: "Remote pin",
       }],
-      projectId: "other",
+      projectId: fixtureIdentityValues.ProjectId["other"],
       revision: 1,
-      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: { harness: "codex", threadId: "remote-pin" }, status: "stopped", title: "Remote pin" }],
+      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["remote-pin"] }, status: "stopped", title: "Remote pin" }],
     }],
   };
   const html = renderPinnedThreads(projects, projectThreadSummaries);
@@ -507,7 +526,7 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
   const localRowHtml = renderThreadItem(localPinned, null, projects[0]);
   const remoteRowHtml = renderThreadItem({
     ...createThreadEntry({ threadId: "remote-pin", title: "Remote pin" }),
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn-remote" },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-remote"] },
     metadata: { archived: false, pinned: true, snoozed: false },
   }, null, projects[1]);
   assert.match(localRowHtml, /Workbench[\s\S]*?web\/workbench[\s\S]*?Local pin/u);
@@ -522,11 +541,11 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
   assert.match(relocatedMainHtml, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
 
   const dragHtml = renderPinnedThreads(projects, projectThreadSummaries, "pinned-section", {
-    ownerProjectId: "source-project",
-    projectSourceKey: "codex:source",
+    ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("source-project"),
+    projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:source"),
     section: "main",
     sourceKey: "codex:source",
-    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "source" } },
+    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["source"] } },
     type: "thread-row",
   });
   assert.doesNotMatch(dragHtml, /data-thread-priority-drop-target="pinned"/u);
@@ -558,15 +577,15 @@ test("project thread drag exposes group outcomes and folder targets only in fold
     metadata: { archived: false as const, pinned: false, snoozed: true },
   };
   const html = renderThreads([pinned, ungroupedPinned, main, snoozed], true, {
-    ownerProjectId: "project",
-    projectSourceKey: "codex:source",
+    ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:source"),
     section: "main",
     sourceKey: "codex:source",
-    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "source" } },
+    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["source"] } },
     type: "thread-row",
   }, {
     folders: [{
-      folderId: "00000000-0000-4000-8000-000000000202",
+      folderId: fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000202"),
       section: "pinned",
       threadKeys: ["codex:pinned-target"],
       title: "Pinned folder",
@@ -617,10 +636,10 @@ test("settled home thread rows retain pin priority", () => {
 
 test("home renders one combined priority list with project-owned folders and foreign drag blocking", () => {
   const projects: WorkbenchProjectOption[] = [{
-    id: "alpha", kind: "git", lastCommitTimeMs: null, name: "Alpha", relativePath: "web/alpha",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), kind: "git", lastCommitTimeMs: null, name: "Alpha", relativePath: "web/alpha",
     rootPath: "C:/git/web/alpha", roots: [{ id: "alpha", isPrimary: true, name: "alpha", relativePath: "web/alpha", rootPath: "C:/git/web/alpha" }],
   }, {
-    id: "beta", kind: "git", lastCommitTimeMs: null, name: "Beta", relativePath: "web/beta",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), kind: "git", lastCommitTimeMs: null, name: "Beta", relativePath: "web/beta",
     rootPath: "C:/git/web/beta", roots: [{ id: "beta", isPrimary: true, name: "beta", relativePath: "web/beta", rootPath: "C:/git/web/beta" }],
   }];
   const alphaPinned = { ...createThreadEntry({ threadId: "alpha-pinned", title: "Alpha pinned" }), metadata: { archived: false as const, pinned: true, snoozed: false } };
@@ -638,31 +657,31 @@ test("home renders one combined priority list with project-owned folders and for
     lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
     metadata: { archived: false as const, pinned: false, snoozed: true },
   };
-  const folderId = "00000000-0000-4000-8000-000000000303";
+  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000303");
   const projectThreadSidebars: WorkbenchProjectThreadSidebars = {
     projects: [{
       displayOrder: { folders: [{ folderId, section: "pinned", threadKeys: ["codex:alpha-pinned"], title: "Alpha folder" }] },
       entries: [alphaPinned, alphaMain, alphaSettled],
       error: null,
       freshness: "fresh",
-      projectId: "alpha",
+      projectId: fixtureIdentityValues.ProjectId["alpha"],
       revision: 1,
     }, {
       displayOrder: {},
       entries: [betaPinned, betaSnoozed],
       error: null,
       freshness: "fresh",
-      projectId: "beta",
+      projectId: fixtureIdentityValues.ProjectId["beta"],
       revision: 1,
     }],
   };
   const html = renderHomeThreads({
     activeDragPayload: {
-      ownerProjectId: "beta",
-      projectSourceKey: "codex:beta-pinned",
+      ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
+      projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:beta-pinned"),
       section: "pinned",
       sourceKey: "beta/codex%3Abeta-pinned",
-      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "beta-pinned" } },
+      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["beta-pinned"] } },
       type: "home-thread-row",
     },
     projectThreadSidebars,
@@ -698,11 +717,11 @@ test("home renders one combined priority list with project-owned folders and for
 
   const sameProjectHtml = renderHomeThreads({
     activeDragPayload: {
-      ownerProjectId: "alpha",
-      projectSourceKey: "codex:alpha-pinned",
+      ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
+      projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:alpha-pinned"),
       section: "pinned",
       sourceKey: "alpha/codex%3Aalpha-pinned",
-      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "alpha-pinned" } },
+      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["alpha-pinned"] } },
       type: "home-thread-row",
     },
     projectThreadSidebars,

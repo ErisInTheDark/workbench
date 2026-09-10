@@ -1,19 +1,18 @@
 /*
- * Keywords: steer, history, identity, submission time.
  * Exports:
  * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX: legacy reference conversion only.
  * - resolveSteerHistoryItemId: reuse admitted identity, with retained-history fallback.
  * - resolveSteerTranscriptSourceId: correlate delivered provider input or retained unsent history.
- * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages. Keywords: synthetic, steer, guard.
- * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors. Keywords: optimistic, synthetic, steer, anchor.
- * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn. Keywords: optimistic, synthetic, steer, pending.
- * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history. Keywords: steer, thread, overlay, persisted history.
+ * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages.
+ * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors.
+ * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn.
+ * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
 import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
-import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
+import type { ThreadPayloadData, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
 import { getWorkbenchInputState, withWorkbenchInputState } from "./thread-input-item.ts";
 
@@ -143,8 +142,8 @@ function applySteerHistoryToItems(items: ThreadItem[], entries: WorkbenchSteerHi
   ];
 }
 
-export function applySteerHistoryToThread(
-  thread: ThreadPayload,
+export function applySteerHistoryToThread<Payload extends ThreadPayloadData<string> & { isDraft: boolean }>(
+  thread: Payload,
   entries: WorkbenchSteerHistoryEntry[],
 ) {
   if (thread.harness !== "codex") {

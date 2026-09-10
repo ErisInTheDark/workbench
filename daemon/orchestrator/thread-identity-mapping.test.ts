@@ -19,14 +19,15 @@ import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityControll
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { admitProviderThreads, admitProviderThreadItems, admitProviderNotifications, mapProviderThread, mapProviderThreadItem, mapProviderTurn, mapProviderNotification } from "./thread-identity-provider-mapping";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
+import { mapProviderLifecycleNotification, normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
 import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } from "./thread-identity-transcript-mapping";
-import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import { createNativeQuestionnaireStatePorts, mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
-import type { WorkbenchTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
+import type { NativeTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
 import { OpenCodeBridge } from "./opencode-bridge";
 import * as opencodeThreadState from "./opencode-thread-state";
 import * as opencodeLiveThreadState from "./opencode-live-thread-state";
@@ -35,6 +36,25 @@ import type OpenCodeAppServer from "./OpenCodeAppServer";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { V2Event } from "@opencode-ai/sdk/v2";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
+import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
+import type WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadSidebarEntrySchema } from "workbench-shared/workbench/thread/thread-state";
+import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "remote-child": fixtureIdentitySchemas.NativeThreadIdSchema.parse("remote-child"),
+    "session": fixtureIdentitySchemas.NativeThreadIdSchema.parse("session"),
+  },
+  NativeTurnId: {
+    "unobserved-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("unobserved-turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 async function setup(platform: NodeJS.Platform = process.platform) {
   const database = new Database(":memory:");
@@ -58,14 +78,14 @@ async function setup(platform: NodeJS.Platform = process.platform) {
     },
     resolveTranscriptItemIdentity: async () => { throw new Error("Unexpected projection database read"); },
   });
-  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "native-parent", nativeTurnId: "native-turn" };
+  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("native-parent"), nativeTurnId: NativeTurnIdSchema.parse("native-turn") };
   const parent = await threads.observe({
-    native, projectId: "project", projectRoot: "C:/repo", title: "Parent",
+    native, projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/repo", title: "Parent",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const child = await threads.observe({
-    native: { ...native, nativeThreadId: "native-child" },
-    projectId: "project", projectRoot: "C:/repo", title: "Child",
+    native: { ...native, nativeThreadId: NativeThreadIdSchema.parse("native-child") },
+    projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/repo", title: "Child",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const turn = await threads.observeTurn({
@@ -75,6 +95,203 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   });
   return { database, owners: { threads, items }, native, parent, child, turn, admissions: () => admissions };
 }
+
+test("accepted-intent ingress resolves canonical ownership before publishing lifecycle evidence", async () => {
+  const { database, owners, native, parent, child, turn } = await setup();
+  const emitted: Array<{ id?: number; error?: { message: string }; result?: { accepted: boolean } }> = [];
+  const accepted: Array<{ threadId: string; turnId: string }> = [];
+  const client: BridgeClient = {
+    OPEN: 1, readyState: 1, close() {}, on() {}, once() {},
+    send(data, callback) { emitted.push(JSON.parse(String(data))); callback?.(); },
+  };
+  const harnesses = new WorkbenchHarnessController([{
+    id: "codex", serverMethods: [], recovery: { kind: "none" },
+    internal: { request: async () => { throw new Error("Lifecycle evidence must not execute a provider request"); } },
+    browse: {
+      readThread: async () => { throw new Error("Unexpected Browse read"); },
+      steerTurn: async () => { throw new Error("Unexpected Browse steer"); },
+    },
+    browser: { handleBrowserMessage: async () => { throw new Error("Unexpected provider dispatch"); } },
+  }], { identities: owners.threads, itemIdentities: owners.items });
+  const controller = new WorkbenchWebSocketRequestController({
+    harnesses, identities: owners,
+    reportDelivery: delivery => controller.completeDelivery(delivery),
+    setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimeout() {},
+    reload: { getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }), subscribeReloadDirt: () => () => {} },
+    threadState: {
+      acceptIntent: async (_connection, input) => {
+        const admitted = owners.threads.knownTurn(input.turnId);
+        assert.equal(admitted.threadId, input.threadId);
+        accepted.push(input);
+        return { accepted: true, revision: accepted.length };
+      },
+      disconnect: async () => {},
+      handleRequest: async () => { throw new Error("Unexpected thread-state request"); },
+    },
+    transcript: { read: async () => null, subscribe: async () => {}, unsubscribe() {} },
+    writeLine() {},
+  });
+  const send = async (id: number, projectId: string, threadId: string, turnId: string) => {
+    await controller.handleMessage(client, "socket", Buffer.from(JSON.stringify({
+      id, method: "workbench/thread-state/accepted",
+      params: { harness: "codex", projectId, threadId, turnId },
+    })), false);
+    return emitted.find(message => message.id === id);
+  };
+  try {
+    assert.equal((await send(1, parent.projectId, parent.threadId, turn.turnId))?.error, undefined);
+    assert.equal((await send(2, parent.projectId, native.nativeThreadId, native.nativeTurnId))?.error, undefined);
+    assert.deepEqual(accepted.map(({ threadId, turnId }) => ({ threadId, turnId })), [
+      { threadId: parent.threadId, turnId: turn.turnId },
+      { threadId: parent.threadId, turnId: turn.turnId },
+    ]);
+    assert.ok((await send(3, "wrong-project", parent.threadId, turn.turnId))?.error);
+    assert.ok((await send(4, child.projectId, child.threadId, turn.turnId))?.error);
+    assert.equal(accepted.length, 2);
+  } finally {
+    controller.dispose();
+    owners.threads.dispose();
+    owners.items.dispose();
+    database.close();
+  }
+});
+
+test("Git arc mutations keep native registry addresses separate from canonical state callbacks", async () => {
+  const { database, owners, native, parent } = await setup();
+  const contexts: string[] = [];
+  const refreshed: string[] = [];
+  const registryOwners: string[] = [];
+  const feature = new WorkbenchGitArcFeature({
+    identities: owners.threads,
+    getThreadCreatedAt: async () => 1,
+    getThreadClaimContext: async (_projectId, _harness, threadId) => {
+      contexts.push(threadId);
+      return threadId === parent.threadId
+        ? { title: "Parent", lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false } }
+        : null;
+    },
+    refreshThreadGitArcState: async (_projectId, _harness, threadId) => { refreshed.push(threadId); },
+    resolveProjectFromCwd: async () => ({ cwd: native.nativeLocation, project: { id: parent.projectId } }),
+    transitions: { run: async (_key, operation) => operation() },
+  });
+  const local = (feature as unknown as {
+    controller: { createAndStartPlan: (input: { threadId: string }) => Promise<object> };
+  }).controller;
+  local.createAndStartPlan = async input => {
+    registryOwners.push(input.threadId);
+    return { phase: "active" };
+  };
+  try {
+    const response = await feature.executeRequest({
+      action: "planStart", cwd: native.nativeLocation, harness: "codex",
+      threadId: parent.threadId, intentName: "identity boundary", paths: ["src/example.ts"],
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.deepEqual(registryOwners, [native.nativeThreadId]);
+    assert.deepEqual(contexts, [parent.threadId, parent.threadId]);
+    assert.deepEqual(refreshed, [parent.threadId]);
+    const registry = (feature as unknown as { workspaceController: WorkbenchWorkspaceGitArcController }).workspaceController;
+    const base = {
+      checkpointCommit: "a".repeat(40), harness: "codex", intentDescription: "", intentName: "identity boundary",
+      threadId: native.nativeThreadId, updatedAt: "2026-09-10T00:00:00.000Z",
+    };
+    const member = { ...base, repoRoot: native.nativeLocation, rootId: parent.projectId, rootIds: [parent.projectId] };
+    const lifecycle = {
+      ...base, phase: "active" as const, claimedPaths: ["src/example.ts"], proposals: [],
+      members: [{ ...member, phase: "active" as const, claimedPaths: ["src/example.ts"], proposals: [] }],
+    };
+    const plan = { ...base, scopePaths: ["src/example.ts"], members: [{ ...member, scopePaths: ["src/example.ts"] }] };
+    registry.findLifecycleState = async (_project, _harness, threadId) => threadId === native.nativeThreadId ? lifecycle : null;
+    registry.findPlanState = async (_project, _harness, threadId) => threadId === native.nativeThreadId ? plan : null;
+    registry.listLifecycleStates = async () => [lifecycle];
+    registry.listPlanStates = async () => [plan];
+    registry.hasLiveClaims = async (_project, _harness, threadId) => threadId === native.nativeThreadId;
+    const pruned: string[] = [];
+    registry.pruneThreadHistories = async (_project, identities) => {
+      pruned.push(...identities.map(identity => identity.threadId));
+      return { prunedRefCount: 0, registryEntryRemoved: false };
+    };
+    assert.equal((await feature.findLifecycleState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);
+    assert.equal((await feature.findPlanState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);
+    assert.equal(await feature.hasLiveClaims(native.nativeLocation, "codex", parent.threadId), true);
+    const [listedLifecycle] = await feature.listLifecycleStates(native.nativeLocation);
+    const [listedPlan] = await feature.listPlanStates(native.nativeLocation);
+    assert.equal(listedLifecycle?.threadId, parent.threadId);
+    assert.equal(listedLifecycle?.members[0]?.threadId, parent.threadId);
+    assert.equal(listedPlan?.threadId, parent.threadId);
+    assert.equal(listedPlan?.members[0]?.threadId, parent.threadId);
+    await feature.pruneThreadHistories(native.nativeLocation, [{ harness: "codex", threadId: parent.threadId }]);
+    assert.deepEqual(pruned, [native.nativeThreadId]);
+  } finally {
+    feature.dispose();
+    owners.threads.dispose();
+    owners.items.dispose();
+    database.close();
+  }
+});
+
+test("native questionnaire ports resolve, publish, clear and observe the canonical thread", async () => {
+  const { database, owners, native, parent, turn } = await setup();
+  const questionnaire = {
+    itemId: randomUUID(), turnId: turn.turnId, requestKey: "question",
+    request: { id: "question", questions: [{ id: "q", header: "", question: "Continue?", allowOther: true, isSecret: false, options: [] }],
+      submitLabel: "Submit", summary: "", title: "Continue?" },
+  };
+  const entry = WorkbenchThreadSidebarEntrySchema.parse({
+    entryKind: "thread", identity: { harness: "codex", threadId: parent.threadId },
+    title: "Parent", activityAt: 1, metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "question", turnId: turn.turnId, settled: false },
+    pendingQuestionnaire: questionnaire,
+  });
+  let listener: Parameters<WorkbenchThreadStateController["subscribe"]>[0] | undefined;
+  const observed: Array<Parameters<WorkbenchThreadStateController["observeLifecycle"]>> = [];
+  const ports = createNativeQuestionnaireStatePorts(owners.threads, {
+    getSnapshot: async projectId => ({ projectId, entries: [entry], revision: 1, error: null, freshness: "fresh" }),
+    observeLifecycle: async (...args) => { observed.push(args); return null; },
+    subscribe: callback => { listener = callback; return () => { listener = undefined; return true; }; },
+  }, async () => parent.projectId);
+  try {
+    const resolved = await ports.resolveThread(native.nativeLocation, native.nativeThreadId);
+    assert.equal(resolved.turnId, native.nativeTurnId);
+    assert.equal(resolved.pendingQuestionnaire?.turnId, native.nativeTurnId);
+    assert.equal(resolved.pendingQuestionnaire?.itemId, questionnaire.itemId);
+    await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
+    assert.equal(observed[0]?.[1], parent.threadId);
+    const pending = observed[0]?.[2];
+    assert.equal(pending?.kind, "pendingInput");
+    if (pending?.kind !== "pendingInput") throw new Error("Expected pending input.");
+    assert.equal(pending.turnId, turn.turnId);
+    assert.equal(pending.questionnaire?.turnId, turn.turnId);
+    await ports.clearPending(native.nativeThreadId, questionnaire.requestKey);
+    assert.equal(observed[1]?.[1], parent.threadId);
+    const notices: Array<{ threadId: string; requestKey: string | null }> = [];
+    const stop = ports.subscribePending(notice => notices.push(notice));
+    listener?.(parent.projectId, entry);
+    assert.equal(notices[0]?.threadId, native.nativeThreadId);
+    assert.equal(notices[0]?.requestKey, questionnaire.requestKey);
+    stop();
+  } finally {
+    owners.threads.dispose();
+    owners.items.dispose();
+    database.close();
+  }
+});
+
+test("unowned native evidence cannot publish a turn as canonical ownership", async () => {
+  const { database, owners, native } = await setup();
+  try {
+    assert.throws(() => mapNativeTranscriptObservation(owners, native, {
+      kind: "nativeEvidence", harnessId: "codex", nativeLocation: native.nativeLocation,
+      nativeThreadId: native.nativeThreadId, nativeTurnId: native.nativeTurnId, nativeItemId: null,
+      nativeEventId: null, clientId: null, nativeSequence: null, recordKind: "event", payloadJson: "{}",
+      recordedAt: 1, threadId: null, turnId: native.nativeTurnId, itemId: null,
+    }), /owning thread/);
+  } finally {
+    owners.threads.dispose();
+    owners.items.dispose();
+    database.close();
+  }
+});
 
 test("equivalent Windows paths preserve the admitted turn location at durable recording", async () => {
   const { database, owners, native, parent, turn } = await setup("win32");
@@ -99,7 +316,7 @@ test("thread Git resolves public and native callers to the same existing selecti
   const selected: string[] = [];
   const feature = new WorkbenchThreadGitFeature({
     identities: owners.threads,
-    resolveProjectFromCwd: async () => ({ cwd: "C:/repo", project: { id: "project" } }),
+    resolveProjectFromCwd: async () => ({ cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
     transitions: { run: async (_root, operation) => operation() },
     createThreadGit: async ({ threadId }) => {
       selected.push(threadId);
@@ -137,12 +354,12 @@ test("cold native thread lookup admits exact metadata before public request rout
     browse: { readThread: async () => { throw new Error("Lookup must not materialise history"); }, steerTurn: async () => null },
   }], {
     identities: owners.threads, itemIdentities: owners.items,
-    resolveProject: async () => ({ projectId: "project", projectRoot: "C:/repo" }),
+    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
   });
   try {
     const request = { method: "thread/read", params: { threadId: "unobserved", includeTurns: false } };
     const routed = await harnesses.resolvePublicRequest("codex", request);
-    const identity = await owners.threads.resolve({ threadId: "unobserved", harness: "codex" });
+    const identity = await owners.threads.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("unobserved"), harness: "codex" });
     assert.ok(identity);
     assert.notEqual(identity.threadId, "unobserved");
     assert.equal((routed.request.params as { threadId: string }).threadId, "unobserved");
@@ -163,7 +380,7 @@ test("OpenCode metadata and live events share admitted identity across bridge ha
     appServer: {} as OpenCodeAppServer,
     getReloadableModules: () => ({ opencodeThreadState, opencodeLiveThreadState }) as OrchestratorReloadableModules,
     projectRoot: "C:/repo", identities: activeOwners, initialState,
-    resolveProject: async () => ({ projectId: "project", projectRoot: "C:/repo" }),
+    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
     onNotification: (notification) => published.push(mapProviderNotification(activeOwners, { harness: "opencode", nativeLocation: "C:/repo" }, notification as ServerNotification)),
   });
   let bridge = create();
@@ -208,7 +425,7 @@ test("OpenCode metadata and live events share admitted identity across bridge ha
     const deltas = published.filter((event) => event.method === "item/agentMessage/delta");
     assert.deepEqual(deltas.map((event) => event.params.delta), ["first", "second"]);
     assert.equal(deltas[0]!.params.itemId, deltas[1]!.params.itemId);
-    assert.equal(deltas[0]!.params.threadId, activeOwners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: "session" }));
+    assert.equal(deltas[0]!.params.threadId, activeOwners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["session"] }));
     assert.notEqual(deltas[0]!.params.itemId, "opencode:agent:message:text");
   } finally {
     await bridge.stop();
@@ -225,7 +442,7 @@ test("OpenCode identity failure reports the affected thread without publishing a
     appServer: {} as OpenCodeAppServer,
     getReloadableModules: () => ({ opencodeThreadState, opencodeLiveThreadState }) as OrchestratorReloadableModules,
     projectRoot: "C:/repo", identities: owners,
-    resolveProject: async () => ({ projectId: "project", projectRoot: "C:/repo" }),
+    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
     onNotification: (event) => published.push(mapProviderNotification(owners, { harness: "opencode", nativeLocation: "C:/repo" }, event as ServerNotification)),
   });
   const handle = (event: V2Event) => (bridge as unknown as { handleEvent(event: V2Event): Promise<void> }).handleEvent(event);
@@ -241,7 +458,7 @@ test("OpenCode identity failure reports the affected thread without publishing a
     assert.deepEqual(published, [{
       method: "thread/status/changed",
       params: {
-        threadId: owners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: "session" }),
+        threadId: owners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["session"] }),
         status: { type: "systemError" },
       },
     }]);
@@ -328,7 +545,7 @@ test("repeated provider catalogues admit only new identity evidence without hidi
       }],
     };
     const admit = () => admitProviderThreads(owners, [{
-      metadata: { native, projectId: "project", projectRoot: "C:/repo", title: "Parent",
+      metadata: { native, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "Parent",
         createdAt: 1, updatedAt: 2, activityAt: 2 },
       thread,
     }]);
@@ -345,7 +562,7 @@ test("repeated provider catalogues admit only new identity evidence without hidi
     await admit();
     const repository = new WorkbenchTranscriptIdentityRepository(database);
     for (const reference of ["new-client", "retained-message"]) {
-      assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: reference })?.itemId, itemId);
+      assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(reference) })?.itemId, itemId);
     }
     assert.equal(fixture.admissions(), initialAdmissions + 1);
     await admit();
@@ -355,12 +572,12 @@ test("repeated provider catalogues admit only new identity evidence without hidi
       threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "client", sourceId: "other-client" }],
       legacyAliases: [],
     }]);
-    const otherClientId = repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "other-client" })!.itemId;
+    const otherClientId = repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("other-client") })!.itemId;
     message.clientId = "other-client";
     await admit();
     assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, itemId);
-    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "other-client" })?.itemId, otherClientId);
-    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "new-client" })?.itemId, itemId);
+    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("other-client") })?.itemId, otherClientId);
+    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("new-client") })?.itemId, itemId);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
@@ -406,7 +623,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       const event = { method: "item/completed" as const, params: {
         threadId: native.nativeThreadId, turnId: native.nativeTurnId, item: message, completedAtMs: 2_000,
       } };
-      const observation: WorkbenchTranscriptAtomicObservation = {
+      const observation: NativeTranscriptAtomicObservation = {
         kind: "item", threadId: native.nativeThreadId, turnId: native.nativeTurnId,
         lifecycle: "completed", observedAt: 3, item: message,
       };
@@ -423,7 +640,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       };
       const admit = () => route === "catalogue"
         ? admitProviderThreads(owners, [{ thread, metadata: {
-          native, projectId: "project", projectRoot: "C:/repo", title: "Parent",
+          native, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "Parent",
           createdAt: 1, updatedAt: 2, activityAt: 2,
         } }])
         : route === "event" ? admitProviderNotifications(owners, native, [event])
@@ -434,7 +651,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       assert.equal(fixture.admissions(), admissions, "The repaired evidence must stop scheduling duplicate admission.");
       for (const reference of [structural!.itemId, recorded!.itemId, "native-message", "item-1",
         ...(evidence === "retained-alias" ? [] : ["submitted"])]) {
-        assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, reference), recorded!.itemId);
+        assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(reference)), recorded!.itemId);
       }
       assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, recorded!.itemId);
       const mappedEvent = mapProviderNotification(owners, native, event);
@@ -464,10 +681,15 @@ test("provider event batches admit starts before deltas without storing pending 
     assert.equal((mapProviderNotification(owners, native, pendingEvent).params as { threadId: string }).threadId, parent.threadId);
     assert.equal(mapProviderTurn(owners, native, pending).id, pending.id);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_turns WHERE id = ?").get(pending.id) as { count: number }).count, 0);
-    const metadata = {
+    const metadata: Thread = {
       id: native.nativeThreadId, cwd: native.nativeLocation, name: "Parent",
       createdAt: 1, updatedAt: 1, parentThreadId: null, source: "cli", turns: [pending],
-    } as Thread;
+      extra: null, sessionId: "native-session", forkedFromId: null, preview: "", ephemeral: false,
+      section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
+      modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
+      status: { type: "active", activeFlags: [] }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+      threadSource: null, agentNickname: null, agentRole: null, gitInfo: null,
+    };
     const snapshot = { ...metadata,
       workbenchTurnHistory: [{
         turnId: pending.id, status: pending.status, startedAt: 1, completedAt: null,
@@ -475,12 +697,22 @@ test("provider event batches admit starts before deltas without storing pending 
       }],
     };
     await admitProviderThreads(owners, [{
-      metadata: { native, projectId: "project", projectRoot: "C:/repo", title: "Parent", createdAt: 1, updatedAt: 1, activityAt: 1 },
+      metadata: { native, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "Parent", createdAt: 1, updatedAt: 1, activityAt: 1 },
       thread: snapshot,
     }]);
-    assert.equal(await owners.threads.resolveTurn({ threadId: parent.threadId, turnId: pending.id }), null);
+    assert.equal(await owners.threads.resolveTurn({ threadId: parent.threadId, turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse(pending.id) }), null);
     assert.deepEqual(readWorkbenchTurnHistory(mapProviderThread(owners, native, snapshot)), []);
     assert.equal(mapProviderThread(owners, native, snapshot).turns[0], pending);
+    const sidebarEntry = normalizeProviderSidebarEntry("codex", {
+      ...mapProviderThread(owners, native, snapshot), status: { type: "active" },
+    }, owners.threads);
+    assert.ok(sidebarEntry && sidebarEntry.entryKind !== "draft");
+    assert.deepEqual(sidebarEntry.lifecycle, {
+      agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false,
+    });
+    assert.equal(mapProviderLifecycleNotification(
+      mapProviderNotification(owners, native, pendingEvent), owners.threads,
+    ), null);
     const turn = { ...pending, id: "next-native-turn", workbenchAdmission: "admitted" as const };
     const item: ThreadItem = { id: "first-reasoning", type: "reasoning", summary: [], content: [] };
     const events = [
@@ -549,14 +781,14 @@ test("notification admission restores cold durable references without replaying 
     assert.equal(reads, coldReads, "Warm deltas remain memory-only");
     assert.equal(writes, 0, "Identifier-only events must not allocate replacement identities");
 
-    const foreign = { ...native, nativeThreadId: "native-child" };
+    const foreign = { ...native, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-child") };
     const foreignEvent = { ...event, params: { ...event.params, threadId: foreign.nativeThreadId } };
     await assert.rejects(async () => {
       await admitProviderNotifications(cold, foreign, [foreignEvent]);
       mapProviderNotification(cold, foreign, foreignEvent);
     }, /turn identity has not been admitted/);
     assert.equal(cold.threads.findNativeTurn(foreign), undefined);
-    assert.equal(cold.items.findItemIdForReference(child.threadId, turn.turnId, item.id), undefined);
+    assert.equal(cold.items.findItemIdForReference(child.threadId, turn.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(item.id)), undefined);
     const absentItem = { ...event, params: { ...event.params, itemId: "absent-item" } };
     await assert.rejects(async () => {
       await admitProviderNotifications(cold, native, [absentItem]);
@@ -634,7 +866,7 @@ test("public socket routing and reload handoff retain native request correlation
       throw new Error("Canonical thread-state delivery must not resolve provider identities");
     });
     const sidebarMessage = { method: "workbench/thread-state/updated", params: {
-      projectId: "project", revision: 1, error: null, freshness: "fresh",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, error: null, freshness: "fresh",
       entries: [{
         entryKind: "thread", activityAt: 1, title: native.nativeThreadId,
         identity: { harness: "codex", threadId: parent.threadId },
@@ -663,7 +895,7 @@ test("public socket routing and reload handoff retain native request correlation
     };
     await controller.sendJsonToClient(client, nextPublication);
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 2);
-    const summary = { projectId: "project", revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
+    const summary = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
     await controller.sendJsonToClient(client, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
     await controller.sendJsonToClient(secondClient, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 3);
@@ -753,8 +985,8 @@ test("provider relationship references map without rewriting prompts or hiding u
     assert.deepEqual(mapped.agentsStates, { [child.threadId]: item.agentsStates["native-child"] });
     assert.equal(mapped.prompt, item.prompt);
     const elsewhere = await owners.threads.observe({
-      native: { harness: "codex", nativeLocation: "C:/another-worktree", nativeThreadId: "remote-child" },
-      projectId: "project", projectRoot: "C:/another-worktree", title: "Remote child", createdAt: 1, updatedAt: 1, activityAt: 1,
+      native: { harness: "codex", nativeLocation: "C:/another-worktree", nativeThreadId: fixtureIdentityValues.NativeThreadId["remote-child"] },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/another-worktree", title: "Remote child", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const crossDirectory = mapProviderThreadItem(owners, native, { ...item, receiverThreadIds: ["remote-child"] });
     assert.equal(crossDirectory.type, "collabAgentToolCall");
@@ -852,7 +1084,7 @@ test("thread metadata maps known parents without admitting unsupported fork ance
     assert.equal(mapped.params.thread.preview, thread.preview);
     assert.equal(thread.parentThreadId, native.nativeThreadId);
     assert.equal(fixture.admissions(), 0);
-    const childNative = { ...native, nativeThreadId: "native-child", nativeTurnId: "child-turn" };
+    const childNative = { ...native, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-child"), nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("child-turn") };
     const childTurn = await owners.threads.observeTurn({
       kind: "turn", threadId: child.threadId, turnId: childNative.nativeTurnId,
       nativeThreadId: childNative.nativeThreadId, nativeTurnId: childNative.nativeTurnId,
@@ -896,7 +1128,7 @@ test("public request routing resolves thread and turn aliases without touching i
     assert.deepEqual(routed, { harness: "codex", request: {
       ...request, params: { ...request.params, threadId: native.nativeThreadId, expectedTurnId: native.nativeTurnId },
     } });
-    assert.equal(routed.request.params && (routed.request.params as typeof request.params).input, input);
+    assert.equal(routed.request.params && (routed.request.params as { input: typeof input }).input, input);
     assert.equal(request.params.threadId, parent.threadId);
     assert.deepEqual(await mapWorkbenchProviderRequest(owners.threads, "codex", {
       ...request, params: { ...request.params, threadId: native.nativeThreadId, expectedTurnId: native.nativeTurnId },
@@ -981,7 +1213,7 @@ for (const deliveryFirst of [true, false]) {
         if (mapped.kind !== "steer") throw new Error("Expected steer.");
         assert.equal(mapped.publicItemId, pending.itemId);
       }
-      assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, pending.itemId), pending.itemId);
+      assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(pending.itemId)), pending.itemId);
       assert.deepEqual(database.pragma("foreign_key_check"), []);
     } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
   });
@@ -1087,8 +1319,8 @@ test("canonical recording maps structural references without changing evidence, 
     const [questionnaire, steer] = await owners.items.admit(["native-questionnaire", "native-steer"].map((alias) => ({
       threadId: parent.threadId, sources: [], legacyAliases: [{ turnId: turn.turnId, alias }],
     })));
-    const observations: WorkbenchTranscriptAtomicObservation[] = [
-      { kind: "thread", threadId: native.nativeThreadId, projectId: "project", projectRoot: "C:/repo",
+    const observations: NativeTranscriptAtomicObservation[] = [
+      { kind: "thread", threadId: native.nativeThreadId, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo",
         title: "Parent", createdAt: 1, updatedAt: 2, activityAt: 2 },
       { kind: "turn", threadId: native.nativeThreadId, turnId: native.nativeTurnId,
         harnessId: native.harness, nativeLocation: native.nativeLocation, nativeThreadId: native.nativeThreadId,
@@ -1113,9 +1345,9 @@ test("canonical recording maps structural references without changing evidence, 
         action: "snapshot", actionIndex: 0, assetUrl: null, durationMs: 1, entryKey: "browse",
         recordedAt: 4, session: null, state: "completed",
       } },
-      { kind: "nativeEvidence", threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: sourceItem.id,
+      { kind: "nativeEvidence", threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(sourceItem.id),
         harnessId: native.harness, nativeLocation: native.nativeLocation, nativeThreadId: native.nativeThreadId,
-        nativeTurnId: native.nativeTurnId, nativeItemId: sourceItem.id, nativeEventId: null, clientId: null,
+        nativeTurnId: native.nativeTurnId, nativeItemId: fixtureIdentitySchemas.NativeItemIdSchema.parse(sourceItem.id), nativeEventId: null, clientId: null,
         nativeSequence: null, recordKind: "event", payloadJson: '{"threadId":"native-parent"}', recordedAt: 4 },
     ];
     const original = structuredClone(observations);
@@ -1156,7 +1388,7 @@ test("canonical recording maps structural references without changing evidence, 
       }],
     });
     assert.throws(() => mapNativeTranscriptObservation(owners, native, {
-      kind: "item", threadId: native.nativeThreadId, turnId: "unobserved-turn", item: sourceItem,
+      kind: "item", threadId: native.nativeThreadId, turnId: fixtureIdentityValues.NativeTurnId["unobserved-turn"], item: sourceItem,
       lifecycle: "completed", observedAt: 4,
     }), /not been admitted/iu);
   } finally {

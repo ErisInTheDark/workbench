@@ -1,7 +1,6 @@
 /*
- * Keywords: workbench, cli, transport, receipts, scope, tests.
  * Exports:
- * - No production exports; Node tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims. Keywords: workbench, cli, questionnaire, git arc, test, output, shim, allowlist.
+ * - No production exports; Node tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -14,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import WorkbenchAgentCommandController from "../../../orchestrator/WorkbenchAgentCommandController.ts";
+import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchAgentCliEnvironment from "../../../orchestrator/WorkbenchAgentCliEnvironment.ts";
 import {
   listWorkbenchAgentCliCommandDescriptors,
@@ -343,6 +344,11 @@ before(async () => {
   assert(address && typeof address === "object");
   origin = `http://127.0.0.1:${address.port}`;
   agentCommandController = new WorkbenchAgentCommandController(origin, {
+    resolveCaller: async (threadId, _cwd, harness) => ({
+      threadId: WorkbenchThreadIdSchema.parse(threadId === "hook-thread" ? "wb:hook-thread" : threadId),
+      nativeThreadId: NativeThreadIdSchema.parse(threadId === "hook-thread" ? threadId : `native:${threadId}`),
+      harness: WorkbenchHarnessSchema.parse(harness),
+    }),
     checkApplyPatchClaims: async ({ paths }) => {
       if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
       const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));

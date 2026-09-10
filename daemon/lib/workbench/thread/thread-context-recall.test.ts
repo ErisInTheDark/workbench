@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover filtered history/search paging, tagged output, plan dedupe, and record expansion. Keywords: thread recall, pagination, tags, test.
+ * - No production exports; Node tests cover filtered history/search paging, tagged output, plan dedupe, and record expansion.
  */
 
 import assert from "node:assert/strict";
@@ -40,6 +40,25 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../orchestrator/database/transcript/workbench-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  },
+  NativeTurnId: {
+    "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread-sqlite": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-sqlite"),
+  },
+  WorkbenchTurnId: {
+    "turn-sqlite": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-sqlite"),
+  },
+};
 
 const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "agent-message",
@@ -72,16 +91,16 @@ test("native incoming agent recall preserves identity and excludes passive outpu
     installWorkbenchDatabaseSchema(database);
     const repository = new WorkbenchTranscriptRepository(database);
     repository.settle([sqliteWindow([{
-      activityAt: 10, createdAt: 1, kind: "thread", projectId: "project",
-      projectRoot: "C:/project", threadId: "thread-sqlite", title: "SQLite recall", updatedAt: 10,
+      activityAt: 10, createdAt: 1, kind: "thread", projectId: fixtureIdentityValues.ProjectId["project"],
+      projectRoot: "C:/project", threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"], title: "SQLite recall", updatedAt: 10,
     }, {
       createdAt: 1, durationMs: 9,
       endedAt: 10, harnessId: "codex", kind: "turn", nativeLocation: "C:/project",
-      nativeThreadId: "native-thread", nativeTurnId: "native-turn", startedAt: 1,
-      state: "completed", threadId: "thread-sqlite", turnId: "turn-sqlite", turnIndex: 0,
+      nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"], nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], startedAt: 1,
+      state: "completed", threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"], turnIndex: 0,
     }, ...items.map((item, itemPosition): WorkbenchTranscriptAtomicObservation => ({
       item, itemPosition, kind: "item", lifecycle: "completed", observedAt: 2,
-      threadId: "thread-sqlite", turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
     }))])]);
     const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 });
     assert.ok(snapshot);
@@ -107,9 +126,9 @@ function sqliteWindow(
   return {
     contentVersion: 3,
     kind: "canonicalWindow",
-    materializedTurnIds: ["turn-sqlite"],
+    materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"]],
     observations,
-    threadId: "thread-sqlite",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
   };
 }
 
@@ -255,7 +274,7 @@ function createBundle(): WorkbenchThreadContextBundle {
       createdAt: 1,
       cwd: "C:/workspace",
       harness: "codex",
-      id: "thread-1",
+      id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-1"),
       isDraft: false,
       model: "test-model",
       name: "Recall test",
@@ -473,9 +492,9 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       activityAt: 10,
       createdAt: 1,
       kind: "thread",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       projectRoot: "C:/project",
-      threadId: "thread-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
       title: "SQLite recall",
       updatedAt: 10,
     }, {
@@ -485,12 +504,12 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       harnessId: "codex",
       kind: "turn",
       nativeLocation: "C:/project",
-      nativeThreadId: "native-thread",
-      nativeTurnId: "native-turn",
+      nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"],
       startedAt: 1,
       state: "completed",
-      threadId: "thread-sqlite",
-      turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
       turnIndex: 4,
     }, {
       item: {
@@ -503,8 +522,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       kind: "item",
       lifecycle: "completed",
       observedAt: 2,
-      threadId: "thread-sqlite",
-      turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
     }, {
       entry: {
         attemptedAt: 3,
@@ -516,8 +535,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         requestId: "steer-request",
         resolvedAt: 4,
         status: "sent",
-        threadId: "thread-sqlite",
-        turnId: "turn-sqlite",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
       },
       itemPosition: 1,
       kind: "steer",
@@ -533,8 +552,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         requestId: "failed-steer-request",
         resolvedAt: 5,
         status: "failed",
-        threadId: "thread-sqlite",
-        turnId: "turn-sqlite",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
       },
       itemPosition: 2,
       kind: "steer",
@@ -550,8 +569,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         requestId: "interrupted-steer-request",
         resolvedAt: 6,
         status: "interrupted",
-        threadId: "thread-sqlite",
-        turnId: "turn-sqlite",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
       },
       itemPosition: 3,
       kind: "steer",
@@ -570,8 +589,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       kind: "item",
       lifecycle: "completed",
       observedAt: 5,
-      threadId: "thread-sqlite",
-      turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
     }, {
       entry: {
         insertAfterItemId: "agent",
@@ -594,8 +613,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         requestKey: "request-key",
         resolvedAt: 6,
         response: { answers: { route: { answers: ["SQLite"] } } },
-        threadId: "thread-sqlite",
-        turnId: "turn-sqlite",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
       },
       itemPosition: 5,
       kind: "questionnaire",
@@ -619,8 +638,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       kind: "item",
       lifecycle: "completed",
       observedAt: 7,
-      threadId: "thread-sqlite",
-      turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
     }, {
       item: {
         id: "agent-final",
@@ -635,8 +654,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       kind: "item",
       lifecycle: "completed",
       observedAt: 8,
-      threadId: "thread-sqlite",
-      turnId: "turn-sqlite",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
     }])]);
     const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 });
     assert.ok(snapshot);

@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadLayoutStore: own Workbench-wide pinned folders, atomic row drops, sparse ordering, compatibility import, and authoritative SQLite persistence. Keywords: pinned, global, layout, folder, storage, sqlite.
+ * - default WorkbenchPinnedThreadLayoutStore: own global pinned folders, row drops, ordering, retained-layout import and SQLite persistence.
  */
 
 import { z } from "zod";
+import { ThreadDisplayKeySchema, type ProjectId, type ThreadDisplayKey } from "workbench-shared/workbench/identity";
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -33,7 +34,7 @@ import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStor
 
 const StoredPinnedThreadLayoutSchema = z.object({
   displayOrder: ThreadDisplayLayoutSchema,
-  importedProjectIds: z.array(z.string().min(1)),
+  importedProjectIds: z.array(z.string().min(1).brand<"ProjectId">()),
   revision: z.number().int().nonnegative(),
   version: z.literal(1),
 }).strict();
@@ -59,7 +60,7 @@ type PinnedFolderDrop = Extract<WorkbenchThreadStateRequest, {
   method: "workbench/thread-state/pinned-display-order/folder/drop";
 }>;
 
-function projectLayoutEntries(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[]) {
+function projectLayoutEntries(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[]) {
   return entries.flatMap((entry): ThreadDisplayLayoutEntry[] => (
     getWorkbenchThreadDisplaySection(entry) === "pinned"
       ? [{ key: getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)), section: "pinned" }]
@@ -67,11 +68,11 @@ function projectLayoutEntries(projectId: string, entries: readonly WorkbenchThre
   ));
 }
 
-function qualifyProjectPinnedOrder(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[], candidate: unknown) {
-  const localKeys = new Set(entries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "pinned").map(getWorkbenchThreadDisplayKey));
+function qualifyProjectPinnedOrder(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[], candidate: unknown) {
+  const localKeys = new Set<string>(entries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "pinned").map(getWorkbenchThreadDisplayKey));
   const qualify = (key: string) => key.startsWith("folder:")
     ? key
-    : getProjectQualifiedThreadDisplayKey(projectId, key);
+    : getProjectQualifiedThreadDisplayKey(projectId, ThreadDisplayKeySchema.parse(key));
   const order = normalizeThreadDisplayLayout(candidate);
   const folders = (order.folders ?? []).flatMap((folder) => {
     if (folder.section !== "pinned") return [];
@@ -109,7 +110,7 @@ export default class WorkbenchPinnedThreadLayoutStore {
     return { displayOrder: state.displayOrder, revision: state.revision, updateKind: "pinnedThreadLayout" };
   }
 
-  async importProject(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[], displayOrder: WorkbenchThreadDisplayOrder) {
+  async importProject(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[], displayOrder: WorkbenchThreadDisplayOrder) {
     return await this.enqueue(async () => {
       const state = await this.load();
       if (state.importedProjectIds.includes(projectId)) return null;
@@ -147,7 +148,7 @@ export default class WorkbenchPinnedThreadLayoutStore {
     });
   }
 
-  async remove(projectId: string, threadKey: string) {
+  async remove(projectId: ProjectId, threadKey: ThreadDisplayKey) {
     return await this.enqueue(async () => {
       const state = await this.load();
       const next = removeThreadDisplayLayoutMember(state.displayOrder, getProjectQualifiedThreadDisplayKey(projectId, threadKey));
@@ -156,7 +157,7 @@ export default class WorkbenchPinnedThreadLayoutStore {
     });
   }
 
-  async replace(projectId: string, sourceThreadKey: string, replacementThreadKey: string) {
+  async replace(projectId: ProjectId, sourceThreadKey: ThreadDisplayKey, replacementThreadKey: ThreadDisplayKey) {
     return await this.enqueue(async () => {
       const state = await this.load();
       const next = replaceThreadDisplayFolderMember(

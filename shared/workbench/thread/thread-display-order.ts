@@ -12,10 +12,13 @@
  */
 
 import type { WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import type { FolderId } from "../identity.ts";
 import {
   createThreadDisplayFolder,
   findThreadDisplayFolder,
   getThreadDisplayFolderKey,
+  getThreadDisplayDraftKey,
+  getThreadDisplayThreadKey,
   isThreadDisplayLayoutEmpty,
   moveThreadDisplayLayoutItem,
   normalizeThreadDisplayLayout,
@@ -66,11 +69,11 @@ export type WorkbenchThreadDisplayItem =
 
 export function getWorkbenchThreadDisplayKey(entry: WorkbenchThreadSidebarEntry) {
   return entry.entryKind === "draft"
-    ? `draft:${entry.draft.draftId}`
-    : `${entry.identity.harness}:${entry.identity.threadId}`;
+    ? getThreadDisplayDraftKey(entry.draft.draftId)
+    : getThreadDisplayThreadKey(entry.identity.harness, entry.identity.threadId);
 }
 
-export function getWorkbenchThreadFolderKey(folderId: string) {
+export function getWorkbenchThreadFolderKey(folderId: FolderId) {
   return getThreadDisplayFolderKey(folderId);
 }
 

@@ -1,16 +1,17 @@
 /*
  * Exports:
- * - No production exports; Node tests protect pushed project snapshots, revision isolation, catalog-only selection, and bridge mutations. Keywords: project, client, websocket, revision, test.
+ * - No production exports; Node tests protect pushed project snapshots, revision isolation, catalog-only selection, and bridge mutations.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ProjectSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import WorkbenchProjectClient, { type WorkbenchProjectTransport } from "./WorkbenchProjectClient";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function createProject(projectId: string): WorkbenchProjectOption {
   return {
-    id: projectId,
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
     kind: "git",
     lastCommitTimeMs: null,
     name: projectId,
@@ -23,7 +24,7 @@ function createProject(projectId: string): WorkbenchProjectOption {
 function createSnapshot(projectId: string, fileName = "README.md"): ProjectSnapshot {
   return {
     changes: {},
-    projectId,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
     root: projectId,
     rootPath: `C:/projects/${projectId}`,
     roots: createProject(projectId).roots,
@@ -96,7 +97,7 @@ test("project selection loads only the catalog and waits for a pushed tree snaps
     assert.equal(client.getSnapshot().isLoading, true);
     assert.deepEqual(client.getSnapshot().tree, []);
 
-    client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 0, snapshot: createSnapshot("alpha"), updateKind: "project" });
     assert.equal(client.getSnapshot().isLoading, false);
     assert.equal(client.getSnapshot().tree[0]?.name, "README.md");
     client.dispose();
@@ -137,7 +138,7 @@ test("route identity accepts a pushed tree before catalog enrichment and can rol
   assert.equal(client.getSnapshot().currentProjectId, "alpha");
   assert.equal(client.getSnapshot().isLoading, true);
 
-  client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha", "instant.ts"), updateKind: "project" });
+  client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 0, snapshot: createSnapshot("alpha", "instant.ts"), updateKind: "project" });
   client.installCatalog({ data: [createProject("alpha")], rootPath: "C:/projects" });
   assert.equal(client.getSnapshot().tree[0]?.name, "instant.ts");
   assert.equal(client.getSnapshot().isLoading, false);
@@ -158,9 +159,9 @@ test("project updates reject stale and foreign revisions", async () => {
     const { transport } = createTransport();
     const client = WorkbenchProjectClient({ transport });
     await client.selectProjectStrict("alpha");
-    client.accept({ projectId: "alpha", revision: 2, snapshot: createSnapshot("alpha", "new.ts"), updateKind: "project" });
-    client.accept({ projectId: "alpha", revision: 1, snapshot: createSnapshot("alpha", "stale.ts"), updateKind: "project" });
-    client.accept({ projectId: "beta", revision: 3, snapshot: createSnapshot("beta", "foreign.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 2, snapshot: createSnapshot("alpha", "new.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 1, snapshot: createSnapshot("alpha", "stale.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), revision: 3, snapshot: createSnapshot("beta", "foreign.ts"), updateKind: "project" });
     assert.equal(client.getSnapshot().tree[0]?.name, "new.ts");
     client.dispose();
   } finally {
@@ -174,7 +175,7 @@ test("entering home retains the catalog and clears every project-owned explorer 
     const { transport } = createTransport();
     const client = WorkbenchProjectClient({ transport });
     await client.selectProjectStrict("alpha");
-    client.accept({ projectId: "alpha", revision: 2, snapshot: createSnapshot("alpha", "owned.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 2, snapshot: createSnapshot("alpha", "owned.ts"), updateKind: "project" });
 
     client.enterNoProject();
 
@@ -186,7 +187,7 @@ test("entering home retains the catalog and clears every project-owned explorer 
     assert.deepEqual(home.changes, {});
     assert.deepEqual(home.expandedDirectories, []);
     assert.equal(home.isLoading, false);
-    client.accept({ projectId: "alpha", revision: 3, snapshot: createSnapshot("alpha", "late.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 3, snapshot: createSnapshot("alpha", "late.ts"), updateKind: "project" });
     assert.equal(client.getSnapshot().currentProjectId, "");
     assert.deepEqual(client.getSnapshot().tree, []);
     client.dispose();
@@ -201,10 +202,10 @@ test("observation reset accepts a restarted revision without clearing the best-k
     const { transport } = createTransport();
     const client = WorkbenchProjectClient({ transport });
     await client.selectProjectStrict("alpha");
-    client.accept({ projectId: "alpha", revision: 5, snapshot: createSnapshot("alpha", "best-known.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 5, snapshot: createSnapshot("alpha", "best-known.ts"), updateKind: "project" });
     client.resetObservation();
     assert.equal(client.getSnapshot().tree[0]?.name, "best-known.ts");
-    client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha", "after-reload.ts"), updateKind: "project" });
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), revision: 0, snapshot: createSnapshot("alpha", "after-reload.ts"), updateKind: "project" });
     assert.equal(client.getSnapshot().tree[0]?.name, "after-reload.ts");
     client.dispose();
   } finally {

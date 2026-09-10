@@ -1,5 +1,4 @@
 /*
- * Keywords: thread owner, admission, transcript, composer, leases, recovery.
  * Exports:
  * - ThreadControllerTarget: project-qualified provider, subagent or draft identity.
  * - ThreadControllerSnapshot: one thread surface, with source-local SQLite state.
@@ -8,7 +7,8 @@
  */
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchReadThreadOptions, WorkbenchSubagentSummary, WorkbenchControls } from "workbench-shared/types";
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
 import { getNextSubagentHydrationBatch } from "./thread/thread-subagents";
@@ -88,10 +88,11 @@ export default class WorkbenchThreadController {
     submitQuestionnaire: (response: Parameters<WorkbenchControls["submitPendingUserInputRequest"]>[1], options?: Parameters<WorkbenchControls["submitPendingUserInputRequest"]>[2]) =>
       this.ports.controls.submitPendingUserInputRequest(this.threadId, response, options),
     snoozeQuestionnaire: async (requestKey: string) => {
-      const harness = this.snapshot.document?.harness ?? (this.target.kind === "draft" ? "codex" : this.target.harness ?? "codex");
+      const entry = this.snapshot.entry;
+      if (!entry) throw new Error("The questionnaire thread is not admitted.");
       const accepted = await this.ports.controls.updateThreadStateWithAcceptance({
-        method: "workbench/thread-state/questionnaire/snooze", projectId: this.projectId,
-        identity: { harness, threadId: this.threadId }, requestKey,
+        method: "workbench/thread-state/questionnaire/snooze", projectId: ProjectIdSchema.parse(this.projectId),
+        identity: entry.identity, requestKey,
       });
       if (!accepted) throw new Error("The questionnaire changed before it could be snoozed.");
     },

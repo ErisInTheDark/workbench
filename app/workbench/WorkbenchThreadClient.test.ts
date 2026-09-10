@@ -1,7 +1,6 @@
 /*
- * Keywords: thread, lifecycle, streaming, questionnaire, restart, tests.
  * Exports:
- * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, live streaming, message admission, and live versus restart-recovered questionnaires. Keywords: workbench, thread, lifecycle, streaming, message, questionnaire, restart, global home, test.
+ * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, live streaming, message admission, and live versus restart-recovered questionnaires.
  */
 
 import assert from "node:assert/strict";
@@ -22,6 +21,24 @@ import type {
   WorkbenchThreadSidebarEntry,
   WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "owner": fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "background": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("background"),
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "pinned": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("pinned"),
+    "root": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 type Listener = (event: { data?: string }) => void;
 type SocketRequest = {
@@ -296,13 +313,13 @@ async function withClient(
   } as unknown as typeof WebSocket;
   const client = WorkbenchThreadClient({
     getProjectById: projectId => projectId === "owner" ? {
-      id: "owner", kind: "git", lastCommitTimeMs: null, name: "owner", relativePath: "owner", rootPath: "C:/owner",
+      id: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), kind: "git", lastCommitTimeMs: null, name: "owner", relativePath: "owner", rootPath: "C:/owner",
       roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
     } : undefined,
     ...clientOptions,
   });
   try {
-    client.setProjectContext({ projectId: "project", root: "repo", rootPath: "C:/repo" });
+    client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
     await client.refreshRateLimits();
     assert.ok(socket);
     await run(client, socket);
@@ -318,10 +335,10 @@ function activeThread(
   harness: ThreadPayload["harness"] = "codex",
   id = "thread",
   turnStatus: ThreadPayload["turns"][number]["status"] = "inProgress",
-): ThreadPayload {
+): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness, id, isDraft: false, model: "model", name: null, path: null, preview: "",
+    harness, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id), isDraft: false, model: "model", name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: harness, status: turnStatus === "inProgress" ? "active" : "idle", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: turnStatus === "inProgress" ? null : 2, durationMs: turnStatus === "inProgress" ? null : 1, error: null, id: `${id === "thread" ? "" : `${id}-`}turn`, items: [], itemsView: "full", startedAt: 1, status: turnStatus }], updatedAt: 1,
   };
@@ -390,7 +407,7 @@ function questionnaireEntry(
     resolvedAt: turnId === "older" ? 1 : 2,
     response: { answers: {} },
     threadId: "thread",
-    turnId,
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   };
 }
 
@@ -415,7 +432,7 @@ test("SQLite transcript source lifecycle publishes through the thread client and
   const publications: Array<{ status: string; threadId: string | null }> = [];
   await withClient(async (client, socket) => {
     client.selectThreadPayload(activeThread("codex", "thread", "completed"));
-    const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "thread" });
+    const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
     const stop = owner.subscribe(() => {
       const state = owner.getSnapshot().transcript;
       publications.push({ status: state.status, threadId: "threadId" in state ? state.threadId : null });
@@ -474,7 +491,7 @@ test("selected active Codex steers settle at admission and canonical notificatio
   const client = WorkbenchThreadClient();
   try {
     const source = activeThread();
-    client.setProjectContext({ projectId: "project", root: "repo", rootPath: "C:/repo" });
+    client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
     client.selectThreadPayload(source);
     const firstAdmission = client.sendThreadMessage(source, [{ text: "same", text_elements: [], type: "text" }]);
     const secondAdmission = client.sendThreadMessage(source, [{ text: "same", text_elements: [], type: "text" }]);
@@ -518,7 +535,7 @@ test("selected active Codex steers settle at admission and canonical notificatio
     const createdTurn = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn-created-by-item");
     assert.deepEqual(createdTurn?.items.map((item) => item.id), ["canonical-second"]);
 
-    const background = { ...activeThread(), id: "background", turns: [{ ...activeThread().turns[0]!, id: "background-turn" }] };
+    const background = { ...activeThread(), id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("background"), turns: [{ ...activeThread().turns[0]!, id: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("background-turn") }] };
     const backgroundResult = await client.sendThreadMessage(
       background,
       [{ text: "background steer", text_elements: [], type: "text" }],
@@ -738,7 +755,7 @@ test("idle selected Codex sends one managed lifecycle intent while providers pre
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
   assert.deepEqual(socket.requests.find((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle")?.params, {
     identity: { harness: "codex", threadId: "idle" },
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     title: "New thread",
     turnId: "idle-started",
   });
@@ -897,7 +914,7 @@ test("an accepted background child turn publishes Working before the send return
   assert.equal(admissionParams.startRequest?.method, "turn/start");
   assert.deepEqual(socket.requests[acceptedIndex]?.params, {
     identity: { harness: "codex", threadId: "child" },
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     title: "continue",
     turnId: "child-started",
   });
@@ -931,12 +948,12 @@ test("project reset rejects stale reads while newer canonical notifications merg
   };
   const staleRead = client.readThread("thread", "codex");
   await waitForRequest(socket, "workbench/thread/page/read");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   socket.respond(deferred!.id, { browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [], thread: wireThread("thread") });
   assert.equal(await staleRead, null);
   assert.equal(client.getSnapshot().currentThread, null);
 
-  client.setProjectContext({ projectId: "project", root: "repo", rootPath: "C:/repo" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
   client.selectThreadPayload(source);
   deferred = null;
   const racedRead = client.readThread("thread", "codex");
@@ -1021,7 +1038,7 @@ test("refreshing the selected thread surfaces read failures", async () => withCl
 
 test("foreign pinned thread context owns provider cwd, subagents, and late-read fencing without replacing the viewed project", async () => withClient(async (client, socket) => {
   const ownerProject = {
-    id: "owner",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
     kind: "git" as const,
     lastCommitTimeMs: null,
     name: "owner",
@@ -1035,14 +1052,14 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
     cwd: "C:/owner",
     directSubagentIndex: 0,
     entryKind: "subagent",
-    identity: { harness: "codex", threadId: "child" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["child"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     name: "Child",
-    parentThreadId: "root",
+    parentThreadId: fixtureIdentityValues.WorkbenchThreadId["root"],
     pinned: false,
     profileId: "default",
     profileName: "Default",
-    projectId: "owner",
+    projectId: fixtureIdentityValues.ProjectId["owner"],
     title: "Child",
     updatedAt: 2,
   }];
@@ -1083,14 +1100,14 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
   await installObservedThreadState(client, {
     activeProjectSnapshot: {
       entries: [{
-        activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "root" },
+        activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["root"] },
         lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
         metadata: { archived: false, pinned: true, snoozed: false }, title: "Root",
       }, ...entries.map(entry => ({ ...entry, title: "Updated child" }))],
-      projectId: "owner", error: null, freshness: "fresh", revision: 2,
+      projectId: fixtureIdentityValues.ProjectId["owner"], error: null, freshness: "fresh", revision: 2,
     },
     durableQuestionnaireEntries: [{
-      activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "root" },
+      activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["root"] },
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       metadata: { archived: false, pinned: true, snoozed: false }, title: "Root",
     }, ...entries.map(entry => ({ ...entry, title: "Updated child" }))],
@@ -1099,7 +1116,7 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
 
   const lateOpen = client.openThread("late", { harness: "codex", project: ownerProject });
   await waitForRequest(socket, "workbench/thread/page/read", 1);
-  const replacement = client.createThread("codex", "00000000-0000-4000-8000-000000000090");
+  const replacement = client.createThread("codex", fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000090"));
   const lateThread = wireThread("late");
   lateThread.cwd = "C:/owner";
   socket.respond(deferredRead!.id, {
@@ -1118,7 +1135,7 @@ test("foreign pinned draft admission sends and publishes accepted intent through
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   await withClient(async (client, socket) => {
     const ownerProject = {
-      id: "owner",
+      id: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
       kind: "git" as const,
       lastCommitTimeMs: null,
       name: "owner",
@@ -1126,7 +1143,7 @@ test("foreign pinned draft admission sends and publishes accepted intent through
       rootPath: "C:/owner",
       roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
     };
-    const draft = client.createThread("codex", "00000000-0000-4000-8000-000000000091", { project: ownerProject });
+    const draft = client.createThread("codex", fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000091"), { project: ownerProject });
     FakeWebSocket.intercept = (target, request) => {
       if (request.method === "thread/start") {
         const thread = wireThread("foreign-materialized", "bootstrap", "completed");
@@ -1852,7 +1869,7 @@ test("status and token owners survive canonical updates, authoritative nulls, an
 test("a thread controller changes its own preferences without changing the selected thread", async () => withClient(async client => {
   client.selectThreadPayload(activeThread("codex", "background"));
   client.selectThreadPayload(activeThread("codex", "selected"));
-  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "background" });
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["background"] });
   owner.actions.changeSettings({
     harness: "codex", model: "background-model", reasoningEffort: "high", serviceTier: "fast", agentPath: null, agentSource: null,
   });
@@ -1867,9 +1884,9 @@ test("a thread controller changes its own preferences without changing the selec
 
 test("changing shell projects preserves a mounted thread's canonical document", async () => withClient(async client => {
   client.selectThreadPayload(activeThread("codex", "pinned"));
-  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "pinned" });
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["pinned"] });
   const release = owner.acquire("view");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   const snapshot = client.getSnapshot();
   const key = snapshot.threadDocuments.keysByThreadId.pinned!;
   assert.equal(snapshot.threadDocuments.documentsByKey[key]?.id, "pinned");
@@ -1879,12 +1896,12 @@ test("changing shell projects preserves a mounted thread's canonical document", 
 
 test("a mounted thread read survives unrelated shell project selection", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "pinned"));
-  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "pinned" });
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["pinned"] });
   const release = owner.acquire("view");
   FakeWebSocket.intercept = (_socket, request) => request.method === "workbench/thread/page/read";
   const pending = owner.read();
   const request = await waitForRequest(socket, "workbench/thread/page/read");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   socket.respond(request.id, {
     thread: wireThread("pinned"), browseResultEntries: [], questionnaireEntries: [], steerEntries: [], nextCursor: null,
   });
@@ -1895,7 +1912,7 @@ test("a mounted thread read survives unrelated shell project selection", async (
 
 test("an unselected draft remains owned and changes provider without moving selection", async () => withClient(async client => {
   client.selectThreadPayload(activeThread("codex", "selected"));
-  const draft = client.createThread("codex", "draft", { select: false });
+  const draft = client.createThread("codex", fixtureIdentitySchemas.DraftIdSchema.parse("draft"), { select: false });
   const owner = client.getThreadController("project", { kind: "draft", draftId: draft.id });
   const release = owner.acquire("view");
   assert.equal(owner.getSnapshot().document?.id, draft.id);
@@ -2164,12 +2181,12 @@ test("project reset during history and control awaits cannot resurrect thread st
     threadId: "thread", turnId: "turn",
   });
   await waitForRequest(socket, "steer/history/list");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   socket.respond(historyRequest!.id, { data: [] });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(client.getSnapshot().currentThread, null);
 
-  client.setProjectContext({ projectId: "project", root: "repo", rootPath: "C:/repo" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
   client.selectThreadPayload(source);
   let interruptRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
@@ -2182,7 +2199,7 @@ test("project reset during history and control awaits cannot resurrect thread st
   const stop = client.stopThread(source);
   await waitForRequest(socket, "turn/interrupt");
   const readsBeforeReset = socket.requests.filter((request) => request.method === "workbench/thread/page/read").length;
-  client.setProjectContext({ projectId: "final", root: "final", rootPath: "C:/final" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("final"), root: "final", rootPath: "C:/final" });
   socket.respond(interruptRequest!.id, {});
   assert.equal((await stop)?.id, "thread");
   assert.equal(socket.requests.filter((request) => request.method === "workbench/thread/page/read").length, readsBeforeReset);
@@ -2206,7 +2223,7 @@ test("project reset during admitted reconciliation history cannot reinstall the 
   };
   const send = client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
   await waitForRequest(socket, "steer/history/list");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   socket.respond(historyRequest!.id, { data: [] });
   assert.equal(await send, null);
   assert.equal(client.getSnapshot().currentThread, null);
@@ -2232,7 +2249,7 @@ test("project reset suppresses stale reconciliation failure warnings", async () 
     };
     const send = client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
     await waitForRequest(socket, "thread/read");
-    client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+    client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
     socket.fail(readRequest!.id, "old reconciliation failed");
     assert.equal(await send, null);
     assert.equal(statusMessages.some((message) => message.includes("immediate thread reconciliation failed")), false);
@@ -2297,7 +2314,7 @@ test("project reset fences a late rate-limit success from the previous project",
   };
   const staleRefresh = client.refreshRateLimits();
   await waitForRequest(socket, "account/rateLimits/read", 1);
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   client.selectThreadPayload(activeThread());
   const currentRefresh = client.refreshRateLimits();
   await waitForRequest(socket, "account/rateLimits/read", 2);
@@ -2318,7 +2335,7 @@ test("project reset fences a late rate-limit success from the previous project",
 }));
 
 test("project changes during draft materialization prevent stale general dispatch without list polling", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("copilot", "draft", "completed"), isDraft: true, source: "draft" };
+  const draft = { ...activeThread("copilot", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);
   let startRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
@@ -2330,7 +2347,7 @@ test("project changes during draft materialization prevent stale general dispatc
   };
   const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }]);
   await waitForRequest(socket, "thread/start");
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   socket.respond(startRequest!.id, { thread: wireThread("materialized") });
   await assert.rejects(send, ThreadMessageNotSentError);
   assert.equal(socket.requests.some((request) => request.method === "thread/list"), false);
@@ -2341,7 +2358,7 @@ test("project changes during draft materialization prevent stale general dispatc
 test("project changes after draft turn dispatch preserve durable acceptance without stale materialization", async () => {
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   await withClient(async (client, socket) => {
-    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000002", "completed"), isDraft: true, source: "draft" };
+    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000002", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000002"), isDraft: true as const, source: "draft" };
     const materialized: string[] = [];
     let startRequest: SocketRequest | null = null;
     client.selectThreadPayload(draft);
@@ -2361,14 +2378,14 @@ test("project changes after draft turn dispatch preserve durable acceptance with
       onThreadMaterialized: (thread) => materialized.push(thread.id),
     });
     await waitForRequest(socket, "turn/start");
-    client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+    client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
     socket.respond(startRequest!.id, { turn: wireThread("materialized-after-dispatch", "new-turn").turns[0] });
 
     assert.equal(await send, null);
     assert.deepEqual(acceptedIntents, [{
-      draftId: "00000000-0000-4000-8000-000000000002",
+      draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000002"),
       harness: "codex",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "materialized-after-dispatch",
       title: "draft",
       turnId: "new-turn",
@@ -2382,7 +2399,7 @@ test("project changes after draft turn dispatch preserve durable acceptance with
 test("native turn admission settles a draft when the turn-start response is lost", async () => {
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   await withClient(async (client, socket) => {
-    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000003", "completed"), isDraft: true, source: "draft" };
+    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000003", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000003"), isDraft: true as const, source: "draft" };
     const materialized: string[] = [];
     let startRequest: SocketRequest | null = null;
     client.selectThreadPayload(draft);
@@ -2409,9 +2426,9 @@ test("native turn admission settles a draft when the turn-start response is lost
     assert.equal(await send, null);
     assert.deepEqual(materialized, ["materialized-after-response-loss"]);
     assert.deepEqual(acceptedIntents, [{
-      draftId: "00000000-0000-4000-8000-000000000003",
+      draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000003"),
       harness: "codex",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "materialized-after-response-loss",
       title: "draft",
       turnId: "native-turn",
@@ -2430,7 +2447,7 @@ test("draft projection precedes admission and materialization is skipped on star
   let releaseAcceptedIntent: (() => void) | null = null;
   const acceptedIntentPending = new Promise<void>((resolve) => { releaseAcceptedIntent = resolve; });
   await withClient(async (client, socket) => {
-  const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000001", "completed"), isDraft: true, source: "draft" };
+  const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000001", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);
   const created: string[] = [];
   const materialized: string[] = [];
@@ -2508,9 +2525,9 @@ test("draft projection precedes admission and materialization is skipped on star
   socket.respond(admittedStartRequest!.id, { turn: admittedTurn });
   await acceptedIntentObserved;
   assert.deepEqual(acceptedIntents, [{
-    draftId: "00000000-0000-4000-8000-000000000001",
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
     harness: "codex",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     threadId: "materialized",
     title: "draft",
     turnId: "new-turn",
@@ -2725,7 +2742,7 @@ test("observed history preserves questionnaires with reused request keys", async
     entries: [{
       activityAt: 2,
       entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
+      identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       questionnaireHistory: [
@@ -2736,7 +2753,7 @@ test("observed history preserves questionnaires with reused request keys", async
     }],
     error: null,
     freshness: "fresh",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     revision: 1,
   });
   client.selectThreadPayload(source);
@@ -2795,7 +2812,7 @@ test("local questionnaire history preserves a later item with a reused request k
 }));
 
 test("draft harness migration selects the new exact document and deletes the old key", async () => withClient(async (client) => {
-  const draft = { ...activeThread("codex", "draft", "completed"), isDraft: true, source: "draft" };
+  const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);
   client.setDraftThreadHarness("opencode");
   const documents = client.getSnapshot().threadDocuments;
@@ -2915,10 +2932,10 @@ test("observed questionnaires survive shell project changes while native request
   const durableEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 2,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     metadata: { archived: false, pinned: false, snoozed: false },
-    pendingQuestionnaire: { itemId: "item", request: durableRequest, requestKey: "durable", turnId: "turn" },
+    pendingQuestionnaire: { itemId: "item", request: durableRequest, requestKey: "durable", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     title: "Thread",
   };
 
@@ -2961,8 +2978,8 @@ test("stop dismisses detached questionnaires without interrupting an inactive pr
     title: "Questionnaire",
   };
   await installProjectThreadState(client, {
-    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
-    error: null, freshness: "fresh", projectId: "project", revision: 1,
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
 
@@ -3012,17 +3029,17 @@ test("durable detached questionnaire responses resolve after admission even when
   const durableEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 2,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     metadata: { archived: false, pinned: false, snoozed: false },
-    pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
+    pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     title: "Thread",
   };
   await installProjectThreadState(client, {
     entries: [durableEntry],
     error: null,
     freshness: "fresh",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     revision: 1,
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
@@ -3131,8 +3148,8 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
     entries: [{
       activityAt: 2,
       entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
-      lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey, settled: false, turnId: "turn" },
+      identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+      lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey, settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
       metadata: { archived: false, pinned: false, snoozed: false },
       pendingQuestionnaire: {
         itemId: null,
@@ -3151,13 +3168,13 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
           title: "smoke test",
         },
         requestKey,
-        turnId: "turn",
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       },
       title: "Thread",
     }],
     error: null,
     freshness: "fresh",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     revision: 1,
   });
 
@@ -3187,21 +3204,21 @@ async function installRecoveredWorkbenchQuestionnaire(
     summary: "",
     title: "details",
   };
-  const pending = { itemId: null, request, requestKey, threadId: "thread", turnId: "turn" };
+  const pending = { itemId: null, request, requestKey, threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn };
   const { threadId: _threadId, ...durable } = pending;
   await installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
       entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
-      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+      identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
       metadata: { archived: false, pinned: false, snoozed: false },
       pendingQuestionnaire: durable,
       title: "Thread",
     }],
     error: null,
     freshness: "fresh",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     revision: 1,
   });
   return pending;
@@ -3267,7 +3284,7 @@ for (const outcome of ["failed", "replaced", "projectChanged", "wrongThread", "w
       } else {
         queueMicrotask(async () => {
           if (outcome === "replaced") await installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
-          if (outcome === "projectChanged") client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+          if (outcome === "projectChanged") client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
           target.respond(request.id, { thread: {
             ...wireThread(outcome === "wrongThread" ? "other" : "thread"), turns: [],
             cwd: outcome === "wrongProject" ? "C:/other" : "C:/repo",
@@ -3288,7 +3305,7 @@ for (const outcome of ["failed", "replaced", "projectChanged", "wrongThread", "w
 test("clearing project selection releases its observation rather than retaining it as a document cache", async () => withClient(async client => {
   await client.openThread("thread", { harness: "codex" });
   assert.equal(client.threadObservations.getObservations().length, 1);
-  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   assert.equal(client.getSnapshot().currentThread, null);
   assert.equal(client.threadObservations.getObservations().length, 0);
 }));
@@ -3492,7 +3509,7 @@ test("Workbench answers do not cross projects when ownership lookup completes la
   FakeWebSocket.intercept = (target, candidate) => {
     if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
     queueMicrotask(() => {
-      client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+      client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
       target.respond(candidate.id, { data: [] });
     });
     return true;
@@ -3538,15 +3555,15 @@ test("failed detached questionnaire transcript recording still resolves durable 
       entries: [{
         activityAt: 2,
         entryKind: "thread",
-        identity: { harness: "codex", threadId: "thread" },
-        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+        identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
         metadata: { archived: false, pinned: false, snoozed: false },
-        pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
+        pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
         title: "Thread",
       }],
       error: null,
       freshness: "fresh",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       revision: 1,
     });
     await waitForCondition(
@@ -3584,8 +3601,8 @@ test("failed detached questionnaire admission leaves the durable request retryab
     title: "Questionnaire",
   };
   await installProjectThreadState(client, {
-    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
-    error: null, freshness: "fresh", projectId: "project", revision: 1,
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
   FakeWebSocket.intercept = (target, candidate) => {
@@ -3609,8 +3626,8 @@ test("rejected durable questionnaire resolution does not clear the detached requ
     title: "Questionnaire",
   };
   await installProjectThreadState(client, {
-    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
-    error: null, freshness: "fresh", projectId: "project", revision: 1,
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
   FakeWebSocket.intercept = (target, candidate) => {

@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 
 import type { WorkbenchStoredSubagent } from "../../workbench-subagent-record.ts";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
@@ -46,7 +47,7 @@ export interface ProjectDocument {
 
 export interface SourceProject {
   document: ProjectDocument;
-  projectId: string;
+  projectId: ProjectId;
   updatedAt: number;
 }
 
@@ -69,7 +70,7 @@ function decodeJson(encoded: string, identity: string): unknown {
   }
 }
 
-function parseDraft(value: unknown, projectId: string): StoredDraft {
+function parseDraft(value: unknown, projectId: ProjectId): StoredDraft {
   const record = asRecord(value);
   const settings = WorkbenchComposerSettingsSchema.safeParse(record.composerSettings);
   const identity = StoredDraftIdentitySchema.safeParse({
@@ -111,7 +112,7 @@ function parseDraft(value: unknown, projectId: string): StoredDraft {
   };
 }
 
-function legacyRecord(value: unknown, projectId: string) {
+function legacyRecord(value: unknown, projectId: ProjectId) {
   const record = asRecord(value);
   return conformStoredWorkbenchThreadStateRecord({
     activityAt: record.orderAt,
@@ -128,7 +129,7 @@ function legacyRecord(value: unknown, projectId: string) {
   }, projectId);
 }
 
-export function parseProjectDocument(encoded: string, projectId: string): ProjectDocument {
+export function parseProjectDocument(encoded: string, projectId: ProjectId): ProjectDocument {
   const source = asRecord(decodeJson(encoded, `thread-state project ${projectId}`));
   const candidates = Array.isArray(source.records)
     ? source.records
@@ -156,7 +157,7 @@ export function parseProjectDocument(encoded: string, projectId: string): Projec
   };
 }
 
-export function parseProjectImport(encoded: string, projectId: string): ProjectDocument {
+export function parseProjectImport(encoded: string, projectId: ProjectId): ProjectDocument {
   const decoded = decodeJson(encoded, "thread-state import");
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new Error("Thread-state import has no project object.");
   const source = asRecord(decoded);

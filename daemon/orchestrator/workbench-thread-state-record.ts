@@ -1,12 +1,13 @@
 /*
- * Keywords: thread, internal record, title history, bounded projection, conformance.
  * Exports:
- * - WorkbenchThreadSnoozeTarget/WorkbenchThreadStateRecord/WorkbenchThreadStateEntry: internal UI-independent thread and dependent-snooze shapes. Keywords: thread, state, record, headless, snooze.
- * - parseWorkbenchThreadStateEntry/safeParseWorkbenchThreadStateEntry: validate persisted and mutated internal entries. Keywords: validation, persistence, migration.
- * - conformStoredWorkbenchThreadStateRecord: preserve valid durable facts while repairing an identified stored record to the current schema. Keywords: storage, conformance, defaults, compatibility.
- * - projectWorkbenchThreadStateEntry: derive the public sidebar projection from internal state. Keywords: sidebar, projection, boundary.
+ * - WorkbenchThreadSnoozeTarget/WorkbenchThreadStateRecord/WorkbenchThreadStateEntry: internal thread and dependent-snooze shapes.
+ * - StoredWorkbenchThreadStateRecordConformance: repaired record or validation failure.
+ * - parseWorkbenchThreadStateEntry/safeParseWorkbenchThreadStateEntry: validate persisted and mutated entries.
+ * - conformStoredWorkbenchThreadStateRecord: repair a stored record while preserving valid facts.
+ * - projectWorkbenchThreadStateEntry: derive the public sidebar projection.
  */
 import { z } from "zod";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import { previousThreadTitles, WorkbenchThreadTitleHistoryEntrySchema, type WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
@@ -37,9 +38,9 @@ export type WorkbenchThreadStateEntry = Extract<WorkbenchThreadSidebarEntry, { e
 export interface WorkbenchThreadSnoozeTarget {
   identity: {
     harness: "codex" | "copilot" | "opencode";
-    threadId: string;
+    threadId: WorkbenchThreadId;
   };
-  projectId: string;
+  projectId: ProjectId;
 }
 
 export type StoredWorkbenchThreadStateRecordConformance =
@@ -48,11 +49,11 @@ export type StoredWorkbenchThreadStateRecordConformance =
 
 const ThreadIdentitySchema = z.object({
   harness: WorkbenchHarnessSchema,
-  threadId: z.string().trim().min(1),
+  threadId: WorkbenchThreadIdSchema,
 }).strip();
 const WorkbenchThreadSnoozeTargetSchema = z.object({
   identity: ThreadIdentitySchema,
-  projectId: z.string().trim().min(1),
+  projectId: ProjectIdSchema,
 }).strict();
 
 const StoredRecordLocatorSchema = z.discriminatedUnion("entryKind", [
@@ -64,7 +65,7 @@ const StoredRecordLocatorSchema = z.discriminatedUnion("entryKind", [
     cwd: z.string().trim().min(1),
     entryKind: z.literal("subagent"),
     identity: ThreadIdentitySchema,
-    parentThreadId: z.string().trim().min(1),
+    parentThreadId: WorkbenchThreadIdSchema,
   }).passthrough(),
 ]);
 
@@ -102,7 +103,7 @@ function defaultThreadMetadata(value: unknown): Extract<WorkbenchThreadSidebarEn
 function storedRecordDefaults(
   locator: z.infer<typeof StoredRecordLocatorSchema>,
   candidate: Record<string, unknown>,
-  projectId: string,
+  projectId: ProjectId,
 ): WorkbenchProviderThreadEntry {
   const lifecycle = defaultLifecycle(candidate.lifecycle);
   const title = locator.identity.threadId;
@@ -181,7 +182,7 @@ export function parseWorkbenchThreadStateEntry(value: unknown): WorkbenchThreadS
 
 export function conformStoredWorkbenchThreadStateRecord(
   value: unknown,
-  projectId: string,
+  projectId: ProjectId,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
     ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)

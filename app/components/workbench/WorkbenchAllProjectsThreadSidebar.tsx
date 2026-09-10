@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchAllProjectsThreadSidebar: bind the global observation to one combined home thread list and bounded project errors. Keywords: home, sidebar, projects, threads.
+ * - default WorkbenchAllProjectsThreadSidebar: bind the global observation to one combined home thread list and bounded project errors.
  */
 "use client";
 
 import { memo, useMemo, type ReactNode } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { FolderId } from "workbench-shared/workbench/identity";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
@@ -18,7 +19,7 @@ interface WorkbenchAllProjectsThreadSidebarProps {
   attentionLabelsByThreadId: Record<string, string | undefined>;
   createProjectId: string;
   currentTarget: WorkbenchThreadTarget | null;
-  onCreateThread: (ownerProjectId: string, folderId?: string) => void;
+  onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;

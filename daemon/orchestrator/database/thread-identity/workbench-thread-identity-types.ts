@@ -1,5 +1,4 @@
 /*
- * Keywords: thread identity, native tuple, catalog, database.
  * Exports:
  * - WorkbenchNativeThreadIdentity: trusted provider identity, never a public thread id.
  * - WorkbenchThreadIdentityMetadata: provider metadata sufficient for identity admission.
@@ -12,17 +11,21 @@
  * - WorkbenchTurnIdentityLookup: public-first turn lookup within one WB thread.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type {
+  NativeThreadId, NativeTurnId, ProjectId, ThreadReference, TurnReference,
+  WorkbenchThreadId, WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptAtomicObservation } from "../transcript/workbench-transcript-types.ts";
 
 export interface WorkbenchNativeThreadIdentity {
   harness: string;
   nativeLocation: string;
-  nativeThreadId: string;
+  nativeThreadId: NativeThreadId;
 }
 
 export interface WorkbenchThreadIdentityMetadata {
   native: WorkbenchNativeThreadIdentity;
-  projectId: string;
+  projectId: ProjectId;
   projectRoot: string;
   title: string;
   createdAt: number;
@@ -31,8 +34,8 @@ export interface WorkbenchThreadIdentityMetadata {
 }
 
 export interface WorkbenchThreadIdentityLookup {
-  threadId: string;
-  projectId?: string;
+  threadId: WorkbenchThreadId | NativeThreadId | ThreadReference;
+  projectId?: ProjectId;
   harness?: WorkbenchHarness;
 }
 
@@ -42,24 +45,26 @@ export interface WorkbenchThreadIdentityBinding extends WorkbenchNativeThreadIde
 }
 
 export interface WorkbenchThreadIdentityRecord {
-  threadId: string;
-  projectId: string;
+  threadId: WorkbenchThreadId;
+  projectId: ProjectId;
   projectRoot: string;
   bindings: readonly WorkbenchThreadIdentityBinding[];
 }
 
-export type WorkbenchTurnIdentityMetadata = Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>;
+export type WorkbenchTurnIdentityMetadata = Omit<Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>, "turnId"> & {
+  turnId: WorkbenchTurnId | NativeTurnId;
+};
 
 export interface WorkbenchTurnIdentityRecord {
-  threadId: string;
-  turnId: string;
+  threadId: WorkbenchThreadId;
+  turnId: WorkbenchTurnId;
   turnIndex: number;
-  native: WorkbenchNativeThreadIdentity & { nativeTurnId: string | null };
+  native: WorkbenchNativeThreadIdentity & { nativeTurnId: NativeTurnId | null };
 }
 
 export interface WorkbenchTurnIdentityLookup {
-  threadId: string;
-  turnId: string;
+  threadId: WorkbenchThreadId;
+  turnId: WorkbenchTurnId | NativeTurnId | TurnReference;
 }
 
 export interface WorkbenchThreadIdentityDatabase {

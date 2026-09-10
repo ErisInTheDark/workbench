@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - CodexMessageRequestClient: minimal transport used by existing Codex message admission. Keywords: codex, message, transport.
- * - ThreadMessageAdmissionLifecycleState: client lifecycle values that fence message preparation. Keywords: message, lifecycle, fence.
- * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one existing Codex admission. Keywords: resume, start, steer, adapter.
- * - ThreadMessageAdmissionResult: admitted steer or started-turn result. Keywords: message, admission, result.
- * - ThreadMessageAdmissionTarget: exact source and selection ownership for one Codex admission. Keywords: codex, message, target, selection.
- * - ThreadMessageAdmissionController: existing Codex message admission owner. Keywords: codex, message, admission, controller.
- * - default ThreadMessageAdmissionController: create the message admission owner. Keywords: codex, message, create.
+ * - CodexMessageRequestClient: minimal transport used by existing Codex message admission.
+ * - ThreadMessageAdmissionLifecycleState: client lifecycle values that fence message preparation.
+ * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one existing Codex admission.
+ * - ThreadMessageAdmissionResult: admitted steer or started-turn result.
+ * - ThreadMessageAdmissionTarget: exact source and selection ownership for one Codex admission.
+ * - ThreadMessageAdmissionController: existing Codex message admission owner.
+ * - default ThreadMessageAdmissionController: create the message admission owner.
  */
 
 import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
@@ -23,11 +23,12 @@ import type { ThreadDocumentStore as ThreadDocumentStoreApi } from "../state/Thr
 import type { ThreadSourceStore } from "../state/ThreadSourceStore";
 import type { ThreadOptimisticInputStore } from "./ThreadOptimisticInputStore";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
+import { WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 
 type CodexRequest = { method: string; params?: unknown } & Record<string, unknown>;
 type ManagedMessageAdmissionResponse =
-  | { kind: "started"; turn: Turn }
-  | { kind: "steered"; turnId: string };
+  | { kind: "started"; turn: Omit<Turn, "id"> & { id: WorkbenchTurnId } }
+  | { kind: "steered"; turnId: WorkbenchTurnId };
 
 export interface CodexMessageRequestClient {
   connect: () => Promise<void>;
@@ -38,7 +39,7 @@ export interface ThreadMessageAdmissionLifecycleState {
   disposed: boolean;
   messageAdmissionIntentRevision: number;
   projectContextGeneration: number;
-  projectId: string;
+  projectId: ProjectId | "";
   projectRootPath: string;
 }
 
@@ -80,16 +81,17 @@ interface ThreadMessageAdmissionControllerOptions {
   getLifecycleState: (threadId: string) => ThreadMessageAdmissionLifecycleState;
   getThreadStatus: (thread: ThreadPayload) => string;
   optimisticInputs: ThreadOptimisticInputStore;
-  publishAccepted?: (event: { correlationHandle: string; projectId: string; threadId: string; title: string; turnId: string }) => void;
+  publishAccepted?: (event: { correlationHandle: string; projectId: ProjectId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId }) => void;
   renderSource: (key: string) => void;
   sources: ThreadSourceStore;
 }
 
 interface AdmissionCapture extends ThreadMessageAdmissionLifecycleState {
+  projectId: ProjectId;
   selectionBound: boolean;
   startNewTurn: boolean;
   threadKey: string;
-  threadId: string;
+  threadId: WorkbenchThreadId;
 }
 
 function ThreadMessageAdmissionController({
@@ -103,7 +105,7 @@ function ThreadMessageAdmissionController({
   renderSource,
   sources,
 }: ThreadMessageAdmissionControllerOptions) {
-  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: string, input: UserInput[]) {
+  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: WorkbenchTurnId, input: UserInput[]) {
     const title = capture.selectionBound
       ? "New thread"
       : input.find((entry) => entry.type === "text")?.text ?? "New thread";
@@ -117,6 +119,7 @@ function ThreadMessageAdmissionController({
     const thread = threadKey ? sources.get(threadKey) : null;
     if (
       lifecycle.disposed
+      || !lifecycle.projectId
       || !threadKey
       || !thread
       || thread.harness !== "codex"
@@ -129,9 +132,10 @@ function ThreadMessageAdmissionController({
 
     return {
       ...lifecycle,
+      projectId: lifecycle.projectId,
       selectionBound,
       startNewTurn: target?.startNewTurn ?? false,
-      threadId,
+      threadId: thread.id,
       threadKey,
     };
   }
@@ -302,7 +306,7 @@ function ThreadMessageAdmissionController({
         if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
         throw new Error("Managed message admission returned an empty steer turn id.");
       }
-      reportAccepted(capture, clientUserMessageId, turnId, input);
+      reportAccepted(capture, clientUserMessageId, WorkbenchTurnIdSchema.parse(turnId), input);
       return { handle: clientUserMessageId, kind: "admitted" };
     }
     const turn = response.result?.kind === "started" ? response.result.turn : null;

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebar: render the current project's configured main thread list from shared sidebar actions. Keywords: sidebar, project, pinned, threads, activity, React.
+ * - default WorkbenchThreadSidebar: render the current project's configured main thread list from shared sidebar actions.
  */
 "use client";
 
@@ -10,7 +10,8 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
 import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { FolderId, ProjectId } from "workbench-shared/workbench/identity";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
@@ -21,9 +22,9 @@ interface WorkbenchThreadSidebarProps {
   currentTarget: WorkbenchThreadTarget | null;
   harness: WorkbenchHarness;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
-  onCreateThread: (folderId?: string) => void;
+  onCreateThread: (folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
-  projectId: string;
+  projectId: ProjectId | "";
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   showMosaicView: boolean;
@@ -44,6 +45,7 @@ export default memo(function WorkbenchThreadSidebar({
 }: WorkbenchThreadSidebarProps) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
   if (actions.isLoading) return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
+  if (!projectId) return null;
 
   return (
     <>

@@ -1,22 +1,35 @@
 /*
- * Keywords: sidebar, actions, questionnaire, settlement, subagent.
  * No exports. Tests protect action authority and primary settlement without pinning rendered text.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkbenchProjectThreadSummary, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadRowActions } from "./thread-row-actions";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 const stopped: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-  activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+  activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
   metadata: { archived: false, pinned: false, snoozed: false },
-  lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: "turn", settled: false },
+  lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: false },
 };
 const pending: typeof stopped = {
   ...stopped,
-  lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "question", turnId: "turn", settled: false },
+  lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: false },
   pendingQuestionnaire: {
-    itemId: "item", requestKey: "question", turnId: "turn",
+    itemId: "item", requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     request: { id: "question", title: "Choose", summary: "", submitLabel: "Submit", questions: [] },
   },
 };
@@ -24,7 +37,7 @@ const pending: typeof stopped = {
 test("stopped sidebar rows settle directly while retaining priority and claim blockers", () => {
   assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", shiftAction: null });
   assert.equal(getThreadRowActions(stopped, "snoozed").baseAction, "wake");
-  assert.equal(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: "turn", settled: true } }, "settled").baseAction, "restore");
+  assert.equal(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: true } }, "settled").baseAction, "restore");
   const claimed = { ...stopped, gitArc: {
     checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentName: "work",
     intentDescription: "", phase: "active" as const, proposals: [], updatedAt: "2026-09-08T00:00:00Z",
@@ -39,7 +52,7 @@ test("a sidebar questionnaire offers completion, never the direct-settle shortcu
 });
 
 test("pinned summaries preserve questionnaire completion without enabling shift settlement", () => {
-  const summary = createWorkbenchProjectThreadSummary("project", [{
+  const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [{
     ...pending, metadata: { archived: false, pinned: true, snoozed: false }, waitingFor: "other",
   }], 1);
   assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "complete", shiftAction: "snooze" });
@@ -49,8 +62,8 @@ test("subagent pending input retains its existing action restrictions", () => {
   const { metadata: _metadata, ...common } = pending;
   const subagent: WorkbenchThreadSidebarEntry = {
     ...common, entryKind: "subagent", createdAt: 1, updatedAt: 1, cwd: "C:/workspace",
-    directSubagentIndex: 0, name: "child", parentThreadId: "parent", pinned: false,
-    profileId: "profile", profileName: "profile", projectId: "project",
+    directSubagentIndex: 0, name: "child", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], pinned: false,
+    profileId: "profile", profileName: "profile", projectId: fixtureIdentityValues.ProjectId["project"],
   };
   assert.deepEqual(getThreadRowActions(subagent, "main"), { baseAction: null, shiftAction: null });
   assert.deepEqual(getThreadRowActions({ ...subagent, lifecycle: stopped.lifecycle }, "main"), { baseAction: "settle", shiftAction: null });

@@ -1,9 +1,13 @@
 /*
- * Keywords: thread identity, native adapter, reload, live lookup.
  * Exports:
  * - default WorkbenchThreadIdentityController: expose database-owned identity and index admitted native bindings for live events.
  */
 import { nativeLocationKey } from "./database/thread-identity/native-location-key";
+import {
+  NativeThreadKeySchema, NativeThreadReferenceKeySchema, NativeTurnKeySchema,
+  type NativeThreadId, type NativeThreadKey, type NativeThreadReferenceKey, type NativeTurnId,
+  type NativeTurnKey, type ThreadReference, type TurnReference, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 import type {
   WorkbenchNativeThreadIdentity,
   WorkbenchThreadIdentityDatabase,
@@ -17,11 +21,11 @@ import type {
 
 export default class WorkbenchThreadIdentityController {
   private disposed = false;
-  private readonly records = new Map<string, WorkbenchThreadIdentityRecord>();
-  private readonly nativeOwners = new Map<string, string>();
-  private readonly nativeReferences = new Map<string, Map<string, WorkbenchNativeThreadIdentity>>();
-  private readonly turns = new Map<string, WorkbenchTurnIdentityRecord>();
-  private readonly nativeTurnOwners = new Map<string, string>();
+  private readonly records = new Map<WorkbenchThreadIdentityLookup["threadId"], WorkbenchThreadIdentityRecord>();
+  private readonly nativeOwners = new Map<NativeThreadKey, WorkbenchThreadId>();
+  private readonly nativeReferences = new Map<NativeThreadReferenceKey, Map<string, WorkbenchNativeThreadIdentity>>();
+  private readonly turns = new Map<WorkbenchTurnIdentityLookup["turnId"], WorkbenchTurnIdentityRecord>();
+  private readonly nativeTurnOwners = new Map<NativeTurnKey, WorkbenchTurnId>();
 
   constructor(
     private readonly database: WorkbenchThreadIdentityDatabase,
@@ -87,14 +91,14 @@ export default class WorkbenchThreadIdentityController {
     return record ? this.rememberTurn(record) : null;
   }
 
-  workbenchTurnIdForNative(input: WorkbenchNativeThreadIdentity & { nativeTurnId: string }): string {
+  workbenchTurnIdForNative(input: WorkbenchNativeThreadIdentity & { nativeTurnId: NativeTurnId }): WorkbenchTurnId {
     this.assertActive();
     const turnId = this.findNativeTurn(input)?.turnId;
     if (!turnId) throw new Error("Native turn identity has not been admitted for live projection.");
     return turnId;
   }
 
-  findNativeTurn(input: WorkbenchNativeThreadIdentity & { nativeTurnId: string }) {
+  findNativeTurn(input: WorkbenchNativeThreadIdentity & { nativeTurnId: NativeTurnId }) {
     this.assertActive();
     const id = this.nativeTurnOwners.get(this.nativeTurnKey(input));
     return id ? this.turns.get(id) : undefined;
@@ -106,7 +110,7 @@ export default class WorkbenchThreadIdentityController {
     return id ? this.records.get(id) : undefined;
   }
 
-  knownTurn(turnId: string): WorkbenchTurnIdentityRecord {
+  knownTurn(turnId: WorkbenchTurnId | TurnReference): WorkbenchTurnIdentityRecord {
     this.assertActive();
     const turn = this.turns.get(turnId);
     if (!turn) throw new Error("Workbench turn identity has not been admitted.");
@@ -120,22 +124,22 @@ export default class WorkbenchThreadIdentityController {
     return threadId;
   }
 
-  knownNativeBinding(harness: string, nativeThreadId: string): WorkbenchNativeThreadIdentity {
+  knownNativeBinding(harness: string, nativeThreadId: NativeThreadId): WorkbenchNativeThreadIdentity {
     this.assertActive();
     const binding = this.findNativeBinding(harness, nativeThreadId);
     if (!binding) throw new Error("Native thread identity has not been admitted for live projection.");
     return binding;
   }
 
-  findNativeBinding(harness: string, nativeThreadId: string) {
+  findNativeBinding(harness: string, nativeThreadId: NativeThreadId) {
     this.assertActive();
-    const bindings = this.nativeReferences.get(JSON.stringify([harness, nativeThreadId]));
+    const bindings = this.nativeReferences.get(this.nativeReferenceKey(harness, nativeThreadId));
     if (!bindings?.size) return undefined;
     if (bindings.size !== 1) throw new Error("Native thread reference requires a location to resolve its owner.");
     return bindings.values().next().value!;
   }
 
-  knownThread(threadId: string) {
+  knownThread(threadId: WorkbenchThreadId | ThreadReference) {
     this.assertActive();
     const record = this.records.get(threadId);
     if (!record) throw new Error(`Workbench thread identity has not been admitted: ${threadId}`);
@@ -165,7 +169,7 @@ export default class WorkbenchThreadIdentityController {
     }
     for (const binding of this.records.get(committed.threadId)?.bindings ?? []) {
       this.nativeOwners.delete(this.nativeKey(binding));
-      const key = JSON.stringify([binding.harness, binding.nativeThreadId]);
+      const key = this.nativeReferenceKey(binding.harness, binding.nativeThreadId);
       const references = this.nativeReferences.get(key);
       references?.delete(nativeLocationKey(binding.nativeLocation, this.platform));
       if (!references?.size) this.nativeReferences.delete(key);
@@ -175,7 +179,7 @@ export default class WorkbenchThreadIdentityController {
       this.nativeOwners.set(this.nativeKey(binding), committed.threadId);
       // Provider events omit cwd. This index is published with the same committed
       // bindings, so event projection never performs a database lookup.
-      const key = JSON.stringify([binding.harness, binding.nativeThreadId]);
+      const key = this.nativeReferenceKey(binding.harness, binding.nativeThreadId);
       const references = this.nativeReferences.get(key) ?? new Map<string, WorkbenchNativeThreadIdentity>();
       references.set(nativeLocationKey(binding.nativeLocation, this.platform), binding);
       this.nativeReferences.set(key, references);
@@ -215,12 +219,16 @@ export default class WorkbenchThreadIdentityController {
     return committed;
   }
 
-  private nativeTurnKey(input: WorkbenchNativeThreadIdentity & { nativeTurnId: string | null }) {
-    return JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId, input.nativeTurnId]);
+  private nativeReferenceKey(harness: string, nativeThreadId: NativeThreadId) {
+    return NativeThreadReferenceKeySchema.parse(JSON.stringify([harness, nativeThreadId]));
+  }
+
+  private nativeTurnKey(input: WorkbenchNativeThreadIdentity & { nativeTurnId: NativeTurnId | null }) {
+    return NativeTurnKeySchema.parse(JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId, input.nativeTurnId]));
   }
 
   private nativeKey(input: WorkbenchNativeThreadIdentity) {
-    return JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
+    return NativeThreadKeySchema.parse(JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]));
   }
 
   private assertActive() {

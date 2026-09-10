@@ -1,18 +1,27 @@
 /*
- * Keywords: questionnaire, release, answer race, cancellation, reload.
- * No production exports. Tests protect Workbench questionnaire publication, answer correlation, cancellation, dismissal, and disposal. Keywords: questionnaire, freeform, lifecycle, wait.
+ * No production exports. Tests protect Workbench questionnaire publication, answer correlation, cancellation, dismissal, and disposal.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { z } from "zod";
 
-import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchQuestionnaireController, {
   type WorkbenchQuestionnaireControllerOptions,
+  type WorkbenchNativeQuestionnaire,
 } from "./WorkbenchQuestionnaireController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread-one": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread-one"),
+  },
+  ProjectId: {
+    "project-one": fixtureIdentitySchemas.ProjectIdSchema.parse("project-one"),
+  },
+};
 
 const freeformInput = {
-  callerThreadId: "thread-one",
+  callerThreadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   cwd: "C:/workspace",
   questions: [{
     header: "details",
@@ -36,15 +45,15 @@ function createHarness(options: {
   beforeClear?: () => Promise<void>;
   beforePublish?: () => Promise<void>;
   publishUnrelatedStateFirst?: boolean;
-  restoredQuestionnaire?: WorkbenchDurableQuestionnaire;
+  restoredQuestionnaire?: WorkbenchNativeQuestionnaire;
 } = {}) {
   const listeners = new Set<Parameters<WorkbenchQuestionnaireControllerOptions["subscribePending"]>[0]>();
-  const published = deferred<WorkbenchDurableQuestionnaire>();
-  let pending: WorkbenchDurableQuestionnaire | null = null;
+  const published = deferred<WorkbenchNativeQuestionnaire>();
+  let pending: WorkbenchNativeQuestionnaire | null = null;
   let clearCount = 0;
   const notify = () => {
     for (const listener of listeners) {
-      listener({ projectId: "project-one", requestKey: pending?.requestKey ?? null, threadId: "thread-one" });
+      listener({ projectId: fixtureIdentityValues.ProjectId["project-one"], requestKey: pending?.requestKey ?? null, threadId: fixtureIdentityValues.NativeThreadId["thread-one"] });
     }
   };
   const controller = new WorkbenchQuestionnaireController({
@@ -63,7 +72,7 @@ function createHarness(options: {
       notify();
     },
     resolveThread: async () => ({
-      projectId: "project-one", turnId: "turn-one", pendingQuestionnaire: options.restoredQuestionnaire,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-one"), turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn-one"), pendingQuestionnaire: options.restoredQuestionnaire,
     }),
     subscribePending: (listener) => {
       listeners.add(listener);
@@ -102,7 +111,7 @@ test("freeform request publishes one durable question and returns its correlated
   const consumed = await harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response,
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   });
   assert.deepEqual(consumed, { ...questionnaire, response, threadId: "thread-one" });
   assert.deepEqual(await waiting, response);
@@ -112,7 +121,7 @@ test("freeform request publishes one durable question and returns its correlated
   const nextQuestionnaire = await next.published;
   assert.equal(nextQuestionnaire.requestKey, questionnaire.requestKey);
   assert.notEqual(nextQuestionnaire.itemId, questionnaire.itemId);
-  await next.controller.respond({ requestKey: nextQuestionnaire.requestKey, response, threadId: "thread-one" });
+  await next.controller.respond({ requestKey: nextQuestionnaire.requestKey, response, threadId: fixtureIdentityValues.NativeThreadId["thread-one"] });
   await nextWaiting;
 });
 
@@ -121,10 +130,10 @@ test("interruption releases only the matching waiter and preserves its durable q
   const abort = new AbortController();
   const waiting = h.controller.request(freeformInput, abort.signal);
   const question = await h.published;
-  await h.controller.releaseForInterruption("thread-one", "stale");
+  await h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], "stale");
   assert.equal(h.controller.list().data.length, 1);
   const rejected = assert.rejects(waiting, /being interrupted/u);
-  await h.controller.releaseForInterruption("thread-one", question.requestKey);
+  await h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey);
   await rejected;
   abort.abort();
   assert.deepEqual(h.readPending(), question);
@@ -142,9 +151,9 @@ test("answer persistence wins interruption, while failed persistence retains the
     const waiting = h.controller.request(freeformInput, new AbortController().signal);
     const question = await h.published;
     const response = { answers: { details: { answers: ["proceed"] } } };
-    const answering = h.controller.respond({ threadId: "thread-one", requestKey: question.requestKey, response });
+    const answering = h.controller.respond({ threadId: fixtureIdentityValues.NativeThreadId["thread-one"], requestKey: question.requestKey, response });
     await started.promise;
-    const released = h.controller.releaseForInterruption("thread-one", question.requestKey);
+    const released = h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey);
     if (fails) {
       const answerFailure = assert.rejects(answering, /write failed/u);
       const waitFailure = assert.rejects(waiting, /being interrupted/u);
@@ -174,7 +183,7 @@ test("one thread cannot open concurrent questionnaires or consume a stale answer
   assert.equal(await harness.controller.respond({
     requestKey: "workbench-mcp:stale",
     response: { answers: {} },
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   }), null);
   cancellation.abort(new Error("caller cancelled"));
   await assert.rejects(waiting, /caller cancelled/u);
@@ -189,12 +198,12 @@ test("a resumed wait keeps the durable questionnaire identity and original turn"
   Reflect.set(reload, Symbol.for("workbench.agentMcpRuntimeReloadInterruption.v1"), true);
   cancellation.abort(reload);
   await assert.rejects(waiting, /reload/u);
-  const restored = { ...questionnaire, itemId: "984090b6-1d94-44cc-ab26-e6470965597e", turnId: "original-turn" };
+  const restored = { ...questionnaire, itemId: "984090b6-1d94-44cc-ab26-e6470965597e", turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("original-turn") };
   const resumed = createHarness({ restoredQuestionnaire: restored });
   const resumedWaiting = resumed.controller.request({ ...freeformInput, requestKey: restored.requestKey }, new AbortController().signal);
   const published = await resumed.published;
   const response = { answers: { details: { answers: ["Proceed."] } } };
-  const answered = await resumed.controller.respond({ requestKey: restored.requestKey, threadId: "thread-one", response });
+  const answered = await resumed.controller.respond({ requestKey: restored.requestKey, threadId: fixtureIdentityValues.NativeThreadId["thread-one"], response });
   await resumedWaiting;
   assert.equal(published.itemId, restored.itemId);
   assert.equal(published.turnId, restored.turnId);
@@ -258,7 +267,7 @@ test("failed answer settlement after reload releases the original wait for re-en
   const responding = harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response: { answers: { details: { answers: ["answer"] } } },
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   });
   await clearStarted.promise;
   const reload = new Error("Workbench command generation was replaced.");
@@ -287,7 +296,7 @@ test("an unrelated thread-state update during publication is not mistaken for di
   assert.ok(await harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response,
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   }));
   assert.deepEqual(await waiting, response);
 });
@@ -307,7 +316,7 @@ test("an unpublished request cannot be listed or answered", async () => {
   assert.equal(await harness.controller.respond({
     requestKey: "workbench-mcp:question-one",
     response: { answers: { details: { answers: ["too early"] } } },
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   }), null);
   releasePublish.resolve();
   const questionnaire = await harness.published;
@@ -315,7 +324,7 @@ test("an unpublished request cannot be listed or answered", async () => {
   assert.ok(await harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response,
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   }));
   assert.deepEqual(await waiting, response);
 });
@@ -334,7 +343,7 @@ test("disposal during answer settlement rejects the wait before releasing the ow
   const responding = harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response: { answers: { details: { answers: ["answer"] } } },
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   });
   await clearStarted.promise;
   const disposing = harness.controller.dispose();
@@ -359,7 +368,7 @@ test("clear failure during disposal still settles the wait and releases the owne
   const responding = harness.controller.respond({
     requestKey: questionnaire.requestKey,
     response: { answers: { details: { answers: ["answer"] } } },
-    threadId: "thread-one",
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   });
   await clearStarted.promise;
   const disposing = harness.controller.dispose();

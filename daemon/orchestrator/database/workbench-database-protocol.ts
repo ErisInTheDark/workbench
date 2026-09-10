@@ -46,6 +46,7 @@ import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateS
 import type { WorkbenchThreadLayoutOwner } from "./thread-state/WorkbenchThreadStateLayoutRepository.ts";
 import type { ThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
 import type { WorkbenchComposerProfileSelectionState } from "workbench-shared/workbench/thread/thread-state";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
@@ -88,26 +89,26 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "resolveTurnIdentity"; input: WorkbenchTurnIdentityLookup }
   | { type: "admitTranscriptItemIdentities"; inputs: readonly WorkbenchTranscriptItemIdentityAdmission[] }
   | { type: "resolveTranscriptItemIdentity"; input: WorkbenchTranscriptItemIdentityLookup }
-  | { type: "readThreadStateProject"; projectId: string }
-  | { type: "readThreadStateTitleHistories"; projectId: string }
-  | { type: "writeThreadStateProject"; projectId: string; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
+  | { type: "readThreadStateProject"; projectId: ProjectId }
+  | { type: "readThreadStateTitleHistories"; projectId: ProjectId }
+  | { type: "writeThreadStateProject"; projectId: ProjectId; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
   | { type: "readThreadStateGlobal"; documentId: WorkbenchThreadStateGlobalDocument["id"] }
   | { type: "writeThreadStateGlobal"; document: WorkbenchThreadStateGlobalDocument }
   | { type: "readThreadStateRecords"; query: WorkbenchThreadRecordQuery }
-  | { type: "readThreadStateDrafts"; projectId: string }
-  | { type: "readThreadStateProfile"; projectId: string }
+  | { type: "readThreadStateDrafts"; projectId: ProjectId }
+  | { type: "readThreadStateProfile"; projectId: ProjectId }
   | { type: "readThreadStateLayout"; owner: WorkbenchThreadLayoutOwner }
   | { type: "readThreadStatePinnedImports" }
   | { type: "readThreadStateArchiveDeadline" }
-  | { type: "readThreadStateActivity"; projectId: string }
-  | { type: "readThreadStateSnoozeSources"; targetThreadId: string }
+  | { type: "readThreadStateActivity"; projectId: ProjectId }
+  | { type: "readThreadStateSnoozeSources"; targetThreadId: WorkbenchThreadId }
   | { type: "readThreadStateArchiveEligible"; activeBefore: number }
   | { type: "commitThreadState"; changes: WorkbenchThreadStateCommit }
   | { type: "readSubagents"; query: WorkbenchSubagentRelationshipRead }
-  | { type: "readOwnedSubagents"; parentThreadId: string; projectId: string; threadIds: readonly string[] }
+  | { type: "readOwnedSubagents"; parentThreadId: WorkbenchThreadId; projectId: ProjectId; threadIds: readonly WorkbenchThreadId[] }
   | { type: "reserveSubagent"; record: Omit<WorkbenchSubagentReservation, "directSubagentIndex"> }
-  | { type: "activateSubagent"; parentThreadId: string; reservationId: string; record: WorkbenchSubagentRelationship }
-  | { type: "removeSubagent"; parentThreadId: string; identifier: string }
+  | { type: "activateSubagent"; parentThreadId: WorkbenchThreadId; reservationId: string; record: WorkbenchSubagentRelationship }
+  | { type: "removeSubagent"; parentThreadId: WorkbenchThreadId; identifier: string }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "queryTranscript"; request: TranscriptQuery }
@@ -153,11 +154,11 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadStateDrafts"; drafts: WorkbenchStoredThreadDraft[] }
   | { id: number; type: "threadStateProfile"; profile: WorkbenchComposerProfileSelectionState | null }
   | { id: number; type: "threadStateLayout"; layout: { revision: number; displayOrder: ThreadDisplayLayout } | null }
-  | { id: number; type: "threadStatePinnedImports"; projectIds: string[] }
+  | { id: number; type: "threadStatePinnedImports"; projectIds: ProjectId[] }
   | { id: number; type: "threadStateArchiveDeadline"; activeAt: number | null }
   | { id: number; type: "threadStateActivity"; activityAt: number | null }
-  | { id: number; type: "threadStateSnoozeSources"; sources: Array<{ projectId: string; threadId: string }> }
-  | { id: number; type: "threadStateArchiveEligible"; records: Array<{ projectId: string; record: WorkbenchThreadStateRecord }> }
+  | { id: number; type: "threadStateSnoozeSources"; sources: Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }> }
+  | { id: number; type: "threadStateArchiveEligible"; records: Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }> }
   | { id: number; type: "subagents"; records: WorkbenchSubagentRelationship[] | null }
   | { id: number; type: "subagentReservation"; record: WorkbenchSubagentReservation }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }

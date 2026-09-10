@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the internal-record/sidebar-projection boundary. Keywords: thread, state, projection, test.
+ * No production exports. Node tests protect the internal-record/sidebar-projection boundary.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,6 +9,13 @@ import {
   parseWorkbenchThreadStateEntry,
   projectWorkbenchThreadStateEntry,
 } from "./workbench-thread-state-record";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 const entry = {
   activityAt: 10,
@@ -62,7 +69,7 @@ test("stored-record conformance preserves lifecycle truth when an optional proje
     },
     mcpGeneration: "epoch:2",
     providerObserved: true,
-  }, "project");
+  }, fixtureIdentityValues.ProjectId["project"]);
 
   assert.equal(conformed.success, true);
   if (!conformed.success) return;
@@ -74,7 +81,7 @@ test("stored-record conformance repairs malformed lifecycle to a non-terminal st
   const conformed = conformStoredWorkbenchThreadStateRecord({
     ...entry,
     lifecycle: { kind: "completed", reason: "futureReason", settled: "yes" },
-  }, "project");
+  }, fixtureIdentityValues.ProjectId["project"]);
 
   assert.equal(conformed.success, true);
   if (!conformed.success) return;
@@ -84,12 +91,12 @@ test("stored-record conformance repairs malformed lifecycle to a non-terminal st
 });
 
 test("stored-record conformance rejects a record whose identity cannot be recovered", () => {
-  const conformed = conformStoredWorkbenchThreadStateRecord({ ...entry, identity: { harness: "codex" } }, "project");
+  const conformed = conformStoredWorkbenchThreadStateRecord({ ...entry, identity: { harness: "codex" } }, fixtureIdentityValues.ProjectId["project"]);
   assert.equal(conformed.success, false);
 });
 
 test("stored dependent snooze defaults safely and repairs malformed targets", () => {
-  const plain = conformStoredWorkbenchThreadStateRecord(entry, "project");
+  const plain = conformStoredWorkbenchThreadStateRecord(entry, fixtureIdentityValues.ProjectId["project"]);
   assert.equal(plain.success, true);
   if (!plain.success) return;
   assert.equal(plain.data.snoozedUntil, null);
@@ -97,7 +104,7 @@ test("stored dependent snooze defaults safely and repairs malformed targets", ()
   const malformed = conformStoredWorkbenchThreadStateRecord({
     ...entry,
     snoozedUntil: { identity: { harness: "future", threadId: "" }, projectId: "" },
-  }, "project");
+  }, fixtureIdentityValues.ProjectId["project"]);
   assert.equal(malformed.success, true);
   if (!malformed.success) return;
   assert.equal(malformed.data.snoozedUntil, null);

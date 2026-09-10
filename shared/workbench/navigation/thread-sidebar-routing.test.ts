@@ -15,6 +15,22 @@ import {
   parseWorkbenchRouteFromPath,
 } from "./workbench-route.ts";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "draft-one": fixtureIdentitySchemas.DraftIdSchema.parse("draft-one"),
+  },
+  FolderId: {
+    "one": fixtureIdentitySchemas.FolderIdSchema.parse("one"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("one"),
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+    "provider": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider"),
+  },
+};
 
 test("stats routes round-trip globally and per project", () => {
   assert.equal(createStatsHref(""), "/@/stats");
@@ -50,14 +66,14 @@ test("project hrefs preserve slash and reserved-character identities", () => {
 });
 
 test("home thread routes preserve the owning project without selecting it", () => {
-  const draftId = "123e4567-e89b-42d3-a456-426614174000";
-  const folderId = "00000000-0000-4000-8000-000000000010";
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000");
+  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000010");
   const cases = [
     [{ kind: "new" as const }, "/@/thread/owner/project/@/new"],
     [{ draftId, kind: "draft" as const }, `/@/thread/owner/project/@/new/${draftId}`],
     [{ folderId, kind: "new" as const }, `/@/thread/owner/project/@/folder/${folderId}/thread/new`],
-    [{ kind: "provider" as const, threadId: "provider" }, "/@/thread/owner/project/@/provider"],
-    [{ kind: "subagent" as const, parentThreadId: "parent", threadId: "child" }, "/@/thread/owner/project/@/parent/sub/child"],
+    [{ kind: "provider" as const, threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("provider") }, "/@/thread/owner/project/@/provider"],
+    [{ kind: "subagent" as const, parentThreadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("child") }, "/@/thread/owner/project/@/parent/sub/child"],
   ] as const;
 
   for (const [target, expectedHref] of cases) {
@@ -80,31 +96,31 @@ test("malformed home thread routes never select a project implicitly", () => {
 });
 
 test("thread routes discriminate blank drafts and provider ids", () => {
-  const draftId = "123e4567-e89b-42d3-a456-426614174000";
-  const folderId = "00000000-0000-4000-8000-000000000010";
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000");
+  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000010");
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/new").threadTarget, { kind: "new" });
   assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/folder/${folderId}/thread/new`).threadTarget, { folderId, kind: "new" });
   assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/thread/new/${draftId}`).threadTarget, { draftId, kind: "draft" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/provider-id").threadTarget, { kind: "provider", threadId: "provider-id" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub/child").threadTarget, { kind: "subagent", parentThreadId: "parent", threadId: "child" });
-  assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: "parent", threadId: "child" }), "/p/@/thread/parent/sub/child");
+  assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] }), "/p/@/thread/parent/sub/child");
   assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
   assert.equal(createThreadHref("p", { folderId, kind: "new" }), `/p/@/folder/${folderId}/thread/new`);
 });
 
 test("pinned routes preserve viewed and owning projects through the existing thread grammar", () => {
-  const draftId = "123e4567-e89b-42d3-a456-426614174000";
-  const providerHref = createPinnedThreadHref("viewed/project", "owner/project", { kind: "provider", threadId: "provider" });
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000");
+  const providerHref = createPinnedThreadHref("viewed/project", "owner/project", { kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["provider"] });
   assert.equal(providerHref, "/viewed/project/@/pin/owner/project/@/thread/provider");
   assert.deepEqual(parseWorkbenchRouteFromPath(providerHref), {
     ...parseWorkbenchRouteFromPath("/owner/project/@/thread/provider"),
-    projectId: "viewed/project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("viewed/project"),
     threadOwnerProjectId: "owner/project",
   });
   const draftHref = createPinnedThreadHref("viewed", "owner", { draftId, kind: "draft" });
   assert.equal(draftHref, `/viewed/@/pin/owner/@/thread/new/${draftId}`);
   assert.equal(parseWorkbenchRouteFromPath(draftHref).threadTarget?.kind, "draft");
-  const subagentHref = createPinnedThreadHref("viewed", "owner", { kind: "subagent", parentThreadId: "parent", threadId: "child" });
+  const subagentHref = createPinnedThreadHref("viewed", "owner", { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] });
   assert.equal(subagentHref, "/viewed/@/pin/owner/@/thread/parent/sub/child");
   assert.equal(parseWorkbenchRouteFromPath("/viewed/@/pin/owner").view, "invalid");
 });
@@ -123,15 +139,15 @@ test("blank routes own their private future draft identity without owning unrela
 });
 
 test("thread target selection matches the visible root without crossing unrelated identities", () => {
-  const provider = { harness: "codex" as const, kind: "provider" as const, threadId: "parent" };
+  const provider = { harness: "codex" as const, kind: "provider" as const, threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent") };
   assert.equal(isWorkbenchThreadTargetSelected(provider, provider), true);
-  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "subagent", parentThreadId: "parent", threadId: "child" }), true);
-  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "opencode", kind: "subagent", parentThreadId: "parent", threadId: "child" }), false);
-  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "provider", threadId: "other" }), false);
-  assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-one", kind: "draft" }), true);
-  assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-two", kind: "draft" }), false);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "subagent", parentThreadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("child") }), true);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "opencode", kind: "subagent", parentThreadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("child") }), false);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("other") }), false);
+  assert.equal(isWorkbenchThreadTargetSelected({ draftId: fixtureIdentityValues.DraftId["draft-one"], kind: "draft" }, { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft-one"), kind: "draft" }), true);
+  assert.equal(isWorkbenchThreadTargetSelected({ draftId: fixtureIdentityValues.DraftId["draft-one"], kind: "draft" }, { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft-two"), kind: "draft" }), false);
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, { kind: "new" }), true);
-  assert.equal(isWorkbenchThreadTargetSelected({ folderId: "one", kind: "new" }, { folderId: "two", kind: "new" }), false);
+  assert.equal(isWorkbenchThreadTargetSelected({ folderId: fixtureIdentityValues.FolderId["one"], kind: "new" }, { folderId: fixtureIdentitySchemas.FolderIdSchema.parse("two"), kind: "new" }), false);
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, null), false);
 });
 
@@ -151,9 +167,9 @@ test("mosaic routes preserve parent-owned subagent identity", () => {
 
 test("mosaic materialization projects every durable root and excludes non-provider panels", () => {
   const node = createWorkbenchMosaicSplit([
-    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "provider", threadId: "one" } }),
+    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["one"] } }),
     createWorkbenchMosaicTarget({ filePath: "src/index.ts", kind: "file" }),
-    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "subagent", parentThreadId: "parent", threadId: "child" } }),
+    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] } }),
     createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "new" } }),
   ]);
   assert.deepEqual([...getWorkbenchMosaicThreadRootIds(node)].sort(), ["one", "parent"]);

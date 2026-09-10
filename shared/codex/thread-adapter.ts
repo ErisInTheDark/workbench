@@ -1,18 +1,18 @@
 /*
  * Exports:
- * - formatSessionSource: flatten generated Codex session sources for sidebar display. Keywords: thread, source, sidebar.
- * - formatThreadStatus: flatten generated Codex thread statuses for workbench state comparisons. Keywords: thread, status, active.
- * - getCodexThreadCwdFilterPaths/getCodexThreadCwdFilterPathsForRoots: build exact-match cwd filter variants for Codex app-server thread listing. Keywords: thread, cwd, filter, windows, workspace.
- * - isCodexThreadWithinRoot/isCodexThreadAtRoot: browser-safe absolute path checks for project thread filtering. Keywords: cwd, root, filter.
- * - isProjectCodexThread: test whether a generated Codex thread belongs to the current project root. Keywords: thread, cwd, project.
- * - isProjectCodexThreadAtExpectedCwd: validate a relationship-owned descendant cwd without broadening ordinary project thread membership. Keywords: thread, cwd, subagent, worktree.
- * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
- * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
- * - toThreadResumePayload: normalize resume metadata plus its optional initial turn page. Keywords: payload, resume, pagination, lifecycle.
+ * - formatSessionSource: flatten generated session sources for sidebar display.
+ * - formatThreadStatus: flatten generated statuses for state comparisons.
+ * - getCodexThreadCwdFilterPaths/getCodexThreadCwdFilterPathsForRoots: build exact-match cwd filter variants.
+ * - isCodexThreadWithinRoot/isCodexThreadAtRoot: browser-safe absolute path checks.
+ * - isProjectCodexThread: test project membership.
+ * - isProjectCodexThreadAtExpectedCwd: validate relationship-owned descendant cwd.
+ * - toThreadSummary: normalise sidebar metadata without changing identity provenance.
+ * - toThreadPayload: normalise thread details without changing identity provenance.
+ * - toThreadResumePayload: normalise resume metadata and its initial turn page.
  * - toThreadTurn: admit native item identity evidence before a turn reaches Workbench consumers.
  * - readWorkbenchTurnHistory: normalise the existing provider-thread history extension at its boundary.
  */
-import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
+import type { ThreadPayloadData, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
 import type { SessionSource } from "./generated/app-server/v2/SessionSource.ts";
 import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse.ts";
@@ -151,7 +151,7 @@ export function isProjectCodexThreadAtExpectedCwd(
     && isCodexThreadAtRoot(thread.cwd, expectedCwd);
 }
 
-export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "codex"): ThreadSummary {
+export function toThreadSummary<Id extends string>(thread: Omit<Thread, "id"> & { id: Id }, harness: WorkbenchHarness = "codex"): ThreadSummary<Id> {
   return {
     id: thread.id,
     harness,
@@ -175,8 +175,8 @@ export function toThreadTurn(turn: Turn, harness: WorkbenchHarness = "codex"): T
   } : turn;
 }
 
-export function toThreadPayload(
-  thread: Thread,
+export function toThreadPayload<Id extends string>(
+  thread: Omit<Thread, "id"> & { id: Id },
   harness: WorkbenchHarness = "codex",
   model: string | null = null,
   reasoningEffort: string | null = null,
@@ -184,7 +184,7 @@ export function toThreadPayload(
   agentPath: string | null = null,
   tokenUsage: ThreadTokenUsage | null = null,
   nextPageCursor: string | null | undefined = undefined,
-): ThreadPayload {
+): ThreadPayloadData<Id> & { isDraft: false } {
   return {
     ...toThreadSummary(thread, harness),
     model,
@@ -199,14 +199,14 @@ export function toThreadPayload(
   };
 }
 
-export function toThreadResumePayload(
-  response: ThreadResumePayloadSource,
+export function toThreadResumePayload<Id extends string>(
+  response: Omit<ThreadResumePayloadSource, "thread"> & { thread: Omit<Thread, "id"> & { id: Id } },
   harness: WorkbenchHarness = "codex",
   model: string | null = response.model ?? null,
   reasoningEffort: string | null = response.reasoningEffort ?? null,
   serviceTier: string | null = response.serviceTier ?? null,
   agentPath: string | null = null,
-): ThreadPayload {
+): ThreadPayloadData<Id> & { isDraft: false } {
   const thread = response.initialTurnsPage
     ? { ...response.thread, turns: response.initialTurnsPage.data }
     : response.thread;

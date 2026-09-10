@@ -1,5 +1,4 @@
 /*
- * Keywords: thread identity, live lookup, database reload, disposal.
  * No exports. Tests protect synchronous admitted identity and reject stale lifecycle results.
  */
 import assert from "node:assert/strict";
@@ -10,13 +9,30 @@ import type {
   WorkbenchThreadIdentityRecord,
 } from "./database/thread-identity/workbench-thread-identity-types";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "another": fixtureIdentitySchemas.NativeThreadIdSchema.parse("another"),
+    "provider-owned": fixtureIdentitySchemas.NativeThreadIdSchema.parse("provider-owned"),
+  },
+  NativeTurnId: {
+    "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "workbench-owned": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("workbench-owned"),
+  },
+};
 
 const record: WorkbenchThreadIdentityRecord = {
-  threadId: "workbench-owned",
-  projectId: "project",
+  threadId: fixtureIdentityValues.WorkbenchThreadId["workbench-owned"],
+  projectId: fixtureIdentityValues.ProjectId["project"],
   projectRoot: "C:/project",
   bindings: [{
-    harness: "codex", nativeThreadId: "provider-owned", nativeLocation: "C:/project",
+    harness: "codex", nativeThreadId: fixtureIdentityValues.NativeThreadId["provider-owned"], nativeLocation: "C:/project",
     pending: true, turnIndex: null,
   }],
 };
@@ -72,8 +88,8 @@ test("committed turn admission supplies native delta lookup and advances the pen
   let admitted = 0;
   const native = record.bindings[0]!;
   const turn = {
-    threadId: record.threadId, turnId: "workbench-turn", turnIndex: 0,
-    native: { ...native, nativeTurnId: "native-turn" },
+    threadId: record.threadId, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("workbench-turn"), turnIndex: 0,
+    native: { ...native, nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn") },
   };
   const controller = new WorkbenchThreadIdentityController(database({
     observeTurnIdentities: async () => {
@@ -83,17 +99,17 @@ test("committed turn admission supplies native delta lookup and advances the pen
   }));
   await controller.start();
   await controller.observeTurn({
-    kind: "turn", threadId: record.threadId, turnId: "native-turn",
+    kind: "turn", threadId: record.threadId, turnId: fixtureIdentityValues.NativeTurnId["native-turn"],
     harnessId: native.harness, nativeLocation: native.nativeLocation, nativeThreadId: native.nativeThreadId,
-    nativeTurnId: "native-turn", state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
+    nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
   });
   assert.equal(controller.workbenchTurnIdForNative(turn.native), turn.turnId);
-  assert.equal(controller.knownTurn(turn.turnId).threadId, record.threadId);
+  assert.equal(controller.knownTurn(fixtureIdentitySchemas.TurnReferenceSchema.parse(turn.turnId)).threadId, record.threadId);
   assert.equal(controller.knownThread(record.threadId).bindings[0]?.pending, false);
   assert.equal(admitted, 1);
-  assert.throws(() => controller.workbenchTurnIdForNative({ ...turn.native, nativeThreadId: "another" }), /not been admitted/iu);
+  assert.throws(() => controller.workbenchTurnIdForNative({ ...turn.native, nativeThreadId: fixtureIdentityValues.NativeThreadId["another"] }), /not been admitted/iu);
   controller.dispose();
-  assert.throws(() => controller.knownTurn(turn.turnId), /disposed/iu);
+  assert.throws(() => controller.knownTurn(fixtureIdentitySchemas.TurnReferenceSchema.parse(turn.turnId)), /disposed/iu);
 });
 
 test("Windows native path aliases resolve together after cold start without changing stored paths", async () => {
@@ -107,7 +123,7 @@ test("Windows native path aliases resolve together after cold start without chan
   }), "win32");
   await controller.start();
   try {
-    assert.ok(locations.includes(controller.knownNativeBinding("codex", "provider-owned").nativeLocation));
+    assert.ok(locations.includes(controller.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId["provider-owned"]).nativeLocation));
     for (const nativeLocation of locations) {
       assert.equal(controller.workbenchIdForNative({ ...record.bindings[0]!, nativeLocation }), record.threadId);
     }
@@ -117,7 +133,7 @@ test("Windows native path aliases resolve together after cold start without chan
 
 test("Linux case-distinct native locations remain separate owners", async () => {
   const first = { ...record, bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/Project" }] };
-  const second = { ...record, threadId: "another-owner", bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/project" }] };
+  const second = { ...record, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("another-owner"), bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/project" }] };
   const controller = new WorkbenchThreadIdentityController(database({
     listThreadIdentities: async () => [first, second],
   }), "linux");
@@ -125,7 +141,7 @@ test("Linux case-distinct native locations remain separate owners", async () => 
   try {
     assert.equal(controller.workbenchIdForNative(first.bindings[0]!), first.threadId);
     assert.equal(controller.workbenchIdForNative(second.bindings[0]!), second.threadId);
-    assert.throws(() => controller.knownNativeBinding("codex", "provider-owned"), /requires a location/);
+    assert.throws(() => controller.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId["provider-owned"]), /requires a location/);
   } finally { controller.dispose(); }
 });
 
@@ -133,7 +149,7 @@ test("Windows path equivalence does not hide competing Workbench owners", async 
   const controller = new WorkbenchThreadIdentityController(database({
     listThreadIdentities: async () => [
       { ...record, bindings: [{ ...record.bindings[0]!, nativeLocation: "C:\\Project" }] },
-      { ...record, threadId: "other", bindings: [{ ...record.bindings[0]!, nativeLocation: "c:/project" }] },
+      { ...record, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other"), bindings: [{ ...record.bindings[0]!, nativeLocation: "c:/project" }] },
     ],
   }), "win32");
   try {

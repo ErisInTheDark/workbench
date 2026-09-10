@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - default AgentThreadViewer: read and poll one thread from the app-server bridge in a chrome-free page. Keywords: agent thread, standalone, thread/read.
- * - Local helpers: resolve URL inputs, classify active status, and read ThreadPayloads through CodexAppServerClient. Keywords: thread id, harness, polling.
+ * - default AgentThreadViewer: read and poll one thread from the app-server bridge in a chrome-free page.
  */
 "use client";
 
@@ -9,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { WorkbenchThreadResponse } from "workbench-shared/workbench/thread/workbench-thread-identity";
 import { isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
@@ -37,7 +37,7 @@ async function readStandaloneThreadPayload(
   harness: WorkbenchHarness,
 ) {
   await client.connect();
-  const response = await client.sendRequest<ThreadReadResponse>({
+  const response = await client.sendRequest<WorkbenchThreadResponse<ThreadReadResponse>>({
     method: "thread/read",
     params: {
       includeTurns: true,

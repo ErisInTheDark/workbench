@@ -1,13 +1,13 @@
 /*
- * Keywords: Codex, identity admission, ordered recording, recovery, bridge lifecycle.
  * Exports:
- * - CodexStdioBridgeOptions: inject app-server, browser, questionnaire, instruction, transcript, and reload-generation boundaries. Keywords: codex, bridge, questionnaire, options, reload.
- * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
- * - default CodexStdioBridge: translate websocket requests, questionnaires, and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, questionnaire, bridge.
+ * - CodexStdioBridgeOptions: app-server, browser, questionnaire, instruction, transcript, and reload boundaries.
+ * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
+ * - default CodexStdioBridge: translate requests, questionnaires, and messages around a stable app-server.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 
 import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
@@ -66,7 +66,8 @@ import {
 import { WorkbenchQuestionnaireHistoryEntrySchema } from "workbench-shared/workbench/thread/thread-state";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type {
-  WorkbenchTranscriptAtomicObservation,
+  NativeTranscriptAtomicObservation,
+  NativeTranscriptObservation,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types.ts";
@@ -240,7 +241,11 @@ type CodexTranscriptThreadContext = CodexTranscriptProviderContext & {
   usageContext?: ReturnType<typeof readCodexUsageContext>;
 };
 
-type CodexSqliteTranscriptObservation = WorkbenchTranscriptObservation;
+type CodexSqliteTranscriptObservation = NativeTranscriptObservation;
+
+function nativeTranscriptEntry<Entry extends { threadId: string; turnId: string }>(entry: Entry): Omit<Entry, "threadId" | "turnId"> & { threadId: NativeThreadId; turnId: NativeTurnId } {
+  return { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) };
+}
 
 function threadPageReadKey(message: JsonRpcRequest) {
   const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
@@ -997,16 +1002,15 @@ export default class CodexStdioBridge {
     this.unmaterializedThreadIds = new Set(initialState?.unmaterializedThreadIds);
     this.transcriptRecording = new CodexTranscriptRecordingController({
       ...(recordSqliteTranscript ? { recordSqlite: async (
-        observations: readonly WorkbenchTranscriptObservation[],
+        observations: readonly NativeTranscriptObservation[],
         context: WorkbenchTranscriptRecordingContext,
       ) => {
-        if (!identities) return recordSqliteTranscript(observations, context);
+        if (!identities) throw new Error("SQLite transcript identity admission is unavailable.");
         await admitNativeTranscriptObservations(identities, observations);
         const mapped = observations.map((observation) => {
           const threadId = "entry" in observation ? observation.entry.threadId : observation.threadId;
-          if (threadId === null) return observation;
           return mapNativeTranscriptObservation(
-            identities, identities.threads.knownNativeBinding("codex", threadId), observation,
+            identities, threadId === null ? null : identities.threads.knownNativeBinding("codex", threadId), observation,
           );
         });
         await recordSqliteTranscript(mapped, context);
@@ -1359,7 +1363,7 @@ export default class CodexStdioBridge {
   get activeSqliteTranscriptThreadIds() {
     return [...new Set([...this.transcriptActiveTurns.values()].map((threadId) => (
       this.identities
-        ? this.identities.threads.workbenchIdForNative(this.identities.threads.knownNativeBinding("codex", threadId))
+        ? this.identities.threads.workbenchIdForNative(this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)))
         : threadId
     )))];
   }
@@ -1371,7 +1375,7 @@ export default class CodexStdioBridge {
   private async captureSqliteTranscriptThread(threadId: string, recoveryBoundary: boolean, signal?: AbortSignal) {
     this.assertAcceptingWork();
     signal?.throwIfAborted();
-    const identity = await this.identities?.threads.resolve({ threadId, harness: "codex" });
+    const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
     const bindings = identity?.bindings.filter((binding) => binding.harness === "codex") ?? [];
     if (this.identities && bindings.length !== 1) {
       throw new Error(`SQLite transcript recovery has no unique admitted Codex binding for thread ${threadId}.`);
@@ -1542,7 +1546,7 @@ export default class CodexStdioBridge {
       await this.captureTranscript("usage-compatibility-import", async () => {
         try {
           if (this.identities) {
-            const native = { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: threadId };
+            const native = { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: NativeThreadIdSchema.parse(threadId) };
             if (!this.identities.threads.findNativeThread(native)) {
               await this.persistTranscript(() => this.identities!.threads.observe({ ...context, native }));
             }
@@ -2131,7 +2135,7 @@ export default class CodexStdioBridge {
             this.transcriptThreadContexts.set(entry.id, context);
             return { thread: entry, metadata: {
               ...context,
-              native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: entry.id },
+              native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: NativeThreadIdSchema.parse(entry.id) },
             } };
           }));
           await this.persistTranscript(() => admitProviderThreads(this.identities!, catalog), signal);
@@ -2150,7 +2154,7 @@ export default class CodexStdioBridge {
         const threadId = asString(params?.threadId);
         const data = asRecord(hydratedMessage.result)?.data as Turn[] | undefined;
         if (threadId && Array.isArray(data)) {
-          const native = this.identities.threads.knownNativeBinding("codex", threadId);
+          const native = this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId));
           const turns = params?.sortDirection === "asc" ? data : [...data].reverse();
           await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, turns.map((turn) => ({
             method: "turn/started" as const, params: { threadId, turn },
@@ -2187,7 +2191,7 @@ export default class CodexStdioBridge {
             await transcriptStore.recordSteerSettlements(steerSettlements);
             return steerSettlements.map((entry) => ({
               kind: "steer" as const,
-              entry,
+              entry: nativeTranscriptEntry(entry),
               observedAt: entry.resolvedAt!,
             }));
           },
@@ -2225,9 +2229,9 @@ export default class CodexStdioBridge {
         const nativeTurnId = asString(params?.turnId);
         const itemId = asString(params?.itemId);
         if (threadId && nativeTurnId && itemId) {
-          const native = this.identities.threads.knownNativeBinding("codex", threadId);
+          const native = this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId));
           const canonicalThreadId = this.identities.threads.workbenchIdForNative(native);
-          const turnId = this.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
+          const turnId = this.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: NativeTurnIdSchema.parse(nativeTurnId) });
           await this.persistTranscript(() => this.identities!.items.admit([{
             threadId: canonicalThreadId, sources: [{ turnId, kind: "stable", sourceId: itemId }], legacyAliases: [],
           }]), signal);
@@ -2331,11 +2335,11 @@ export default class CodexStdioBridge {
         const params = asRecord(message.params);
         const threadId = asString(params?.threadId);
         if (threadId && typeof params?.turnId === "string") {
-          const native = this.identities.threads.knownNativeBinding("codex", threadId);
+          const native = this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId));
           await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, [message as ServerNotification]), signal);
         }
         if (syntheticFileChangeNotification) {
-          const native = this.identities.threads.knownNativeBinding("codex", syntheticFileChangeNotification.params.threadId);
+          const native = this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(syntheticFileChangeNotification.params.threadId));
           await this.persistTranscript(() => admitProviderNotifications(this.identities!, native, [syntheticFileChangeNotification!]), signal);
         }
       }
@@ -2382,7 +2386,7 @@ export default class CodexStdioBridge {
             await transcriptStore.recordSteerSettlements(steerSettlements);
             return steerSettlements.map((entry) => ({
               kind: "steer" as const,
-              entry,
+              entry: nativeTranscriptEntry(entry),
               observedAt: entry.resolvedAt!,
             }));
           },
@@ -2461,7 +2465,7 @@ export default class CodexStdioBridge {
       }
       await this.persistTranscript(() => this.transcriptRecording.recordWorkbenchMutation({
         observations: admittedSteer
-          ? [{ kind: "steer", entry: admittedSteer, observedAt: admittedSteer.attemptedAt }]
+          ? [{ kind: "steer", entry: nativeTranscriptEntry(admittedSteer), observedAt: admittedSteer.attemptedAt }]
           : [],
         recordLegacy: () => this.ensureTranscriptStore().recordClientRequest(request, admittedSteer),
       }));
@@ -2480,7 +2484,7 @@ export default class CodexStdioBridge {
         : null;
       await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
         observations: settledSteer
-          ? [{ kind: "steer", entry: settledSteer, observedAt: settledSteer.resolvedAt! }]
+          ? [{ kind: "steer", entry: nativeTranscriptEntry(settledSteer), observedAt: settledSteer.resolvedAt! }]
           : [],
         recordLegacy: async () => {
           const transcriptStore = this.ensureTranscriptStore();
@@ -2785,7 +2789,7 @@ export default class CodexStdioBridge {
         await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
           observations: [{
             kind: "questionnaire",
-            entry: historyEntry,
+            entry: nativeTranscriptEntry(historyEntry),
             observedAt: historyEntry.resolvedAt,
           }],
           recordLegacy: async () => {
@@ -2973,8 +2977,8 @@ export default class CodexStdioBridge {
 
     if (this.identities) {
       await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, [
-        ...questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry, observedAt: entry.resolvedAt })),
-        ...steerEntries.map((entry) => ({ kind: "steer" as const, entry, observedAt: entry.resolvedAt ?? entry.attemptedAt })),
+        ...questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry: nativeTranscriptEntry(entry), observedAt: entry.resolvedAt })),
+        ...steerEntries.map((entry) => ({ kind: "steer" as const, entry: nativeTranscriptEntry(entry), observedAt: entry.resolvedAt ?? entry.attemptedAt })),
       ]), signal);
     }
     signal.throwIfAborted();
@@ -3130,7 +3134,7 @@ export default class CodexStdioBridge {
       if (invalidEvidence) logError("codex-context-usage", "Ignored malformed or foreign retained context measurements.");
       await this.captureTranscript("context-usage-initialisation", () => (
         this.persistTranscript(() => this.transcriptRecording.importCompatibilityWindow(async () => [{
-          kind: "threadContextUsage", threadId, snapshot: { tokenUsage }, initialise: true,
+          kind: "threadContextUsage", threadId: NativeThreadIdSchema.parse(threadId), snapshot: { tokenUsage }, initialise: true,
         }]), signal)
       ), { requireSqlite: true });
       // Read back the winner: a live event may have arrived while historical evidence was being read.
@@ -3194,7 +3198,7 @@ export default class CodexStdioBridge {
     await this.captureTranscript("workbench-browse-settlement", async () => {
       try {
         await this.persistTranscript(() => this.transcriptRecording.recordCrossedWorkbenchMutation({
-          observations: [{ kind: "browse", entry, ...(asset ? { asset } : {}) }],
+          observations: [{ kind: "browse", entry: nativeTranscriptEntry(entry), ...(asset ? { asset } : {}) }],
           recordLegacy: () => transcriptStore.recordBrowseResultEntry(entry),
         }));
       } catch (error) {
@@ -3221,7 +3225,7 @@ export default class CodexStdioBridge {
 
     const encodedThreadId = decodeURIComponent(match[1]!);
     const fileName = decodeURIComponent(match[2]!);
-    const identity = await this.identities?.threads.resolve({ threadId, harness: "codex" });
+    const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
     const nativeSegments = identity
       ? identity.bindings.filter((binding) => binding.harness === "codex").map((binding) => encodeTranscriptPathSegment(binding.nativeThreadId))
       : [encodeTranscriptPathSegment(threadId)];
@@ -3343,7 +3347,7 @@ export default class CodexStdioBridge {
     const workbenchQuestionnaire = await this.questionnaires.respond({
       requestKey: resolvedResponse.requestKey,
       response: resolvedResponse.response,
-      threadId: resolvedResponse.threadId,
+      threadId: NativeThreadIdSchema.parse(resolvedResponse.threadId),
     });
     if (workbenchQuestionnaire) {
       return await this.settleQuestionnaireHistoryEntry({
@@ -3692,7 +3696,7 @@ export default class CodexStdioBridge {
   private createSqliteProviderWindowObservations(
     thread: Thread,
     context?: CodexTranscriptThreadContext,
-  ): WorkbenchTranscriptObservation[] {
+  ): NativeTranscriptObservation[] {
     if (!this.sqliteTranscriptEnabled) return [];
     if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
     return [createCodexTranscriptProviderThreadScopeObservation(thread, context)];
@@ -3702,7 +3706,7 @@ export default class CodexStdioBridge {
     request: JsonRpcRequest,
     response: JsonRpcResponse,
     historicalHydration: boolean,
-  ): Promise<WorkbenchTranscriptObservation[]> {
+  ): Promise<NativeTranscriptObservation[]> {
     if (
       !this.sqliteTranscriptEnabled
       || response.error
@@ -3754,7 +3758,7 @@ export default class CodexStdioBridge {
   private async createSqliteProviderNotificationObservations(
     notification: JsonRpcNotification,
     settingsTurnId?: string,
-  ): Promise<WorkbenchTranscriptObservation[]> {
+  ): Promise<NativeTranscriptObservation[]> {
     if (!this.sqliteTranscriptEnabled) return [];
     if (notification.method === "thread/settings/updated") {
       const params = asRecord(notification.params);
@@ -3847,7 +3851,7 @@ export default class CodexStdioBridge {
   private createSqliteProviderStartedTurnObservations(
     threadId: string,
     turn: Turn,
-  ): WorkbenchTranscriptObservation[] {
+  ): NativeTranscriptObservation[] {
     const context = this.transcriptThreadContexts.get(threadId);
     if (!context) {
       throw new Error(`Codex transcript thread ${threadId} has no provider context for live turn ${turn.id}`);
@@ -3920,7 +3924,7 @@ export default class CodexStdioBridge {
       activityAt: Math.round((thread.recencyAt ?? thread.updatedAt) * 1_000),
       createdAt: Math.round(thread.createdAt * 1_000),
       nativeLocation: thread.cwd,
-      projectId: resolution.project.id,
+      projectId: ProjectIdSchema.parse(resolution.project.id),
       projectRoot: resolution.root.rootPath,
       title: thread.name?.trim() || thread.preview.trim() || "Untitled thread",
       updatedAt: Math.round(thread.updatedAt * 1_000),
@@ -3929,7 +3933,7 @@ export default class CodexStdioBridge {
     if (this.identities && remember) {
       await this.persistTranscript(() => admitProviderThreads(this.identities!, [{ metadata: {
         ...context,
-        native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: thread.id },
+        native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: NativeThreadIdSchema.parse(thread.id) },
       }, thread }]), signal);
     }
     signal.throwIfAborted();
@@ -4003,12 +4007,12 @@ export default class CodexStdioBridge {
   private async loadSqliteCompatibilityWindow(
     thread: Thread,
     transcriptStore: CodexTranscriptStoreInstance,
-  ): Promise<WorkbenchTranscriptObservation> {
+  ): Promise<NativeTranscriptObservation> {
     const context = this.transcriptThreadContexts.get(thread.id);
     if (!context) throw new Error(`Codex transcript thread ${thread.id} has no admitted provider context.`);
     const materializedTurnIds = thread.turns.map(({ id }) => id);
     const entries = await transcriptStore.readThreadContextEntries(thread.id, { turnIds: materializedTurnIds });
-    const browseAssets = new Map<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>();
+    const browseAssets = new Map<string, Extract<NativeTranscriptAtomicObservation, { kind: "browse" }>["asset"]>();
     for (const entry of entries.browseResultEntries) {
       const asset = await this.readSqliteBrowseAsset(thread.id, entry.assetUrl);
       if (asset) browseAssets.set(entry.entryKey, asset);

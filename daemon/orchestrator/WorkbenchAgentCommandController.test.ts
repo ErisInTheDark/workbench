@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse/subagent/thread/questionnaire dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, questionnaire, thread, dirt, cancellation, transport, test.
+ * - No production exports; tests cover direct dispatch, claim identity, reload dirt, response adaptation and caller cancellation.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -9,8 +9,10 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const reloadCatalog = [
   { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
@@ -154,7 +156,7 @@ test("transcript CLI dispatch keeps Workbench target ids and rejects outside-roo
   const controller = new WorkbenchAgentCommandController("http://127.0.0.1:1", {
     ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     workbenchProjectRoot: "C:/workbench",
-    resolveCaller: async () => ({ threadId: "wb-caller", nativeThreadId: "native-caller", harness: "codex" }),
+    resolveCaller: async () => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("wb-caller"), nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-caller"), harness: "codex" }),
     executeTranscriptQuery: async (body) => { bodies.push(body); return new Response("stored results"); },
   });
   const server = await startController(controller);
@@ -257,8 +259,8 @@ test("answers the private apply_patch hook from the active claim owner", async (
     {
         ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
         resolveCaller: async (threadId) => {
-          assert.equal(threadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
-          return { harness: "codex", threadId, nativeThreadId: "provider-thread" };
+          assert.ok(threadId === "97d84a45-0d43-4d20-a996-e6b8bd8ad149" || threadId === "provider-thread");
+          return { harness: "codex", threadId: WorkbenchThreadIdSchema.parse("97d84a45-0d43-4d20-a996-e6b8bd8ad149"), nativeThreadId: NativeThreadIdSchema.parse("provider-thread") };
         },
       checkApplyPatchClaims: async ({ paths, threadId }) => {
         checkedPaths.push(paths);
@@ -311,7 +313,7 @@ test("answers the private apply_patch hook from the active claim owner", async (
     const mixedDecision = await mixed.json() as { systemMessage: string };
     const mixedPayload = JSON.parse(mixedDecision.systemMessage.replace(/^workbench:file-change-failure:v1:/u, "")) as { changes: Array<{ path: string }> };
     assert.deepEqual(mixedPayload.changes.map((change) => change.path), [checkedPaths[2]![1]]);
-    assert.deepEqual(checkedThreadIds, ["provider-thread", "provider-thread", "provider-thread"]);
+    assert.deepEqual(checkedThreadIds, Array(3).fill("97d84a45-0d43-4d20-a996-e6b8bd8ad149"));
   } finally {
     await server.close();
   }
@@ -323,6 +325,10 @@ test("returns Codex deny decisions for mismatched identity, malformed input, and
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
       checkApplyPatchClaims: async () => { throw new Error("claim registry unavailable"); },
+      resolveCaller: async () => ({
+        harness: "codex", threadId: WorkbenchThreadIdSchema.parse("97d84a45-0d43-4d20-a996-e6b8bd8ad149"),
+        nativeThreadId: NativeThreadIdSchema.parse("parent-thread"),
+      }),
     },
   );
   const server = await startController(controller);

@@ -10,6 +10,11 @@ import { isDeepStrictEqual } from "node:util";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import {
+  ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ThreadDisplayKeySchema,
+  ThreadReferenceSchema, TurnReferenceSchema,
+  type ProjectId, type ThreadReference, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
+import {
   applyWorkbenchDatabaseSchema, type WorkbenchDatabaseSchema,
 } from "workbench-shared/database/schema/schema-history";
 import {
@@ -19,6 +24,7 @@ import {
 import {
   getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
   ThreadDisplayLayoutSchema, type ThreadDisplayLayout,
+  getThreadDisplayThreadKey,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
@@ -32,24 +38,24 @@ import WorkbenchSubagentRelationshipRepository from "./WorkbenchSubagentRelation
 import { asRecord, decodeGlobalDocument, parseProjectImport } from "./workbench-thread-state-document-source.ts";
 
 export interface WorkbenchThreadStateRelationshipSource {
-  parentThreadId: string;
+  parentThreadId: ThreadReference;
   nextDirectSubagentIndex: number;
-  relationships: WorkbenchStoredSubagent[];
+  relationships: Array<z.infer<typeof RelationshipSchema>>;
 }
 
 const RelationshipMetadataSchema = z.object({
-  parentThreadId: z.string().min(1), projectId: z.string().min(1),
+  parentThreadId: z.string().min(1).brand<"ThreadReference">(), projectId: z.string().min(1).brand<"ProjectId">(),
   harness: WorkbenchHarnessSchema, cwd: z.string().min(1), name: z.string().min(1),
   title: z.string().min(1), profileId: z.string().min(1), profileName: z.string().min(1),
   createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative(),
   directSubagentIndex: z.number().int().nonnegative(),
 });
 const RelationshipSchema = z.discriminatedUnion("kind", [
-  RelationshipMetadataSchema.extend({ kind: z.literal("active"), threadId: z.string().min(1) }).strict(),
+  RelationshipMetadataSchema.extend({ kind: z.literal("active"), threadId: z.string().min(1).brand<"ThreadReference">() }).strict(),
   RelationshipMetadataSchema.extend({ kind: z.literal("reserved"), reservationId: z.uuid() }).strict(),
 ]);
 const ParentRelationshipSourceSchema = z.object({
-  parentThreadId: z.string().min(1),
+  parentThreadId: z.string().min(1).brand<"ThreadReference">(),
   schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   nextDirectSubagentIndex: z.number().int().nonnegative().optional(),
   subagents: z.record(z.string(), z.unknown()),
@@ -60,13 +66,13 @@ const GlobalRelationshipSourceSchema = z.object({
 }).strict();
 
 export async function readThreadStateRelationshipSources(runtimeDirectory: string): Promise<WorkbenchThreadStateRelationshipSource[]> {
-  const parents = new Map<string, WorkbenchThreadStateRelationshipSource>();
+  const parents = new Map<ThreadReference, WorkbenchThreadStateRelationshipSource>();
   const read = async (file: string) => {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Subagent import source must be a regular file.");
     return JSON.parse(await fs.readFile(file, "utf8")) as unknown;
   };
-  const merge = (parentThreadId: string, values: unknown[], counter = 0) => {
+  const merge = (parentThreadId: ThreadReference, values: unknown[], counter = 0) => {
     const prior = parents.get(parentThreadId);
     const records = new Map<string, Record<string, unknown>>((prior?.relationships ?? []).map(record => [
       record.kind === "reserved" ? record.reservationId : record.threadId, { ...record },
@@ -97,7 +103,7 @@ export async function readThreadStateRelationshipSources(runtimeDirectory: strin
       }
     }
     const used = new Set<number>();
-    const relationships: WorkbenchStoredSubagent[] = [];
+    const relationships: Array<z.infer<typeof RelationshipSchema>> = [];
     const identifier = (candidate: Record<string, unknown>) => String(candidate.kind === "reserved" ? candidate.reservationId : candidate.threadId);
     for (const candidate of merged.sort((left, right) => Number(left.createdAt) - Number(right.createdAt)
       || identifier(left).localeCompare(identifier(right)))) {
@@ -131,9 +137,9 @@ export async function readThreadStateRelationshipSources(runtimeDirectory: strin
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   if (legacy !== null) {
     const source = GlobalRelationshipSourceSchema.parse(legacy);
-    const grouped = new Map<string, unknown[]>();
+    const grouped = new Map<ThreadReference, unknown[]>();
     for (const value of Object.values(source.subagents)) {
-      const parent = z.string().min(1).parse(asRecord(value).parentThreadId);
+      const parent = z.string().min(1).brand<"ThreadReference">().parse(asRecord(value).parentThreadId);
       grouped.set(parent, [...grouped.get(parent) ?? [], value]);
     }
     for (const [parent, values] of grouped) merge(parent, values);
@@ -168,13 +174,13 @@ export default class WorkbenchThreadStateMigration {
         // Existing histories remain sealed. The domain conversion owns only the new release.
         applyWorkbenchDatabaseSchema(this.database, schema, { targetVersion: databaseReleases.nativeIdentityLookupIndexes.version });
         const projects = (this.database.prepare("SELECT project_id, document_json FROM workbench_thread_state_projects").all() as {
-          project_id: string; document_json: string;
+          project_id: ProjectId; document_json: string;
         }[]).map(row => ({ projectId: row.project_id, document: parseProjectImport(row.document_json, row.project_id) }));
         const globals = this.database.prepare("SELECT id, document_json FROM workbench_thread_state_globals").all() as {
           id: string; document_json: string;
         }[];
         const titleRows = this.database.prepare("SELECT * FROM workbench_thread_title_history").all() as {
-          project_id: string; harness_id: "codex" | "copilot" | "opencode"; thread_id: string; title: string; used_at: number;
+          project_id: ProjectId; harness_id: "codex" | "copilot" | "opencode"; thread_id: string; title: string; used_at: number;
         }[];
         for (const project of projects) for (const record of project.document.records) this.admitRecord(project.projectId, record);
         for (const parent of relationships) {
@@ -193,7 +199,7 @@ export default class WorkbenchThreadStateMigration {
           this.requireThread(record.parentThreadId, record.projectId);
           if (record.kind === "active" && !this.identities.resolve({ projectId: record.projectId, harness: record.harness, threadId: record.threadId })) {
             this.identities.observe({
-              native: { harness: record.harness, nativeThreadId: record.threadId, nativeLocation: record.cwd },
+              native: { harness: record.harness, nativeThreadId: NativeThreadIdSchema.parse(record.threadId), nativeLocation: record.cwd },
               projectId: record.projectId, projectRoot: this.projectRoot(record.projectId), title: record.title,
               createdAt: record.createdAt, updatedAt: record.updatedAt, activityAt: record.updatedAt,
             });
@@ -246,11 +252,12 @@ export default class WorkbenchThreadStateMigration {
         const expectedParents = relationships.map(parent => ({
           ...parent,
           parentThreadId: this.requireThread(parent.parentThreadId).threadId,
-          relationships: parent.relationships.map(record => ({
-            ...record,
-            parentThreadId: this.requireThread(record.parentThreadId, record.projectId).threadId,
-            ...(record.kind === "active" ? { threadId: this.requireThread(record.threadId, record.projectId, record.harness).threadId } : {}),
-          })),
+          relationships: parent.relationships.map((record): WorkbenchStoredSubagent => {
+            const parentThreadId = this.requireThread(record.parentThreadId, record.projectId).threadId;
+            return record.kind === "active"
+              ? { ...record, parentThreadId, threadId: this.requireThread(record.threadId, record.projectId, record.harness).threadId }
+              : { ...record, parentThreadId };
+          }),
         }));
         for (const parent of expectedParents) relationshipRepository.importParent(parent);
         for (const global of globals) {
@@ -263,7 +270,7 @@ export default class WorkbenchThreadStateMigration {
           const owner = { kind: global.id === "pinnedLayout" ? "pinned" as const : "home" as const };
           const displayOrder = this.mapLayout(ThreadDisplayLayoutSchema.parse(document.displayOrder ?? {}));
           const revision = z.number().int().nonnegative().parse(document.revision ?? 0);
-          const pinnedImports = global.id === "pinnedLayout" ? z.array(z.string()).parse(document.importedProjectIds ?? []) : undefined;
+          const pinnedImports = global.id === "pinnedLayout" ? z.array(z.string().brand<"ProjectId">()).parse(document.importedProjectIds ?? []) : undefined;
           repository.commit({ layouts: [{ owner, revision, displayOrder }], ...(pinnedImports ? { pinnedImports } : {}) });
           this.same(repository.readLayout(owner), { revision, displayOrder }, "global layout");
           if (pinnedImports) this.same(repository.readPinnedImports().sort(), [...pinnedImports].sort(), "pinned imports");
@@ -302,7 +309,7 @@ export default class WorkbenchThreadStateMigration {
     }
   }
 
-  private projectRoot(projectId: string, retainedCwds: readonly string[] = []) {
+  private projectRoot(projectId: ProjectId, retainedCwds: readonly string[] = []) {
     const rows = this.database.prepare("SELECT DISTINCT project_root FROM workbench_threads WHERE project_id = ?").all(projectId) as { project_root: string }[];
     const candidates = rows.length ? rows.map(row => row.project_root) : retainedCwds;
     const normalized = new Map(candidates.map(root => [
@@ -315,11 +322,11 @@ export default class WorkbenchThreadStateMigration {
     return root;
   }
 
-  private admitRecord(projectId: string, record: WorkbenchThreadStateRecord) {
+  private admitRecord(projectId: ProjectId, record: WorkbenchThreadStateRecord) {
     if (this.identities.resolve({ projectId, ...record.identity })) return;
     const projectRoot = this.projectRoot(projectId);
     this.identities.observe({
-      native: { harness: record.identity.harness, nativeThreadId: record.identity.threadId, nativeLocation: record.entryKind === "subagent" ? record.cwd : projectRoot },
+      native: { harness: record.identity.harness, nativeThreadId: NativeThreadIdSchema.parse(record.identity.threadId), nativeLocation: record.entryKind === "subagent" ? record.cwd : projectRoot },
       projectId, projectRoot, title: record.title,
       createdAt: record.entryKind === "subagent" ? record.createdAt : record.activityAt,
       updatedAt: record.entryKind === "subagent" ? record.updatedAt : record.activityAt,
@@ -327,14 +334,14 @@ export default class WorkbenchThreadStateMigration {
     });
   }
 
-  private requireThread(threadId: string, projectId?: string, harness?: "codex" | "copilot" | "opencode") {
-    const identity = this.identities.resolve({ threadId, projectId, harness });
+  private requireThread(threadId: string, projectId?: ProjectId, harness?: "codex" | "copilot" | "opencode") {
+    const identity = this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId, harness });
     if (!identity) throw new Error("Thread-state source has unresolved thread ownership.");
     return identity;
   }
 
   private mapTurn(identity: WorkbenchThreadIdentityRecord, harness: string, turnId: string) {
-    const known = this.identities.resolveTurn({ threadId: identity.threadId, turnId });
+    const known = this.identities.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(turnId) });
     if (known) return known.turnId;
     const bindings = identity.bindings.filter(binding => binding.harness === harness);
     const binding = bindings[0];
@@ -342,21 +349,21 @@ export default class WorkbenchThreadStateMigration {
       throw new Error("Thread-state turn has unresolved native ownership.");
     }
     return this.identities.observeTurn({
-      kind: "turn", threadId: identity.threadId, turnId,
-      harnessId: harness, nativeLocation: binding.nativeLocation, nativeThreadId: binding.nativeThreadId, nativeTurnId: turnId,
+      kind: "turn", threadId: identity.threadId, turnId: NativeTurnIdSchema.parse(turnId),
+      harnessId: harness, nativeLocation: binding.nativeLocation, nativeThreadId: binding.nativeThreadId, nativeTurnId: NativeTurnIdSchema.parse(turnId),
       state: "admitted", createdAt: 0, startedAt: null, endedAt: null, durationMs: null,
     }).turnId;
   }
 
-  private mapItem(threadId: string, turnId: string | null, itemId: string | null) {
+  private mapItem(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId | null, itemId: string | null) {
     if (itemId === null) return null;
-    const known = this.items.resolve({ threadId, itemId, ...(turnId ? { turnId } : {}) });
+    const known = this.items.resolve({ threadId, itemId: ItemReferenceSchema.parse(itemId), ...(turnId ? { turnId } : {}) });
     if (known) return known.itemId;
     if (!turnId) throw new Error("Thread-state item has no resolvable identity or owning turn.");
     return this.items.admit({ threadId, sources: [], legacyAliases: [{ turnId, alias: itemId }] }).itemId;
   }
 
-  private mapRecord(projectId: string, record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
+  private mapRecord(projectId: ProjectId, record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
     const identity = this.requireThread(record.identity.threadId, projectId, record.identity.harness);
     const turn = (id: string) => this.mapTurn(identity, record.identity.harness, id);
     const lifecycle: WorkbenchThreadLifecycle = "agent" in record.lifecycle && record.lifecycle.agent?.turnId
@@ -381,13 +388,15 @@ export default class WorkbenchThreadStateMigration {
     };
   }
 
-  private mapLayout(layout: ThreadDisplayLayout, projectId?: string): ThreadDisplayLayout {
+  private mapLayout(layout: ThreadDisplayLayout, projectId?: ProjectId): ThreadDisplayLayout {
     const key = (value: string): string => {
       if (value.startsWith("folder:")) return value;
       const qualified = projectId ? { projectId, threadKey: value } : parseProjectQualifiedThreadDisplayKey(value);
       if (!qualified) throw new Error("Global layout has an unqualified member.");
       const match = /^(codex|copilot|opencode):(.+)$/u.exec(qualified.threadKey);
-      const mapped = match ? `${match[1]}:${this.requireThread(match[2]!, qualified.projectId, WorkbenchHarnessSchema.parse(match[1])).threadId}` : qualified.threadKey;
+      const mapped = match
+        ? getThreadDisplayThreadKey(WorkbenchHarnessSchema.parse(match[1]), this.requireThread(match[2]!, qualified.projectId, WorkbenchHarnessSchema.parse(match[1])).threadId)
+        : ThreadDisplayKeySchema.parse(qualified.threadKey);
       return projectId ? mapped : getProjectQualifiedThreadDisplayKey(qualified.projectId, mapped);
     };
     const mapped: ThreadDisplayLayout = {};
@@ -412,14 +421,14 @@ export default class WorkbenchThreadStateMigration {
     this.database.transaction(() => {
       this.verifyForeignKeys();
       const repository = new WorkbenchThreadStateRelationalRepository(this.database, this.identities);
-      const threads = this.database.prepare("SELECT thread_id FROM workbench_thread_states").all() as { thread_id: string }[];
+      const threads = this.database.prepare("SELECT thread_id FROM workbench_thread_states").all() as { thread_id: WorkbenchThreadId }[];
       const records = repository.readRecords({ selection: "threads", threadIds: threads.map(row => row.thread_id) });
       if (records.length !== threads.length) throw new Error("Current thread-state data has incomplete records.");
       const projects = this.database.prepare(`
         SELECT project_id FROM workbench_thread_drafts
         UNION SELECT project_id FROM workbench_project_thread_profiles
         UNION SELECT project_id FROM workbench_sidebar_project_layouts
-      `).all() as { project_id: string }[];
+      `).all() as { project_id: ProjectId }[];
       for (const { project_id: projectId } of projects) {
         repository.readDrafts(projectId);
         repository.readProjectProfile(projectId);
@@ -429,7 +438,7 @@ export default class WorkbenchThreadStateMigration {
       repository.readLayout({ kind: "home" });
       repository.readPinnedImports();
       const relationships = new WorkbenchSubagentRelationshipRepository(this.database);
-      const parents = this.database.prepare("SELECT parent_thread_id FROM workbench_subagent_parents").all() as { parent_thread_id: string }[];
+      const parents = this.database.prepare("SELECT parent_thread_id FROM workbench_subagent_parents").all() as { parent_thread_id: WorkbenchThreadId }[];
       for (const { parent_thread_id: parentThreadId } of parents) {
         const parent = relationships.readParent(parentThreadId)!;
         if (parent.relationships.some(record => record.directSubagentIndex >= parent.nextDirectSubagentIndex)) {

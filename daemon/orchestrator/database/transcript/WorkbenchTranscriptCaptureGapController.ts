@@ -1,11 +1,13 @@
 /*
- * WorkbenchTranscriptCaptureGapEntry: bounded durable identity for one thread affected by failed shadow recording. Keywords: transcript, capture gap, thread.
- * WorkbenchTranscriptCaptureGapMarker: durable set of threads that cannot contribute to cutover evidence. Keywords: transcript, capture gap, marker.
- * WorkbenchTranscriptCaptureGapControllerOptions: filesystem and clock inputs for capture-gap ownership. Keywords: transcript, capture gap, lifecycle.
- * default WorkbenchTranscriptCaptureGapController: record shadow gaps, expose provider recovery work, and guard cutover only. Keywords: transcript, capture gap, recovery.
+ * Exports:
+ * - WorkbenchTranscriptCaptureGapEntry: retained reference for one thread affected by failed recording.
+ * - WorkbenchTranscriptCaptureGapMarker: durable set of threads excluded from cutover evidence.
+ * - WorkbenchTranscriptCaptureGapControllerOptions: filesystem, identity and clock inputs.
+ * - default WorkbenchTranscriptCaptureGapController: record gaps, expose provider recovery and guard cutover.
  */
 import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 
 import type { WorkbenchTranscriptCaptureGapObservation } from "./workbench-transcript-types.ts";
 
@@ -245,19 +247,19 @@ export default class WorkbenchTranscriptCaptureGapController {
     return new Error(`SQLite transcript shadow settlement failed for thread ${threadId}.`, { cause: error });
   }
 
-  requireRecovery(threadId: string) {
+  requireRecovery(threadId: WorkbenchThreadId) {
     this.#assertStarted();
     const entry = this.#marker?.entries.find((candidate) => candidate.threadId === threadId);
     if (!entry) throw new Error(`SQLite transcript capture recovery has no entry for thread ${threadId}.`);
     if (entry.recoverability !== "provider") {
       throw new Error(`SQLite transcript capture gap for thread ${threadId} is not provider-recoverable.`);
     }
-    return entry;
+    return { ...entry, threadId };
   }
 
   createRecoveryObservation(
-    entry: WorkbenchTranscriptCaptureGapEntry,
-    turnId: string | null,
+    entry: WorkbenchTranscriptCaptureGapEntry & { threadId: WorkbenchThreadId },
+    turnId: WorkbenchTurnId | null,
   ): WorkbenchTranscriptCaptureGapObservation {
     this.#assertStarted();
     if (!this.#marker?.entries.some((candidate) => candidate.id === entry.id)) {

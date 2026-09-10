@@ -9,6 +9,19 @@ import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+  },
+  WorkbenchTurnId: {
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+  },
+};
 
 const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentNickname: null,
@@ -16,7 +29,7 @@ const thread = (id: string, updatedAt: number): ThreadSummary => ({
   createdAt: 1,
   cwd: "C:/repo",
   harness: "codex",
-  id,
+  id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id),
   name: id,
   path: null,
   preview: id,
@@ -32,14 +45,14 @@ const subagent = (threadId: string, lastActivityAt: number): WorkbenchSubagentSu
   directSubagentIndex: 0,
   harness: "codex",
   lastActivityAt,
-  lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+  lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
   name: threadId,
-  parentThreadId: "parent",
+  parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"],
   pinned: false,
   profileId: "profile",
   profileName: "Profile",
-  projectId: "project",
-  threadId,
+  projectId: fixtureIdentityValues.ProjectId["project"],
+  threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
   title: threadId,
   updatedAt: 1,
 });
@@ -47,7 +60,7 @@ const subagent = (threadId: string, lastActivityAt: number): WorkbenchSubagentSu
 const explorer = (): ExplorerSnapshot => ({
   changes: {},
   currentPath: "",
-  currentProjectId: "project",
+  currentProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   currentThreadId: "",
   expandedDirectories: [],
   fontSize: 16,
@@ -70,7 +83,7 @@ const explorer = (): ExplorerSnapshot => ({
 });
 
 const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
-  entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
+  entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
 
 test("thread-state open negotiates incremental delivery with a complete bootstrap", async () => {
@@ -79,13 +92,13 @@ test("thread-state open negotiates incremental delivery with a complete bootstra
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: (catalog) => { catalogs.push(catalog); },
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async (params) => {
       requests.push(params);
       return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
     },
   });
-  assert.deepEqual(requests, [{ projectId: "project", version: 5 }]);
+  assert.deepEqual(requests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 }]);
   assert.equal(result.sidebar.projectId, "project");
   assert.deepEqual(result.pinnedThreadLayout, {
     displayOrder: {},
@@ -109,8 +122,8 @@ test("global thread-state open installs a catalog and full sidebars without a se
         pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
         projectSidebars: {
           projects: [
-            { ...sidebar(), projectId: "alpha" },
-            { ...sidebar(), projectId: "beta" },
+            { ...sidebar(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha") },
+            { ...sidebar(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
           ],
         },
         version: 7,
@@ -180,7 +193,7 @@ test("thread-state open negotiates back to version 2 while the server is still o
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async (params) => {
       requests.push(params);
       if (params.version && params.version > 2) throw new Error("Invalid input: expected 2");
@@ -193,10 +206,10 @@ test("thread-state open negotiates back to version 2 while the server is still o
     },
   });
   assert.deepEqual(requests, [
-    { projectId: "project", version: 5 },
-    { projectId: "project", version: 4 },
-    { projectId: "project", version: 3 },
-    { projectId: "project", version: 2 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 2 },
   ]);
   assert.equal(result.sidebar.projectId, "project");
   assert.deepEqual(result.projectThreads, { projects: [] });
@@ -207,7 +220,7 @@ test("thread-state open falls back from version 4 on the typed old-server reject
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async (params) => {
       requests.push(params);
       if (params.version && params.version >= 4) {
@@ -225,9 +238,9 @@ test("thread-state open falls back from version 4 on the typed old-server reject
     },
   });
   assert.deepEqual(requests, [
-    { projectId: "project", version: 5 },
-    { projectId: "project", version: 4 },
-    { projectId: "project", version: 3 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
   ]);
   assert.equal(result.sidebar.projectId, "project");
 });
@@ -237,7 +250,7 @@ test("thread-state open retries legacy only for an unsupported version field", a
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async (params) => {
       requests.push(params);
       if (params.version !== undefined) throw new Error('Unrecognized key: "version"');
@@ -245,11 +258,11 @@ test("thread-state open retries legacy only for an unsupported version field", a
     },
   });
   assert.deepEqual(requests, [
-    { projectId: "project", version: 5 },
-    { projectId: "project", version: 4 },
-    { projectId: "project", version: 3 },
-    { projectId: "project", version: 2 },
-    { projectId: "project" },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 2 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
   ]);
   assert.equal(result.sidebar.projectId, "project");
 });
@@ -260,7 +273,7 @@ test("thread-state open accepts a composite bootstrap from the versionless compa
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: (catalog) => { catalogs.push(catalog); },
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async (params) => {
       requests.push(params);
       if (params.version !== undefined) throw new Error('Unrecognized key: "version"');
@@ -273,11 +286,11 @@ test("thread-state open accepts a composite bootstrap from the versionless compa
     },
   });
   assert.deepEqual(requests, [
-    { projectId: "project", version: 5 },
-    { projectId: "project", version: 4 },
-    { projectId: "project", version: 3 },
-    { projectId: "project", version: 2 },
-    { projectId: "project" },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 2 },
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
   ]);
   assert.equal(result.sidebar.projectId, "project");
   assert.equal(catalogs.length, 1);
@@ -293,7 +306,7 @@ test("thread-state open conforms malformed composite nodes without discarding va
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: (catalog) => { catalogs.push(catalog); },
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async () => {
       requests += 1;
       return {
@@ -318,7 +331,7 @@ test("thread-state conformance strips retired arc reload scopes without dropping
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async () => ({
       catalog: { data: [], rootPath: "C:/projects" },
       project: null,
@@ -355,7 +368,7 @@ test("thread-state open repairs a missing project summary during a mixed reload"
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async () => ({
       catalog: { data: [], rootPath: "C:/projects" },
       project: null,
@@ -369,7 +382,7 @@ test("thread-state open drops an old project-summary row without rejecting valid
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     request: async () => ({
       catalog: { data: [], rootPath: "C:/projects" },
       project: null,
@@ -383,7 +396,7 @@ test("thread-state open drops an old project-summary row without rejecting valid
             stopped: 0,
             working: 1,
           },
-          projectId: "project",
+          projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
           revision: 1,
         }],
       },
@@ -419,7 +432,7 @@ test("semantic thread and subagent changes invalidate the root explorer snapshot
     { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, status: "idle" } : value) },
     { ...current, subagents: current.subagents.slice(1) },
     { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, title: "renamed" } : value) },
-    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, parentThreadId: "other-parent" } : value) },
+    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other-parent") } : value) },
     { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, pinned: true } : value) },
     { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } } : value) },
   ];

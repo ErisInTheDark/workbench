@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect project-file conflict, mutation, and containment behavior. Keywords: project, file, mtime, containment, test.
+ * - No production exports; tests protect project-file conflict, mutation, and containment behavior.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -9,13 +9,14 @@ import path from "node:path";
 import { test } from "node:test";
 
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("file writes preserve mtime conflicts and refresh snapshots only after mutation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-file-"));
   const filePath = path.join(root, "note.md");
   await fs.writeFile(filePath, "before", "utf8");
   const project = {
-    id: "project",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     kind: "git" as const,
     root,
     rootPath: root,
@@ -37,7 +38,7 @@ test("file writes preserve mtime conflicts and refresh snapshots only after muta
       content: "blocked",
       expectedMtimeMs: mtimeMs - 1,
       path: "note.md",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       resetToHead: false,
     });
     assert.equal("error" in conflict, true);
@@ -48,7 +49,7 @@ test("file writes preserve mtime conflicts and refresh snapshots only after muta
       content: "after",
       expectedMtimeMs: mtimeMs,
       path: "note.md",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       resetToHead: false,
     });
     assert.equal("changes" in saved, true);
@@ -61,7 +62,7 @@ test("file writes preserve mtime conflicts and refresh snapshots only after muta
         expectedMtimeMs: 0,
         force: true,
         path: "../outside.md",
-        projectId: "project",
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
         resetToHead: false,
       }),
       /outside the project (?:root|workspace)/u,

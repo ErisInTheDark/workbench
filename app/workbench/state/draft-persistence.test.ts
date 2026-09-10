@@ -10,6 +10,7 @@ import {
   clearComposerDraft, clearQuestionnaireDraft, saveComposerDraft, saveQuestionnaireDraft, sidebarDraftToInput,
   type ComposerDraftTarget, type SidebarDraftPersistence,
 } from "./draft-persistence";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function sidebarFixture() {
   const records = new Map<string, WorkbenchThreadDraft>();
@@ -25,7 +26,7 @@ function sidebarFixture() {
     remove: async (projectId, draftId) => { records.delete(`${projectId}:${draftId}`); },
     materialize: (draft) => { navigations.push(draft.draftId); },
   };
-  const target: ComposerDraftTarget = { kind: "sidebar", draftId: crypto.randomUUID(), projectId: "project", isNew: true, owner };
+  const target: ComposerDraftTarget = { kind: "sidebar", draftId: fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID()), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), isNew: true, owner };
   return { records, navigations, owner, target };
 }
 
@@ -58,11 +59,11 @@ test("detached creation never navigates and clearing uses the original project i
   const store = sidebarFixture();
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "save this detached draft safely" }), { ...autosave, detached: true });
   assert.equal(store.navigations.length, 0);
-  const otherProject = { ...store.target, projectId: "other" };
+  const otherProject = { ...store.target, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") };
   await saveComposerDraft(state, otherProject, (draft) => ({ ...draft, text: "another project's draft" }), autosave);
   await clearComposerDraft(state, store.target);
-  assert.equal(store.owner.read("project", store.target.draftId), null);
-  assert.ok(store.owner.read("other", store.target.draftId));
+  assert.equal(store.owner.read(fixtureIdentitySchemas.ProjectIdSchema.parse("project"), store.target.draftId), null);
+  assert.ok(store.owner.read(fixtureIdentitySchemas.ProjectIdSchema.parse("other"), store.target.draftId));
 });
 
 test("below-threshold edits remain buffered until materialisation, including screenshots", async () => {
@@ -89,10 +90,10 @@ test("below-threshold edits remain buffered until materialisation, including scr
 
 test("questionnaire updates merge into latest content and isolate project and request identities", async () => {
   const state = new WorkbenchClientStateController();
-  const identity = { daemonRegistrationId: "memory", projectId: "one", threadId: "thread", requestKey: "request" };
+  const identity = { daemonRegistrationId: "memory", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("one"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread"), requestKey: "request" };
   await saveQuestionnaireDraft(state, identity, (draft) => ({ ...draft, customValues: { answer: "newer text" } }));
   await saveQuestionnaireDraft(state, { ...identity, requestKey: "other request" }, (draft) => ({ ...draft, customValues: { answer: "other request" } }));
-  await saveQuestionnaireDraft(state, { ...identity, projectId: "two" }, (draft) => ({ ...draft, customValues: { answer: "other project" } }));
+  await saveQuestionnaireDraft(state, { ...identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("two") }, (draft) => ({ ...draft, customValues: { answer: "other project" } }));
   const saved = await saveQuestionnaireDraft(state, identity, (draft) => ({
     ...draft, attachments: [...draft.attachments, { id: "shot", url: "image:shot" }],
   }));
@@ -104,14 +105,14 @@ test("questionnaire updates merge into latest content and isolate project and re
 
 test("composer changes use latest client-state content and clearing leaves other records alone", async () => {
   const state = new WorkbenchClientStateController();
-  const target: ComposerDraftTarget = { kind: "thread", daemonRegistrationId: "memory", projectId: "one", threadId: "thread" };
+  const target: ComposerDraftTarget = { kind: "thread", daemonRegistrationId: "memory", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("one"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   await saveComposerDraft(state, target, (draft) => ({ ...draft, text: "new text" }), autosave);
   const latest = await saveComposerDraft(state, target, (draft) => ({
     ...draft, attachments: [{ id: "shot", url: "image:shot" }],
   }), { ...autosave, detached: true });
   assert.ok(latest);
   assert.equal(latest.text, "new text");
-  await saveComposerDraft(state, { ...target, projectId: "two" }, (draft) => ({ ...draft, text: "keep this" }), autosave);
+  await saveComposerDraft(state, { ...target, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("two") }, (draft) => ({ ...draft, text: "keep this" }), autosave);
   await clearComposerDraft(state, target);
   assert.deepEqual(state.records("composerDraft").map((record) => record.value.text), ["keep this"]);
 });

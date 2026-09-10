@@ -1,10 +1,9 @@
 /*
- * Keywords: thread, page, context usage, WebSocket, compatibility.
  * Exports:
- * - WORKBENCH_THREAD_PAGE_READ_METHOD: harness-neutral browser thread-page request identity. Keywords: thread, page, WebSocket, harness.
- * - WorkbenchThreadPageReadParamsSchema/WorkbenchThreadPageReadParams: strict first-page and continuation request contract. Keywords: cursor, pagination, validation.
- * - WorkbenchThreadPageResponse: normalized harness response with optional last-reported usage. Keywords: thread, overlays, model, cursor.
- * - readWorkbenchThreadPageNextCursor: derive the next stable Workbench continuation boundary from one returned page. Keywords: turn, history, cursor.
+ * - WORKBENCH_THREAD_PAGE_READ_METHOD: harness-neutral browser thread-page request identity.
+ * - WorkbenchThreadPageReadParamsSchema/WorkbenchThreadPageReadParams: first-page and continuation request contract.
+ * - WorkbenchThreadPageResponse: harness response preserving source identity.
+ * - readWorkbenchThreadPageNextCursor: derive the next continuation boundary from one returned page.
  */
 import { z } from "zod";
 import type { Thread } from "../../codex/generated/app-server/v2/Thread.ts";
@@ -28,7 +27,7 @@ export const WorkbenchThreadPageReadParamsSchema = z.object({
 
 export type WorkbenchThreadPageReadParams = z.infer<typeof WorkbenchThreadPageReadParamsSchema>;
 
-export interface WorkbenchThreadPageResponse {
+export interface WorkbenchThreadPageResponse<Id extends string = string> {
   tokenUsage?: ThreadTokenUsage | null;
   browseResultEntries: WorkbenchBrowseResultEntry[];
   entryScope?: WorkbenchThreadContextEntryScope;
@@ -38,7 +37,7 @@ export interface WorkbenchThreadPageResponse {
   reasoningEffort?: string | null;
   serviceTier?: string | null;
   steerEntries: WorkbenchSteerHistoryEntry[];
-  thread: Thread;
+  thread: Omit<Thread, "id"> & { id: Id };
 }
 
 type ThreadWithHistory = Thread & {

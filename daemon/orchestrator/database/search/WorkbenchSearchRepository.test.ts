@@ -1,5 +1,4 @@
 /*
- * Keywords: search, sqlite, latency, corpus, fuzzy, exclusions.
  * No exports. Tests protect search-owner correctness and the 500ms query budget.
  */
 import assert from "node:assert/strict";
@@ -10,6 +9,7 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptObservation } from "../transcript/workbench-transcript-types";
 import WorkbenchSearchRepository from "./WorkbenchSearchRepository";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("search stays below 500ms per query on a multi-megabyte relational corpus", (t) => {
   const database = new Database(":memory:");
@@ -26,26 +26,26 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
       const turnId = `search-turn-${index}`;
       const title = `Project maintenance ${index}`;
       const catalog = {
-        kind: "thread" as const, threadId, projectId: "project", projectRoot: "C:/project",
+        kind: "thread" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/project",
         title, createdAt: 1, updatedAt: index + 1, activityAt: index + 1,
       };
       if (index >= 42) {
-        observations.push({ kind: "turnCatalog", threadId, catalog: [catalog] });
+        observations.push({ kind: "turnCatalog", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), catalog: [catalog] });
         continue;
       }
       const text = `${index === 0 ? "quartzzeppelin exact phrase " : ""}${paragraph}`;
       corpusCharacters += text.length;
       observations.push({
-        kind: "canonicalWindow", threadId, contentVersion: 3, materializedTurnIds: [turnId],
+        kind: "canonicalWindow", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), contentVersion: 3, materializedTurnIds: [fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId)],
         observations: [
           catalog,
           {
-            kind: "turn", threadId, turnId, turnIndex: 0, harnessId: "codex",
-            nativeLocation: "C:/project", nativeThreadId: threadId, nativeTurnId: turnId,
+            kind: "turn", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), turnIndex: 0, harnessId: "codex",
+            nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(threadId), nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(turnId),
             state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
           },
           {
-            kind: "item", threadId, turnId, lifecycle: "completed", observedAt: 2,
+            kind: "item", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), lifecycle: "completed", observedAt: 2,
             item: {
               id: `body-${index}`, type: "agentMessage", phase: "commentary",
               text, delivery: null, questions: null, memoryCitation: null,
@@ -63,7 +63,7 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
     const measurements = [];
     for (const query of ["", "a", "quartzzeppeln", "quartzzeppelin state", '"exact phrase"', "maintenance -quartzzeppelin", "asdlfkajsdlfkjasdlfkjasdf"]) {
       const startedAt = performance.now();
-      const response = repository.search({ projectId: "project", query });
+      const response = repository.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query });
       const elapsedMs = performance.now() - startedAt;
       measurements.push({ query, elapsedMs });
       if (query === "asdlfkajsdlfkjasdlfkjasdf") assert.deepEqual(response.results, []);

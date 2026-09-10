@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect direct provider thread, turn, and item projection without storage reads. Keywords: codex, transcript, provider, test.
+ * No production exports. Tests protect direct provider thread, turn, and item projection without storage reads.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -19,12 +19,13 @@ import {
   createCodexTranscriptProviderTurnScopeObservation,
 } from "./codex-transcript-provider-observations.ts";
 import type { CodexTranscriptRawEvent } from "./codex-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const context = {
   activityAt: 6_000,
   createdAt: 1_000,
   nativeLocation: "C:/repo",
-  projectId: "project",
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   projectRoot: "C:/repo",
   title: "Thread",
   updatedAt: 6_000,
@@ -122,7 +123,7 @@ test("routine provider metadata projects without importing turns", () => {
     activityAt: 6_000,
     createdAt: 1_000,
     kind: "thread",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     projectRoot: "C:/repo",
     threadId: "thread",
     title: "Thread",
@@ -227,8 +228,8 @@ test("one provider snapshot becomes direct ordered thread, turn, and item facts"
     harnessId: "codex",
     kind: "turn",
     nativeLocation: "C:/repo",
-    nativeThreadId: "thread",
-    nativeTurnId: "turn",
+    nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
     startedAt: 1_000,
     state: "completed",
     threadId: "thread",

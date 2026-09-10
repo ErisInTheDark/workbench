@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect compact plan reuse plus mounted preview and unmounted live ownership in sidebar tooltip details. Keywords: sidebar, tooltip, plan, questionnaire, proposal, ownership.
+ * No production exports. Tests protect compact plan reuse plus mounted preview and unmounted live ownership in sidebar tooltip details.
  */
 import assert from "node:assert/strict";
 import ThreadObservationController, { getThreadObservationKey } from "../../workbench/thread/ThreadObservationController";
@@ -18,6 +18,13 @@ import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadGitArcConflictList from "./thread-view/ThreadGitArcConflictList";
 import { getWorkbenchThreadPlanIntersections } from "workbench-shared/workbench/thread/thread-state";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 const pendingRequest = {
   harness: "codex",
@@ -66,8 +73,8 @@ async function renderDetails(
   } });
   let ready!: () => void;
   const loaded = new Promise<void>(resolve => { ready = resolve; });
-  const key = getThreadObservationKey("project", { kind: "provider", harness: "codex", threadId: "thread" });
-  const consumer = owner.acquire("project", { kind: "provider", harness: "codex", threadId: "thread" }, () => {
+  const key = getThreadObservationKey("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
+  const consumer = owner.acquire("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, () => {
     if (["ready", "failed"].includes(owner.getSnapshot(key).status)) ready();
   });
   await loaded;
@@ -80,7 +87,7 @@ async function renderDetails(
     pendingUserInputRequestsByThreadId: request ? { thread: request } : {},
     rateLimits: null, subagents: [], threadDocuments: { documentsByKey: {}, keysByThreadId: {}, selectedThreadKey: "" }, threads: [], threadsError: "",
   });
-  const thread = new WorkbenchThreadController("project", { kind: "provider", harness: "codex", threadId: "thread" }, {
+  const thread = new WorkbenchThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, {
     observations: owner,
     getChild: () => { throw new Error("Unexpected child."); },
     controls: {} as NonNullable<WorkbenchClientController["controls"]>,
@@ -98,9 +105,9 @@ async function renderDetails(
       harness: "codex",
       materialized,
       onOpenThread: () => undefined,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       spellCheck: true,
-      threadId: "thread",
+      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     }),
     options.sidebarStore ?? null,
     client,
@@ -147,7 +154,7 @@ function planThread(
     entryKind: "thread",
     gitArc,
     gitArcPlan,
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     title: threadId,
@@ -181,7 +188,7 @@ const planSnapshot = {
     entries: [planOwner, activeIntersection, plannedIntersection],
     error: null,
     freshness: "fresh" as const,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 1,
 };
 const planStore = {
@@ -232,7 +239,7 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     createElement(ThreadGitArcIntersectionCard, {
       harness: "codex",
       onOpenThread: () => undefined,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "thread",
     }),
     planStore,
@@ -241,7 +248,7 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   const plannedHtml = renderWithClient(createElement(ThreadGitArcConflictList, {
     entries: getWorkbenchThreadPlanIntersections(planSnapshot.entries, planOwner.identity).plannedEntries,
     onOpenThread: () => undefined,
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   }), planStore);
   assert.match(plannedHtml, /data-project-file-relative-path="src\/feature\/other.ts"/u);
 });
@@ -252,7 +259,7 @@ test("Git arc waits show active claim owners without planned-only intersections"
       harness: "codex",
       mode: "wait",
       onOpenThread: () => undefined,
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "thread",
     }),
     planStore,

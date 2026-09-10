@@ -8,6 +8,14 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchSubagentRelationshipRepository from "./WorkbenchSubagentRelationshipRepository";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("other-project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function fixture() {
   const database = new Database(":memory:");
@@ -15,8 +23,8 @@ function fixture() {
   installWorkbenchDatabaseSchema(database);
   const identities = new WorkbenchThreadIdentityRepository(database);
   const observe = (nativeThreadId: string, harness: "codex" | "opencode") => identities.observe({
-    native: { harness, nativeLocation: "C:/project", nativeThreadId },
-    projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+    native: { harness, nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+    projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: nativeThreadId,
     createdAt: 1, updatedAt: 1, activityAt: 1,
   }).threadId;
   const parentThreadId = observe("parent", "codex");
@@ -26,7 +34,7 @@ function fixture() {
     database, parentThreadId, childThreadId, otherParentThreadId,
     repository: new WorkbenchSubagentRelationshipRepository(database),
     reservation: {
-      reservationId: randomUUID(), parentThreadId, projectId: "project", harness: "opencode" as const,
+      reservationId: randomUUID(), parentThreadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "opencode" as const,
       cwd: "C:/project", name: "lena", title: "check things", profileId: "review", profileName: "reviewer",
       createdAt: 1, updatedAt: 1,
     },
@@ -39,12 +47,12 @@ test("cross-harness activation retains parent allocation and removing membership
     const { reservationId, ...reserved } = repository.reserve(reservation);
     const active = { ...reserved, threadId: childThreadId, updatedAt: 2 };
     repository.activate(parentThreadId, reservationId, active);
-    assert.deepEqual(repository.getOwned(parentThreadId, "project", childThreadId), active);
-    assert.equal(repository.getOwned(otherParentThreadId, "project", childThreadId), null);
-    assert.equal(repository.getOwned(parentThreadId, "other-project", childThreadId), null);
+    assert.deepEqual(repository.getOwned(parentThreadId, fixtureIdentityValues.ProjectId["project"], childThreadId), active);
+    assert.equal(repository.getOwned(otherParentThreadId, fixtureIdentityValues.ProjectId["project"], childThreadId), null);
+    assert.equal(repository.getOwned(parentThreadId, fixtureIdentityValues.ProjectId["other-project"], childThreadId), null);
     assert.equal(repository.remove(otherParentThreadId, childThreadId), false);
     assert.equal(repository.remove(parentThreadId, childThreadId), true);
-    assert.equal(repository.getOwned(parentThreadId, "project", childThreadId), null);
+    assert.equal(repository.getOwned(parentThreadId, fixtureIdentityValues.ProjectId["project"], childThreadId), null);
     assert.deepEqual(repository.readParent(parentThreadId), {
       parentThreadId, nextDirectSubagentIndex: 1, relationships: [],
     });
@@ -64,14 +72,14 @@ test("failed reservation and activation roll back allocation and leave the reser
     assert.throws(() => repository.reserve({ ...reservation, reservationId: randomUUID(), name: "LENA" }), /already in use/);
     assert.equal(repository.readParent(parentThreadId)?.nextDirectSubagentIndex, 1);
     assert.throws(() => repository.activate(parentThreadId, reservationId, {
-      ...reserved, threadId: randomUUID(), updatedAt: 2,
+      ...reserved, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(randomUUID()), updatedAt: 2,
     }), /FOREIGN KEY/);
     assert.deepEqual(repository.readParent(parentThreadId)?.relationships, [
       { ...reserved, reservationId, kind: "reserved" },
     ]);
     const active = { ...reserved, threadId: childThreadId, updatedAt: 2 };
     repository.activate(parentThreadId, reservationId, active);
-    assert.deepEqual(repository.getOwned(parentThreadId, "project", childThreadId), active);
+    assert.deepEqual(repository.getOwned(parentThreadId, fixtureIdentityValues.ProjectId["project"], childThreadId), active);
   } finally {
     database.close();
   }

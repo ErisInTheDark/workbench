@@ -8,6 +8,19 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "../transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadStateQuestionnaireRepository, { type WorkbenchThreadQuestionnaires } from "./WorkbenchThreadStateQuestionnaireRepository";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+  NativeTurnId: {
+    "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function fixture() {
   const database = new Database(":memory:");
@@ -15,11 +28,11 @@ function fixture() {
   installWorkbenchDatabaseSchema(database);
   const identities = new WorkbenchThreadIdentityRepository(database);
   const { threadId } = identities.observe({
-    native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: "thread" },
-    projectId: "project", projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1,
+    native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"] },
+    projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const { turnId } = identities.observeTurn({
-    kind: "turn", threadId, turnId: "turn", nativeTurnId: "turn", nativeThreadId: "thread",
+    kind: "turn", threadId, turnId: fixtureIdentityValues.NativeTurnId.turn, nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"], nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"],
     nativeLocation: "C:/project", harnessId: "codex", state: "inProgress",
     createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
   });

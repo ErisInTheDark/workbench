@@ -1,5 +1,4 @@
 /*
- * Keywords: thread observation, connection, subscription, revision, disposal.
  * Exports:
  * - ThreadObservationRequest: one connection-owned thread observation.
  * - default WorkbenchThreadObservationController: own live observation registration and delivery.
@@ -8,9 +7,10 @@ import type {
   WorkbenchObservedThreadTarget,
   WorkbenchThreadObservationSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 
 export interface ThreadObservationRequest {
-  projectId: string;
+  projectId: ProjectId;
   subscriptionId: string;
   target: WorkbenchObservedThreadTarget;
 }
@@ -57,7 +57,7 @@ export default class WorkbenchThreadObservationController {
     }
   }
 
-  update(projectId: string, read: (request: ThreadObservationRequest) => WorkbenchThreadObservationSnapshot) {
+  update(projectId: ProjectId, read: (request: ThreadObservationRequest) => WorkbenchThreadObservationSnapshot) {
     for (const subscriptions of this.connections.values()) {
       for (const observation of subscriptions.values()) {
         if (observation.request.projectId !== projectId) continue;
@@ -80,7 +80,7 @@ export default class WorkbenchThreadObservationController {
     this.connections.delete(connectionId);
   }
 
-  hasProject(projectId: string) {
+  hasProject(projectId: ProjectId) {
     for (const subscriptions of this.connections.values()) {
       for (const observation of subscriptions.values()) {
         if (observation.request.projectId === projectId) return true;

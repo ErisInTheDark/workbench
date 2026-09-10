@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transcript readiness, direct shadow recording, per-thread gap isolation, recovery, subscriptions, and disposal. Keywords: transcript, controller, recovery, test.
+ * No production exports. Tests protect transcript readiness, direct shadow recording, per-thread gap isolation, recovery, subscriptions, and disposal.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -14,6 +14,29 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native"),
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+  NativeTurnId: {
+    "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "provider-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider-thread"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "historical": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("historical"),
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+    "turn-provider-thread": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-provider-thread"),
+  },
+};
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
@@ -28,9 +51,9 @@ function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation
     activityAt: 1,
     createdAt: 1,
     kind: "thread",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     projectRoot: "C:/project",
-    threadId,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
     title: `Thread ${threadId}`,
     updatedAt: 1,
   }, {
@@ -40,12 +63,12 @@ function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation
     harnessId: "codex",
     kind: "turn",
     nativeLocation: "C:/project",
-    nativeThreadId: threadId,
-    nativeTurnId: `turn-${threadId}`,
+    nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(threadId),
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(`turn-${threadId}`),
     startedAt: 2,
     state: "inProgress",
-    threadId,
-    turnId: `turn-${threadId}`,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(`turn-${threadId}`),
     turnIndex: 0,
   }];
 }
@@ -68,13 +91,13 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     await controller.record([{
       kind: "canonicalWindow",
       contentVersion: 3,
-      materializedTurnIds: ["turn"],
-      threadId: "thread",
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn"]],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       observations: [
         {
           kind: "thread",
-          threadId: "thread",
-          projectId: "project",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          projectId: fixtureIdentityValues.ProjectId["project"],
           projectRoot: "C:/project",
           title: "Thread",
           createdAt: 1,
@@ -83,13 +106,13 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
         },
         {
           kind: "turn",
-          threadId: "thread",
-          turnId: "turn",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
           turnIndex: 0,
           harnessId: "codex",
           nativeLocation: "C:/project",
-          nativeThreadId: "native",
-          nativeTurnId: "turn",
+          nativeThreadId: fixtureIdentityValues.NativeThreadId["native"],
+          nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
           state: "inProgress",
           createdAt: 2,
           startedAt: 2,
@@ -115,12 +138,12 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     blockProjection = true;
     const recording = controller.record([{
       kind: "providerTurnScope",
-      completeTurnIds: ["turn"],
-      threadId: "thread",
+      completeTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn"]],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       observations: [{
         kind: "thread",
-        threadId: "thread",
-        projectId: "project",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        projectId: fixtureIdentityValues.ProjectId["project"],
         projectRoot: "C:/project",
         title: "Thread",
         createdAt: 1,
@@ -128,13 +151,13 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
         activityAt: 3,
       }, {
         kind: "turn",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         turnIndex: 0,
         harnessId: "codex",
         nativeLocation: "C:/project",
-        nativeThreadId: "native",
-        nativeTurnId: "turn",
+        nativeThreadId: fixtureIdentityValues.NativeThreadId["native"],
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
         state: "inProgress",
         createdAt: 2,
         startedAt: 2,
@@ -142,8 +165,8 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
         durationMs: null,
       }, {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         lifecycle: "completed",
         observedAt: 3,
         item: {
@@ -256,8 +279,8 @@ test("durable item facts refresh subscriptions only at complete projection bound
       kind: "item",
       lifecycle: "completed",
       observedAt: 2,
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     }], { source: "provider" });
     await controller.record([{
       createdAt: 1,
@@ -266,12 +289,12 @@ test("durable item facts refresh subscriptions only at complete projection bound
       harnessId: "codex",
       kind: "turn",
       nativeLocation: "C:/project",
-      nativeThreadId: "thread",
-      nativeTurnId: "turn",
+      nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"],
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
       startedAt: 1,
       state: "inProgress",
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     }], { source: "provider" });
     await Promise.resolve();
     await Promise.resolve();
@@ -284,17 +307,17 @@ test("durable item facts refresh subscriptions only at complete projection bound
       harnessId: "codex",
       kind: "turn",
       nativeLocation: "C:/project",
-      nativeThreadId: "thread",
-      nativeTurnId: "turn",
+      nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"],
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
       startedAt: 1,
       state: "completed",
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     });
     assert.equal(reads, 2);
 
     await awaitNextPublication({
-      completeTurnIds: ["turn"],
+      completeTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn"]],
       kind: "providerTurnScope",
       observations: [{
         createdAt: 1,
@@ -303,14 +326,14 @@ test("durable item facts refresh subscriptions only at complete projection bound
         harnessId: "codex",
         kind: "turn",
         nativeLocation: "C:/project",
-        nativeThreadId: "thread",
-        nativeTurnId: "turn",
+        nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"],
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"],
         startedAt: 1,
         state: "completed",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       }],
-      threadId: "thread",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
     });
     assert.equal(reads, 3);
 
@@ -318,9 +341,9 @@ test("durable item facts refresh subscriptions only at complete projection bound
       activityAt: 3,
       createdAt: 1,
       kind: "thread",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       projectRoot: "C:/project",
-      threadId: "thread",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       title: "Thread",
       updatedAt: 3,
     });
@@ -337,8 +360,8 @@ test("durable item facts refresh subscriptions only at complete projection bound
         recordedAt: 4,
         session: "session",
         state: "completed",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       },
       kind: "browse",
     }, "workbench");
@@ -346,7 +369,7 @@ test("durable item facts refresh subscriptions only at complete projection bound
     published = deferred<void>();
     await controller.record([{
       item: { id: "screenshot", type: "functionCallOutput", namespace: "workbench", name: "screenshot", output: "queued capture" },
-      kind: "item", lifecycle: "completed", observedAt: 5, threadId: "thread", turnId: "turn",
+      kind: "item", lifecycle: "completed", observedAt: 5, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     }], { source: "workbench" });
     assert.equal(reads, 6, "Workbench item admission must request a snapshot without waiting for a provider terminal boundary");
     await published.promise;
@@ -395,14 +418,14 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
 
     rejectSettlements = false;
     await failed.record([{
-      kind: "usageWindow", threadId: "provider-thread",
+      kind: "usageWindow", threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"],
       catalog: observationsFor("provider-thread").filter(
         (observation): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }> => (
           observation.kind === "thread" || observation.kind === "turn"
         ),
       ),
       observations: [{
-        kind: "turnUsageContext", threadId: "provider-thread", turnId: "turn-provider-thread",
+        kind: "turnUsageContext", threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"],
         model: "observed-model", serviceTier: null, observedAt: 5,
       }],
     }], { source: "compatibility" });
@@ -416,21 +439,23 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
       "workbench-thread",
     );
     const liveItem: WorkbenchTranscriptAtomicObservation = {
-      kind: "item", threadId: "provider-thread", turnId: "turn-provider-thread", lifecycle: "completed", observedAt: 6,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"], lifecycle: "completed", observedAt: 6,
       item: { id: "live", type: "plan", text: "fresh live content" },
     };
     await failed.record([liveItem], { source: "provider" });
+    const originalTurn = observationsFor("provider-thread")[1]!;
+    assert.ok(originalTurn.kind === "turn");
     const historicalTurn = {
-      ...observationsFor("provider-thread")[1]!,
-      kind: "turn" as const, turnId: "historical", turnIndex: 1, nativeTurnId: "historical",
-    } as Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>;
+      ...originalTurn,
+      turnId: fixtureIdentityValues.WorkbenchTurnId.historical, turnIndex: 1, nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("historical"),
+    };
     await failed.record([{
-      kind: "canonicalWindow", threadId: "provider-thread", contentVersion: 3,
-      materializedTurnIds: ["turn-provider-thread", "historical"],
+      kind: "canonicalWindow", threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"], contentVersion: 3,
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"], fixtureIdentityValues.WorkbenchTurnId["historical"]],
       observations: [
         ...observationsFor("provider-thread"), historicalTurn,
         { ...liveItem, item: { id: "live", type: "plan", text: "stale compatibility content" } },
-        { ...liveItem, turnId: "historical", item: { id: "history", type: "plan", text: "retained history" } },
+        { ...liveItem, turnId: fixtureIdentityValues.WorkbenchTurnId.historical, item: { id: "history", type: "plan", text: "retained history" } },
       ],
     }], { source: "compatibility" });
     let published = false;
@@ -460,10 +485,10 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
     assert.deepEqual(recovered.pendingRecoveryThreadIds, ["provider-thread"]);
     await recovered.record(
       [{
-        completeTurnIds: ["turn-provider-thread"],
+        completeTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"]],
         kind: "providerTurnScope",
         observations: observationsFor("provider-thread"),
-        threadId: "provider-thread",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"],
       }],
       { recoveryBoundary: true, source: "provider" },
     );

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover existing Codex message admission ordering and lifecycle races. Keywords: codex, message, admission, test.
+ * - No production exports; Node tests cover existing Codex message admission ordering and lifecycle races.
  */
 
 import assert from "node:assert/strict";
@@ -14,13 +14,14 @@ import ThreadSourceStore from "../state/ThreadSourceStore.ts";
 import ThreadOptimisticInputStore from "./ThreadOptimisticInputStore.ts";
 import ThreadMessageAdmissionController, { type ThreadMessageAdmissionLifecycleState } from "./ThreadMessageAdmissionController.ts";
 import { ThreadMessageNotSentError } from "./thread-message-submission.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 type AdmissionRequest = { method: string; params?: unknown } & Record<string, unknown>;
 
-function thread(): ThreadPayload {
+function thread(): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items: [], itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
@@ -42,7 +43,7 @@ function setup(
   sources.install(source);
   documents.upsertDocument(source, { select: true });
   const lifecycle: ThreadMessageAdmissionLifecycleState = {
-    disposed: false, messageAdmissionIntentRevision: 1, projectContextGeneration: 1, projectId: "project", projectRootPath: "C:/repo",
+    disposed: false, messageAdmissionIntentRevision: 1, projectContextGeneration: 1, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRootPath: "C:/repo",
   };
   const events: string[] = [];
   const controller = ThreadMessageAdmissionController({
@@ -162,7 +163,7 @@ test("detached new-turn admission keeps its exact source across unrelated select
       result: { kind: "started", turn: { ...thread().turns[0]!, id: "detached-turn" } },
     } as CodexJsonRpcResponse<TResponse>;
   }, { connect: () => connected });
-  const other = { ...thread(), id: "other" };
+  const other = { ...thread(), id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other") };
   result.sources.install(other);
   result.documents.upsertDocument(other, { select: true });
 
@@ -382,7 +383,7 @@ test("malformed successful acknowledgement fails the exact optimistic entry", as
 test("every lifecycle and exact-selection drift rejects before dispatch", async () => {
   const mutations: Array<(result: ReturnType<typeof setup>) => void> = [
     (result) => { result.lifecycle.projectContextGeneration += 1; },
-    (result) => { result.lifecycle.projectId = "other"; },
+    (result) => { result.lifecycle.projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("other"); },
     (result) => { result.lifecycle.projectRootPath = "C:/other"; },
     (result) => { result.lifecycle.messageAdmissionIntentRevision += 1; },
     (result) => { result.documents.selectDocumentKey(""); },

@@ -1,7 +1,6 @@
 /*
- * Keywords: transcript, identity, retained assets, http, tests.
  * Exports:
- * - No production exports; tests protect transcript asset validation, immutable delivery, and missing-file behavior. Keywords: transcript, asset, http, test.
+ * - No production exports; tests protect transcript asset validation, immutable delivery, and missing-file behavior.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -14,6 +13,21 @@ import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetContro
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native-later": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-later"),
+    "native-owner": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-owner"),
+  },
+  NativeTurnId: {
+    "first": fixtureIdentitySchemas.NativeTurnIdSchema.parse("first"),
+    "later": fixtureIdentitySchemas.NativeTurnIdSchema.parse("later"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 class TestResponse {
   body = new Uint8Array();
@@ -71,14 +85,14 @@ test("canonical asset requests use only their thread's retained native folders",
   installWorkbenchDatabaseSchema(database);
   const identities = new WorkbenchThreadIdentityRepository(database);
   const observe = (nativeThreadId: string) => identities.observe({
-    native: { harness: "codex", nativeLocation: root, nativeThreadId },
-    projectId: "project", projectRoot: root, title: "Assets", createdAt: 1, updatedAt: 1, activityAt: 1,
+    native: { harness: "codex", nativeLocation: root, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+    projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: root, title: "Assets", createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const owner = observe("native-owner");
   const other = observe("native-other");
   identities.observeTurn({
-    kind: "turn", threadId: owner.threadId, turnId: "first", nativeThreadId: "native-owner",
-    nativeTurnId: "first", nativeLocation: root, harnessId: "codex", state: "completed",
+    kind: "turn", threadId: owner.threadId, turnId: fixtureIdentityValues.NativeTurnId.first, nativeThreadId: fixtureIdentityValues.NativeThreadId["native-owner"],
+    nativeTurnId: fixtureIdentityValues.NativeTurnId["first"], nativeLocation: root, harnessId: "codex", state: "completed",
     createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
   });
   // Represent an already-associated second execution, without adding a handoff API.
@@ -86,8 +100,8 @@ test("canonical asset requests use only their thread's retained native folders",
     (thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
     VALUES (?, 'codex', ?, 'native-later', 2, 2)`).run(owner.threadId, root);
   identities.observeTurn({
-    kind: "turn", threadId: owner.threadId, turnId: "later", nativeThreadId: "native-later",
-    nativeTurnId: "later", nativeLocation: root, harnessId: "codex", state: "completed",
+    kind: "turn", threadId: owner.threadId, turnId: fixtureIdentityValues.NativeTurnId.later, nativeThreadId: fixtureIdentityValues.NativeThreadId["native-later"],
+    nativeTurnId: fixtureIdentityValues.NativeTurnId["later"], nativeLocation: root, harnessId: "codex", state: "completed",
     createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
   });
   const asset = `${"c".repeat(64)}.png`;

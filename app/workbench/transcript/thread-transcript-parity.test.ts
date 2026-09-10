@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests prove semantic equality uses explicit renderer facts while diagnostics stay bounded and content-free. Keywords: transcript, parity, diagnostics, browser.
+ * No production exports. Tests prove semantic equality uses explicit renderer facts while diagnostics stay bounded and content-free.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -19,6 +19,7 @@ import type {
   WorkbenchProjectedTranscriptTurn,
   WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function turn(items: ThreadItem[]): Turn {
   return {
@@ -42,7 +43,7 @@ function thread(items: ThreadItem[]): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id: "thread",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     isDraft: false,
     model: null,
     name: "Thread",
@@ -99,7 +100,7 @@ function projection(items: WorkbenchProjectedTranscriptItem[]): WorkbenchTranscr
       activityAt: 3_000,
       createdAt: 1_000,
       id: "thread",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       projectRoot: "C:/project",
       title: "Thread",
       updatedAt: 3_000,

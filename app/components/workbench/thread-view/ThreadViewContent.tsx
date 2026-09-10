@@ -1,5 +1,4 @@
 /*
- * Keywords: thread view, project identity, draft, domain hook, subthread, history.
  * Exports:
  * - default ThreadViewContent: render admitted thread content and source-local transcript state.
  */
@@ -46,8 +45,9 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
 import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-composer-profile-slot";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
-import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import {
   filterSubagentsByParentThreadId,
   getSubagentHarness,
@@ -408,7 +408,7 @@ export default memo(function ThreadViewContent ({
   const activeThreadId = selectedThreadId ?? thread.id;
   const threads = useWorkbenchThreads();
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
-    : { kind: "subagent", parentThreadId: thread.id, threadId: activeThreadId };
+    : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const activeThreadController = useWorkbenchThread(projectId, activeTarget, undefined, "view");
   const transcriptSource = activeThreadController.state.transcript;
   const threadGoalControls = threads.goals;
@@ -447,7 +447,7 @@ export default memo(function ThreadViewContent ({
   const subagents = useMemo(() => sortWorkbenchSubagents(knownDirectSubagents), [knownDirectSubagents]);
   const hasSettledSubagents = useMemo(() => subagents.some((subagent) => subagent.lifecycle?.settled), [subagents]);
   const subagentTabLayout = useMemo(() => {
-    const revealedThreadIds = new Set(
+    const revealedThreadIds = new Set<string>(
       areSettledSubagentsVisible
         ? subagents.filter((subagent) => subagent.lifecycle?.settled).map((subagent) => subagent.threadId)
         : [],
@@ -470,7 +470,7 @@ export default memo(function ThreadViewContent ({
     lifecycle: activeSidebarEntry.lifecycle,
   } : null, [activeSidebarEntry]);
   const activeProfileSlot = useMemo(() => activeThread
-    ? resolveThreadComposerProfileSlot(projectId, threadTarget, activeThread)
+    ? resolveThreadComposerProfileSlot(ProjectIdSchema.parse(projectId), threadTarget, activeThread)
     : null, [activeThread?.harness, activeThread?.id, projectId, threadTarget]);
   const resolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
@@ -777,8 +777,8 @@ export default memo(function ThreadViewContent ({
   }, [onSelectedThreadChange]);
   const getSubthreadHref = useCallback((threadId: string) => {
     const target: WorkbenchThreadTarget = threadId === thread.id
-      ? { harness: thread.harness, kind: "provider", threadId: thread.id }
-      : { harness: getSubagentHarness(subagents, threadId, thread.harness), kind: "subagent", parentThreadId: thread.id, threadId };
+      ? { harness: thread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(thread.id) }
+      : { harness: getSubagentHarness(subagents, threadId, thread.harness), kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(threadId) };
     return getThreadHref?.(target) ?? createThreadHref(projectId, target);
   }, [getThreadHref, projectId, subagents, thread.harness, thread.id]);
 
@@ -786,10 +786,10 @@ export default memo(function ThreadViewContent ({
     const subagent = getSubagentSummary(subagents, threadId);
     if (!subagent) return;
     void threads.updateState({
-      identity: { harness: subagent.harness, threadId },
+      identity: { harness: subagent.harness, threadId: subagent.threadId },
       method: "workbench/thread-state/pin/set",
       pinned: !subagent.pinned,
-      projectId,
+      projectId: subagent.projectId,
     });
   }, [projectId, subagents, threads.updateState]);
 
@@ -797,9 +797,9 @@ export default memo(function ThreadViewContent ({
     const subagent = getSubagentSummary(subagents, threadId);
     if (!subagent) return;
     void threads.updateState({
-      identity: { harness: subagent.harness, threadId },
+      identity: { harness: subagent.harness, threadId: subagent.threadId },
       method: settled ? "workbench/thread-state/settle" : "workbench/thread-state/restore",
-      projectId,
+      projectId: subagent.projectId,
     });
   }, [projectId, subagents, threads.updateState]);
 
@@ -1225,7 +1225,7 @@ export default memo(function ThreadViewContent ({
             claim={terminalGitArc}
             cwd={activeThread.cwd}
             harness={activeThread.harness}
-            onReleased={async () => await threads.updateState({ method: "workbench/thread-state/refresh", projectId })}
+            onReleased={async () => await threads.updateState({ method: "workbench/thread-state/refresh", projectId: ProjectIdSchema.parse(projectId) })}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

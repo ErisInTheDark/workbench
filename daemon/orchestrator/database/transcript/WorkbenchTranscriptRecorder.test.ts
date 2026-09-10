@@ -1,16 +1,26 @@
 /*
- * No production exports. Tests protect ordered forwarding and recovery after one rolled-back transcript batch. Keywords: transcript, recorder, test.
+ * No production exports. Tests protect ordered forwarding and recovery after one rolled-back transcript batch.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
 import type { WorkbenchTranscriptObservation } from "./workbench-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 const observation: WorkbenchTranscriptObservation = {
   kind: "thread",
-  threadId: "thread",
-  projectId: "project",
+  threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+  projectId: fixtureIdentityValues.ProjectId["project"],
   projectRoot: "C:/project",
   title: "Thread",
   createdAt: 1,

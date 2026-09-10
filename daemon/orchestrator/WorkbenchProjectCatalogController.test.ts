@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover project icon assets, catalog caching, coalescing, watcher invalidation, soft TTL refresh, CWD resolution, retry, and disposal. Keywords: project, icon, asset, catalog, cache, watcher, cwd, lifecycle, test.
+ * - No production exports; Node tests cover project icon assets, catalog caching, coalescing, watcher invalidation, soft TTL refresh, CWD resolution, retry, and disposal.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -13,6 +13,7 @@ import type { ResolvedProject } from "../lib/project";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 class FakeWatcher {
   closed = false;
@@ -45,7 +46,7 @@ function deferred<TValue>() {
 
 function createProject(id: string, rootPath = `C:/projects/${id}`): WorkbenchProjectOption {
   return {
-    id,
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
     kind: "git",
     lastCommitTimeMs: null,
     name: id,

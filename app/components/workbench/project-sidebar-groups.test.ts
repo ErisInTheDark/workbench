@@ -8,13 +8,14 @@ import test from "node:test";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./project-sidebar-groups";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = 200 * DAY_MS;
 
 function project(id: string, ageDays: number | null, kind: WorkbenchProjectOption["kind"] = "git"): WorkbenchProjectOption {
   return {
-    id,
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
     kind,
     lastCommitTimeMs: ageDays === null ? null : NOW_MS - ageDays * DAY_MS,
     name: id,
@@ -48,11 +49,11 @@ function summary(
     },
     lastThreadUpdateAt: activityAt,
     pinnedThreads: [],
-    projectId,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
     revision: 1,
     unsettledThreads: snoozed ? [] : [{
       activityAt,
-      identity: { harness: "codex", threadId: `${projectId}-thread` },
+      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(`${projectId}-thread`) },
       status: "working",
       title: `${projectId} thread`,
     }],

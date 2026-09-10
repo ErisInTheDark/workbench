@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebarActionsProvider: own shared thread-sidebar subscriptions, mutations, menus, folder focus, relative time, and expose the colocated context hook. Keywords: sidebar, actions, context, threads.
+ * - default WorkbenchThreadSidebarActionsProvider: own shared thread-sidebar subscriptions, mutations, menus, folder focus, relative time, and expose the colocated context hook.
  */
 "use client";
 
@@ -10,7 +10,8 @@ import type { ThreadSummary, WorkbenchControls } from "workbench-shared/types";
 import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { FolderIdSchema, type ProjectId, type ThreadDisplayKey, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   getThreadSidebarGroup,
   isWorkbenchThreadSettlementAvailable,
@@ -70,22 +71,22 @@ interface WorkbenchThreadSidebarActionsValue {
   displayOrder: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
   error: string;
-  getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: string, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition;
+  getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition;
   isLoading: boolean;
   homeDisplayOrder: WorkbenchThreadDisplayOrder;
   homeDisplayOrderSupported: boolean;
   nowMs: number;
-  onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: string) => void;
+  onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: ProjectId) => void;
   onAutoFocusFolderComplete: () => void;
-  onMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null, ownerProjectId?: string) => void;
-  onProjectFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
-  onPinnedFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetKey: string, destinationFolderId: string | null) => void;
+  onMove: (sourceKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null, ownerProjectId?: ProjectId) => void;
+  onProjectFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
+  onPinnedFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetKey: ThreadDisplayKey, destinationFolderId: string | null) => void;
   onSetPriority: (payload: WorkbenchThreadRowDragPayload, priority: WorkbenchThreadPriority) => void;
-  onSnoozeUntil: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: string }) => void;
+  onSnoozeUntil: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId }) => void;
   onHomeMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderKey: string | null, beforeKey: string | null) => void;
   onPinnedMove: (sourceKey: string, destinationFolderId: string | null, beforeKey: string | null) => void;
   onRenamePinnedFolder: (folderId: string, title: string) => Promise<string>;
-  onRenameFolder: (folderId: string, title: string, ownerProjectId?: string) => Promise<string>;
+  onRenameFolder: (folderId: string, title: string, ownerProjectId?: ProjectId) => Promise<string>;
   pinnedDisplayOrder: WorkbenchThreadDisplayOrder;
   projectThreadSidebars: WorkbenchProjectThreadSidebars;
   projectThreadSummaries: WorkbenchProjectThreadSummaries;
@@ -111,7 +112,7 @@ function WorkbenchThreadSidebarActionsProvider({
   controls: WorkbenchControls | null;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   onThreadSettled: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
-  projectId: string;
+  projectId: ProjectId | "";
   threadSummariesById: ReadonlyMap<string, ThreadSummary>;
 }) {
   const currentSidebar = useWorkbenchProjectThreadSidebar(projectId);
@@ -138,7 +139,7 @@ function WorkbenchThreadSidebarActionsProvider({
     if (payload) await controls.stopThread(payload);
   }, [controls]);
 
-  const mutateEntry = useCallback(async (entry: ThreadListEntry, ownerProjectId: string, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
+  const mutateEntry = useCallback(async (entry: ThreadListEntry, ownerProjectId: ProjectId, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
     if (!controls || !ownerProjectId) return;
     if (entry.entryKind === "draft") {
       const draftId = isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId;
@@ -174,7 +175,7 @@ function WorkbenchThreadSidebarActionsProvider({
     });
   }, [controls]);
 
-  const getThreadContextMenu = useCallback((entry: ThreadListEntry, ownerProjectId: string, folderScope?: "pinned" | "project"): WorkbenchContextMenuDefinition => {
+  const getThreadContextMenu = useCallback((entry: ThreadListEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project"): WorkbenchContextMenuDefinition => {
     const thread = entry.entryKind === "thread" && ownerProjectId === projectId ? threadSummariesById.get(entry.identity.threadId) ?? null : null;
     const identifier = entry.entryKind === "draft" ? isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId : entry.identity.threadId;
     const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
@@ -203,7 +204,7 @@ function WorkbenchThreadSidebarActionsProvider({
       onSelect: () => { void writeTextToClipboard(identifier); },
     });
 
-    const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? `draft:${entry.draftId}` : getWorkbenchThreadDisplayKey(entry);
+    const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? getThreadDisplayDraftKey(entry.draftId) : getWorkbenchThreadDisplayKey(entry);
     const useProjectFolder = folderScope === "project"
       || (folderScope !== "pinned" && (!projectId || group !== "pinned"));
     const displayKey = useProjectFolder ? localDisplayKey : getProjectQualifiedThreadDisplayKey(ownerProjectId, localDisplayKey);
@@ -218,11 +219,11 @@ function WorkbenchThreadSidebarActionsProvider({
         label: "Add to folder",
         onSelect: () => {
           if (!controls) return;
-          const folderId = crypto.randomUUID();
+          const folderId = FolderIdSchema.parse(crypto.randomUUID());
           setAutoFocusFolderId(folderId);
           const request = group === "pinned" && !useProjectFolder
             ? { folderId, method: "workbench/thread-state/pinned-display-order/folder/create" as const, sourceKey: displayKey, title: "New folder" }
-            : { folderId, method: "workbench/thread-state/display-order/folder/create" as const, projectId: ownerProjectId, sourceKey: displayKey, title: "New folder" };
+            : { folderId, method: "workbench/thread-state/display-order/folder/create" as const, projectId: ownerProjectId, sourceKey: localDisplayKey, title: "New folder" };
           void controls.updateThreadStateWithAcceptance(request).then((accepted) => {
             if (!accepted) setAutoFocusFolderId((current) => current === folderId ? null : current);
           }).catch((error: unknown) => {
@@ -359,7 +360,8 @@ function WorkbenchThreadSidebarActionsProvider({
       void mutations[action]().catch(error => console.error("Thread action failed", boundedFolderMutationError(error)));
     },
     onAutoFocusFolderComplete: () => setAutoFocusFolderId(null),
-    onMove: (sourceKey, section, destinationFolderId, beforeKey, ownerProjectId = projectId) => {
+    onMove: (sourceKey, section, destinationFolderId, beforeKey, ownerProjectId = projectId || undefined) => {
+      if (!ownerProjectId) return;
       void controls?.updateThreadStateWithAcceptance({
         beforeKey,
         destinationFolderId,
@@ -438,7 +440,8 @@ function WorkbenchThreadSidebarActionsProvider({
       if (!accepted) throw new Error("Unable to update the pinned thread folder name.");
       return title.trim();
     },
-    onRenameFolder: async (folderId, title, ownerProjectId = projectId) => {
+    onRenameFolder: async (folderId, title, ownerProjectId = projectId || undefined) => {
+      if (!ownerProjectId) throw new Error("A project must be selected before renaming a folder.");
       const accepted = await controls?.updateThreadStateWithAcceptance({
         folderId,
         method: "workbench/thread-state/display-order/folder/title/set",

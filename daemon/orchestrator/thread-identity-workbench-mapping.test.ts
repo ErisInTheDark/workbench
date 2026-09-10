@@ -11,6 +11,20 @@ import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityControll
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native-child": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-child"),
+  },
+  NativeTurnId: {
+    "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
+  },
+  ProjectId: {
+    "foreign": fixtureIdentitySchemas.ProjectIdSchema.parse("foreign"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 test("observation requests validate canonical ownership and outbound state needs no identity projection", async () => {
   const database = new Database(":memory:");
@@ -32,17 +46,17 @@ test("observation requests validate canonical ownership and outbound state needs
   });
   try {
     await threads.start();
-    const native = { harness: "codex", nativeLocation: "/repo", nativeThreadId: "native-thread" };
-    const thread = await threads.observe({ native, projectId: "project", projectRoot: "/repo", title: "Thread", createdAt: 1, updatedAt: 1, activityAt: 1 });
+    const native = { harness: "codex", nativeLocation: "/repo", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") };
+    const thread = await threads.observe({ native, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "/repo", title: "Thread", createdAt: 1, updatedAt: 1, activityAt: 1 });
     const turn = await threads.observeTurn({
-      kind: "turn", threadId: thread.threadId, turnId: "native-turn",
+      kind: "turn", threadId: thread.threadId, turnId: fixtureIdentityValues.NativeTurnId["native-turn"],
       harnessId: "codex", nativeLocation: "/repo", nativeThreadId: native.nativeThreadId,
-      nativeTurnId: "native-turn", state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
     });
     const owners = { threads, items };
     const [question] = await items.admit([{ threadId: thread.threadId, sources: [], legacyAliases: [] }]);
     const source: WorkbenchThreadObservationSnapshot = {
-      projectId: "project", subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",
+      projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",
       target: { kind: "provider", harness: "codex", threadId: thread.threadId },
       revision: 4, version: 1, updateKind: "threadObservation", error: null, freshness: "fresh",
       entries: [{
@@ -82,18 +96,18 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.equal(entry.pendingQuestionnaire?.itemId, question!.itemId);
     assert.deepEqual(entry.pendingQuestionnaire?.request, source.entries[0]!.entryKind !== "draft" && source.entries[0]!.pendingQuestionnaire?.request);
     const child = await threads.observe({
-      native: { harness: "opencode", nativeLocation: "/repo", nativeThreadId: "native-child" },
-      projectId: "project", projectRoot: "/repo", title: "Child", createdAt: 1, updatedAt: 1, activityAt: 1,
+      native: { harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"] },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "/repo", title: "Child", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const childRequest = await mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/observe", projectId: "project", subscriptionId: source.subscriptionId, version: 1,
+      method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: source.subscriptionId, version: 1,
       target: { kind: "subagent", harness: "opencode", threadId: child.threadId, parentThreadId: thread.threadId },
     });
     assert.ok(childRequest.method === "workbench/thread-state/observe" && childRequest.target.kind === "subagent");
     assert.equal(childRequest.target.threadId, child.threadId);
     assert.equal(childRequest.target.parentThreadId, thread.threadId);
     await assert.rejects(mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/observe", projectId: "foreign", subscriptionId: source.subscriptionId, version: 1,
+      method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["foreign"], subscriptionId: source.subscriptionId, version: 1,
       target: { kind: "provider", harness: "codex", threadId: thread.threadId },
     }));
   } finally {

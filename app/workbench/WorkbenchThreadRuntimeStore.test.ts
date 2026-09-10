@@ -1,15 +1,16 @@
 /*
  * Exports:
- * - no exports: semantic tests for stable route-owned thread runtime publication. Keywords: thread runtime, selection, React.
+ * - no exports: semantic tests for stable route-owned thread runtime publication.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadPayload, WorkbenchThreadRuntimeSnapshot } from "workbench-shared/types";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadRuntimeStore from "./WorkbenchThreadRuntimeStore";
 
-function thread(id: string): ThreadPayload {
+function thread(id: string): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null,
     agentPath: null,
@@ -17,7 +18,7 @@ function thread(id: string): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id,
+    id: WorkbenchThreadIdSchema.parse(id),
     isDraft: false,
     model: "model",
     name: id,

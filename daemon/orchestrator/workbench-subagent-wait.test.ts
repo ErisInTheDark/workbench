@@ -13,8 +13,9 @@ import type { AgentEndpointProjectResolution } from "../lib/workbench/project/ag
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
-const callerThreadId = "parent-thread";
+const callerThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent-thread");
 const inactiveThreadId = "inactive-child";
 const questionnaireThreadId = "questionnaire-child";
 
@@ -60,8 +61,8 @@ function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string
     parentThreadId: callerThreadId,
     profileId: "profile-1",
     profileName: "Lily",
-    projectId,
-    threadId,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
     title: `${name} task`,
     updatedAt: 1,
   };
@@ -105,7 +106,9 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const projectId = "subagent-wait-project";
   const inactive = summary({ cwd, name: "Yuzu", projectId, threadId: inactiveThreadId });
   const waiting = summary({ cwd, name: "Momo", projectId, threadId: questionnaireThreadId });
-  const subagentStore = new WorkbenchSubagentStore(createThreadStateTestDatabase());
+  const database = createThreadStateTestDatabase();
+  for (const threadId of [callerThreadId, inactiveThreadId, questionnaireThreadId]) database.admitThread(projectId, threadId);
+  const subagentStore = new WorkbenchSubagentStore(database);
   for (const record of [inactive, waiting]) {
     const { threadId, directSubagentIndex: _index, ...metadata } = record;
     const reservationId = randomUUID();
@@ -114,6 +117,12 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   }
   const client = new FakeHarnessClient(cwd);
   const controller = new WorkbenchSubagentController({
+    identities: database.identities.threads,
+    publicThreadId: async (threadId, projectId) => {
+      const identity = await database.identities.threads.resolve({ threadId, projectId });
+      assert.ok(identity);
+      return identity.threadId;
+    },
     bridgeUrl: "ws://unused",
     createHarnessClient: () => client,
     onRelationshipCommitted: async () => undefined,

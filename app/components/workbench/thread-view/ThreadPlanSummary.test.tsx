@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect copy-enabled plan summaries and embedded marker integration. Keywords: thread, plan, summary, copy, renderer, icon.
+ * No production exports. Regression wards protect copy-enabled plan summaries and embedded marker integration.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,6 +10,7 @@ import type { ThreadPayload } from "workbench-shared/types";
 import { renderThreadMarkdown } from "./thread-markdown-render";
 import { ThreadThreadContent } from "./thread-view-items";
 import ThreadPlanSummary from "./ThreadPlanSummary";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function countMatches(value: string, pattern: RegExp) {
   return Array.from(value.matchAll(pattern)).length;
@@ -48,7 +49,7 @@ test("first-class plan items use the shared copy-enabled summary", () => {
     createdAt: 1,
     cwd: "C:/workspace",
     harness: "codex",
-    id: "thread-plan-summary",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-plan-summary"),
     isDraft: false,
     model: null,
     name: null,

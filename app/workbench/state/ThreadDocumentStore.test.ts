@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover exact-key document deletion and selection. Keywords: thread, document, test.
+ * - No production exports; Node tests cover exact-key document deletion and selection.
  */
 
 import assert from "node:assert/strict";
@@ -8,11 +8,12 @@ import { test } from "node:test";
 
 import type { ThreadPayload } from "workbench-shared/types";
 import ThreadDocumentStore from "./ThreadDocumentStore.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function thread(harness: ThreadPayload["harness"]): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness, id: "same", isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
+    harness, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("same"), isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
     serviceTier: null, source: harness, status: "active", tokenUsage: null, turnHistory: [], turns: [], updatedAt: 1,
   };
 }

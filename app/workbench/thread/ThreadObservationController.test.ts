@@ -1,13 +1,19 @@
 /*
- * Keywords: leases, reconnect, stale reply, thread isolation, readiness.
  * Exports: none. Tests protect the browser observation lifecycle through its socket port.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import ThreadObservationController from "./ThreadObservationController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
-const target = { kind: "provider" as const, harness: "codex" as const, threadId: "thread" };
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+  },
+};
+
+const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
 
 function fixture(releaseRequest: () => Promise<unknown> = async () => ({ accepted: true })) {
   const opens: Array<{ projectId: string; subscriptionId: string; target: typeof target; resolve: (value: object) => Promise<void>; reject: (error: Error) => Promise<void> }> = [];
@@ -32,7 +38,7 @@ function fixture(releaseRequest: () => Promise<unknown> = async () => ({ accepte
   function snapshot(index: number, revision: number, present = true): WorkbenchThreadObservationSnapshot {
     const open = opens[index]!;
     return {
-      projectId: open.projectId, subscriptionId: open.subscriptionId, target: open.target,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(open.projectId), subscriptionId: open.subscriptionId, target: open.target,
       entries: present ? [{
         activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: open.target.threadId },
         metadata: { archived: false, pinned: true, snoozed: false },
@@ -48,7 +54,7 @@ test("root and child consumers share a subscription until the final lease releas
   const { owner, opens, releases, snapshot } = fixture();
   let changes = 0;
   const root = owner.acquire("project", target, () => changes++);
-  const child = owner.acquire("project", { ...target, kind: "subagent", parentThreadId: target.threadId, threadId: "child" });
+  const child = owner.acquire("project", { ...target, kind: "subagent", parentThreadId: target.threadId, threadId: fixtureIdentityValues.WorkbenchThreadId["child"] });
   assert.equal(opens.length, 1);
   assert.equal(root.key, child.key);
   assert.equal(owner.getSnapshot(root.key).status, "loading");
@@ -66,7 +72,7 @@ test("root and child consumers share a subscription until the final lease releas
 
 test("a child on another provider opens its real family and shares the root lease", async () => {
   const { owner, opens } = fixture();
-  const childTarget = { kind: "subagent" as const, harness: "opencode" as const, parentThreadId: "thread", threadId: "child" };
+  const childTarget = { kind: "subagent" as const, harness: "opencode" as const, parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") };
   const child = owner.acquire("project", childTarget);
   const root = owner.acquire("project", target);
   assert.equal(opens.length, 1);
@@ -158,7 +164,7 @@ test("a mismatched reply cannot install a different project's state", async t =>
   const { owner, opens, snapshot } = fixture();
   const lease = owner.acquire("project", target);
   assert.equal(opens.length, 1);
-  await opens[0]!.resolve({ observation: { ...snapshot(0, 1), projectId: "other" } });
+  await opens[0]!.resolve({ observation: { ...snapshot(0, 1), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") } });
   assert.equal(owner.getSnapshot(lease.key).status, "failed");
   assert.equal(owner.getObservations().length, 0);
   owner.dispose();

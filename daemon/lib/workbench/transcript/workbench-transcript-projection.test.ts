@@ -1,12 +1,11 @@
 /*
- * No production exports. Real SQLite fixtures protect relational item reconstruction, browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal. Keywords: transcript, projection, sqlite, parity.
+ * No production exports. Real SQLite fixtures protect relational item reconstruction, browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import Database from "better-sqlite3";
 
-import type { WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
@@ -16,6 +15,22 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../orchestrator/database/transcript/workbench-transcript-types";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "turn-1": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-1"),
+  },
+};
 
 function createRepository() {
   const database = new Database(":memory:");
@@ -32,9 +47,9 @@ function thread(): WorkbenchTranscriptAtomicObservation {
     activityAt: 7_000,
     createdAt: 1_000,
     kind: "thread",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     projectRoot: "C:/project",
-    threadId: "thread",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
     title: "Projected thread",
     updatedAt: 7_000,
   };
@@ -48,12 +63,12 @@ function turn(turnId: string, turnIndex: number): WorkbenchTranscriptAtomicObser
     harnessId: "codex",
     kind: "turn",
     nativeLocation: "C:/project",
-    nativeThreadId: "native-thread",
-    nativeTurnId: `native-${turnId}`,
+    nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(`native-${turnId}`),
     startedAt: (turnIndex + 1) * 1_000,
     state: "completed",
-    threadId: "thread",
-    turnId,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
     turnIndex,
   };
 }
@@ -70,8 +85,8 @@ function item(
     lifecycle: "completed",
     observedAt,
     ...(timeline ? { timeline } : {}),
-    threadId: "thread",
-    turnId,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   };
 }
 
@@ -82,9 +97,9 @@ function canonicalWindow(
   return {
     contentVersion: 3,
     kind: "canonicalWindow",
-    materializedTurnIds,
+    materializedTurnIds: materializedTurnIds.map((id) => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id)),
     observations,
-    threadId: "thread",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
   };
 }
 
@@ -103,7 +118,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       status: "completed",
       type: "fileChange",
     };
-    const questionnaire: WorkbenchQuestionnaireHistoryEntry = {
+    const questionnaire: Extract<WorkbenchTranscriptAtomicObservation, { kind: "questionnaire" }>["entry"] = {
       insertAfterItemId: null,
       insertAfterItemIndex: null,
       itemId: null,
@@ -124,8 +139,8 @@ test("real SQLite rows project the renderer facts used by current command, file,
       requestKey: "request-key",
       resolvedAt: 6_000,
       response: { answers: { choice: { answers: ["One"] } } },
-      threadId: "thread",
-      turnId: "turn-1",
+      threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-1"],
     };
     repository.settle([canonicalWindow([
       thread(),
@@ -179,8 +194,8 @@ test("real SQLite rows project the renderer facts used by current command, file,
           recordedAt: 4_100,
           session: "research",
           state: "completed",
-          threadId: "thread",
-          turnId: "turn-1",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentityValues.WorkbenchTurnId["turn-1"],
         },
         kind: "browse",
         asset: {
@@ -323,7 +338,7 @@ test("projection preserves distinct questionnaire items with one reused provider
     turnId: string,
     itemId: string,
     resolvedAt: number,
-  ): WorkbenchQuestionnaireHistoryEntry => ({
+  ): Extract<WorkbenchTranscriptAtomicObservation, { kind: "questionnaire" }>["entry"] => ({
     insertAfterItemId: null,
     insertAfterItemIndex: null,
     itemId,
@@ -344,8 +359,8 @@ test("projection preserves distinct questionnaire items with one reused provider
     requestKey: "reused",
     resolvedAt,
     response: { answers: { choice: { answers: [turnId] } } },
-    threadId: "thread",
-    turnId,
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   });
   try {
     repository.settle([canonicalWindow([

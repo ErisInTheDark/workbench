@@ -1,10 +1,10 @@
 /*
- * Keywords: sqlite, claims, distinct threads, identity, titles, paging.
  * Exports:
  * - default WorkbenchClaimStatsRepository: read shared UI hotspots and cwd-scoped CLI claim analysis.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { statsRangeShape } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import {
   WORKBENCH_CLAIM_STATS_PAGE_SIZE,
@@ -84,7 +84,7 @@ export default class WorkbenchClaimStatsRepository {
         ORDER BY c.last_day DESC, c.identity_id, c.harness_id
         LIMIT @limit OFFSET @offset
       `).all({ ...scoped, limit: pageSize, offset: (page - 1) * pageSize }) as Array<{
-        identity_id: string; harness_id: WorkbenchHarness; managed_id: string | null; title: string | null;
+        identity_id: string; harness_id: WorkbenchHarness; managed_id: WorkbenchThreadId | null; title: string | null;
       }>;
       return {
         kind: "threads", page, pages: Math.max(1, Math.ceil(count.count / pageSize)),
@@ -99,7 +99,7 @@ export default class WorkbenchClaimStatsRepository {
               UNION SELECT harness_id, native_location, native_thread_id
               FROM workbench_pending_import_threads WHERE thread_id = ?
               LIMIT 1
-            `).get(row.managed_id, row.managed_id) as { harness: string; nativeLocation: string; nativeThreadId: string } | undefined;
+            `).get(row.managed_id, row.managed_id) as { harness: string; nativeLocation: string; nativeThreadId: NativeThreadId } | undefined;
             if (native) identity = this.identities.resolveNative(native);
           }
           return {

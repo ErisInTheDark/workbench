@@ -6,14 +6,15 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchStoredSubagent, WorkbenchSubagentReservation } from "../../workbench-subagent-record";
 import type { WorkbenchSubagentRelationshipRead } from "./workbench-thread-state-persistence";
 
 type RelationshipRow = {
   id: string;
-  parent_thread_id: string;
+  parent_thread_id: WorkbenchThreadId;
   relationship_kind: "reserved" | "active";
-  project_id: string;
+  project_id: ProjectId;
   direct_subagent_index: number;
   created_at: number;
   updated_at: number;
@@ -23,7 +24,7 @@ type RelationshipRow = {
   title: string | null;
   profile_id: string | null;
   profile_name: string | null;
-  thread_id: string | null;
+  thread_id: WorkbenchThreadId | null;
 };
 
 const SELECT_RELATIONSHIPS = `
@@ -64,7 +65,7 @@ export default class WorkbenchSubagentRelationshipRepository {
     });
   }
 
-  getOwnedMany(parentThreadId: string, projectId: string, threadIds: readonly string[]) {
+  getOwnedMany(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadIds: readonly WorkbenchThreadId[]) {
     return this.database.transaction(() => {
       const records = threadIds.map(threadId => this.getOwned(parentThreadId, projectId, threadId));
       return records.every((record): record is WorkbenchSubagentRelationship => record !== null) ? records : null;
@@ -95,7 +96,7 @@ export default class WorkbenchSubagentRelationshipRepository {
     })();
   }
 
-  activate(parentThreadId: string, reservationId: string, record: WorkbenchSubagentRelationship) {
+  activate(parentThreadId: WorkbenchThreadId, reservationId: string, record: WorkbenchSubagentRelationship) {
     this.database.transaction(() => {
       const reserved = this.database.prepare(`
         SELECT parent_thread_id, project_id, relationship_kind, direct_subagent_index
@@ -118,7 +119,7 @@ export default class WorkbenchSubagentRelationshipRepository {
     })();
   }
 
-  remove(parentThreadId: string, identifier: string) {
+  remove(parentThreadId: WorkbenchThreadId, identifier: string) {
     return this.database.prepare(`
       DELETE FROM workbench_subagent_relationships WHERE parent_thread_id = ? AND (
         (relationship_kind = 'reserved' AND id = ?) OR id IN (
@@ -128,7 +129,7 @@ export default class WorkbenchSubagentRelationshipRepository {
     `).run(parentThreadId, identifier, identifier).changes > 0;
   }
 
-  getOwned(parentThreadId: string, projectId: string, threadId: string): WorkbenchSubagentRelationship | null {
+  getOwned(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadId: WorkbenchThreadId): WorkbenchSubagentRelationship | null {
     const row = this.database.prepare(`${SELECT_RELATIONSHIPS}
       WHERE relationship.parent_thread_id = ? AND relationship.project_id = ? AND active.thread_id = ?
     `).get(parentThreadId, projectId, threadId) as RelationshipRow | undefined;
@@ -139,7 +140,7 @@ export default class WorkbenchSubagentRelationshipRepository {
     return relationship;
   }
 
-  readParent(parentThreadId: string) {
+  readParent(parentThreadId: WorkbenchThreadId) {
     const parent = this.database.prepare(`
       SELECT next_direct_subagent_index FROM workbench_subagent_parents WHERE parent_thread_id = ?
     `).get(parentThreadId) as { next_direct_subagent_index: number } | undefined;
@@ -154,7 +155,7 @@ export default class WorkbenchSubagentRelationshipRepository {
   }
 
   importParent(input: {
-    parentThreadId: string;
+    parentThreadId: WorkbenchThreadId;
     nextDirectSubagentIndex: number;
     relationships: readonly WorkbenchStoredSubagent[];
   }) {

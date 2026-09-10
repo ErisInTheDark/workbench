@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, native boundary, identity, recording, steer, client correlation.
  * Exports:
  * - mapNativeTranscriptObservation: translate admitted native references for canonical recording.
  * - admitNativeTranscriptObservations: admit missing structural identities before publication or body recording.
@@ -11,10 +10,11 @@ import { z } from "zod";
 import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchNativeThreadIdentity } from "./database/thread-identity/workbench-thread-identity-types";
-import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission, WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
+import type { NativeTranscriptAtomicObservation, NativeTranscriptObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission, WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
 import { mapProviderThreadItem, type WorkbenchProviderIdentityOwners } from "./thread-identity-provider-mapping";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import { ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchItemIdSchema, WorkbenchTurnIdSchema, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 
 type IdentityOwners = WorkbenchProviderIdentityOwners & {
   threads: Pick<WorkbenchThreadIdentityController, "knownTurn">;
@@ -24,13 +24,13 @@ export interface NativeTranscriptIdentityOwners {
   threads: WorkbenchThreadIdentityController;
   items: WorkbenchTranscriptIdentityController;
 }
-type CatalogObservation = Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }>;
+type CatalogObservation = Extract<NativeTranscriptAtomicObservation, { kind: "thread" | "turn" }>;
 type ObservationMappers = {
   [Kind in WorkbenchTranscriptObservation["kind"]]:
-    (input: Extract<WorkbenchTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
+    (input: Extract<NativeTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
 };
 
-function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: string): WorkbenchTranscriptItemSource[] {
+function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: WorkbenchTurnId): WorkbenchTranscriptItemSource[] {
   if (entry.status === "sent") {
     const sources: WorkbenchTranscriptItemSource[] = [];
     if (entry.canonicalItemId) {
@@ -53,9 +53,9 @@ function steerAttemptReference(entry: WorkbenchSteerHistoryEntry, publicItemId?:
 
 export async function admitNativeTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
-  observations: readonly WorkbenchTranscriptObservation[],
+  observations: readonly NativeTranscriptObservation[],
 ) {
-  const facts = observations.flatMap<WorkbenchTranscriptAtomicObservation | Extract<WorkbenchTranscriptObservation, { kind: "captureGap" }>>((observation) => {
+  const facts = observations.flatMap<NativeTranscriptAtomicObservation | Extract<NativeTranscriptObservation, { kind: "captureGap" }>>((observation) => {
     switch (observation.kind) {
       case "canonicalWindow":
       case "providerTurnScope": return observation.observations;
@@ -94,7 +94,7 @@ export async function admitNativeTranscriptObservations(
     const reference = fact.kind === "item" ? fact.publicItemId
       : fact.kind === "steer" ? steerAttemptReference(fact.entry, fact.publicItemId)
         : fact.publicItemId ?? fact.entry.itemId ?? undefined;
-    const itemId = z.uuid().safeParse(reference).success ? reference : undefined;
+    const itemId = z.uuid().safeParse(reference).success ? WorkbenchItemIdSchema.parse(reference) : undefined;
     const known = owners.items.findItemIdForSource(threadId, sources[0]!);
     if (known && (!itemId || itemId === known)
       && sources.every((source) => owners.items.findItemIdForSource(threadId, source) === known)) continue;
@@ -110,24 +110,29 @@ export async function admitNativeTranscriptObservations(
 
 export function mapNativeTranscriptObservation(
   owners: IdentityOwners,
-  native: WorkbenchNativeThreadIdentity,
-  observation: WorkbenchTranscriptObservation,
+  native: WorkbenchNativeThreadIdentity | null,
+  observation: NativeTranscriptObservation,
 ): WorkbenchTranscriptObservation {
-  const threadId = (source: string) => owners.threads.workbenchIdForNative({ ...native, nativeThreadId: source });
+  if (observation.kind === "nativeEvidence" && observation.threadId === null) {
+    if (observation.turnId !== null || observation.itemId !== null) throw new Error("Transcript evidence references require an owning thread.");
+    return { ...observation, threadId: null, turnId: null, itemId: null };
+  }
+  if (native === null) throw new Error("Owned transcript facts require an admitted native execution.");
+  const threadId = (source: string) => owners.threads.workbenchIdForNative({ ...native, nativeThreadId: NativeThreadIdSchema.parse(source) });
   const turnId = (thread: string, source: string) => owners.threads.workbenchTurnIdForNative({
-    ...native, nativeThreadId: thread, nativeTurnId: source,
+    ...native, nativeThreadId: NativeThreadIdSchema.parse(thread), nativeTurnId: NativeTurnIdSchema.parse(source),
   });
   const itemId = (thread: string, turn: string, source: string) => owners.items.itemIdForReference(
-    threadId(thread), turnId(thread, turn), source,
+    threadId(thread), turnId(thread, turn), ItemReferenceSchema.parse(source),
   );
   // Each discriminator selects its matching typed handler; only the indexed call needs narrowing.
-  const mapAtomic = (input: WorkbenchTranscriptAtomicObservation) => mappings[input.kind](input as never);
+  const mapAtomic = (input: NativeTranscriptAtomicObservation) => mappings[input.kind](input as never);
   const mapCatalog = (input: CatalogObservation) => mappings[input.kind](input as never);
   const mappings: ObservationMappers = {
     threadContextUsage: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     thread: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     turn: (input) => {
-      const id = input.nativeTurnId === null ? input.turnId : turnId(input.threadId, input.nativeTurnId);
+      const id = input.nativeTurnId === null ? WorkbenchTurnIdSchema.parse(input.turnId) : turnId(input.threadId, input.nativeTurnId);
       const admitted = owners.threads.knownTurn(id);
       if (admitted.threadId !== threadId(input.threadId)) throw new Error("Transcript turn changed its admitted owner.");
       return {
@@ -192,7 +197,6 @@ export function mapNativeTranscriptObservation(
       },
     }),
     nativeEvidence: (input) => {
-      if (input.threadId === null) return input;
       if (input.itemId !== null && input.turnId === null) throw new Error("Transcript item evidence requires an owning turn.");
       return {
         ...input, threadId: threadId(input.threadId),

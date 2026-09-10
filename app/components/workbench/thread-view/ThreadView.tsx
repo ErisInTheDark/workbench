@@ -1,5 +1,4 @@
 /*
- * Keywords: thread surface, admission, skeleton, common error.
  * Exports:
  * - default ThreadView: render the shared thread owner's loading, failure or admitted content.
  */
@@ -7,6 +6,7 @@
 
 import { useEffect, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { useWorkbenchThread } from "../use-workbench-thread";
 import ThreadViewContent from "./ThreadViewContent";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
@@ -29,7 +29,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const thread = useWorkbenchThread(props.projectId, target, undefined, interest);
   const child = thread.state.subagents.find(candidate => candidate.threadId === selectedId);
   const active = useWorkbenchThread(props.projectId, selectedId && selectedId !== rootId
-    ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: rootId, threadId: selectedId, harness: child?.harness } : null
+    ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
     : target, undefined, selectedId !== rootId ? "view" : interest);
   const error = thread.state.error ?? active.state.error ?? ((!target || target.kind === "new") ? routeError : "");
   if (error) {

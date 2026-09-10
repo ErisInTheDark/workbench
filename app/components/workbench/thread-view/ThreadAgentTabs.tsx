@@ -1,11 +1,11 @@
 /*
- * Keywords: thread, subagent, tabs, lock, lifecycle, hue.
  * Exports:
  * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, Lock controls, status icons, and settled-history disclosure.
  */
 import type { MouseEvent } from "react";
 
 import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
@@ -88,7 +88,7 @@ export default function ThreadAgentTabs ({
   projectId: string;
   tabs: readonly SubagentTab[];
 }) {
-  const mainThread = useWorkbenchThread(projectId, { kind: "provider", harness: mainThreadHarness, threadId: mainThreadId });
+  const mainThread = useWorkbenchThread(projectId, { kind: "provider", harness: mainThreadHarness, threadId: ThreadReferenceSchema.parse(mainThreadId) });
   const mainThreadLifecycle = mainThread.state.entry?.lifecycle ?? null;
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);

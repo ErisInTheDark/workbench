@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect project-qualified thread state in project and global observation modes. Keywords: hooks, home, sidebar, lifecycle.
+ * No production exports. Tests protect project-qualified thread state in project and global observation modes.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -13,6 +13,13 @@ import ThreadObservationController from "../../workbench/thread/ThreadObservatio
 import type { WorkbenchClientController } from "./workbench-client-context";
 import { useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory } from "./use-workbench-client";
 import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
   activityAt: 10,
@@ -33,7 +40,7 @@ const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     scopePaths: ["app/next.tsx"],
     updatedAt: "2026-09-03T00:00:00.000Z",
   },
-  identity: { harness: "codex", threadId: "thread" },
+  identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
   lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
   metadata: { archived: false, pinned: false, snoozed: false },
   title: "Thread",
@@ -42,7 +49,7 @@ const projectSnapshot = {
   entries: [entry],
   error: null,
   freshness: "fresh" as const,
-  projectId: "project",
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   revision: 1,
 };
 const globalStore = {
@@ -74,7 +81,7 @@ const client = {
 } satisfies WorkbenchClientController;
 
 function ThreadStateProbe({ projectId }: { projectId: string }) {
-  const selected = useWorkbenchThreadSidebarEntry(projectId, "codex", "thread");
+  const selected = useWorkbenchThreadSidebarEntry(fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), "codex", "thread");
   return (
     <output>
       {selected
@@ -88,7 +95,7 @@ test("thread state hooks resolve the project owner while the route snapshot is n
   const html = renderToStaticMarkup(createElement(
     WorkbenchClientProvider,
     {
-      children: createElement(ThreadStateProbe, { projectId: "project" }),
+      children: createElement(ThreadStateProbe, { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }),
       client,
     },
   ));
@@ -99,7 +106,7 @@ test("thread state hooks do not leak another project's entry", () => {
   const html = renderToStaticMarkup(createElement(
     WorkbenchClientProvider,
     {
-      children: createElement(ThreadStateProbe, { projectId: "other" }),
+      children: createElement(ThreadStateProbe, { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") }),
       client,
     },
   ));
@@ -114,7 +121,7 @@ test("title history actions target their project and preserve rejection", async 
   } as WorkbenchClientController["controls"];
   let history!: ReturnType<typeof useWorkbenchThreadTitleHistory>;
   function Probe() {
-    history = useWorkbenchThreadTitleHistory("project", "codex", "thread");
+    history = useWorkbenchThreadTitleHistory(fixtureIdentitySchemas.ProjectIdSchema.parse("project"), "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"));
     return null;
   }
   renderToStaticMarkup(createElement(WorkbenchClientProvider, {
@@ -122,11 +129,11 @@ test("title history actions target their project and preserve rejection", async 
     children: createElement(Probe),
   }));
   await history.reapply("old");
-  assert.deepEqual(calls, [{ projectId: "project", harness: "codex", threadId: "thread", title: "old" }]);
+  assert.deepEqual(calls, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex", threadId: "thread", title: "old" }]);
   await assert.rejects(history.dismiss("old"));
   assert.deepEqual(calls[1], {
     method: "workbench/thread-state/title/dismiss",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     identity: { harness: "codex", threadId: "thread" },
     title: "old",
   });

@@ -10,7 +10,18 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
-import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "00000000-0000-4000-8000-000000000001": fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+  },
+  ProjectId: {
+    "first": fixtureIdentitySchemas.ProjectIdSchema.parse("first"),
+    "second": fixtureIdentitySchemas.ProjectIdSchema.parse("second"),
+  },
+};
 
 test("consumer objects retain thread facts, title replacement and project isolation across cold reopen", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-relational-facade-"));
@@ -19,8 +30,8 @@ test("consumer objects retain thread facts, title replacement and project isolat
   let reopened: WorkbenchDatabaseController | null = null;
   try {
     const identities = await database.observeThreadIdentities(["first", "second"].map(projectId => ({
-      native: { harness: "codex" as const, nativeLocation: join(directory, projectId), nativeThreadId: projectId },
-      projectId, projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
+      native: { harness: "codex" as const, nativeLocation: join(directory, projectId), nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(projectId) },
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
     })));
     const store = new WorkbenchThreadStateStore(database);
     const records = identities.map((identity): WorkbenchThreadStateRecord => ({
@@ -35,19 +46,19 @@ test("consumer objects retain thread facts, title replacement and project isolat
     }
     const first = records[0]!;
     const updated = [{ identity: first.identity, titles: [{ title: "renamed", usedAt: 3 }] }];
-    await store.writeProject("first", { version: 4, records: [{ ...first, title: "renamed" }], drafts: [] }, updated);
-    const before = await store.readProject("first");
-    await assert.rejects(store.writeProject("first", { version: 4, records: [records[1]], drafts: [] }), /project/i);
-    assert.deepEqual(await store.readProject("first"), before);
-    assert.deepEqual(await store.readTitleHistories("first"), updated);
-    assert.deepEqual(await store.readTitleHistories("second"), [{ identity: records[1]!.identity, titles: [{ title: "old", usedAt: 1 }] }]);
+    await store.writeProject(fixtureIdentityValues.ProjectId["first"], { version: 4, records: [{ ...first, title: "renamed" }], drafts: [] }, updated);
+    const before = await store.readProject(fixtureIdentityValues.ProjectId["first"]);
+    await assert.rejects(store.writeProject(fixtureIdentityValues.ProjectId["first"], { version: 4, records: [records[1]], drafts: [] }), /project/i);
+    assert.deepEqual(await store.readProject(fixtureIdentityValues.ProjectId["first"]), before);
+    assert.deepEqual(await store.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
+    assert.deepEqual(await store.readTitleHistories(fixtureIdentityValues.ProjectId["second"]), [{ identity: records[1]!.identity, titles: [{ title: "old", usedAt: 1 }] }]);
     await database.close();
     reopened = new WorkbenchDatabaseController({ databasePath });
     const cold = new WorkbenchThreadStateStore(reopened);
-    assert.deepEqual(await cold.readProject("first"), before);
-    assert.deepEqual(await cold.readTitleHistories("first"), updated);
-    await cold.writeProject("first", before, []);
-    assert.deepEqual(await cold.readTitleHistories("first"), []);
+    assert.deepEqual(await cold.readProject(fixtureIdentityValues.ProjectId["first"]), before);
+    assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
+    await cold.writeProject(fixtureIdentityValues.ProjectId["first"], before, []);
+    assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), []);
   } finally {
     await reopened?.close();
     await database.close();
@@ -61,25 +72,25 @@ test("project-qualified draft replacement preserves a moved draft and removes de
   try {
     const store = new WorkbenchThreadStateStore(database);
     const draft: WorkbenchThreadDraft = {
-      draftId: "00000000-0000-4000-8000-000000000001", projectId: "first",
+      draftId: fixtureIdentityValues.DraftId["00000000-0000-4000-8000-000000000001"], projectId: fixtureIdentityValues.ProjectId["first"],
       attachments: [{ id: "attachment", url: "data:text/plain,kept" }],
       composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
       profileId: null, prompt: "kept", clientUpdatedAt: 2, createdAt: 1, updatedAt: 2,
     };
     const document = (drafts: WorkbenchThreadDraft[]) => ({ version: 4, records: [], drafts: drafts.map(value => ({ ...value, pinned: true, snoozed: false })) });
-    await store.writeProject("first", document([draft]));
-    await store.writeProject("second", document([{ ...draft, projectId: "second" }]));
-    await store.writeProject("first", document([]));
-    assert.equal((await store.readProject("second")).drafts[0]?.prompt, "kept");
-    const key = getProjectQualifiedThreadDisplayKey("second", `draft:${draft.draftId}`);
+    await store.writeProject(fixtureIdentityValues.ProjectId["first"], document([draft]));
+    await store.writeProject(fixtureIdentityValues.ProjectId["second"], document([{ ...draft, projectId: fixtureIdentityValues.ProjectId["second"] }]));
+    await store.writeProject(fixtureIdentityValues.ProjectId["first"], document([]));
+    assert.equal((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts[0]?.prompt, "kept");
+    const key = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["second"], getThreadDisplayDraftKey(draft.draftId));
     await store.writeGlobal("pinnedLayout", {
       version: 1, revision: 2, importedProjectIds: ["second"],
       displayOrder: { pinned: { [key]: { above: [], below: [] } } },
     });
-    await store.writeProject("second", document([]));
+    await store.writeProject(fixtureIdentityValues.ProjectId["second"], document([]));
     const pinned = await store.readGlobal("pinnedLayout") as { displayOrder: { pinned?: object } };
     assert.deepEqual(pinned.displayOrder.pinned ?? {}, {});
-    assert.deepEqual((await store.readProject("second")).drafts, []);
+    assert.deepEqual((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts, []);
   } finally {
     await database.close();
     await rm(directory, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation. Keywords: agent command, CLI, MCP, questionnaire, reload graph.
+ * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -14,6 +14,7 @@ import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from "workbench-shared/workbench/identity";
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
@@ -27,7 +28,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const transcriptIdentity = build.get("transcriptIdentity");
     const nativeTarget = async (threadId: string, cwd: string, harness?: string) => {
       const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench command" });
-      const identity = await harnesses.resolveThreadIdentity({ threadId, projectId: project.project.id, ...(harness ? { harness: WorkbenchHarnessSchema.parse(harness) } : {}) });
+      const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, ...(harness ? { harness: WorkbenchHarnessSchema.parse(harness) } : {}) });
       if (!identity?.bindings[0]) throw new Error("The managed thread has no native execution in this project.");
       return { identity, binding: identity.bindings[0] };
     };
@@ -53,8 +54,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const commandLogger = new WorkbenchAgentCommandLogger();
     const materializeTurn = async (threadId: string, turnId: string | null, signal: AbortSignal) => {
       signal.throwIfAborted();
-      const identity = await harnesses.resolveThreadIdentity({ threadId });
-      const turn = turnId && identity ? await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId }) : null;
+      const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId) });
+      const turn = turnId && identity ? await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(turnId) }) : null;
       const binding = turn?.native ?? identity?.bindings[0];
       if (!binding || (turnId && !turn) || binding.harness !== "codex") throw new Error("Thread Recall has no matching native Codex execution.");
       const response = await harnesses.request("codex", {
@@ -69,7 +70,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       materializeTurn,
       readTranscript: async (request) => await transcript.read(request),
       resolveReference: async (threadId, locator, signal) => {
-        const turn = await threadIdentity.resolveTurn({ threadId, turnId: locator.turnId });
+        const identity = threadIdentity.knownThread(ThreadReferenceSchema.parse(threadId));
+        const turn = await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(locator.turnId) });
         if (!turn) throw new Error("Thread Recall cursor has no matching turn.");
         const snapshot = await transcript.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
         if (!snapshot) {
@@ -77,7 +79,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
           await transcript.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
         }
         signal.throwIfAborted();
-        const item = await transcriptIdentity.resolve({ threadId, turnId: turn.turnId, itemId: locator.itemId });
+        const item = await transcriptIdentity.resolve({ threadId: identity.threadId, turnId: turn.turnId, itemId: ItemReferenceSchema.parse(locator.itemId) });
         if (!item) throw new Error("Thread Recall cursor has no matching item.");
         return { ...locator, turnId: turn.turnId, itemId: item.itemId };
       },
@@ -105,7 +107,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         const prefix = "/api/thread-context/";
         if (!url.pathname.startsWith(prefix)) throw new Error("Invalid Thread Recall command path.");
         signal.throwIfAborted();
-        const identity = await harnesses.resolveThreadIdentity({ threadId: decodeURIComponent(url.pathname.slice(prefix.length)) });
+        const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(decodeURIComponent(url.pathname.slice(prefix.length))) });
         if (!identity) throw new Error("Thread Recall has no matching Workbench thread.");
         signal.throwIfAborted();
         return await threadRecall.execute({

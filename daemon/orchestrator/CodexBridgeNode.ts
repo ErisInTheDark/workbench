@@ -1,8 +1,7 @@
 /*
- * Keywords: Codex bridge, patch controller, reload handoff, transcript readiness.
  * Exports:
  * - recoverCodexSqliteTranscripts: repair marked recovery and active baselines independently of harness availability.
- * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process. Keywords: codex, bridge, questionnaire, handoff.
+ * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
@@ -11,6 +10,7 @@ import type { OrchestratorProcessContext } from "./orchestrator-process-context"
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -139,8 +139,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
       signal: AbortSignal,
     ) => {
-      const threadId = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
-      if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
+      const reference = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
+      if (!reference) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
+      const threadId = NativeThreadIdSchema.parse(reference);
       const state = await threadState.getCodexMcpState(threadId, requestProvider);
       signal.throwIfAborted();
       const [project, networkAccess] = await Promise.all([
@@ -183,7 +184,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
           })),
           settings: profile.selection.settings, subagentName: profile.subagentName,
           threadId: build.get("threadIdentity").workbenchIdForNative(
-            build.get("threadIdentity").knownNativeBinding("codex", thread.id),
+            build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(thread.id)),
           ),
         };
         const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
@@ -196,7 +197,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       questionnaires,
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(
-          build.get("threadIdentity").knownNativeBinding("codex", threadId),
+          build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)),
         ),
       ),
       readSqliteTranscriptMaterializedTurnIds: (threadId, turnIds) => (

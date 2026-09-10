@@ -8,6 +8,9 @@ import { installWorkbenchDatabaseSchema } from "./database/workbench-database-sc
 import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository";
 import WorkbenchSubagentRelationshipRepository from "./database/thread-state/WorkbenchSubagentRelationshipRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
+import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
 import type { WorkbenchSubagentPersistence, WorkbenchThreadStateCommit } from "./database/thread-state/workbench-thread-state-persistence";
@@ -15,6 +18,7 @@ import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record
 import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
 import { normalizeThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
+import { ProjectIdSchema, WorkbenchItemIdSchema } from "workbench-shared/workbench/identity";
 
 export function createThreadStateTestDatabase(sqlite = new Database(":memory:")) {
   sqlite.pragma("foreign_keys = ON");
@@ -26,28 +30,52 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
   const repository = new WorkbenchThreadStateRelationalRepository(sqlite);
   const relationships = new WorkbenchSubagentRelationshipRepository(sqlite);
   const items = new WorkbenchTranscriptIdentityRepository(sqlite);
+  const threadRepository = new WorkbenchThreadIdentityRepository(sqlite);
+  const identities = {
+    threads: new WorkbenchThreadIdentityController({
+      listThreadIdentities: async () => threadRepository.list(),
+      observeThreadIdentities: async inputs => threadRepository.observeMany(inputs),
+      observeTurnIdentities: async inputs => threadRepository.observeTurns(inputs),
+      resolveThreadIdentity: async input => threadRepository.resolve(input),
+      resolveNativeThreadIdentity: async input => threadRepository.resolveNative(input),
+      resolveTurnIdentity: async input => threadRepository.resolveTurn(input),
+    }),
+    items: new WorkbenchTranscriptIdentityController({
+      admitTranscriptItemIdentities: async inputs => items.admitMany(inputs),
+      resolveTranscriptItemIdentity: async input => items.resolve(input),
+    }),
+  };
+  after(() => {
+    identities.threads.dispose();
+    identities.items.dispose();
+  });
   const operations: string[] = [];
 
-  const admitThread = (projectId: string, threadId: string, harness: WorkbenchHarnessId = "codex") => {
+  const admitThread = (projectId: string, threadId: string, harness: WorkbenchHarnessId = "codex", nativeThreadId = `native:${threadId}`, nativeLocation = `C:/${projectId}`) => {
+    if (threadId === nativeThreadId) throw new Error("Fixture native and canonical thread IDs must differ.");
     sqlite.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(harness);
     sqlite.prepare(`
       INSERT OR IGNORE INTO workbench_threads(
         id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at, identity_origin
       ) VALUES (?, ?, ?, ?, 0, 1, 1, 1, 'workbench')
-    `).run(threadId, projectId, `C:/${projectId}`, threadId);
+    `).run(threadId, projectId, nativeLocation, threadId);
     const owner = sqlite.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").get(threadId) as { project_id: string };
     if (owner.project_id !== projectId) return;
     sqlite.prepare(`
       INSERT INTO workbench_pending_import_threads(thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
       VALUES (?, ?, ?, ?, 1, 1) ON CONFLICT(thread_id) DO UPDATE SET harness_id = excluded.harness_id
-    `).run(threadId, harness, `C:/${projectId}`, threadId);
+    `).run(threadId, harness, nativeLocation, nativeThreadId);
   };
   const admitTurn = (record: WorkbenchThreadStateRecord, turnId: string) => {
+    const binding = sqlite.prepare("SELECT native_location, native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ?")
+      .get(record.identity.threadId) as { native_location: string; native_thread_id: string };
     sqlite.prepare(`
       INSERT OR IGNORE INTO thread_turns(
-        id, thread_id, turn_index, harness_id, native_location, native_thread_id, native_turn_id, state, created_at
-      ) VALUES (?, ?, (SELECT COALESCE(MAX(turn_index) + 1, 0) FROM thread_turns WHERE thread_id = ?), ?, '', ?, ?, 'inProgress', 1)
-    `).run(turnId, record.identity.threadId, record.identity.threadId, record.identity.harness, record.identity.threadId, turnId);
+        id, thread_id, turn_index, harness_id, native_location, native_thread_id, native_turn_id, state, created_at, identity_origin
+      ) VALUES (?, ?, (SELECT COALESCE(MAX(turn_index) + 1, 0) FROM thread_turns WHERE thread_id = ?), ?, ?, ?, ?, 'inProgress', 1, 'workbench')
+    `).run(turnId, record.identity.threadId, record.identity.threadId, record.identity.harness, binding.native_location, binding.native_thread_id, `native:${turnId}`);
+    sqlite.prepare("UPDATE workbench_threads SET next_turn_index = (SELECT MAX(turn_index) + 1 FROM thread_turns WHERE thread_id = ?) WHERE id = ?")
+      .run(record.identity.threadId, record.identity.threadId);
   };
   const admitRecord = (record: WorkbenchThreadStateRecord) => {
     const owner = sqlite.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
@@ -62,7 +90,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
       if (!questionnaire) continue;
       if (questionnaire.turnId) admitTurn(record, questionnaire.turnId);
       for (const itemId of [questionnaire.itemId, "insertAfterItemId" in questionnaire ? questionnaire.insertAfterItemId : null]) {
-        if (typeof itemId === "string" && itemId) items.admit({ threadId: record.identity.threadId, itemId, sources: [], legacyAliases: [] });
+        if (typeof itemId === "string" && itemId) items.admit({ threadId: record.identity.threadId, itemId: WorkbenchItemIdSchema.parse(itemId), sources: [], legacyAliases: [] });
       }
     }
   };
@@ -77,10 +105,6 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
     writeThreadStateProject: async (projectId, document, titleHistories) => {
       operations.push("commit");
       sqlite.transaction(() => {
-        for (const record of document.records) {
-          admitThread(projectId, record.identity.threadId, record.identity.harness);
-          admitRecord(record);
-        }
         repository.writeProject(projectId, document, titleHistories);
       })();
     },
@@ -91,36 +115,37 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
     commitThreadState: async changes => {
       operations.push("commit");
       sqlite.transaction(() => {
-        for (const record of changes.records ?? []) admitRecord(record);
         repository.commit(changes);
       })();
     },
     readSubagents: async query => relationships.read(query),
     readOwnedSubagents: async (parent, project, ids) => relationships.getOwnedMany(parent, project, ids),
     reserveSubagent: async record => {
-      admitThread(record.projectId, record.parentThreadId);
       return relationships.reserve(record);
     },
     activateSubagent: async (parent, reservation, record) => {
-      admitThread(record.projectId, record.threadId, record.harness);
       relationships.activate(parent, reservation, record);
     },
     removeSubagent: async (parent, identifier) => { relationships.remove(parent, identifier); },
   };
   const persistence = new WorkbenchThreadStateStore(database);
   return {
-    ...database, operations, sqlite, repository, persistence, admitThread,
+    ...database, operations, sqlite, repository, persistence, identities, admitThread, admitRecord,
     async readThreadStateRecords(query: import("./database/thread-state/workbench-thread-state-persistence").WorkbenchThreadRecordQuery) {
       return repository.readRecords(query);
     },
     async seedProject(projectId: string, source: object) {
-      const project = parseProjectDocument(JSON.stringify(source), projectId);
-      for (const record of project.records) admitThread(projectId, record.identity.threadId, record.identity.harness);
+      const ownerProjectId = ProjectIdSchema.parse(projectId);
+      const project = parseProjectDocument(JSON.stringify(source), ownerProjectId);
+      for (const record of project.records) {
+        admitThread(ownerProjectId, record.identity.threadId, record.identity.harness);
+        admitRecord(record);
+      }
       await database.commitThreadState({
         records: project.records,
         drafts: project.drafts.map(({ pinned, snoozed, ...draft }) => ({ draft, pinned, snoozed })),
-        projectProfiles: [{ projectId, profile: project.newThreadProfile }],
-        layouts: [{ owner: { kind: "project", projectId }, revision: 0, displayOrder: project.displayOrder }],
+        projectProfiles: [{ projectId: ownerProjectId, profile: project.newThreadProfile }],
+        layouts: [{ owner: { kind: "project", projectId: ownerProjectId }, revision: 0, displayOrder: project.displayOrder }],
       });
     },
     async seedGlobal(id: "pinnedLayout" | "homeDisplayOrder", source: { displayOrder?: object; revision?: number; importedProjectIds?: string[] }) {
@@ -129,7 +154,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
           owner: { kind: id === "pinnedLayout" ? "pinned" : "home" }, revision: source.revision ?? 0,
           displayOrder: normalizeThreadDisplayLayout(source.displayOrder),
         }],
-        ...(source.importedProjectIds ? { pinnedImports: source.importedProjectIds } : {}),
+        ...(source.importedProjectIds ? { pinnedImports: source.importedProjectIds.map(id => ProjectIdSchema.parse(id)) } : {}),
       });
     },
   };

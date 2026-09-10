@@ -16,25 +16,26 @@ import type { WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRep
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchSubagentReservation } from "../../workbench-subagent-record";
 import type { ProjectDocument } from "./workbench-thread-state-document-source";
+import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export type WorkbenchThreadStateProjectDocument = ProjectDocument & { version: 4 };
 export type WorkbenchThreadStateGlobalDocument =
   | { id: "homeDisplayOrder"; version: 1; revision: number; displayOrder: ThreadDisplayLayout }
-  | { id: "pinnedLayout"; version: 1; revision: number; displayOrder: ThreadDisplayLayout; importedProjectIds: string[] };
+  | { id: "pinnedLayout"; version: 1; revision: number; displayOrder: ThreadDisplayLayout; importedProjectIds: ProjectId[] };
 
 export interface WorkbenchSubagentRelationshipRead {
-  projectId: string;
-  parentThreadId?: string;
-  after?: { createdAt: number; threadId: string };
+  projectId: ProjectId;
+  parentThreadId?: WorkbenchThreadId;
+  after?: { createdAt: number; threadId: WorkbenchThreadId };
   limit?: number;
 }
 
 export interface WorkbenchSubagentPersistence {
   readSubagents(query: WorkbenchSubagentRelationshipRead): Promise<WorkbenchSubagentRelationship[]>;
-  readOwnedSubagents(parentThreadId: string, projectId: string, threadIds: readonly string[]): Promise<WorkbenchSubagentRelationship[] | null>;
+  readOwnedSubagents(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadIds: readonly WorkbenchThreadId[]): Promise<WorkbenchSubagentRelationship[] | null>;
   reserveSubagent(record: Omit<WorkbenchSubagentReservation, "directSubagentIndex">): Promise<WorkbenchSubagentReservation>;
-  activateSubagent(parentThreadId: string, reservationId: string, record: WorkbenchSubagentRelationship): Promise<void>;
-  removeSubagent(parentThreadId: string, identifier: string): Promise<void>;
+  activateSubagent(parentThreadId: WorkbenchThreadId, reservationId: string, record: WorkbenchSubagentRelationship): Promise<void>;
+  removeSubagent(parentThreadId: WorkbenchThreadId, identifier: string): Promise<void>;
 }
 
 export interface WorkbenchStoredThreadDraft {
@@ -45,31 +46,31 @@ export interface WorkbenchStoredThreadDraft {
 
 export interface WorkbenchThreadStateCommit {
   records?: readonly WorkbenchThreadStateRecord[];
-  deletedThreadIds?: readonly string[];
+  deletedThreadIds?: readonly WorkbenchThreadId[];
   drafts?: readonly WorkbenchStoredThreadDraft[];
-  deletedDraftIds?: readonly string[];
-  projectProfiles?: readonly { projectId: string; profile: WorkbenchComposerProfileSelectionState | null }[];
+  deletedDraftIds?: readonly DraftId[];
+  projectProfiles?: readonly { projectId: ProjectId; profile: WorkbenchComposerProfileSelectionState | null }[];
   layouts?: readonly { owner: WorkbenchThreadLayoutOwner; revision: number; displayOrder: ThreadDisplayLayout }[];
-  pinnedImports?: readonly string[];
+  pinnedImports?: readonly ProjectId[];
 }
 
 export type WorkbenchThreadRecordQuery =
-  | { selection: "live"; projectId: string }
-  | { selection: "threads"; threadIds: readonly string[]; projectId?: string }
-  | { selection: "children"; parentThreadId: string }
-  | { selection: "parentStatus"; parentThreadIds: readonly string[] }
-  | { selection: "gitRetention"; projectId: string; settledBefore: number }
-  | { selection: "project"; projectId: string };
+  | { selection: "live"; projectId: ProjectId }
+  | { selection: "threads"; threadIds: readonly WorkbenchThreadId[]; projectId?: ProjectId }
+  | { selection: "children"; parentThreadId: WorkbenchThreadId }
+  | { selection: "parentStatus"; parentThreadIds: readonly WorkbenchThreadId[] }
+  | { selection: "gitRetention"; projectId: ProjectId; settledBefore: number }
+  | { selection: "project"; projectId: ProjectId };
 
 export interface WorkbenchThreadStatePersistence {
   readRecords(query: WorkbenchThreadRecordQuery): Promise<WorkbenchThreadStateRecord[]>;
-  readProjectActivity(projectId: string): Promise<number | null>;
-  readSnoozeSources(targetThreadId: string): Promise<Array<{ projectId: string; threadId: string }>>;
-  readDrafts(projectId: string): Promise<WorkbenchStoredThreadDraft[]>;
-  readProjectProfile(projectId: string): Promise<WorkbenchComposerProfileSelectionState | null>;
+  readProjectActivity(projectId: ProjectId): Promise<number | null>;
+  readSnoozeSources(targetThreadId: WorkbenchThreadId): Promise<Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }>>;
+  readDrafts(projectId: ProjectId): Promise<WorkbenchStoredThreadDraft[]>;
+  readProjectProfile(projectId: ProjectId): Promise<WorkbenchComposerProfileSelectionState | null>;
   readLayout(owner: WorkbenchThreadLayoutOwner): Promise<{ revision: number; displayOrder: ThreadDisplayLayout } | null>;
-  readPinnedImports(): Promise<string[]>;
+  readPinnedImports(): Promise<ProjectId[]>;
   readNextArchiveEligibility(): Promise<number | null>;
-  readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: string; record: WorkbenchThreadStateRecord }>>;
+  readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   commit(changes: WorkbenchThreadStateCommit): Promise<void>;
 }

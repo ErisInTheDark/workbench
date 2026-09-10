@@ -1,7 +1,6 @@
 /*
- * Keywords: Codex, identity, recording, recovery, admission, lifecycle tests.
  * Exports:
- * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, usage hydration, reload recovery, approvals, turn-start preflight, context reads, and MCP config. Keywords: codex, bridge, questionnaire, reload, transcript, stats, recovery, approval, MCP, test.
+ * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, usage hydration, reload recovery, approvals, turn-start preflight, context reads, and MCP config.
  */
 
 import assert from "node:assert/strict";
@@ -38,6 +37,22 @@ import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentity
 import { mapProviderNotification } from "./thread-identity-provider-mapping";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
+import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import type CodexTranscriptRecordingController from "./CodexTranscriptRecordingController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+  NativeTurnId: {
+    "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
@@ -153,7 +168,7 @@ test("bridge admits public identity before structural publication and records th
   const facts: WorkbenchTranscriptObservation[] = [];
   const body = deferred<void>();
   const bodyEntered = deferred<void>();
-  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread") };
   let readPage = false;
   const pageTurn = { ...bridgeThread().turns[0]!, id: "historical-page-turn" };
   const bridge = new CodexStdioBridge({
@@ -178,7 +193,7 @@ test("bridge admits public identity before structural publication and records th
       }
     },
     resolveProjectFromCwd: async () => ({
-      cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {}, storageRoot: root,
@@ -236,10 +251,10 @@ test("bridge admits public identity before structural publication and records th
     assert.equal(patchStart.params.item.id, preview.params.itemId);
     readPage = true;
     await bridge.handleServerRequest({ id: 1, method: "thread/turns/list", params: { threadId: "thread", itemsView: "full" } });
-    const pageIdentity = threads.findNativeTurn({ ...native, nativeTurnId: pageTurn.id });
+    const pageIdentity = threads.findNativeTurn({ ...native, nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(pageTurn.id) });
     assert.ok(pageIdentity);
     for (const pageItem of pageTurn.items) {
-      assert.ok(items.itemIdForReference(pageIdentity.threadId, pageIdentity.turnId, pageItem.id));
+      assert.ok(items.itemIdForReference(pageIdentity.threadId, pageIdentity.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(pageItem.id)));
     }
     const bytes = Buffer.from("canonical browse asset");
     const digest = createHash("sha256").update(bytes).digest("hex");
@@ -287,7 +302,7 @@ test("database replacement preserves ordered live events and usage without repla
     }),
   });
   let identities = createOwners();
-  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread") };
   const published: ServerNotification[] = [];
   const message: ThreadItem = { type: "agentMessage", id: "cold-message", text: "first", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
   const reasoning: ThreadItem = { type: "reasoning", id: "cold-reasoning", summary: ["title"], content: [] };
@@ -298,7 +313,7 @@ test("database replacement preserves ordered live events and usage without repla
     onNotification(event) { published.push(mapProviderNotification(identities, native, event as ServerNotification)); },
     recordSqliteTranscript: async (batch) => { transcripts.settle(batch); },
     resolveProjectFromCwd: async () => ({
-      cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {}, storageRoot: root,
@@ -311,9 +326,9 @@ test("database replacement preserves ordered live events and usage without repla
       await bridge.handleUpstreamMessage({ method: "item/started", params: { threadId: "thread", turnId: "turn", item } });
     }
     const threadId = identities.threads.workbenchIdForNative(native);
-    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" });
-    const messageId = identities.items.itemIdForReference(threadId, turnId, message.id);
-    const reasoningId = identities.items.itemIdForReference(threadId, turnId, reasoning.id);
+    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"] });
+    const messageId = identities.items.itemIdForReference(threadId, turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(message.id));
+    const reasoningId = identities.items.itemIdForReference(threadId, turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(reasoning.id));
     const tokens = { inputTokens: 100, outputTokens: 40, cachedInputTokens: 20, cacheWriteInputTokens: 5, reasoningOutputTokens: 10, totalTokens: 140 };
     const events: ServerNotification[] = [
       { method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn", itemId: message.id, delta: "continued" } },
@@ -334,9 +349,9 @@ test("database replacement preserves ordered live events and usage without repla
       assert.equal(published.length, before + 2, "Every event must reach publication without replayed start events");
       const expected = mapProviderNotification(identities, native, event);
       assert.deepEqual(published.slice(before), [expected, expected]);
-      assert.equal(identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" }), turnId);
+      assert.equal(identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"] }), turnId);
       if ("itemId" in event.params) {
-        assert.equal(identities.items.itemIdForReference(threadId, turnId, event.params.itemId),
+        assert.equal(identities.items.itemIdForReference(threadId, turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(event.params.itemId)),
           event.params.itemId === message.id ? messageId : reasoningId);
       }
     }
@@ -423,7 +438,7 @@ test("stats usage hydration reads Workbench journals without requesting provider
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -445,9 +460,9 @@ test("stats usage hydration reads Workbench journals without requesting provider
       ? window.observations.find(({ kind }) => kind === "turnTokenUsage") : undefined;
     assert.equal(usage?.kind, "turnTokenUsage");
     if (usage?.kind !== "turnTokenUsage") throw new Error("Expected a hydrated token-usage observation.");
-    const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+    const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread") };
     const threadId = identities.threads.workbenchIdForNative(native);
-    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" });
+    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"] });
     assert.notEqual(threadId, "thread");
     assert.notEqual(turnId, "turn");
     assert.equal(typeof usage.observedAt, "number");
@@ -510,7 +525,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       onNotification(notification) { notifications.push(notification); },
       resolveProjectFromCwd: async () => ({
         cwd: root,
-        project: { id: "project", kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+        project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
         root: { id: "root", name: "repo", root, rootPath: root },
       }),
       sendToClient() {}, storageRoot: root,
@@ -588,12 +603,14 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
 
 for (const origin of ["active", "idle", "changed", "failed"] as const) {
   test(`passive screenshot context handles ${origin} origin without user input or a new turn`, async () => {
+  const fixtureIdentities = await recordingIdentities();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-passive-context-"));
     const requests: JsonRpcRequest[] = [];
     const facts: WorkbenchTranscriptObservation[] = [];
     const visible: unknown[] = [];
     const metadata = { ...bridgeThread(), turns: [], status: origin === "idle" ? { type: "idle" as const } : bridgeThread().status };
     const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
       appServer: { send(message: JsonRpcRequest) {
         requests.push(message);
         if (message.method === "thread/read" || message.method === "thread/turns/list") {
@@ -607,7 +624,7 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
       onNotification(message) { visible.push(message); },
       recordSqliteTranscript: async (batch) => { facts.push(...batch); },
       resolveProjectFromCwd: async () => ({
-        cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       }),
       sendToClient() {}, storageRoot: root,
@@ -708,7 +725,7 @@ test("ordinary failed patches receive current-file findings without automatic re
     bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {}, sendToClient() {}, storageRoot: root,
     resolveProjectFromCwd: async () => ({
-      cwd: root, project: { id: "project", kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+      cwd: root, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
       root: { id: "root", name: "repo", root, rootPath: root },
     }),
   });
@@ -948,9 +965,10 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
 });
 
 test("background thread pages repair inactive provider turns directly into both transcript recorders", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-recovery-"));
-  const contextResolutionStarted = deferred<void>();
-  const releaseContextResolution = deferred<void>();
+  const recordingStarted = deferred<void>();
+  const releaseRecording = deferred<void>();
   const laterProviderFactRecorded = deferred<void>();
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
@@ -1000,22 +1018,23 @@ test("background thread pages repair inactive provider turns directly into both 
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
+      recordingStarted.resolve();
+      await releaseRecording.promise;
       sqliteBatches.push([...observations]);
       if (observations.length === 1 && observations[0]?.kind === "item") {
         laterProviderFactRecorded.resolve();
       }
     },
     resolveProjectFromCwd: async () => {
-      contextResolutionStarted.resolve();
-      await releaseContextResolution.promise;
       return {
         cwd: "C:/repo",
-        project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       };
     },
@@ -1037,7 +1056,7 @@ test("background thread pages repair inactive provider turns directly into both 
         threadId: "thread",
       },
     });
-    await contextResolutionStarted.promise;
+    await recordingStarted.promise;
     const response = await responsePromise;
     await bridge.handleUpstreamMessage({
       id: "later-provider-fact",
@@ -1051,7 +1070,7 @@ test("background thread pages repair inactive provider turns directly into both 
         turnId: "turn",
       },
     });
-    releaseContextResolution.resolve();
+    releaseRecording.resolve();
     await laterProviderFactRecorded.promise;
 
     const recovered = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]!;
@@ -1082,6 +1101,7 @@ test("background thread pages repair inactive provider turns directly into both 
 });
 
 test("provider catalog identities and the materialized page record as one dual-recorder fact", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-window-"));
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const pageItem: ThreadItem = {
@@ -1105,6 +1125,7 @@ test("provider catalog identities and the materialized page record as one dual-r
   };
   const metadata = { ...bridgeThread(), turns: [] } as Thread;
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -1114,7 +1135,7 @@ test("provider catalog identities and the materialized page record as one dual-r
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1155,7 +1176,10 @@ test("provider catalog identities and the materialized page record as one dual-r
     );
     assert.deepEqual(
       providerScope?.kind === "providerTurnScope" ? providerScope.completeTurnIds : [],
-      ["turn"],
+      [fixtureIdentities.threads.workbenchTurnIdForNative({
+        harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId.turn,
+      })],
     );
     const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]) as (
       Thread & { workbenchTurnHistory: Array<{ turnId: string }> }
@@ -1169,6 +1193,7 @@ test("provider catalog identities and the materialized page record as one dual-r
 });
 
 test("non-empty terminal provider turns record as complete replacement scopes", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-turn-scope-"));
   const batches: WorkbenchTranscriptObservation[][] = [];
   const item: ThreadItem = {
@@ -1181,6 +1206,7 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     type: "agentMessage",
   };
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -1190,7 +1216,7 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1219,7 +1245,10 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     assert.equal(scope?.kind, "providerTurnScope");
     assert.deepEqual(
       scope?.kind === "providerTurnScope" ? scope.completeTurnIds : [],
-      ["turn"],
+      [fixtureIdentities.threads.workbenchTurnIdForNative({
+        harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId.turn,
+      })],
     );
     assert.deepEqual(
       scope?.kind === "providerTurnScope"
@@ -1234,6 +1263,7 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
 });
 
 test("usage context follows resolved defaults, reloads, overrides and queued model changes without provider reads", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-model-"));
   const observations: WorkbenchTranscriptObservation[] = [];
   const requests: string[] = [];
@@ -1243,6 +1273,7 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
     restartingAppServer = false,
   ) => new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: {
       send(message: JsonRpcRequest) {
         requests.push(message.method!);
@@ -1260,7 +1291,7 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
     recordSqliteTranscript: async (batch) => { observations.push(...batch); },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
   });
@@ -1295,7 +1326,8 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
     } });
     await bridge.waitForIdle();
     assert.ok(observations.some((observation) => observation.kind === "turnUsageContext"
-      && observation.turnId === "model-turn-3" && observation.model === "changed" && observation.modelChanged));
+      && fixtureIdentities.threads.knownTurn(observation.turnId).native.nativeTurnId === "model-turn-3"
+      && observation.model === "changed" && observation.modelChanged));
     bridge = createBridge(await bridge.detachForReload({ restartingAppServer: true }), true);
     assert.equal((await startTurn()).model, null);
     const provider = bridge as unknown as {
@@ -1314,6 +1346,7 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
 });
 
 test("live provider observations and active baselines stay ordered across a bridge reload", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-sqlite-transcript-"));
   const batches: object[][] = [];
   let activeRecords = 0;
@@ -1321,6 +1354,7 @@ test("live provider observations and active baselines stay ordered across a brid
   const createBridge = (
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: {
       send(message: JsonRpcRequest) {
         if (message.method !== "thread/read" && message.method !== "thread/turns/list") return;
@@ -1347,7 +1381,7 @@ test("live provider observations and active baselines stay ordered across a brid
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1369,7 +1403,9 @@ test("live provider observations and active baselines stay ordered across a brid
       method: "turn/started",
       params: { threadId: "thread", turn: bridgeThread([]).turns[0] },
     });
-    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, ["thread"]);
+    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, [fixtureIdentities.threads.workbenchIdForNative({
+      harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+    })]);
     await bridge.handleUpstreamMessage({
       method: "item/completed",
       params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
@@ -1386,7 +1422,9 @@ test("live provider observations and active baselines stay ordered across a brid
 
     const state = await bridge.detachForReload();
     bridge = createBridge(state);
-    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, ["thread"]);
+    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, [fixtureIdentities.threads.workbenchIdForNative({
+      harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+    })]);
     const batchesBeforeBaseline = batches.length;
     await bridge.baselineSqliteTranscriptThread("thread");
     assert.ok(batches.length > batchesBeforeBaseline);
@@ -1434,10 +1472,12 @@ test("live provider observations and active baselines stay ordered across a brid
 });
 
 test("JSON records first and blocked SQLite recording holds bridge detach", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-blocked-shadow-"));
   const sqliteStarted = deferred<void>();
   const releaseSqlite = deferred<void>();
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -1448,7 +1488,7 @@ test("JSON records first and blocked SQLite recording holds bridge detach", asyn
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1481,10 +1521,12 @@ test("JSON records first and blocked SQLite recording holds bridge detach", asyn
 });
 
 test("provider-live transcript bursts bypass durable recording until item settlement", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-only-transcript-"));
   const notifications: string[] = [];
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -1496,7 +1538,7 @@ test("provider-live transcript bursts bypass durable recording until item settle
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1580,6 +1622,7 @@ test("provider-live transcript bursts bypass durable recording until item settle
 });
 
 test("only explicit SQLite recovery reads close the exact provider gap after settlement", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-recovery-"));
   const contexts: Array<{ recoveryBoundary?: boolean; source: string }> = [];
   const upstreamMessages: JsonRpcRequest[] = [];
@@ -1600,6 +1643,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -1611,7 +1655,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1843,7 +1887,7 @@ for (const interruption of ["none", "recorder failure", "cancellation"] as const
       bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
       identities, onNotification() {}, sendToClient() {}, storageRoot: root,
       resolveProjectFromCwd: async () => ({
-        cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       }),
       recordSqliteTranscript: async (observations, context) => {
@@ -1863,8 +1907,8 @@ for (const interruption of ["none", "recorder failure", "cancellation"] as const
       await transcript.start();
       await identities.threads.start();
       const identity = await identities.threads.observe({
-        native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" },
-        projectId: "project", projectRoot: "C:/repo", title: "recovery",
+        native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"] },
+        projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "recovery",
         createdAt: 1, updatedAt: 2, activityAt: 2,
       });
       await gaps.captureFailure({
@@ -1904,6 +1948,72 @@ for (const interruption of ["none", "recorder failure", "cancellation"] as const
     }
   });
 }
+
+async function recordingIdentities(options: { database?: InstanceType<typeof Database>; existingTurn?: boolean } = {}) {
+  const database = options.database ?? new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchThreadIdentityRepository(database);
+  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  const thread = repository.observe({
+    native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread },
+    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo",
+    title: "", createdAt: 1, updatedAt: 1, activityAt: 1,
+  });
+  const threads = new WorkbenchThreadIdentityController({
+    listThreadIdentities: async () => repository.list(),
+    observeThreadIdentities: async inputs => repository.observeMany(inputs),
+    observeTurnIdentities: async inputs => repository.observeTurns(inputs),
+    resolveThreadIdentity: async input => repository.resolve(input),
+    resolveNativeThreadIdentity: async input => repository.resolveNative(input),
+    resolveTurnIdentity: async input => repository.resolveTurn(input),
+  });
+  const items = new WorkbenchTranscriptIdentityController({
+    admitTranscriptItemIdentities: async inputs => itemRepository.admitMany(inputs),
+    resolveTranscriptItemIdentity: async input => itemRepository.resolve(input),
+  });
+  after(() => {
+    threads.dispose();
+    items.dispose();
+    if (database.open) database.close();
+  });
+  await threads.start();
+  if (options.existingTurn) await threads.observeTurn({
+    kind: "turn",
+    threadId: thread.threadId, turnId: fixtureIdentityValues.NativeTurnId.turn,
+    harnessId: "codex", nativeLocation: "C:/repo",
+    nativeThreadId: fixtureIdentityValues.NativeThreadId.thread, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn,
+    state: "inProgress", createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
+  });
+  return { threads, items };
+}
+
+test("SQLite recording cannot bypass canonical admission when the identity owner is absent", async () => {
+  let writes = 0;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() { throw new Error("Unexpected provider request"); } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    storageRoot: os.tmpdir(),
+    recordSqliteTranscript: async () => { writes++; },
+    sendToClient() {},
+  });
+  try {
+    const recording = (bridge as unknown as { transcriptRecording: CodexTranscriptRecordingController }).transcriptRecording;
+    await assert.rejects(recording.recordWorkbenchMutation({
+      recordLegacy: async () => {},
+      observations: [{
+        kind: "thread", threadId: NativeThreadIdSchema.parse("native-thread"), projectId: ProjectIdSchema.parse("project"),
+        projectRoot: "C:/repo", title: "Thread", createdAt: 1, updatedAt: 1, activityAt: 1,
+      }],
+    }), /identity.*unavailable/i);
+    assert.equal(writes, 0);
+  } finally {
+    await bridge.disposeImmediately();
+  }
+});
 
 test("ordinary page reads restore context without activity and isolate context read failures", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-context-page-"));
@@ -1955,6 +2065,7 @@ test("ordinary page reads restore context without activity and isolate context r
 });
 
 test("Workbench questionnaires share native listing, response, and transcript history routes", async () => {
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-owned-questionnaire-"));
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const upstreamMessages: unknown[] = [];
@@ -1976,11 +2087,12 @@ test("Workbench questionnaires share native listing, response, and transcript hi
     itemId: null,
     request,
     requestKey: "workbench-mcp:question",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.NativeThreadId.thread,
+    turnId: fixtureIdentityValues.NativeTurnId.turn,
   };
   let receivedResponse: unknown = null;
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2027,19 +2139,26 @@ test("Workbench questionnaires share native listing, response, and transcript hi
     assert.deepEqual(settled?.result, { ok: true });
     assert.equal(upstreamMessages.length, 0);
     assert.equal(sqliteBatches.length, 1);
+    const native = fixtureIdentities.threads.knownNativeBinding("codex", pending.threadId);
+    const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
+    const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: pending.turnId });
+    const itemId = fixtureIdentities.items.itemIdForSource(threadId, {
+      turnId, kind: "stable", sourceId: resolveQuestionnaireHistoryItemId(pending),
+    });
     assert.deepEqual(sqliteBatches[0]?.[0], {
       entry: {
         insertAfterItemId: null,
         insertAfterItemIndex: null,
-        itemId: null,
+        itemId,
         request,
         requestKey: pending.requestKey,
         resolvedAt: (sqliteBatches[0]?.[0] as { observedAt?: number } | undefined)?.observedAt,
         response,
-        threadId: pending.threadId,
-        turnId: pending.turnId,
+        threadId,
+        turnId,
       },
       kind: "questionnaire",
+      publicItemId: itemId,
       observedAt: (sqliteBatches[0]?.[0] as { observedAt?: number } | undefined)?.observedAt,
     });
   } finally {
@@ -2049,12 +2168,14 @@ test("Workbench questionnaires share native listing, response, and transcript hi
 });
 
 test("SQLite transcript failure does not block steer or questionnaire side effects", async () => {
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-failed-"));
   const upstreamMessages: unknown[] = [];
   const client: BridgeClient = {
     OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
   };
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2116,10 +2237,15 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
 });
 
 test("detached questionnaire history records directly without answering a provider request", async () => {
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
+  const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
+  const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
+  const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-detached-questionnaire-"));
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const upstreamMessages: unknown[] = [];
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2163,10 +2289,14 @@ test("detached questionnaire history records directly without answering a provid
       params: entry,
     });
     assert.deepEqual(response?.result, { ok: true });
+    const itemId = fixtureIdentities.items.itemIdForSource(threadId, {
+      turnId, kind: "stable", sourceId: resolveQuestionnaireHistoryItemId(entry),
+    });
     assert.deepEqual(sqliteBatches, [[{
-      entry,
+      entry: { ...entry, threadId, turnId, itemId, insertAfterItemId: null, insertAfterItemIndex: null },
       kind: "questionnaire",
       observedAt: entry.resolvedAt,
+      publicItemId: itemId,
     }]]);
     assert.deepEqual(upstreamMessages, []);
 
@@ -2194,9 +2324,11 @@ test("detached questionnaire history records directly without answering a provid
 });
 
 test("repeated provider misses report one SQLite capture failure with a bounded sanitised root cause", async () => {
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-report-"));
   const records: Array<{ event?: string; fields?: Record<string, unknown> }> = [];
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2246,6 +2378,13 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
 });
 
 test("Browse settlement verifies Workbench transcript assets before forwarding their SQLite observation", async () => {
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
+  const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
+  const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
+  const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
+  const [command] = await fixtureIdentities.items.admit([{
+    threadId, sources: [{ turnId, kind: "stable", sourceId: "command" }], legacyAliases: [],
+  }]);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
   const observations: object[] = [];
   const notifications: object[] = [];
@@ -2266,6 +2405,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   await fs.writeFile(path.join(assetDirectory, `${digest}.png`), bytes);
 
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2275,7 +2415,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -2306,7 +2446,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     await bridge.recordBrowseResultForBrowse(entry);
     assert.deepEqual(observations, [{
       kind: "browse",
-      entry,
+      entry: { ...entry, threadId, turnId, commandItemId: command!.itemId },
       asset: {
         byteLength: bytes.byteLength,
         digest,
@@ -2333,9 +2473,11 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
 });
 
 test("SQLite transcript failure does not block Browse settlement", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-sqlite-failure-"));
   const notifications: object[] = [];
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2377,6 +2519,7 @@ test("live transcript recording survives throwing compatibility readers across r
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
+  const fixtureIdentities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const sqliteFailures: Error[] = [];
@@ -2394,6 +2537,7 @@ test("live transcript recording survives throwing compatibility readers across r
   const createBridge = (
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2413,7 +2557,7 @@ test("live transcript recording survives throwing compatibility readers across r
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -3209,7 +3353,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       events.push("prepare:profile");
       const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
       const configuration = {
-        cwd: root, projectId: "project", roots: [], subagentName: null, threadId: thread.id,
+        cwd: root, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), roots: [], subagentName: null, threadId: thread.id,
         settings: {
           harness: "codex" as const, agentPath: "library:agents/lily.md", agentSource: "library" as const,
           model: "saved-model", reasoningEffort: null, serviceTier: null,
@@ -3807,6 +3951,7 @@ test("context reads bypass the operation queue and negotiate scoped entries with
 });
 
 test("exact transcript windows await ordered import and Thread Recall reuses their materialisation owner", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
   const compatibilityImportStarted = deferred<void>();
   const releaseCompatibilityImport = deferred<void>();
@@ -3845,6 +3990,7 @@ test("exact transcript windows await ordered import and Thread Recall reuses the
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -3860,12 +4006,15 @@ test("exact transcript windows await ordered import and Thread Recall reuses the
       if (compatibilityWindow?.kind === "canonicalWindow") {
         compatibilityImportStarted.resolve();
         await releaseCompatibilityImport.promise;
-        for (const turnId of compatibilityWindow.materializedTurnIds) materializedTurnIds.add(turnId);
+        for (const turnId of compatibilityWindow.materializedTurnIds) {
+          const nativeTurnId = fixtureIdentities.threads.knownTurn(turnId).native.nativeTurnId;
+          if (nativeTurnId) materializedTurnIds.add(nativeTurnId);
+        }
       }
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -3961,7 +4110,8 @@ test("exact transcript windows await ordered import and Thread Recall reuses the
       (observation as { kind?: string }).kind === "canonicalWindow"
     )) as Array<{ materializedTurnIds?: string[] }>;
     assert.deepEqual(
-      compatibilityWindows.map(({ materializedTurnIds }) => materializedTurnIds),
+      compatibilityWindows.map(({ materializedTurnIds }) => materializedTurnIds?.map(turnId =>
+        fixtureIdentities.threads.knownTurn(fixtureIdentitySchemas.TurnReferenceSchema.parse(turnId)).native.nativeTurnId)),
       [["turn"], ["earlier"]],
     );
     assert.equal(upstreamRequests.length, upstreamRequestCountBeforeRecall);
@@ -4023,12 +4173,14 @@ test("exact transcript windows await ordered import and Thread Recall reuses the
 });
 
 test("durable transcript and recall materialisation propagate SQLite failure and can retry after recovery", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-materialisation-failure-"));
   const failure = new Error("Recorded compatibility failure");
   const materialized = new Set<string>();
   let failing = true;
   let imports = 0;
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() { throw new Error("Materialisation must not call the provider"); } } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -4040,12 +4192,15 @@ test("durable transcript and recall materialisation propagate SQLite failure and
       for (const observation of observations) {
         if (observation.kind !== "canonicalWindow") continue;
         imports++;
-        for (const id of observation.materializedTurnIds) materialized.add(id);
+        for (const id of observation.materializedTurnIds) {
+          const nativeTurnId = fixtureIdentities.threads.knownTurn(id).native.nativeTurnId;
+          if (nativeTurnId) materialized.add(nativeTurnId);
+        }
       }
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4080,6 +4235,7 @@ test("durable transcript and recall materialisation propagate SQLite failure and
 });
 
 test("transcript materialisation waits for an admitted live turn before consulting compatibility storage", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-materialisation-"));
   const liveTurnRecordingStarted = deferred<void>();
   const releaseLiveTurnRecording = deferred<void>();
@@ -4088,6 +4244,7 @@ test("transcript materialisation waits for an admitted live turn before consulti
   let materializationReads = 0;
   let materialisationSettled = false;
   const bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -4099,7 +4256,7 @@ test("transcript materialisation waits for an admitted live turn before consulti
     },
     recordSqliteTranscript: async (observations) => {
       if (!observations.some((observation) => (
-        observation.kind === "turn" && observation.turnId === "turn"
+        observation.kind === "turn" && observation.nativeTurnId === "turn"
       ))) return;
       liveTurnRecordingStarted.resolve();
       await releaseLiveTurnRecording.promise;
@@ -4107,7 +4264,7 @@ test("transcript materialisation waits for an admitted live turn before consulti
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4162,6 +4319,7 @@ test("transcript materialisation waits for an admitted live turn before consulti
 });
 
 test("turn start responses admit the live turn before materialisation can consult compatibility storage", async () => {
+  const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-turn-start-materialisation-"));
   const directTurnRecordingStarted = deferred<void>();
   const releaseDirectTurnRecording = deferred<void>();
@@ -4187,6 +4345,7 @@ test("turn start responses admit the live turn before materialisation can consul
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
+    identities: fixtureIdentities,
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -4199,7 +4358,7 @@ test("turn start responses admit the live turn before materialisation can consul
     recordSqliteTranscript: async (observations) => {
       recordedObservations.push(...observations);
       if (!observations.some((observation) => (
-        observation.kind === "turn" && observation.turnId === "turn"
+        observation.kind === "turn" && observation.nativeTurnId === "turn"
       ))) return;
       directTurnRecordingStarted.resolve();
       await releaseDirectTurnRecording.promise;
@@ -4207,7 +4366,7 @@ test("turn start responses admit the live turn before materialisation can consul
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4270,8 +4429,10 @@ test("turn start responses admit the live turn before materialisation can consul
     if (contextObservation?.kind === "turnUsageContext") {
       assert.equal(contextObservation.model, null);
       assert.equal(contextObservation.serviceTier, null);
-      assert.equal(contextObservation.threadId, "thread");
-      assert.equal(contextObservation.turnId, "turn");
+      assert.equal(contextObservation.threadId, fixtureIdentities.threads.workbenchIdForNative({
+        harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+      }));
+      assert.equal(fixtureIdentities.threads.knownTurn(contextObservation.turnId).native.nativeTurnId, "turn");
       assert.equal(typeof contextObservation.observedAt, "number");
     }
     await bridge.handleUpstreamMessage({
@@ -4312,8 +4473,13 @@ test("turn start responses admit the live turn before materialisation can consul
       },
       kind: "turnTokenUsage",
       observedAt: 0,
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentities.threads.workbenchIdForNative({
+        harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+      }),
+      turnId: fixtureIdentities.threads.workbenchTurnIdForNative({
+        harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+        nativeTurnId: fixtureIdentityValues.NativeTurnId.turn,
+      }),
       usageDataVersion: 2,
     });
   } finally {

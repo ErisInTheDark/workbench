@@ -35,6 +35,7 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import { ThreadReferenceSchema, type ProjectId, type ThreadReference, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -47,7 +48,7 @@ interface SubagentRequestBase {
 }
 
 interface ResolvedSubagentCaller {
-  callerThreadId: string;
+  callerThreadId: WorkbenchThreadId;
   cwd: string;
   project: AgentEndpointProjectResolution["project"];
 }
@@ -65,15 +66,15 @@ type WorkbenchSubagentControllerStore = Pick<
 export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
   requestNativeHarness?: (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>;
-  publicThreadId?: (threadId: string, projectId: string) => Promise<string>;
-  identities?: Pick<WorkbenchThreadIdentityController, "resolve">;
+  publicThreadId: (threadId: WorkbenchThreadId | ThreadReference, projectId: ProjectId) => Promise<WorkbenchThreadId>;
+  identities: Pick<WorkbenchThreadIdentityController, "resolve" | "knownThread">;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
   resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
   subagentStore: WorkbenchSubagentControllerStore;
   threadState?: {
-    getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;
+    getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
     subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
   };
@@ -150,7 +151,7 @@ export default class WorkbenchSubagentController {
   constructor({
     bridgeUrl,
     requestNativeHarness,
-    publicThreadId = async (threadId) => threadId,
+    publicThreadId,
     identities,
     createHarnessClient = () => new CodexAppServerClient(),
     onRelationshipCommitted,
@@ -196,7 +197,7 @@ export default class WorkbenchSubagentController {
       if (this.identities && message.method !== "workbench/subagent/waitCancel") {
         const { project } = await this.resolveProjectFromCwd(requiredString(params, "cwd"), { endpointName: "Workbench subagent" });
         const canonicalId = async (threadId: string) => {
-          const identity = await this.identities!.resolve({ threadId, projectId: project.id });
+          const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
           if (!identity) throw new Error("Subagent thread identity is unavailable in this project.");
           return identity.threadId;
         };
@@ -226,6 +227,10 @@ export default class WorkbenchSubagentController {
 
   mutateProfile(value: unknown) {
     return this.profileStore.mutate(value);
+  }
+
+  private readThreadId(params: Record<string, unknown>, key: string) {
+    return this.identities.knownThread(ThreadReferenceSchema.parse(requiredString(params, key))).threadId;
   }
 
   private async withHarnessClient<T>(operation: (client: WorkbenchSubagentHarnessClient | null) => Promise<T>) {
@@ -288,13 +293,14 @@ export default class WorkbenchSubagentController {
     label: string,
     knownHarness?: WorkbenchHarness,
   ) {
-    const identity = await this.identities?.resolve({ threadId, projectId: project.id });
-    const nativeHarness = identity?.bindings[0]?.harness ?? knownHarness ?? (this.identities ? null : "codex");
+    const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.id });
+    if (!identity) throw new Error(`${label} has no admitted identity.`);
+    const nativeHarness = identity.bindings[0]?.harness ?? knownHarness;
     if (!nativeHarness) throw new Error(`${label} has no native execution.`);
     const harness = WorkbenchHarnessSchema.parse(nativeHarness);
-    const thread = await this.readThread(client, harness, identity?.threadId ?? threadId, cwd);
+    const thread = await this.readThread(client, harness, identity.threadId, cwd);
     const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label });
-    if (threadProject.project.id === project.id) return { harness, thread };
+    if (threadProject.project.id === project.id) return { harness, thread, threadId: identity.threadId };
     throw new Error(`${label} does not belong to this cwd project.`);
   }
 
@@ -320,13 +326,13 @@ export default class WorkbenchSubagentController {
       "Workbench subagent caller",
       knownHarness,
     );
-    return { callerThreadId, cwd, harness: caller.harness, project: resolvedProject.project };
+    return { callerThreadId: caller.threadId, cwd, harness: caller.harness, project: resolvedProject.project };
   }
 
   private async list(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
-    const parentThreadId = typeof params.parentThreadId === "string" ? params.parentThreadId.trim() : requiredString(params, "callerThreadId");
+    const parentThreadId = this.readThreadId(params, typeof params.parentThreadId === "string" ? "parentThreadId" : "callerThreadId");
     const relationships = (await this.subagentStore.list({ parentThreadId, projectId: project.project.id })).subagents;
     const joined: WorkbenchSubagentSummary[] = await Promise.all(relationships.map(async (relationship) => {
       const entry = await this.threadState?.getEntry(project.project.id, relationship.harness, relationship.threadId);
@@ -353,7 +359,7 @@ export default class WorkbenchSubagentController {
     return { profiles };
   }
 
-  private async buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined) {
+  private async buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: WorkbenchThreadId | null, name: string, workbenchOrigin: string | undefined) {
     return {
       agentPath: profile.agentPath,
       cwd: caller.cwd,
@@ -378,7 +384,7 @@ export default class WorkbenchSubagentController {
     const title = requiredString(params, "title");
     const userMessage = requiredString(params, "message");
     const workbenchOrigin = typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined;
-    let result: { threadId: string } | null = null;
+    let result: { threadId: WorkbenchThreadId } | null = null;
     const operation = this.createQueue.catch(() => undefined).then(async () => {
       const currentRelationships = await this.subagentStore.list({ parentThreadId: caller.callerThreadId, projectId: caller.project.id });
       const sameName = currentRelationships.subagents.filter((relationship) => relationship.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
@@ -395,14 +401,14 @@ export default class WorkbenchSubagentController {
         name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
         projectId: caller.project.id, reservationId, title, updatedAt: now,
       });
-      let childId = "";
+      let childId: WorkbenchThreadId | null = null;
       try {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
           method: "thread/start",
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, "", name, workbenchOrigin),
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, null, name, workbenchOrigin),
           params: { cwd: caller.cwd, effort: profile.reasoningEffort, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
         });
-        childId = start.thread.id;
+        childId = await this.publicThreadId(ThreadReferenceSchema.parse(start.thread.id), caller.project.id);
         const startedAt = Date.now();
         const { reservationId: _reservationId, ...metadata } = reservation;
         const record = { ...metadata, threadId: childId, updatedAt: startedAt };
@@ -439,11 +445,11 @@ export default class WorkbenchSubagentController {
   }
 
   private async ownedRecord(params: Record<string, unknown>) {
-    const callerThreadId = requiredString(params, "callerThreadId");
+    const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const requestedName = typeof params.threadName === "string" ? params.threadName.trim() : typeof params.name === "string" ? params.name.trim() : "";
-    let threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+    let threadId = typeof params.threadId === "string" && params.threadId.trim() ? this.readThreadId(params, "threadId") : null;
     if (!threadId && requestedName) {
       const relationships = await this.subagentStore.list({ parentThreadId: callerThreadId, projectId: project.project.id });
       const matches = relationships.subagents.filter((record) => record.name.trim().toLocaleLowerCase() === requestedName.toLocaleLowerCase());
@@ -458,14 +464,15 @@ export default class WorkbenchSubagentController {
     if (!threadId) throw new Error("threadId or threadName is required.");
     const record = await this.subagentStore.getOwned(callerThreadId, project.project.id, threadId);
     if (!record) throw new Error("That subagent is not owned by the current thread.");
-    return { caller: { callerThreadId, cwd, project: project.project }, record };
+    return { caller: { callerThreadId: record.parentThreadId, cwd, project: project.project }, record };
   }
 
   private async ownedRecords(params: Record<string, unknown>) {
-    const callerThreadId = requiredString(params, "callerThreadId");
+    const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const threadIds = Array.isArray(params.threadIds) || typeof params.threadId === "string" ? requiredThreadIds(params) : [];
+    const threadIds = Array.isArray(params.threadIds) || typeof params.threadId === "string"
+      ? requiredThreadIds(params).map(threadId => this.identities.knownThread(ThreadReferenceSchema.parse(threadId)).threadId) : [];
     const rawNames = Array.isArray(params.threadNames) ? params.threadNames : Array.isArray(params.names) ? params.names : [params.threadName ?? params.name];
     const threadNames = rawNames
       .map((value) => typeof value === "string" ? value.trim() : "")
@@ -493,7 +500,7 @@ export default class WorkbenchSubagentController {
     return records;
   }
 
-  private async assertUnlocked(projectId: string, records: readonly WorkbenchSubagentRelationship[]) {
+  private async assertUnlocked(projectId: ProjectId, records: readonly WorkbenchSubagentRelationship[]) {
     if (!this.threadState) return;
     const entries = await Promise.all(records.map((record) => this.threadState!.getEntry(projectId, record.harness, record.threadId)));
     const locked = entries.find((entry) => entry?.entryKind === "subagent" && entry.pinned);
@@ -663,7 +670,7 @@ export default class WorkbenchSubagentController {
   }
 
   private async messageParent(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
-    const callerThreadId = requiredString(params, "callerThreadId");
+    const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const requestedProject = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const relationships = await this.subagentStore.list({ projectId: requestedProject.project.id });

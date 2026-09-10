@@ -1,10 +1,13 @@
 /*
- * Keywords: transcript, repository, usage, provider reconciliation, transaction.
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, cumulative usage facts, provider reconciliation, and bounded reads. Keywords: transcript, repository, usage, provider, transaction.
- * Local helpers: classify timestamps, provider projection items, enrichment, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, cumulative usage facts, provider reconciliation, and bounded reads.
  */
 import type Database from "better-sqlite3";
+import {
+  ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, TurnReferenceSchema,
+  WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  type WorkbenchItemId, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository.ts";
@@ -154,7 +157,7 @@ export default class WorkbenchTranscriptRepository {
         where: { id: request.threadId },
       }));
       if (!thread) {
-        const identity = this.#identity.resolve({ threadId: request.threadId });
+        const identity = this.#identity.resolve({ threadId: ThreadReferenceSchema.parse(request.threadId) });
         if (identity) thread = this.#requiredThread(identity.threadId);
       }
       if (!thread) return null;
@@ -169,7 +172,7 @@ export default class WorkbenchTranscriptRepository {
       const currentTurnIds = new Set(turns.map(({ id }) => id));
       const requestedTurnIds = request.turnIds ? new Set(request.turnIds.map((turnId) => (
         thread.identity_origin === "workbench" && !currentTurnIds.has(turnId)
-          ? this.#identity.resolveTurn({ threadId, turnId })?.turnId ?? turnId
+          ? this.#identity.resolveTurn({ threadId: WorkbenchThreadIdSchema.parse(threadId), turnId: TurnReferenceSchema.parse(turnId) })?.turnId ?? turnId
           : turnId
       ))) : null;
       const loadedTurns = requestedTurnIds
@@ -193,7 +196,7 @@ export default class WorkbenchTranscriptRepository {
         const loadedIndexes = new Map(loadedTurns.map(({ id }, index) => [id, index]));
         for (const [index, turn] of turns.entries()) {
           if (turn.identity_origin !== "legacy") continue;
-          const identity = this.#identity.resolveTurn({ threadId, turnId: turn.id })!;
+          const identity = this.#identity.resolveTurn({ threadId: WorkbenchThreadIdSchema.parse(threadId), turnId: TurnReferenceSchema.parse(turn.id) })!;
           const replacement = { ...turn, id: identity.turnId, identity_origin: "workbench" as const };
           turns[index] = replacement;
           const loadedIndex = loadedIndexes.get(turn.id);
@@ -235,12 +238,15 @@ export default class WorkbenchTranscriptRepository {
     for (const { item, index } of retained) {
       const turn = turnById.get(item.turn_id)!;
       const userMessage = userMessages.get(item.id);
+      // This repair runs after the owning thread and turns have been canonicalised.
+      const threadId = WorkbenchThreadIdSchema.parse(item.thread_id);
+      const turnId = WorkbenchTurnIdSchema.parse(item.turn_id);
       const identity = this.#itemIdentity.admit({
-        threadId: item.thread_id,
+        threadId,
         sources: [
-          { turnId: item.turn_id, sourceId: item.source_id,
+          { turnId, sourceId: item.source_id,
             kind: turn.harness_id === "codex" ? getCodexItemIdentityKind({ id: item.source_id }) : "stable" },
-          ...(userMessage?.client_id ? [{ turnId: item.turn_id, sourceId: userMessage.client_id, kind: "client" as const }] : []),
+          ...(userMessage?.client_id ? [{ turnId, sourceId: userMessage.client_id, kind: "client" as const }] : []),
         ],
         legacyAliases: [...new Set([
           item.source_id,
@@ -248,7 +254,7 @@ export default class WorkbenchTranscriptRepository {
           ...(item.type === "questionnaire" || item.type === "approval"
             ? [`${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${item.source_id}`] : []),
         ])]
-          .map((alias) => ({ turnId: item.turn_id, alias })),
+          .map((alias) => ({ turnId, alias })),
       });
       this.#run(updateRows(itemTables.threadItems, { public_id: identity.itemId }, { id: item.id }));
       // Old source formats are interpreted only while converting the retained row.
@@ -263,10 +269,15 @@ export default class WorkbenchTranscriptRepository {
     const requestedTurnIds = [...new Set(turnIds)];
     if (requestedTurnIds.length === 0) return [];
     const thread = this.#one(selectRows(coreTables.workbenchThreads, { where: { id: threadId } }));
-    if (!thread) threadId = this.#identity.resolve({ threadId })?.threadId ?? threadId;
+    if (!thread) threadId = this.#identity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) })?.threadId ?? threadId;
     const resolvedTurnIds = new Map(requestedTurnIds.map((turnId) => {
+      const direct = this.#one(selectRows(coreTables.threadTurns, { where: { thread_id: threadId, id: turnId } }));
+      if (direct) return [turnId, direct.id];
       const alias = this.#one(selectRows(transcriptIdentityTables.turnLegacyAliases, { where: { thread_id: threadId, alias: turnId } }));
-      return [turnId, alias?.turn_id ?? turnId];
+      if (alias) return [turnId, alias.turn_id];
+      const native = this.#all(selectRows(coreTables.threadTurns, { where: { thread_id: threadId, native_turn_id: turnId } }));
+      if (native.length > 1) throw new Error("Native turn identity is ambiguous within the requested thread.");
+      return [turnId, native[0]?.id ?? turnId];
     }));
     const materializations = this.#all(selectRows(coreTables.threadTurnMaterializations, {
       where: { thread_id: threadId },
@@ -283,9 +294,13 @@ export default class WorkbenchTranscriptRepository {
       const parsed = readWorkbenchToolOutput(JSON.parse(row.safe_json));
       const { item: root, index } = roots.get(row.item_id)!;
       if (!parsed || parsed.id !== root.source_id) continue;
-      this.#settleObservation({
-        kind: "item", item: parsed, threadId: root.thread_id, turnId: root.turn_id,
-        lifecycle: "completed", observedAt: root.updated_at, itemPosition: root.item_position,
+      this.#writeItem({
+        createTransform: (itemId, sourceRevision) => transformWorkbenchTranscriptItem({
+          item: parsed, itemId, sourceRevision, lifecycle: "completed",
+        }),
+        threadId: root.thread_id, turnId: root.turn_id, sourceId: parsed.id,
+        observedAt: root.updated_at, itemPosition: root.item_position,
+        replaceTimeline: false, allowToolOutputTransition: true,
       });
       items[index] = { ...root, type: "functionCallOutput" };
     }
@@ -442,10 +457,10 @@ export default class WorkbenchTranscriptRepository {
 
   #mergeCanonicalItemIdentity(
     index: CanonicalSettlementIndex,
-    threadId: string,
-    turnId: string,
-    fromItemId: string,
-    toItemId: string,
+    threadId: WorkbenchThreadId,
+    turnId: WorkbenchTurnId,
+    fromItemId: WorkbenchItemId,
+    toItemId: WorkbenchItemId,
   ) {
     if (fromItemId === toItemId) return;
     const source = index.itemsByPublicId.get(fromItemId);
@@ -602,9 +617,11 @@ export default class WorkbenchTranscriptRepository {
       for (const entry of reconciledItems) {
         if (!incomingObservationById.get(entry.incomingItemId)?.publicItemId) continue;
         for (const alias of entry.aliases) {
-          const source = this.#itemIdentity.resolve({ threadId: scope.threadId, turnId, itemId: alias });
+          const source = this.#itemIdentity.resolve({ threadId: scope.threadId, turnId, itemId: ItemReferenceSchema.parse(alias) });
           if (!source) throw new Error(`Reconciliation alias has no admitted identity: ${alias}`);
-          this.#mergeCanonicalItemIdentity(index, scope.threadId, turnId, source.itemId, entry.item.id);
+          const target = this.#itemIdentity.resolve({ threadId: scope.threadId, turnId, itemId: ItemReferenceSchema.parse(entry.item.id) });
+          if (!target) throw new Error("Reconciliation target has no admitted identity.");
+          this.#mergeCanonicalItemIdentity(index, scope.threadId, turnId, source.itemId, target.itemId);
         }
       }
       const survivingItemIdByEvidenceId = new Map<string, string>();
@@ -717,10 +734,14 @@ export default class WorkbenchTranscriptRepository {
             entry.observation,
             entry.entry.aliases,
           );
+          const publicItemId = entry.observation.publicItemId
+            ? this.#itemIdentity.resolve({ threadId: scope.threadId, turnId, itemId: ItemReferenceSchema.parse(entry.entry.item.id) })?.itemId
+            : undefined;
+          if (entry.observation.publicItemId && !publicItemId) throw new Error("Replacement item has no admitted identity.");
           this.#settleObservation(
             {
               ...entry.observation,
-              ...(entry.observation.publicItemId ? { publicItemId: entry.entry.item.id } : {}),
+              ...(publicItemId ? { publicItemId } : {}),
               item: entry.observation.publicItemId
                 ? { ...entry.entry.item, id: entry.observation.item.id }
                 : entry.entry.item,
@@ -1137,14 +1158,14 @@ export default class WorkbenchTranscriptRepository {
   }
 
   #findReferencedItem(
-    threadId: string,
-    turnId: string,
+    threadId: WorkbenchThreadId,
+    turnId: WorkbenchTurnId,
     itemId: string,
     index?: CanonicalSettlementIndex,
   ) {
     const known = index?.itemsByPublicId.get(itemId);
     if (known) return known.turn_id === turnId ? known : null;
-    const identity = this.#itemIdentity.resolve({ threadId, turnId, itemId });
+    const identity = this.#itemIdentity.resolve({ threadId, turnId, itemId: ItemReferenceSchema.parse(itemId) });
     const item = this.#findItem(threadId, turnId, itemId, identity?.itemId, index);
     return item?.turn_id === turnId ? item : null;
   }
@@ -1189,7 +1210,11 @@ export default class WorkbenchTranscriptRepository {
       throw new Error(`Transcript item ${sourceId} references an unmaterialized turn`);
     }
     if (publicItemId !== undefined) {
-      const identity = this.#itemIdentity.resolve({ threadId, turnId, itemId: publicItemId });
+      const identity = this.#itemIdentity.resolve({
+        threadId: WorkbenchThreadIdSchema.parse(threadId),
+        turnId: WorkbenchTurnIdSchema.parse(turnId),
+        itemId: ItemReferenceSchema.parse(publicItemId),
+      });
       if (!identity) {
         throw new Error("Transcript item identity was not admitted before body recording.");
       }
@@ -1432,9 +1457,9 @@ export default class WorkbenchTranscriptRepository {
         kind: "nativeEvidence",
         harnessId: turn.harness_id,
         nativeLocation: turn.native_location,
-        nativeThreadId: turn.native_thread_id,
-        nativeTurnId: turn.native_turn_id,
-        nativeItemId: entry.commandItemId,
+        nativeThreadId: turn.native_thread_id === null ? null : NativeThreadIdSchema.parse(turn.native_thread_id),
+        nativeTurnId: turn.native_turn_id === null ? null : NativeTurnIdSchema.parse(turn.native_turn_id),
+        nativeItemId: null,
         nativeEventId: entry.entryKey,
         clientId: null,
         nativeSequence: String(entry.actionIndex),

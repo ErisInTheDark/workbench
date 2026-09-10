@@ -1,11 +1,11 @@
 /*
- * Keywords: mcp, http, assets, identity, reload graph.
  * Exports:
- * - default WorkbenchMcpNode: own the wb MCP server and HTTP router after core and topology parents are active. Keywords: mcp, router, graph.
+ * - default WorkbenchMcpNode: own the wb MCP server and HTTP router after core and topology parents are active.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetController";
@@ -50,7 +50,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const mcp = new WorkbenchAgentMcpController({
       resolveThreadId: async (threadId, cwd) => {
         const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench MCP" });
-        const identity = await build.get("threadIdentity").resolve({ threadId, projectId: project.project.id, harness: "codex" });
+        const identity = await build.get("threadIdentity").resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness: "codex" });
         if (!identity) throw new Error("The managed Codex thread has no Workbench identity.");
         return identity.threadId;
       },

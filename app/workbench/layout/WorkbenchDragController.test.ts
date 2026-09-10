@@ -7,6 +7,13 @@ import test from "node:test";
 
 import WorkbenchDragController from "./WorkbenchDragController";
 import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "./workbench-drag";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 test("the controller resolves extended targets inside the closest boundary and drops at final coordinates", () => {
   const listeners = new Map<string, Set<(event: Event) => void>>();
@@ -60,7 +67,7 @@ test("the controller resolves extended targets inside the closest boundary and d
     controller.begin({ button: 0, clientX: 0, clientY: 0 }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread"), section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] } }, type: "thread-row" },
     });
     dispatch("pointermove", 3, 3);
     assert.equal(controller.getSnapshot().active, false);
@@ -104,7 +111,7 @@ test("the controller resolves extended targets inside the closest boundary and d
     controller.begin({ button: 0, clientX: 0, clientY: 0 }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread"), section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] } }, type: "thread-row" },
     });
     dispatch("pointermove", 50, 600);
     assert.equal(controller.getSnapshot().selectedRegistrationId, null);
@@ -129,7 +136,7 @@ test("touch pointers cannot arm drag listeners or suppress their click", () => {
     const started = controller.begin({ button: 0, clientX: 12, clientY: 18, pointerType: "touch" }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread"), section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] } }, type: "thread-row" },
     });
 
     assert.equal(started, false);

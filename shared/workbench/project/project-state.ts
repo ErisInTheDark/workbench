@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - WorkbenchProjectsPayloadSchema: strict project catalog wire contract with optional icon descriptors. Keywords: project, catalog, icon, schema.
- * - WorkbenchProjectSnapshotSchema: strict project tree and change-summary wire contract. Keywords: project, tree, snapshot, schema.
- * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: successful pushed project snapshot update. Keywords: project, websocket, revision.
- * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create, and delete requests carried by the existing project observation. Keywords: project, mutation, websocket.
- * - WorkbenchCreateEntryResultSchema/WorkbenchDeleteFileResultSchema: mutation metadata returned without duplicate tree snapshots. Keywords: project, mutation, result, schema.
+ * - WorkbenchProjectsPayloadSchema: project catalog wire contract with optional icons.
+ * - WorkbenchProjectSnapshotSchema: project tree and change-summary wire contract.
+ * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: pushed project snapshot update.
+ * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create and delete requests.
+ * - WorkbenchCreateEntryResultSchema/WorkbenchDeleteFileResultSchema: mutation metadata without duplicate snapshots.
  */
 import { z } from "zod";
 
@@ -25,7 +25,7 @@ const WorkbenchProjectIconSchema = z.object({
 }).strict();
 
 const WorkbenchProjectOptionSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().min(1).brand<"ProjectId">(),
   icon: WorkbenchProjectIconSchema.optional(),
   kind: z.enum(["git", "workspace", "workbench-library"]),
   lastCommitTimeMs: z.number().nullable().nonoptional(),
@@ -51,7 +51,7 @@ const TreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() => z.discriminatedUnion("t
 
 export const WorkbenchProjectSnapshotSchema = z.object({
   changes: z.record(z.string(), ChangeSummarySchema),
-  projectId: z.string().min(1),
+  projectId: z.string().min(1).brand<"ProjectId">(),
   root: z.string(),
   rootPath: z.string(),
   roots: z.array(WorkbenchProjectRootSchema),

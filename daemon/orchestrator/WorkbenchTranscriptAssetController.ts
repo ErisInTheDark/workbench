@@ -1,11 +1,11 @@
 /*
- * Keywords: transcript, asset, native storage, canonical identity, http.
  * Exports:
- * - default WorkbenchTranscriptAssetController: serve immutable validated transcript image assets. Keywords: transcript, asset, image, http.
+ * - default WorkbenchTranscriptAssetController: serve immutable validated transcript image assets.
  */
 import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 
@@ -38,7 +38,7 @@ export default class WorkbenchTranscriptAssetController {
       sendJson(response, 400, "Invalid transcript asset path.");
       return;
     }
-    const identity = await this.identities.resolve({ threadId, harness: "codex" });
+    const identity = await this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
     // Existing URLs already contain a filesystem-encoded native key. Keep that
     // compatibility at this boundary, never as a public thread identity.
     const segments = identity

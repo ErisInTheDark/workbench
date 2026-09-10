@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type Database from "better-sqlite3";
+import type { DraftId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchThreadDraftSchema,
@@ -29,18 +30,18 @@ type SqlValue = string | number | null;
 type SqlRow = Record<string, SqlValue>;
 
 interface ThreadStateRow {
-  thread_id: string;
+  thread_id: WorkbenchThreadId;
   thread_kind: "topLevel" | "subagent";
   harness_id: "codex" | "copilot" | "opencode";
   title: string;
   activity_at: number;
   provider_observed: 0 | 1;
-  project_id: string;
+  project_id: ProjectId;
   archived: 0 | 1 | null;
   pinned: 0 | 1 | null;
   snoozed: 0 | 1 | null;
   order_at: number | null;
-  parent_thread_id: string | null;
+  parent_thread_id: WorkbenchThreadId | null;
   cwd: string | null;
   name: string | null;
   profile_id: string | null;
@@ -52,7 +53,7 @@ interface ThreadStateRow {
   lifecycle_kind: WorkbenchThreadLifecycle["kind"] | null;
   reason: WorkbenchThreadLifecycle["reason"] | null;
   settled: 0 | 1 | null;
-  turn_id: string | null;
+  turn_id: WorkbenchTurnId | null;
   request_key: string | null;
   agent_status: "working" | "completed" | "blocked" | null;
   settled_at: number | null;
@@ -145,7 +146,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     return this.layouts.read(owner);
   }
 
-  readProject(projectId: string): WorkbenchThreadStateProjectDocument {
+  readProject(projectId: ProjectId): WorkbenchThreadStateProjectDocument {
     return this.database.transaction(() => ({
       version: 4 as const,
       records: this.readRecords({ selection: "project", projectId }),
@@ -155,14 +156,14 @@ export default class WorkbenchThreadStateRelationalRepository {
     }))();
   }
 
-  readTitleHistories(projectId: string): WorkbenchStoredThreadTitleHistory[] {
+  readTitleHistories(projectId: ProjectId): WorkbenchStoredThreadTitleHistory[] {
     const rows = this.database.prepare(`
       SELECT title.thread_id, title.title, title.used_at, state.harness_id
       FROM workbench_thread_title_history title
       JOIN workbench_threads thread ON thread.id = title.thread_id
       LEFT JOIN workbench_thread_states state ON state.thread_id = title.thread_id
       WHERE thread.project_id = ? ORDER BY title.used_at DESC, title.title
-    `).all(projectId) as Array<{ thread_id: string; title: string; used_at: number; harness_id: string | null }>;
+    `).all(projectId) as Array<{ thread_id: WorkbenchThreadId; title: string; used_at: number; harness_id: string | null }>;
     const histories = new Map<string, WorkbenchStoredThreadTitleHistory>();
     for (const row of rows) {
       let history = histories.get(row.thread_id);
@@ -177,7 +178,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     return [...histories.values()];
   }
 
-  writeProject(projectId: string, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
+  writeProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
     this.database.transaction(() => {
       for (const record of document.records) {
         const identity = this.threadIdentity.resolve({ projectId, threadId: record.identity.threadId });
@@ -188,11 +189,11 @@ export default class WorkbenchThreadStateRelationalRepository {
       const removedThreads = (this.database.prepare(`
         SELECT state.thread_id FROM workbench_thread_states state
         JOIN workbench_threads thread ON thread.id = state.thread_id WHERE thread.project_id = ?
-      `).all(projectId) as Array<{ thread_id: string }>)
+      `).all(projectId) as Array<{ thread_id: WorkbenchThreadId }>)
         .filter(row => !retainedThreads.has(row.thread_id)).map(row => row.thread_id);
       const retainedDrafts = new Set(document.drafts.map(draft => draft.draftId));
       const removedDrafts = (this.database.prepare("SELECT draft_id FROM workbench_thread_drafts WHERE project_id = ?")
-        .all(projectId) as Array<{ draft_id: string }>)
+        .all(projectId) as Array<{ draft_id: DraftId }>)
         .filter(row => !retainedDrafts.has(row.draft_id));
       this.commit({
         records: document.records,
@@ -266,7 +267,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       for (const layout of changes.layouts ?? []) this.layouts.replace(layout.owner, layout.revision, layout.displayOrder);
       for (const draftId of changes.deletedDraftIds ?? []) {
         const draft = this.database.prepare("SELECT project_id FROM workbench_thread_drafts WHERE draft_id = ?")
-          .get(draftId) as { project_id: string } | undefined;
+          .get(draftId) as { project_id: ProjectId } | undefined;
         if (draft) this.layouts.removeDraft(draft.project_id, draftId);
         this.database.prepare("DELETE FROM workbench_thread_drafts WHERE draft_id = ?").run(draftId);
       }
@@ -289,12 +290,12 @@ export default class WorkbenchThreadStateRelationalRepository {
     })();
   }
 
-  readPinnedImports(): string[] {
-    return (this.database.prepare("SELECT project_id FROM workbench_sidebar_pinned_imports ORDER BY project_id").all() as Array<{ project_id: string }>)
+  readPinnedImports(): ProjectId[] {
+    return (this.database.prepare("SELECT project_id FROM workbench_sidebar_pinned_imports ORDER BY project_id").all() as Array<{ project_id: ProjectId }>)
       .map((row) => row.project_id);
   }
 
-  readProjectProfile(projectId: string): WorkbenchComposerProfileSelectionState | null {
+  readProjectProfile(projectId: ProjectId): WorkbenchComposerProfileSelectionState | null {
     const profile = this.database.prepare("SELECT * FROM workbench_project_thread_profiles WHERE project_id = ?")
       .get(projectId) as Record<string, SqlValue> | undefined;
     return profile ? WorkbenchComposerProfileSelectionSchema.parse({
@@ -306,7 +307,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     }) : null;
   }
 
-  readDrafts(projectId: string): WorkbenchStoredThreadDraft[] {
+  readDrafts(projectId: ProjectId): WorkbenchStoredThreadDraft[] {
     const rows = this.database.prepare(`
       SELECT * FROM workbench_thread_drafts WHERE project_id = ? ORDER BY updated_at DESC, draft_id
     `).all(projectId) as Array<Record<string, SqlValue>>;
@@ -422,20 +423,20 @@ export default class WorkbenchThreadStateRelationalRepository {
     return rows.map((row) => this.readThreadState(row));
   }
 
-  readProjectActivity(projectId: string): number | null {
+  readProjectActivity(projectId: ProjectId): number | null {
     return (this.database.prepare(`
       SELECT MAX(state.activity_at) AS activity_at FROM workbench_thread_states state
       JOIN workbench_threads thread ON thread.id = state.thread_id WHERE thread.project_id = ?
     `).get(projectId) as { activity_at: number | null }).activity_at;
   }
 
-  readSnoozeSources(targetThreadId: string): Array<{ projectId: string; threadId: string }> {
+  readSnoozeSources(targetThreadId: WorkbenchThreadId): Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }> {
     return this.database.prepare(`
       SELECT thread.project_id AS projectId, dependency.source_thread_id AS threadId
       FROM workbench_thread_snooze_dependencies dependency
       JOIN workbench_threads thread ON thread.id = dependency.source_thread_id
       WHERE dependency.target_thread_id = ?
-    `).all(targetThreadId) as Array<{ projectId: string; threadId: string }>;
+    `).all(targetThreadId) as Array<{ projectId: ProjectId; threadId: WorkbenchThreadId }>;
   }
 
   readNextArchiveEligibility(): number | null {
@@ -448,7 +449,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     return row.activity_at;
   }
 
-  readArchiveEligible(activeBefore: number): Array<{ projectId: string; record: WorkbenchThreadStateRecord }> {
+  readArchiveEligible(activeBefore: number): Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }> {
     if (!Number.isSafeInteger(activeBefore)) throw new Error("Archive eligibility boundary must be an integer timestamp.");
     const rows = this.database.prepare(`${SELECT_THREAD_STATES}
       WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1 AND state.activity_at <= ?
@@ -605,7 +606,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       FROM workbench_thread_snooze_dependencies dependency
       JOIN workbench_thread_states target ON target.thread_id = dependency.target_thread_id
       JOIN workbench_threads thread ON thread.id = target.thread_id WHERE dependency.source_thread_id = ?
-    `).get(row.thread_id) as { thread_id: string; harness_id: "codex" | "copilot" | "opencode"; project_id: string } | undefined;
+    `).get(row.thread_id) as { thread_id: WorkbenchThreadId; harness_id: "codex" | "copilot" | "opencode"; project_id: ProjectId } | undefined;
     const common = {
       identity: { harness: row.harness_id, threadId: row.thread_id }, title: row.title,
       activityAt: row.activity_at, lifecycle, providerObserved: Boolean(row.provider_observed),

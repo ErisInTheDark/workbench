@@ -1,20 +1,21 @@
 /*
- * CodexTranscriptRecordingControllerOptions: the SQLite recorder port used beside authoritative JSON recording. Keywords: codex, transcript, recording, sqlite.
- * CodexTranscriptSqliteRecordingFailure: SQLite-side failure after source-owned legacy recording. Keywords: codex, transcript, sqlite, failure.
- * default CodexTranscriptRecordingController: sequence source-owned JSON and SQLite recording without owning admission or a queue. Keywords: codex, transcript, recording, lifecycle.
+ * Exports:
+ * - CodexTranscriptRecordingControllerOptions: native-fact port used beside source-owned JSON recording.
+ * - CodexTranscriptSqliteRecordingFailure: SQLite-side failure after legacy recording.
+ * - default CodexTranscriptRecordingController: sequence source-owned recording without owning admission or a queue.
  */
-import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types.ts";
+import type { NativeTranscriptObservation } from "./database/transcript/workbench-transcript-types.ts";
 import type { WorkbenchTranscriptRecordingContext } from "./database/transcript/workbench-transcript-types.ts";
 
 export interface CodexTranscriptRecordingControllerOptions {
   recordSqlite?: (
-    observations: readonly WorkbenchTranscriptObservation[],
+    observations: readonly NativeTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
   ) => Promise<void>;
 }
 
 interface SourceOwnedRecording {
-  observations: readonly WorkbenchTranscriptObservation[];
+  observations: readonly NativeTranscriptObservation[];
   recordLegacy: () => Promise<void>;
 }
 
@@ -37,7 +38,7 @@ export default class CodexTranscriptRecordingController {
 
   async recordProviderFact(
     recording: SourceOwnedRecording & {
-      recordCrossedWorkbenchFacts?: () => Promise<readonly WorkbenchTranscriptObservation[]>;
+      recordCrossedWorkbenchFacts?: () => Promise<readonly NativeTranscriptObservation[]>;
       recoveryBoundary?: boolean;
     },
   ) {
@@ -64,14 +65,14 @@ export default class CodexTranscriptRecordingController {
   }
 
   async importCompatibilityWindow(
-    load: () => Promise<readonly WorkbenchTranscriptObservation[]>,
+    load: () => Promise<readonly NativeTranscriptObservation[]>,
   ) {
     const observations = await load();
     if (observations.length) await this.#recordSqliteFact(observations, { source: "compatibility" });
   }
 
   async #recordSqliteFact(
-    observations: readonly WorkbenchTranscriptObservation[],
+    observations: readonly NativeTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
   ) {
     try {

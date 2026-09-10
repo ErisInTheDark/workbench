@@ -3,6 +3,7 @@
  * - default WorkbenchSubagentStore: own durable relationships, reservations and cursor pages.
  */
 import { z } from "zod";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import type {
   WorkbenchSubagentRelationship,
@@ -14,9 +15,9 @@ import type { WorkbenchSubagentPersistence } from "./database/thread-state/workb
 
 interface SubagentCursor {
   createdAt: number;
-  parentThreadId: string;
-  projectId: string;
-  threadId: string;
+  parentThreadId: WorkbenchThreadId;
+  projectId: ProjectId;
+  threadId: WorkbenchThreadId;
   version: 2;
 }
 
@@ -38,7 +39,7 @@ function encodeCursor(record: WorkbenchSubagentRelationship): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: string, parentThreadId: string, projectId: string): SubagentCursor {
+function decodeCursor(value: string, parentThreadId: WorkbenchThreadId, projectId: ProjectId): SubagentCursor {
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
@@ -57,7 +58,10 @@ function decodeCursor(value: string, parentThreadId: string, projectId: string):
   ) {
     throw new Error("Invalid subagent list cursor.");
   }
-  return parsed as unknown as SubagentCursor;
+  return {
+    createdAt: parsed.createdAt, parentThreadId, projectId,
+    threadId: z.string().brand<"WorkbenchThreadId">().parse(parsed.threadId), version: 2,
+  };
 }
 
 export default class WorkbenchSubagentStore {
@@ -66,10 +70,10 @@ export default class WorkbenchSubagentStore {
   async list({ cursor, limit, parentThreadId, projectId }: {
     cursor?: string | null;
     limit?: number | null;
-    parentThreadId?: string | null;
-    projectId: string;
+    parentThreadId?: WorkbenchThreadId | null;
+    projectId: ProjectId;
   }) {
-    const parent = parentThreadId?.trim() ?? "";
+    const parent = parentThreadId ?? null;
     if (!parent) {
       if (cursor || limit != null) throw new Error("Subagent pagination requires parentThreadId.");
       return { nextCursor: null, subagents: await this.persistence.readSubagents({ projectId }) };
@@ -95,19 +99,19 @@ export default class WorkbenchSubagentStore {
     return this.persistence.reserveSubagent(record);
   }
 
-  replace(parentThreadId: string, reservationId: string, record: WorkbenchSubagentRelationship) {
+  replace(parentThreadId: WorkbenchThreadId, reservationId: string, record: WorkbenchSubagentRelationship) {
     return this.persistence.activateSubagent(parentThreadId, reservationId, record);
   }
 
-  remove(parentThreadId: string, identifier: string) {
+  remove(parentThreadId: WorkbenchThreadId, identifier: string) {
     return this.persistence.removeSubagent(parentThreadId, identifier);
   }
 
-  async getOwned(parentThreadId: string, projectId: string, threadId: string) {
+  async getOwned(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadId: WorkbenchThreadId) {
     return (await this.persistence.readOwnedSubagents(parentThreadId, projectId, [threadId]))?.[0] ?? null;
   }
 
-  getOwnedMany(parentThreadId: string, projectId: string, threadIds: readonly string[]) {
+  getOwnedMany(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadIds: readonly WorkbenchThreadId[]) {
     return this.persistence.readOwnedSubagents(parentThreadId, projectId, threadIds);
   }
 }

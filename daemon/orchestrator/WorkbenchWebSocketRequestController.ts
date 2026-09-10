@@ -8,6 +8,7 @@
  * - default WorkbenchWebSocketRequestController: route feature requests and own event-stream health.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import {
   WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
@@ -31,7 +32,7 @@ import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-typ
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import {
   mapNativeProviderResponse, mapNativeThreadStateSnapshot, mapNativeThreadStateResult,
-  mapWorkbenchThreadStateRequest, mapWorkbenchProviderRequest,
+  mapWorkbenchThreadStateRequest,
   type NativeThreadStateIdentityOwners,
 } from "./thread-identity-workbench-mapping";
 import { mapProviderNotification } from "./thread-identity-provider-mapping";
@@ -398,10 +399,21 @@ export default class WorkbenchWebSocketRequestController {
           const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
           const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
           if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
-          const mapped = this.identities ? await mapWorkbenchProviderRequest(this.identities.threads, acceptedHarness, { params: { threadId, turnId } }) : null;
+          if (!this.identities) throw new Error("Accepted-intent identity resolution is unavailable.");
+          const thread = await this.identities.threads.resolve({
+            harness: acceptedHarness, projectId: ProjectIdSchema.parse(projectId),
+            threadId: ThreadReferenceSchema.parse(threadId),
+          });
+          if (!thread) throw new Error("Accepted-intent thread does not belong to the requested project.");
+          const turn = await this.identities.threads.resolveTurn({
+            threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId),
+          });
+          if (!turn) throw new Error("Accepted-intent turn does not belong to the requested thread.");
           signal.throwIfAborted();
-          const native = mapped?.request.params as { threadId: string; turnId: string } | undefined;
-          const result = await this.threadState.acceptIntent(connectionId, { harness: mapped?.harness ?? acceptedHarness, projectId, threadId: native?.threadId ?? threadId, turnId: native?.turnId ?? turnId });
+          const result = await this.threadState.acceptIntent(connectionId, {
+            harness: acceptedHarness, projectId: thread.projectId,
+            threadId: thread.threadId, turnId: turn.turnId,
+          });
           await this.sendJsonToClient(client, { id: requestId, result });
         } catch (error) {
           signal.throwIfAborted();
@@ -504,7 +516,7 @@ export default class WorkbenchWebSocketRequestController {
           const thread = asRecord(params?.thread);
           const threadId = typeof params?.threadId === "string" ? params.threadId : thread?.id;
           if (typeof threadId === "string") {
-            const native = this.identities.threads.knownNativeBinding(harness, threadId);
+            const native = this.identities.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(threadId));
             message = mapProviderNotification(this.identities, native, message as ServerNotification);
           }
         }
@@ -733,12 +745,12 @@ export default class WorkbenchWebSocketRequestController {
       if (materialise && subscription.turnIds) {
         const requests: JsonRpcRequest[] = [];
         if (this.identities) {
-          const thread = await this.identities.threads.resolve({ threadId: subscription.threadId });
+          const thread = await this.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(subscription.threadId) });
           signal.throwIfAborted();
           if (!thread) throw new Error("Transcript thread identity has not been admitted.");
           const groups = new Map<string, { threadId: string; turnIds: string[] }>();
           for (const turnId of subscription.turnIds) {
-            const turn = await this.identities.threads.resolveTurn({ threadId: thread.threadId, turnId });
+            const turn = await this.identities.threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId) });
             signal.throwIfAborted();
             if (!turn?.native.nativeTurnId || turn.native.harness !== "codex") throw new Error("Transcript turn has no Codex materialisation source.");
             const native = turn.native;

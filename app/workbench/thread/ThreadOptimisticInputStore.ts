@@ -1,13 +1,12 @@
 /*
- * Keywords: optimistic, input, identity, lifecycle, submission time.
  * Exports:
- * - OptimisticInputEntry: one stable optimistic user-input lifecycle record. Keywords: optimistic, input, steer, lifecycle.
- * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state. Keywords: optimistic, status, placement.
- * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory and enqueue clock. Keywords: optimistic, identity, test.
- * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message. Keywords: initial, identity, status.
- * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth. Keywords: connecting, initial, pending.
- * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation. Keywords: optimistic, thread, delivery.
- * - default ThreadOptimisticInputStore: create the optimistic input owner. Keywords: optimistic, thread, create.
+ * - OptimisticInputEntry: one stable optimistic user-input lifecycle record.
+ * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state.
+ * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory and enqueue clock.
+ * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message.
+ * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth.
+ * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation.
+ * - default ThreadOptimisticInputStore: create the optimistic input owner.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";

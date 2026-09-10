@@ -1,5 +1,4 @@
 /*
- * Keywords: claim CLI, cwd, path safety, reports.
  * No exports. Tests protect root ownership, historical paths, cancellation, and failure propagation.
  */
 import assert from "node:assert/strict";
@@ -8,11 +7,12 @@ import test from "node:test";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project.ts";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const roots = ["primary", "secondary"].map((id) => ({ id, name: id, root: path.resolve(id), rootPath: path.resolve(id) }));
 const resolution: AgentEndpointProjectResolution = {
   cwd: roots[1]!.root, root: roots[1]!,
-  project: { id: "owned", kind: "workspace", root: roots[0]!.root, rootPath: roots[0]!.root, roots },
+  project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("owned"), kind: "workspace", root: roots[0]!.root, rootPath: roots[0]!.root, roots },
 };
 const signal = () => new AbortController().signal;
 

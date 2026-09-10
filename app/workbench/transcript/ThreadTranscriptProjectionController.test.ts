@@ -1,10 +1,11 @@
 /*
- * No production exports. Tests protect explicit SQLite source state, immediate live projection publication, serialized subscription replacement, and deferred deduplicated parity reporting. Keywords: transcript, projection, parity, lifecycle, subscription.
+ * No production exports. Tests protect explicit SQLite source state, immediate live projection publication, serialized subscription replacement, and deferred deduplicated parity reporting.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadPayload } from "workbench-shared/types";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import {
   transcriptSnapshotTables,
@@ -24,7 +25,7 @@ function flushComparison() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
-function thread(id: string, turnIds = ["turn"]): ThreadPayload {
+function thread(id: string, turnIds = ["turn"]): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null,
     agentPath: null,
@@ -33,7 +34,7 @@ function thread(id: string, turnIds = ["turn"]): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id,
+    id: WorkbenchThreadIdSchema.parse(id),
     isDraft: false,
     model: null,
     name: "Thread",

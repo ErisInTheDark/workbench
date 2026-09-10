@@ -1,5 +1,4 @@
 /*
- * Keywords: questionnaire, history, identity, answer time, tests.
  * No production exports. Tests protect native Workbench request identity and permanent questionnaire item identity when provider keys repeat across turns.
  */
 import assert from "node:assert/strict";
@@ -18,6 +17,7 @@ import {
   mergeQuestionnaireHistoryEntries,
   resolveQuestionnaireHistoryItemId,
 } from "./thread-questionnaire-identity.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("Workbench MCP questionnaire keys keep a strict native-response namespace", () => {
   assert.equal(isWorkbenchMcpQuestionnaireRequestKey("workbench-mcp:question"), true);
@@ -83,7 +83,7 @@ function thread(): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id: "thread",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     isDraft: false,
     model: null,
     name: "Thread",

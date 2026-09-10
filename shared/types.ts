@@ -1,5 +1,4 @@
 /*
- * Keywords: shared contracts, workbench, project-qualified title mutations, draft persistence.
  * Exports:
  * - WorkbenchHarness: supported agent harness identity.
  * - OrchestratorReloadScope: reloadable orchestrator subsystem identity.
@@ -97,7 +96,8 @@
  * - WorkbenchListModelsOptions: model-list options.
  * - ChangeSummary: file-change summary.
  * - ThreadSummary: thread-list summary.
- * - ThreadPayload: full rendered thread payload.
+ * - ThreadPayload: full rendered thread payload with draft identity discrimination.
+ * - ThreadPayloadData: thread details preserving the source identity type.
  * - WorkbenchThreadTitleRequest: provider-backed thread title mutation request.
  * - WorkbenchThreadDocumentSnapshot: thread document-store snapshot.
  * - WorkbenchThreadTurnLoadState: turn hydration state.
@@ -133,7 +133,7 @@
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
  * - WorkbenchThreadSidebarStore: read-only live sidebar store contract.
- * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary. Keywords: thread runtime, domain hook, React.
+ * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary.
  * - WorkbenchRouteLoadResult: route-load result.
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchThreadGoalSnapshot: thread goal state.
@@ -158,6 +158,7 @@
  */
 
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot.ts";
+import type { DraftId, FolderId, ProjectId, WorkbenchThreadId } from "./workbench/identity.ts";
 import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction.ts";
 import type { Thread } from "./codex/generated/app-server/v2/Thread.ts";
 import type { ThreadGoal } from "./codex/generated/app-server/v2/ThreadGoal.ts";
@@ -712,7 +713,7 @@ export interface WorkbenchProjectIcon {
 }
 
 export interface WorkbenchProjectOption {
-  id: string;
+  id: ProjectId;
   icon?: WorkbenchProjectIcon;
   kind: "git" | "workspace" | "workbench-library";
   lastCommitTimeMs: number | null;
@@ -793,11 +794,11 @@ export interface WorkbenchSubagentRelationship {
   directSubagentIndex: number;
   harness: WorkbenchHarness;
   name: string;
-  parentThreadId: string;
+  parentThreadId: WorkbenchThreadId;
   profileId: string;
   profileName: string;
-  projectId: string;
-  threadId: string;
+  projectId: ProjectId;
+  threadId: WorkbenchThreadId;
   title: string;
   updatedAt: number;
 }
@@ -815,9 +816,9 @@ export interface WorkbenchSubagentPage {
 }
 
 export type WorkbenchComposerProfileSlot =
-  | { draftId: string; harness: WorkbenchHarness; kind: "draft"; projectId: string }
-  | { kind: "new-thread"; projectId: string }
-  | { harness: WorkbenchHarness; kind: "thread"; projectId: string; threadId: string };
+  | { draftId: DraftId; harness: WorkbenchHarness; kind: "draft"; projectId: ProjectId }
+  | { kind: "new-thread"; projectId: ProjectId }
+  | { harness: WorkbenchHarness; kind: "thread"; projectId: ProjectId; threadId: WorkbenchThreadId };
 
 export type WorkbenchComposerProfileSelection =
   | { kind: "custom"; settings?: WorkbenchComposerSettings }
@@ -836,8 +837,8 @@ export interface ChangeSummary {
   deletions: number;
 }
 
-export interface ThreadSummary {
-  id: string;
+export interface ThreadSummary<Id extends string = WorkbenchThreadId> {
+  id: Id;
   harness: WorkbenchHarness;
   name: string | null;
   preview: string;
@@ -851,13 +852,16 @@ export interface ThreadSummary {
   agentRole: string | null;
 }
 
-export interface ThreadPayload extends ThreadSummary {
+export type ThreadPayload<Id extends string = WorkbenchThreadId | DraftId> =
+  | (ThreadPayloadData<Exclude<Id, DraftId>> & { isDraft: false })
+  | (ThreadPayloadData<Extract<Id, DraftId>> & { isDraft: true });
+
+export interface ThreadPayloadData<Id extends string> extends ThreadSummary<Id> {
   browseResultEntries?: WorkbenchBrowseResultEntry[];
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;
   agentPath: string | null;
-  isDraft: boolean;
   nextPageCursor?: string | null;
   tokenUsage: ThreadTokenUsage | null;
   turnHistory: WorkbenchThreadTurnHistoryEntry[];
@@ -1081,7 +1085,7 @@ export interface DirectoryNode {
 export type TreeNode = DirectoryNode | FileNode;
 
 export interface ProjectSnapshot {
-  projectId: string;
+  projectId: ProjectId;
   root: string;
   rootPath: string;
   roots: WorkbenchProjectRoot[];
@@ -1091,7 +1095,7 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
-  currentProjectId: string;
+  currentProjectId: ProjectId | "";
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
@@ -1116,11 +1120,11 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchThreadSidebarStore {
-  getDraft?: (projectId: string, draftId: string) => WorkbenchThreadDraft | null;
+  getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
-  getProjectSnapshot: (projectId: string) => WorkbenchThreadSidebarSnapshot | null;
+  getProjectSnapshot: (projectId: ProjectId) => WorkbenchThreadSidebarSnapshot | null;
   getProjectThreadSidebars?: () => WorkbenchProjectThreadSidebars;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
   getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
@@ -1154,13 +1158,13 @@ export interface WorkbenchRouteLoadResult {
 export interface WorkbenchControls {
   daemon: WorkbenchDaemonClient;
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
-  createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
+  createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   orchestratorRuntime: WorkbenchOrchestratorRuntimeStore;
   refreshRateLimits: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  moveThreadDraft: (sourceProjectId: string, destinationProjectId: string, draftId: string) => Promise<void>;
+  moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -1186,9 +1190,9 @@ export interface WorkbenchControls {
   updateThreadStateWithAcceptance: (request: WorkbenchThreadStateRequest) => Promise<boolean>;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
-  deleteThreadDraft: (draftId: string, projectId?: string) => Promise<void>;
-  editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: string }) => void;
-  flushThreadDraft: (projectId: string, draftId: string) => Promise<void>;
+  deleteThreadDraft: (draftId: DraftId, projectId?: ProjectId) => Promise<void>;
+  editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: FolderId }) => void;
+  flushThreadDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 

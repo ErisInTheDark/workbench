@@ -1,6 +1,6 @@
 /*
  * Tests:
- * - WorkbenchComposerProfileController keeps daemon-owned definitions and target snapshots acknowledged without stale-read rollback. Keywords: composer, profile, controller, daemon, regression.
+ * - WorkbenchComposerProfileController keeps daemon-owned definitions and target snapshots acknowledged without stale-read rollback.
  */
 
 import assert from "node:assert/strict";
@@ -18,6 +18,22 @@ import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } fro
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
 import { createComposerProfileTargetPersistence } from "./composer-profile-api";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "draft-a": fixtureIdentitySchemas.DraftIdSchema.parse("draft-a"),
+  },
+  ProjectId: {
+    "project-a": fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"),
+  },
+  WorkbenchThreadId: {
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+    "thread-a": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a"),
+    "thread-b": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-b"),
+    "thread-c": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-c"),
+  },
+};
 
 class MemoryPersistence implements ComposerProfilePersistence {
   failMutations = false;
@@ -91,7 +107,7 @@ async function createController(initialProfiles: WorkbenchComposerProfile[] = []
 
 test("missing daemon selection never resolves settings from a raw thread", async () => {
   const { controller } = await createController();
-  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   assert.equal(controller.resolveSettings(slot), null);
   controller.dispose();
 });
@@ -99,8 +115,8 @@ test("missing daemon selection never resolves settings from a raw thread", async
 test("empty target reads finish loading and allow a profile to be selected", async () => {
   const { controller } = await createController([profile()]);
   const slots: WorkbenchComposerProfileSlot[] = [
-    { kind: "new-thread", projectId: "project-a" },
-    { kind: "draft", projectId: "project-a", harness: "codex", draftId: "draft-a" },
+    { kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project-a"] },
+    { kind: "draft", projectId: fixtureIdentityValues.ProjectId["project-a"], harness: "codex", draftId: fixtureIdentityValues.DraftId["draft-a"] },
   ];
   try {
     for (const slot of slots) {
@@ -119,7 +135,7 @@ test("empty target reads finish loading and allow a profile to be selected", asy
 
 test("targets requested before connection load when persistence arrives", async () => {
   const controller = new WorkbenchComposerProfileController();
-  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   const targets = new MemoryTargetPersistence();
   await targets.write(slot, { kind: "custom", settings: CODEX_SETTINGS });
   let notifications = 0;
@@ -137,7 +153,7 @@ test("targets requested before connection load when persistence arrives", async 
 
 test("disconnect fences late reads without severing profile subscribers", async () => {
   const controller = new WorkbenchComposerProfileController();
-  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   let release!: (selection: WorkbenchComposerProfileTargetSelection) => void;
   const pending = new Promise<WorkbenchComposerProfileTargetSelection>((resolve) => { release = resolve; });
   await controller.initializeTargetPersistence({ read: async () => pending, write: async () => undefined });
@@ -163,7 +179,7 @@ test("draft profile reads wait for persistence and propagate save failures", asy
   const daemon: Pick<WorkbenchDaemonClient, "request"> = {
     request: async () => { reads++; return { selection: { kind: "custom", settings: CODEX_SETTINGS } } as never; },
   };
-  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: "project-a", draftId: "draft" };
+  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
   const persistence = createComposerProfileTargetPersistence(daemon, async (projectId, draftId) => {
     assert.equal(projectId, slot.projectId);
     assert.equal(draftId, slot.draftId);
@@ -176,7 +192,7 @@ test("draft profile reads wait for persistence and propagate save failures", asy
   const failing = createComposerProfileTargetPersistence(daemon, async () => { throw new Error("Draft save failed"); });
   await assert.rejects(failing.read(slot), /Draft save failed/);
   assert.equal(reads, 1);
-  await failing.read({ kind: "thread", harness: "codex", projectId: "project-a", threadId: "thread" });
+  await failing.read({ kind: "thread", harness: "codex", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
   assert.equal(reads, 2);
 });
 
@@ -187,7 +203,7 @@ test("draft profile edits cannot overtake a queued draft save", async () => {
   const daemon: Pick<WorkbenchDaemonClient, "request"> = {
     request: async () => { writes++; return {} as never; },
   };
-  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: "project-a", draftId: "draft" };
+  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
   const selection = { kind: "custom" as const, settings: CODEX_SETTINGS };
   const persistence = createComposerProfileTargetPersistence(daemon, async () => saving);
   const writing = persistence.write(slot, selection);
@@ -209,7 +225,7 @@ test("target edits reach daemon before preceding saves finish", async () => {
     read: async () => writes.at(-1) ?? null,
     write: async (_slot, selection) => { writes.push(selection); await gate; },
   });
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   try {
     controller.selectCustom(slot, CODEX_SETTINGS);
     controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "new-model" });
@@ -223,7 +239,7 @@ test("target edits reach daemon before preceding saves finish", async () => {
 
 test("scope changes retain stable ids and preserve hidden out-of-scope links", async () => {
   const { controller } = await createController();
-  const sourceSlot = { kind: "new-thread" as const, projectId: "project-b" };
+  const sourceSlot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-b") };
   const created = await controller.createProfile({
     ...CODEX_SETTINGS,
     name: "Lily",
@@ -232,7 +248,7 @@ test("scope changes retain stable ids and preserve hidden out-of-scope links", a
   assert.ok(created);
   controller.selectProfile(sourceSlot, created.id);
 
-  const demoted = await controller.updateProfile(created.id, { scope: { kind: "project", projectId: "project-a" } });
+  const demoted = await controller.updateProfile(created.id, { scope: { kind: "project", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") } });
   assert.equal(demoted?.id, created.id);
   assert.deepEqual(controller.getVisibleProfiles("project-b"), []);
   assert.equal(controller.getSelectedProfile(sourceSlot)?.id, created.id);
@@ -241,16 +257,16 @@ test("scope changes retain stable ids and preserve hidden out-of-scope links", a
 });
 
 test("materialization copies only compatible profile links to durable destination slots", async () => {
-  const sourceSlot = { kind: "new-thread" as const, projectId: "project-a" };
+  const sourceSlot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(sourceSlot, "profile-a");
   await controller.loadSelection(sourceSlot);
 
-  controller.materializeSelection(sourceSlot, "thread-a", "codex");
-  controller.materializeSelection(sourceSlot, "thread-b", "copilot");
-  assert.equal(controller.getSelectedProfile({ harness: "codex", kind: "thread", projectId: "project-a", threadId: "thread-a" })?.id, "profile-a");
-  assert.equal(controller.getSelection({ harness: "copilot", kind: "thread", projectId: "project-a", threadId: "thread-b" }).kind, "custom");
-  assert.equal(controller.selectProfile({ harness: "copilot", kind: "thread", projectId: "project-a", threadId: "thread-c" }, "profile-a"), false);
+  controller.materializeSelection(sourceSlot, fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a"), "codex");
+  controller.materializeSelection(sourceSlot, fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-b"), "copilot");
+  assert.equal(controller.getSelectedProfile({ harness: "codex", kind: "thread", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-a"] })?.id, "profile-a");
+  assert.equal(controller.getSelection({ harness: "copilot", kind: "thread", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-b"] }).kind, "custom");
+  assert.equal(controller.selectProfile({ harness: "copilot", kind: "thread", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-c"] }, "profile-a"), false);
   assert.equal(targets.selections.size, 1);
   controller.dispose();
 });
@@ -259,7 +275,7 @@ test("profile harness is immutable and project agents cannot be promoted globall
   const projectProfile = profile({
     agentPath: ".agents/agents/project.md",
     agentSource: "project",
-    scope: { kind: "project", projectId: "project-a" },
+    scope: { kind: "project", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") },
   });
   const { controller } = await createController([projectProfile]);
 
@@ -268,12 +284,12 @@ test("profile harness is immutable and project agents cannot be promoted globall
   const rejected = await controller.updateProfile(projectProfile.id, { scope: { kind: "global" } });
   assert.equal(rejected, null);
   assert.match(controller.getSnapshot().error, /project agent/i);
-  assert.deepEqual(controller.getProfile(projectProfile.id)?.scope, { kind: "project", projectId: "project-a" });
+  assert.deepEqual(controller.getProfile(projectProfile.id)?.scope, { kind: "project", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") });
   controller.dispose();
 });
 
 test("deleting a linked profile preserves its last settings as a durable custom handoff", async () => {
-  const slot = { harness: "codex" as const, kind: "thread" as const, projectId: "project-a", threadId: "thread-a" };
+  const slot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
 
@@ -311,7 +327,7 @@ test("profile descriptions preserve multiline text and clear to an absent option
 });
 
 test("profile resolution preserves the thread payload contract", async () => {
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
   const resolved = controller.resolveThread(slot, {
@@ -322,7 +338,7 @@ test("profile resolution preserves the thread payload contract", async () => {
     createdAt: 1,
     cwd: "C:/workspace",
     harness: "codex",
-    id: "draft:1",
+    id: fixtureIdentitySchemas.DraftIdSchema.parse("draft:1"),
     isDraft: true,
     model: "gpt-5.4",
     name: "Draft",
@@ -346,8 +362,8 @@ test("profile resolution preserves the thread payload contract", async () => {
 
 test("draft profile slots remain UUID-isolated and harness-bound", async () => {
   const { controller } = await createController([profile()]);
-  const first = { draftId: "11111111-1111-4111-8111-111111111111", harness: "codex" as const, kind: "draft" as const, projectId: "project-a" };
-  const second = { ...first, draftId: "22222222-2222-4222-8222-222222222222" };
+  const first = { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111"), harness: "codex" as const, kind: "draft" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
+  const second = { ...first, draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222") };
 
   assert.equal(controller.selectProfile(first, "profile-a"), true);
   assert.deepEqual(controller.getSelection(first), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
@@ -357,7 +373,7 @@ test("draft profile slots remain UUID-isolated and harness-bound", async () => {
 });
 
 test("acknowledged tied profile edits refresh the daemon target projection", async () => {
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
   await controller.loadSelection(slot);
@@ -384,7 +400,7 @@ test("acknowledged tied profile edits refresh the daemon target projection", asy
 });
 
 test("daemon target settings remain available while profile labels are loading", async () => {
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const targets = new MemoryTargetPersistence();
   await targets.write(slot, {
     kind: "profile",
@@ -413,7 +429,7 @@ test("daemon target settings remain available while profile labels are loading",
 });
 
 test("late reads cannot erase newer selections and missing daemon targets clear provisional display", async () => {
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   let resolveRead: (selection: WorkbenchComposerProfileTargetSelection | null) => void = () => undefined;
   const read = new Promise<WorkbenchComposerProfileTargetSelection | null>((resolve) => { resolveRead = resolve; });
   const persisted = new MemoryTargetPersistence();
@@ -433,10 +449,10 @@ test("late reads cannot erase newer selections and missing daemon targets clear 
   await saving;
 
   const draftSlot = {
-    draftId: "11111111-1111-4111-8111-111111111111",
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111"),
     harness: "codex" as const,
     kind: "draft" as const,
-    projectId: "project-a",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"),
   };
   controller.selectProfile(slot, "profile-a");
   controller.materializeDraftSelection(slot, draftSlot.draftId, draftSlot.harness, draftSlot.projectId);
@@ -448,7 +464,7 @@ test("late reads cannot erase newer selections and missing daemon targets clear 
 });
 
 test("target persistence failure restores acknowledged settings and exposes the failure", async () => {
-  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller, targets } = await createController();
   await controller.selectCustom(slot, CODEX_SETTINGS);
   targets.failWrites = true;

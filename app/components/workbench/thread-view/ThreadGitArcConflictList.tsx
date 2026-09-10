@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default ThreadGitArcConflictList: render compact conflict threads with optional intersecting file links. Keywords: thread, git, arc, conflict, navigation, list, files.
+ * - default ThreadGitArcConflictList: render compact conflict threads with optional intersecting file links.
  */
 "use client";
 
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import ProjectFileLinkList from "../ProjectFileLinkList";
 
@@ -32,7 +33,7 @@ export default function ThreadGitArcConflictList({
           href={createThreadHref(projectId, { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId })}
           key={`${entry.identity.harness}:${entry.identity.threadId}`}
           onActivate={onOpenThread}
-          projectId={projectId}
+          projectId={ProjectIdSchema.parse(projectId)}
           secondaryRow={paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} /> : undefined}
           showTooltip={false}
         />

@@ -1,8 +1,12 @@
 /*
- * Keywords: transcript, structural admission, live delta, identity, disposal.
  * Exports:
  * - default WorkbenchTranscriptIdentityController: index committed source identity for synchronous live projection.
  */
+import {
+  TranscriptIdentityKeySchema,
+  type ItemReference, type NativeItemId, type TranscriptIdentityKey,
+  type WorkbenchItemId, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 import type {
   WorkbenchTranscriptIdentityDatabase,
   WorkbenchTranscriptItemIdentity,
@@ -13,7 +17,7 @@ import type {
 
 export default class WorkbenchTranscriptIdentityController {
   private disposed = false;
-  private readonly referencesByThread = new Map<string, Map<string, string>>();
+  private readonly referencesByThread = new Map<WorkbenchThreadId, Map<TranscriptIdentityKey, WorkbenchItemId>>();
 
   constructor(private readonly database: WorkbenchTranscriptIdentityDatabase) {}
 
@@ -43,27 +47,27 @@ export default class WorkbenchTranscriptIdentityController {
     return itemId !== undefined && keys.length > 0 && keys.every((key) => references.get(key) === itemId);
   }
 
-  itemIdForSource(threadId: string, source: WorkbenchTranscriptItemSource): string {
+  itemIdForSource(threadId: WorkbenchThreadId, source: WorkbenchTranscriptItemSource): WorkbenchItemId {
     const itemId = this.findItemIdForSource(threadId, source);
     if (!itemId) throw new Error("Transcript source identity has not been admitted for live projection.");
     return itemId;
   }
 
-  findItemIdForSource(threadId: string, source: WorkbenchTranscriptItemSource) {
+  findItemIdForSource(threadId: WorkbenchThreadId, source: WorkbenchTranscriptItemSource) {
     this.assertActive();
     return this.referencesByThread.get(threadId)?.get(this.sourceKey(source));
   }
 
-  itemIdForReference(threadId: string, turnId: string, reference: string): string {
+  itemIdForReference(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, reference: WorkbenchItemId | NativeItemId | ItemReference): WorkbenchItemId {
     const itemId = this.findItemIdForReference(threadId, turnId, reference);
     if (!itemId) throw new Error("Transcript item reference has not been admitted for live projection.");
     return itemId;
   }
 
-  findItemIdForReference(threadId: string, turnId: string, reference: string) {
+  findItemIdForReference(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, reference: WorkbenchItemId | NativeItemId | ItemReference) {
     this.assertActive();
     const references = this.referencesByThread.get(threadId);
-    const direct = references?.get(JSON.stringify(["public", reference]));
+    const direct = references?.get(this.publicKey(reference));
     if (direct) return direct;
     const candidates = new Set(
       (["stable", "provisional", "client", "legacy"] as const)
@@ -89,18 +93,22 @@ export default class WorkbenchTranscriptIdentityController {
       references = new Map();
       this.referencesByThread.set(committed.threadId, references);
     }
-    references.set(JSON.stringify(["public", committed.itemId]), committed.itemId);
+    references.set(this.publicKey(committed.itemId), committed.itemId);
     for (const source of committed.sources) references.set(this.sourceKey(source), committed.itemId);
     for (const legacy of committed.legacyAliases) {
       references.set(this.sourceKey({ turnId: legacy.turnId, kind: "legacy", sourceId: legacy.alias }), committed.itemId);
-      const publicKey = JSON.stringify(["public", legacy.alias]);
+      const publicKey = this.publicKey(legacy.alias);
       if (references.has(publicKey)) references.set(publicKey, committed.itemId);
     }
     return committed;
   }
 
-  private sourceKey(source: { turnId: string; kind: WorkbenchTranscriptItemSource["kind"] | "legacy"; sourceId: string }) {
-    return JSON.stringify([source.turnId, source.kind, source.sourceId]);
+  private publicKey(reference: string) {
+    return TranscriptIdentityKeySchema.parse(JSON.stringify(["public", reference]));
+  }
+
+  private sourceKey(source: { turnId: WorkbenchTurnId; kind: WorkbenchTranscriptItemSource["kind"] | "legacy"; sourceId: string }) {
+    return TranscriptIdentityKeySchema.parse(JSON.stringify([source.turnId, source.kind, source.sourceId]));
   }
 
   private assertActive() {

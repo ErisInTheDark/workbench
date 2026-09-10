@@ -5,19 +5,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarProjectState from "./ThreadSidebarProjectState.ts";
 import { createWorkbenchProjectThreadSummary, type WorkbenchThreadActivityUpdate, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 const sidebar = (revision: number): WorkbenchThreadSidebarSnapshot => ({
-  projectId: "project", revision, error: null, freshness: "fresh",
+  projectId: fixtureIdentityValues.ProjectId["project"], revision, error: null, freshness: "fresh",
   entries: ["one", "two"].map((threadId) => ({
-    entryKind: "thread", identity: { harness: "codex", threadId }, title: threadId,
+    entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, title: threadId,
     activityAt: 1, orderAt: 1,
     metadata: { archived: false, pinned: false, snoozed: false },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
   })),
 });
 const activity = (revision: number, threadId = "one", fields: Partial<WorkbenchThreadActivityUpdate> = {}): WorkbenchThreadActivityUpdate => ({
-  updateKind: "activity", projectId: "project", revision, activityAt: revision,
-  identity: { harness: "codex", threadId }, ...fields,
+  updateKind: "activity", projectId: fixtureIdentityValues.ProjectId["project"], revision, activityAt: revision,
+  identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, ...fields,
 });
 
 async function createState() {
@@ -31,7 +38,7 @@ test("changed entries survive overtaken bootstrap and activity without erasing i
   const changed = sidebar(3).entries[0]!;
   changed.title = "renamed";
   const delta = {
-    updateKind: "threadStateDelta" as const, projectId: "project", revision: 3,
+    updateKind: "threadStateDelta" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 3,
     upserts: [changed], removedKeys: [], error: null, freshness: "fresh" as const,
   };
   state.acceptDelta(delta);
@@ -55,7 +62,7 @@ test("entry updates arriving before bootstrap survive the older complete respons
   const state = new ThreadSidebarProjectState();
   const entry = sidebar(2).entries[0]!;
   state.acceptDelta({
-    updateKind: "threadStateDelta", projectId: "project", revision: 2,
+    updateKind: "threadStateDelta", projectId: fixtureIdentityValues.ProjectId["project"], revision: 2,
     upserts: [{ ...entry, title: "before bootstrap" }], removedKeys: [], error: null, freshness: "fresh",
   });
   state.acceptSidebar(sidebar(1));
@@ -65,7 +72,7 @@ test("entry updates arriving before bootstrap survive the older complete respons
 test("unrelated and older draft deliveries preserve the local draft body", async () => {
   const state = await createState();
   const draft = {
-    draftId: "00000000-0000-4000-8000-000000000001", projectId: "project",
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     prompt: "local body", attachments: [], clientUpdatedAt: 20, createdAt: 1, updatedAt: 20, profileId: null,
     composerSettings: { harness: "codex" as const, agentPath: null, agentSource: null, model: "", reasoningEffort: null, serviceTier: null },
   };
@@ -75,7 +82,7 @@ test("unrelated and older draft deliveries preserve the local draft body", async
   };
   state.replaceLocalSidebar({ ...state.getSnapshot()!, entries: [...state.getSnapshot()!.entries, entry] });
   state.acceptDelta({
-    updateKind: "threadStateDelta", projectId: "project", revision: 3, error: null, freshness: "fresh", removedKeys: [],
+    updateKind: "threadStateDelta", projectId: fixtureIdentityValues.ProjectId["project"], revision: 3, error: null, freshness: "fresh", removedKeys: [],
     upserts: [{ ...entry, draft: { ...draft, clientUpdatedAt: 10, prompt: "older body" } }, sidebar(3).entries[0]!],
   });
   assert.equal(state.getSnapshot()!.entries.find(value => value.entryKind === "draft")?.title, "local body");
@@ -125,7 +132,7 @@ test("newer full summaries are not fenced out by activity from an older sidebar"
   state.acceptActivity(activity(5));
   const changed = sidebar(3);
   changed.entries[0]!.title = "renamed";
-  state.acceptSummary(createWorkbenchProjectThreadSummary("project", changed.entries, 3));
+  state.acceptSummary(createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], changed.entries, 3));
   assert.equal(state.getSummary()!.unsettledThreads.find((entry) => entry.identity.threadId === "one")!.title, "renamed");
   assert.equal(state.getSummary()!.unsettledThreads.find((entry) => entry.identity.threadId === "one")!.activityAt, 5);
   state.acceptSidebar(sidebar(2));

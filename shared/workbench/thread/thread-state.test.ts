@@ -5,6 +5,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "draft": fixtureIdentitySchemas.DraftIdSchema.parse("draft"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "owner": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("owner"),
+    "parent": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+    "pinned": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("pinned"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+  WorkbenchTurnId: {
+    "new": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new"),
+    "old": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("old"),
+    "old-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("old-turn"),
+    "parent-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("parent-turn"),
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+    "wait-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("wait-turn"),
+    "work-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("work-turn"),
+  },
+};
 
 const EMPTY_CODEX_SETTINGS = {
   agentPath: null,
@@ -17,35 +43,35 @@ const EMPTY_CODEX_SETTINGS = {
 
 test("observations carry a complete entry without admitting a different thread family", () => {
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+    activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
     metadata: { archived: false, pinned: true, snoozed: false },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     previousTitles: [{ title: "Earlier", usedAt: 1 }],
     pendingQuestionnaire: {
-      itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "request", turnId: "turn",
+      itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       request: { id: "question", title: "Choose", summary: "", submitLabel: "Send", questions: [
         { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
       ] },
     },
   };
   const observation = {
-    projectId: "project", subscriptionId: "7a74a3d2-8223-4cf1-b348-92d299480570",
-    target: { kind: "provider", harness: "codex", threadId: "thread" },
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), subscriptionId: "7a74a3d2-8223-4cf1-b348-92d299480570",
+    target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     entries: [entry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation", version: 1,
   };
   assert.deepEqual(WorkbenchThreadObservationSnapshotSchema.parse(observation).entries, [entry]);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [] }).success, true);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({
-    ...observation, target: { ...observation.target, threadId: "another" },
+    ...observation, target: { ...observation.target, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("another") },
   }).success, false);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [entry, entry] }).success, false);
   const child = {
     activityAt: 1, createdAt: 1, updatedAt: 1, cwd: "/repo", directSubagentIndex: 0, entryKind: "subagent",
-    identity: { harness: "opencode", threadId: "child" }, lifecycle: entry.lifecycle,
-    name: "Child", parentThreadId: "thread", pinned: false, profileId: "profile", profileName: "Profile", projectId: "project", title: "Child",
+    identity: { harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") }, lifecycle: entry.lifecycle,
+    name: "Child", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), pinned: false, profileId: "profile", profileName: "Profile", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: "Child",
   };
   const childObservation = { ...observation, entries: [entry, child],
-    target: { kind: "subagent", harness: "opencode", threadId: "child", parentThreadId: "thread" } };
+    target: { kind: "subagent", harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"), parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") } };
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse(childObservation).success, true);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({
     ...childObservation, target: { ...childObservation.target, harness: "codex" },
@@ -54,18 +80,18 @@ test("observations carry a complete entry without admitting a different thread f
 
 test("sidebar completion and pinned eligibility exclude working threads and approval requests", () => {
   const question = {
-    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: "turn",
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
     request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [] },
   };
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+    activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
     metadata: { archived: false, pinned: true, snoozed: false }, pendingQuestionnaire: question,
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: "turn", settled: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: false },
   };
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable(entry), true);
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({ ...entry, pendingQuestionnaire: null }), false);
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({
-    ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: "turn" }, settled: false },
+    ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, settled: false },
   }), false);
   const approval = { ...entry, pendingQuestionnaire: {
     ...question, request: { ...question.request, questions: [{
@@ -75,14 +101,14 @@ test("sidebar completion and pinned eligibility exclude working threads and appr
   } };
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable(approval), false);
   for (const [source, expected] of [[entry, true], [approval, false]] as const) {
-    const pin = createWorkbenchProjectThreadSummary("project", [source], 1).pinnedThreads[0]!;
+    const pin = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [source], 1).pinnedThreads[0]!;
     assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, expected);
     assert.equal(isWorkbenchSidebarThreadCompletionAvailable(pin), expected);
     const { canCompleteQuestionnaire: _eligibility, ...legacy } = pin as Extract<typeof pin, { entryKind: "thread" }>;
     assert.equal(isWorkbenchSidebarThreadCompletionAvailable(WorkbenchPinnedThreadSummaryEntrySchema.parse(legacy)), false);
   }
   const completed = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "userCompleted" });
-  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "turnCompleted", status: "interrupted", turnId: "turn" }), completed);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }), completed);
 });
 
 test("live claims prevent thread settlement while proposals do not", () => {
@@ -107,20 +133,20 @@ test("current project and global observation versions stay distinct from draft m
   });
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     method: "workbench/thread-state/global/open",
-    projectId: "must-not-select",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("must-not-select"),
     version: 6,
   }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationProjectId: "beta",
-    draftId: "22222222-2222-4222-8222-222222222222",
+    destinationProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222"),
     method: "workbench/thread-state/draft/move",
-    sourceProjectId: "alpha",
+    sourceProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationProjectId: "alpha",
-    draftId: "22222222-2222-4222-8222-222222222222",
+    destinationProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222"),
     method: "workbench/thread-state/draft/move",
-    sourceProjectId: "alpha",
+    sourceProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
   }).success, false);
 });
 
@@ -151,7 +177,7 @@ test("settlement is available only for unsettled terminal rows without Git block
   const completed = {
     activityAt: 1,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "thread" },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Thread",
@@ -173,7 +199,7 @@ test("settlement is available only for unsettled terminal rows without Git block
     activityAt: 2,
     draft: {
       attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
-      draftId: "draft", profileId: null, projectId: "project", prompt: "Draft", updatedAt: 2,
+      draftId: fixtureIdentityValues.DraftId["draft"], profileId: null, projectId: fixtureIdentityValues.ProjectId["project"], prompt: "Draft", updatedAt: 2,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: false, snoozed: false },
@@ -210,22 +236,22 @@ test("thread titles ignore identifier-shaped provider names and prefer the first
 
 test("multiplexed updates strictly distinguish sidebar, activity, and project payloads", () => {
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
+    entries: [], error: null, freshness: "fresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1,
   }).success, true);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity",
+    activityAt: 10, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") }, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 2, updateKind: "activity",
   }).success, true);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, identity: { harness: "codex", threadId: "thread" }, orderAt: 9, projectId: "project", revision: 2, updateKind: "activity",
+    activityAt: 10, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") }, orderAt: 9, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 2, updateKind: "activity",
   }).success, true);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
     displayOrder: {}, revision: 2, updateKind: "homeThreadDisplayOrder",
   }).success, true);
   const projectUpdate = WorkbenchThreadStateSnapshotSchema.safeParse({
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 3,
     snapshot: {
-      changes: {}, projectId: "project", root: "Project", rootPath: "C:/project",
+      changes: {}, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "Project", rootPath: "C:/project",
       roots: [{ id: "project", isPrimary: true, name: "Project", relativePath: "project", rootPath: "C:/project" }],
       tree: [{ isIgnored: true, name: ".env.local", path: ".env.local", type: "file" }], workbenchStorageRootPath: "C:/workbench",
     },
@@ -236,22 +262,22 @@ test("multiplexed updates strictly distinguish sidebar, activity, and project pa
     ? projectUpdate.data.snapshot.tree[0].isIgnored
     : null, true);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, projectId: "project", revision: 4, updateKind: "activity",
+    activityAt: 10, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 4, updateKind: "activity",
   }).success, false);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    entries: [], error: null, freshness: "fresh", projectId: "project", revision: 5, updateKind: "sidebar",
+    entries: [], error: null, freshness: "fresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 5, updateKind: "sidebar",
   }).success, false);
 });
 
 test("strict lifecycle rejects impossible combinations", () => {
-  assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "working", reason: "acceptedIntent", settled: true, agent: { agentStatus: "working", turnId: "t" } }).success, false);
-  assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "needsAttention", reason: "pendingInput", settled: false, turnId: "t" }).success, false);
+  assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "working", reason: "acceptedIntent", settled: true, agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("t") } }).success, false);
+  assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "needsAttention", reason: "pendingInput", settled: false, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("t") }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "stopped", reason: "providerInterrupted", settled: false }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "completed", reason: "providerInactive", settled: false }).success, true);
 });
 
 test("manual status request accepts exactly the three radio statuses", () => {
-  const request = { identity: { harness: "codex", threadId: "thread" }, method: "workbench/thread-state/status/set", projectId: "project" };
+  const request = { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") }, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
   for (const status of ["needsAttention", "completed", "stopped"]) {
     assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status }).success, true);
   }
@@ -260,15 +286,15 @@ test("manual status request accepts exactly the three radio statuses", () => {
 });
 
 test("draft priority requests use draft identity and drive shared grouping and ordering", () => {
-  const draftId = "00000000-0000-4000-8000-000000000001";
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/snooze/set", projectId: "project", snoozed: true }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" }).success, false);
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/snooze/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), snoozed: true }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, false);
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
     activityAt: 1,
     draft: {
       attachments: [], clientUpdatedAt: 1, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
-      draftId, profileId: null, projectId: "project", prompt: "Pinned draft", updatedAt: 1,
+      draftId, profileId: null, projectId: fixtureIdentityValues.ProjectId["project"], prompt: "Pinned draft", updatedAt: 1,
     },
     entryKind: "draft",
     metadata: { archived: false, pinned: true, snoozed: true },
@@ -298,11 +324,11 @@ test("legacy draft settings conform from reload-compatible flattened fields", ()
     clientUpdatedAt: 2,
     composerSettings: {},
     createdAt: 1,
-    draftId: "00000000-0000-4000-8000-000000000002",
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000002"),
     harness: "codex",
     model: "legacy-model",
     profileId: "legacy-profile",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     prompt: "Legacy draft",
     reasoningEffort: "high",
     serviceTier: "fast",
@@ -322,11 +348,11 @@ test("pinned context requests preserve full target identity and responses admit 
   const draftId = "00000000-0000-4000-8000-000000000019";
   const request = {
     method: "workbench/thread-state/pin/open",
-    projectId: "owner",
-    target: { harness: "opencode", kind: "subagent", parentThreadId: "parent", threadId: "child" },
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
+    target: { harness: "opencode", kind: "subagent", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") },
   };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, target: { kind: "subagent", threadId: "child" } }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, target: { kind: "subagent", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") } }).success, false);
   assert.equal(WorkbenchPinnedThreadContextResultSchema.safeParse({
     context: {
       entries: [{
@@ -341,7 +367,7 @@ test("pinned context requests preserve full target identity and responses admit 
           harness: "codex",
           model: null,
           profileId: null,
-          projectId: "owner",
+          projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
           prompt: "Private pinned prompt",
           reasoningEffort: null,
           serviceTier: null,
@@ -351,14 +377,14 @@ test("pinned context requests preserve full target identity and responses admit 
         metadata: { archived: false, pinned: true, snoozed: false },
         title: "Private pinned prompt",
       }],
-      projectId: "owner",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
       target: { draftId, kind: "draft" },
     },
   }).success, true);
 });
 
 test("display-order moves require a reorderable section and explicit insertion key", () => {
-  const request = { beforeKey: null, destinationFolderId: null, method: "workbench/thread-state/display-order/move", projectId: "project", section: "snoozed", sourceKey: "codex:thread" };
+  const request = { beforeKey: null, destinationFolderId: null, method: "workbench/thread-state/display-order/move", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), section: "snoozed", sourceKey: "codex:thread" };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, beforeKey: "codex:other" }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, section: "main" }).success, false);
@@ -369,35 +395,35 @@ test("folder mutations require canonical ids, durable thread keys, and non-empty
   const folderId = "00000000-0000-4000-8000-000000000020";
   const folderDraft = {
     agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 2,
-    draftId: "00000000-0000-4000-8000-000000000021", harness: "codex", model: null,
-    profileId: null, projectId: "project", prompt: "folder draft", reasoningEffort: null, serviceTier: null, updatedAt: 2,
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000021"), harness: "codex", model: null,
+    profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "folder draft", reasoningEffort: null, serviceTier: null, updatedAt: 2,
   };
-  const create = { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: "project", sourceKey: "codex:thread", title: "Work" };
-  const rename = { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: "project", title: "Later" };
+  const create = { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sourceKey: "codex:thread", title: "Work" };
+  const rename = { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: "Later" };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse(create).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse(rename).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, folderId: "folder" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, folderId: fixtureIdentitySchemas.FolderIdSchema.parse("folder") }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, sourceKey: "" }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...rename, title: " " }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId, method: "workbench/thread-state/draft/upsert", projectId: "project" }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId: "folder", method: "workbench/thread-state/draft/upsert", projectId: "project" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId, method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId: fixtureIdentitySchemas.FolderIdSchema.parse("folder"), method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, false);
 });
 
 test("drag mutations strictly identify priority, folder, and dependent-snooze intent", () => {
   const folderId = "00000000-0000-4000-8000-000000000022";
-  const identity = { harness: "codex", threadId: "source" };
-  const target = { identity: { harness: "opencode", threadId: "target" }, projectId: "beta" };
+  const identity = { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") };
+  const target = { identity: { harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     method: "workbench/thread-state/priority/set",
     priority: "main",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     sourceKey: "codex:source",
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     destinationFolderId: null,
     folderId,
     method: "workbench/thread-state/display-order/folder/drop",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     section: "snoozed",
     sourceKey: "codex:source",
     targetKey: "codex:target",
@@ -412,19 +438,19 @@ test("drag mutations strictly identify priority, folder, and dependent-snooze in
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     identity,
     method: "workbench/thread-state/snooze/until",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     target,
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     method: "workbench/thread-state/priority/set",
     priority: "settled",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     sourceKey: "codex:source",
   }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     identity,
     method: "workbench/thread-state/snooze/until",
-    projectId: "alpha",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     target: { ...target, extra: true },
   }).success, false);
 });
@@ -437,7 +463,7 @@ test("durable questionnaire state accepts proper questions and rejects approvals
     summary: "Choose a route",
     title: "Questionnaire",
   };
-  const pending = { itemId: "item", request, requestKey: "request-key", turnId: "turn" };
+  const pending = { itemId: "item", request, requestKey: "request-key", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") };
   assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse(pending).success, true);
   assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse({
     ...pending,
@@ -456,25 +482,25 @@ test("durable questionnaire state accepts proper questions and rejects approvals
     requestKey: "request-key",
     resolvedAt: 2,
     response: { answers: { route: { answers: ["Approve"] } } },
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
   };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     entry,
-    identity: { harness: "codex", threadId: "thread" },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     method: "workbench/thread-state/questionnaire/resolve",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    identity: { harness: "codex", threadId: "thread" },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     method: "workbench/thread-state/questionnaire/dismiss",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     requestKey: "request-key",
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    identity: { harness: "codex", threadId: "thread" },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     method: "workbench/thread-state/questionnaire/dismiss",
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   }).success, false);
 });
 
@@ -490,7 +516,7 @@ test("plan intersections classify active and planned siblings while stabilizing 
       checkpointCommit: "a".repeat(40), claimedPaths, intentDescription: "", intentName: threadId,
       phase: "active", proposals: [], updatedAt: "2026-08-20T00:00:00.000Z",
     } : null,
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle,
     metadata: { archived: false, pinned: false, snoozed: false },
     title: threadId,
@@ -512,7 +538,7 @@ test("plan intersections classify active and planned siblings while stabilizing 
     },
   };
   const completed = thread("completed", { kind: "completed", reason: "providerInactive", settled: false }, ["src/feature"]);
-  const working = thread("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, ["src"]);
+  const working = thread("working", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false }, ["src"]);
   const settled = thread("settled", { kind: "completed", reason: "providerInactive", settled: true }, ["src/feature/deep/file.ts"]);
   const unrelated = thread("unrelated", { kind: "completed", reason: "providerInactive", settled: false }, ["docs"]);
   const planned = {
@@ -535,9 +561,9 @@ test("plan intersections classify active and planned siblings while stabilizing 
   };
   const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
     activityAt: 10, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
-    gitArc: working.gitArc, identity: { harness: "codex", threadId: "child" }, lifecycle: working.lifecycle,
-    name: "child", parentThreadId: "owner", pinned: false, profileId: "default", profileName: "Default",
-    projectId: "project", title: "child", updatedAt: 10,
+    gitArc: working.gitArc, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["child"] }, lifecycle: working.lifecycle,
+    name: "child", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["owner"], pinned: false, profileId: "default", profileName: "Default",
+    projectId: fixtureIdentityValues.ProjectId["project"], title: "child", updatedAt: 10,
   };
   const entries = [owner, settled, working, pendingAttention, completed, attention, unrelated, planned, unrelatedPlan, resolvedAttention, snoozedAttention, child];
   assert.equal(getThreadSidebarGroup(attention), "main");
@@ -564,10 +590,10 @@ test("plan intersections classify active and planned siblings while stabilizing 
     { ...attention, gitArc: { ...attention.gitArc!, claimedPaths: ["src/feature/card.tsx", "docs/unrelated.ts"] } },
   ], owner.identity);
   assert.deepEqual(duplicateMatches.activeEntries.map(({ paths }) => paths), [["src/feature/card.tsx"]]);
-  assert.equal(getWorkbenchThreadPlanIntersections(entries, { harness: "codex", threadId: "missing" }).hasPlannedClaims, false);
+  assert.equal(getWorkbenchThreadPlanIntersections(entries, { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing") }).hasPlannedClaims, false);
 
   const select = createWorkbenchThreadPlanIntersectionSelector(owner.identity);
-  const snapshot = { entries, error: null, freshness: "fresh" as const, projectId: "project", revision: 1 };
+  const snapshot = { entries, error: null, freshness: "fresh" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1 };
   const first = select(snapshot);
   assert.equal(select({ ...snapshot, error: "unrelated", revision: 2 }), first);
   const changed = select({ ...snapshot, entries: entries.map((entry) => entry === working ? { ...working, title: "working changed" } : entry), revision: 3 });
@@ -579,15 +605,15 @@ test("lifecycle parsing preserves canonical attention variants and normalizes le
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), {
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
   });
-  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" }), {
-    kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn",
+  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }), {
+    kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
   });
   assert.deepEqual(
-    WorkbenchThreadLifecycleSchema.parse({ agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false }),
-    { agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false },
+    WorkbenchThreadLifecycleSchema.parse({ agent: { agentStatus: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "needsAttention", reason: "agentBlocked", settled: false }),
+    { agent: { agentStatus: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "needsAttention", reason: "agentBlocked", settled: false },
   );
   for (const lifecycle of [
-    { agent: { agentStatus: "working", turnId: "turn" }, kind: "needsAttention", reason: "turnEnded", settled: false },
+    { agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "needsAttention", reason: "turnEnded", settled: false },
     { kind: "needsAttention", reason: "restartRecoveryFailed", settled: false },
     { kind: "needsAttention", reason: "providerSystemError", settled: false },
   ]) {
@@ -599,22 +625,22 @@ test("lifecycle parsing preserves canonical attention variants and normalizes le
 });
 
 test("exact-turn transitions reject stale completion and manual settlement becomes completed", () => {
-  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "new" });
-  assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: "old" }), working);
-  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "new" });
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
+  assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), working);
+  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.equal(completed.kind, "completed");
-  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: "new" });
+  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.deepEqual(blocked, {
-    agent: { agentStatus: "blocked", turnId: "new" },
+    agent: { agentStatus: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new") },
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
   });
-  assert.equal(reduceWorkbenchThreadLifecycle(blocked, { kind: "turnCompleted", status: "completed", turnId: "new" }), blocked);
+  assert.equal(reduceWorkbenchThreadLifecycle(blocked, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }), blocked);
   const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle" });
   assert.equal(settled.settled, true);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
-  const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: "new" });
+  const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "settle" }), {
     kind: "completed",
     reason: "userCompleted",
@@ -632,24 +658,24 @@ test("exact-turn transitions reject stale completion and manual settlement becom
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
   });
   assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" }), {
-    agent: { agentStatus: "completed", turnId: "new" }, kind: "stopped", reason: "userMarkedStopped", settled: false,
+    agent: { agentStatus: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new") }, kind: "stopped", reason: "userMarkedStopped", settled: false,
   });
   assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "userCompleted" }), {
     kind: "completed", reason: "userCompleted", settled: false,
   });
-  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "new" });
+  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.equal(isWorkbenchThreadStatusProviderOwned(pendingInput), true);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle" }), pendingInput);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 
 test("delivered user input reactivates provider-owned terminal state without overriding user-owned state", () => {
-  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "old-turn" });
-  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "old-turn" });
-  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: "old-turn" });
-  const delivered = { kind: "userInputDelivered" as const, turnId: "delivered-turn" };
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const delivered = { kind: "userInputDelivered" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("delivered-turn") };
   const reactivated = {
-    agent: { agentStatus: "working" as const, turnId: "delivered-turn" },
+    agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("delivered-turn") },
     kind: "working" as const,
     reason: "acceptedIntent" as const,
     settled: false as const,
@@ -660,10 +686,10 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.deepEqual(reduceWorkbenchThreadLifecycle({ kind: "completed", reason: "providerInactive", settled: true }, delivered), reactivated);
 
   const userCompleted = reduceWorkbenchThreadLifecycle(completed, { kind: "userCompleted" });
-  const providerStopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: "old-turn" });
+  const providerStopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
   const userStopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
-  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "old-turn" });
-  assert.equal(reduceWorkbenchThreadLifecycle(providerStopped, { kind: "userInputDelivered", turnId: "old-turn" }), providerStopped);
+  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  assert.equal(reduceWorkbenchThreadLifecycle(providerStopped, { kind: "userInputDelivered", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }), providerStopped);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(providerStopped, delivered), reactivated);
   assert.equal(reduceWorkbenchThreadLifecycle(userCompleted, delivered), userCompleted);
   assert.equal(reduceWorkbenchThreadLifecycle(userStopped, delivered), userStopped);
@@ -674,8 +700,8 @@ test("grouping keeps terminal status while settlement moves it to other", () => 
   const entry = {
     activityAt: 1,
     entryKind: "thread" as const,
-    identity: { harness: "codex" as const, threadId: "thread" },
-    lifecycle: { agent: { agentStatus: "completed" as const, turnId: "turn" }, kind: "completed" as const, reason: "agentCompleted" as const, settled: false },
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
+    lifecycle: { agent: { agentStatus: "completed" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "completed" as const, reason: "agentCompleted" as const, settled: false },
     metadata: { archived: false as const, pinned: false, snoozed: false },
     title: "Thread",
   };
@@ -685,16 +711,16 @@ test("grouping keeps terminal status while settlement moves it to other", () => 
 
 test("completed parent status derives attention before working without mutating durable lifecycle", () => {
   const parent: WorkbenchThreadSidebarEntry = {
-    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "parent" },
+    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["parent"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
     metadata: { archived: false, pinned: false, snoozed: false }, title: "Parent",
   };
   const child = (threadId: string, lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>["lifecycle"]): WorkbenchThreadSidebarEntry => ({
     activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
-    identity: { harness: "codex", threadId }, lifecycle, name: threadId, parentThreadId: "parent", pinned: false,
-    profileId: "default", profileName: "Default", projectId: "project", title: threadId, updatedAt: 2,
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, lifecycle, name: threadId, parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], pinned: false,
+    profileId: "default", profileName: "Default", projectId: fixtureIdentityValues.ProjectId["project"], title: threadId, updatedAt: 2,
   });
-  const working = child("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false });
+  const working = child("working", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false });
   const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, working])[0]!;
   const projectedAttention = projectWorkbenchThreadSidebarEntries([parent, working, attention])[0]!;
@@ -706,8 +732,8 @@ test("completed parent status derives attention before working without mutating 
 
 test("subagent waits inherit attention before working before waiting while other waits stay waiting", () => {
   const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "parent" },
-    lifecycle: { agent: { agentStatus: "working", turnId: "parent-turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["parent"] },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["parent-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false }, title: "Parent", waitingFor: "subagents",
   };
   const child = (
@@ -716,12 +742,12 @@ test("subagent waits inherit attention before working before waiting while other
     waitingFor?: "other" | "subagents",
   ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> => ({
     activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
-    identity: { harness: "codex", threadId }, lifecycle, name: threadId, parentThreadId: "parent", pinned: false,
-    profileId: "default", profileName: "Default", projectId: "project", title: threadId, updatedAt: 2,
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, lifecycle, name: threadId, parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], pinned: false,
+    profileId: "default", profileName: "Default", projectId: fixtureIdentityValues.ProjectId["project"], title: threadId, updatedAt: 2,
     ...(waitingFor ? { waitingFor } : {}),
   });
-  const waiting = child("waiting", { agent: { agentStatus: "working", turnId: "wait-turn" }, kind: "working", reason: "acceptedIntent", settled: false }, "other");
-  const working = child("working", { agent: { agentStatus: "working", turnId: "work-turn" }, kind: "working", reason: "acceptedIntent", settled: false });
+  const waiting = child("waiting", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["wait-turn"] }, kind: "working", reason: "acceptedIntent", settled: false }, "other");
+  const working = child("working", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["work-turn"] }, kind: "working", reason: "acceptedIntent", settled: false });
   const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   const projectedWaiting = projectWorkbenchThreadSidebarEntries([parent, waiting])[0]!;
   const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, waiting, working])[0]!;
@@ -747,7 +773,7 @@ test("project summaries count unsettled top-level status after direct-child proj
     activityAt,
     entryKind: "thread",
     ...(gitArc ? { gitArc } : {}),
-    identity: { harness: "codex", threadId },
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle,
     metadata: { archived: false, pinned: false, snoozed },
     title: threadId,
@@ -768,21 +794,21 @@ test("project summaries count unsettled top-level status after direct-child proj
     cwd: "C:/repo",
     directSubagentIndex: 0,
     entryKind: "subagent",
-    identity: { harness: "codex", threadId: "child" },
-    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["child"] },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
     name: "child",
-    parentThreadId: "parent",
+    parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"],
     pinned: false,
     profileId: "default",
     profileName: "Default",
-    projectId: "project",
+    projectId: fixtureIdentityValues.ProjectId["project"],
     title: "child",
     updatedAt: 2,
   };
-  const summary = createWorkbenchProjectThreadSummary("project", [
+  const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [
     parent,
     child,
-    { ...thread("waiting", { agent: { agentStatus: "working", turnId: "wait-turn" }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "other" },
+    { ...thread("waiting", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["wait-turn"] }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "other" },
     thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc, 1, true),
     thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
     thread("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }),
@@ -807,42 +833,42 @@ test("project summaries count unsettled top-level status after direct-child proj
     },
     lastThreadUpdateAt: 4,
     pinnedThreads: [],
-    projectId: "project",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 7,
     unsettledThreads: [
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "parent" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent") },
         status: "working",
         title: "parent",
       },
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "waiting" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("waiting") },
         status: "waiting",
         title: "waiting",
       },
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "attention" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("attention") },
         status: "needsAttention",
         title: "attention",
       },
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "active-attention" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("active-attention") },
         status: "needsAttentionActive",
         title: "active-attention",
       },
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "stopped" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("stopped") },
         status: "stopped",
         title: "stopped",
       },
       {
         activityAt: 1,
-        identity: { harness: "codex", threadId: "proposed" },
+        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("proposed") },
         status: "proposedCommit",
         title: "proposed",
       },
@@ -851,16 +877,16 @@ test("project summaries count unsettled top-level status after direct-child proj
 });
 
 test("project summaries expose ordered unsnoozed pins without draft bodies", () => {
-  const draftId = "00000000-0000-4000-8000-000000000031";
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000031");
   const pinnedThread: WorkbenchThreadSidebarEntry = {
     activityAt: 2,
     entryKind: "thread",
-    identity: { harness: "codex", threadId: "pinned" },
-    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["pinned"] },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
     metadata: { archived: false, pinned: true, snoozed: false },
     title: "Pinned provider",
   };
-  const summary = createWorkbenchProjectThreadSummary("project", [
+  const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [
     {
       activityAt: 3,
       draft: {
@@ -870,7 +896,7 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
         createdAt: 1,
         draftId,
         profileId: null,
-        projectId: "project",
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
         prompt: "private draft body",
         updatedAt: 3,
       },
@@ -881,7 +907,7 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
     pinnedThread,
     {
       ...pinnedThread,
-      identity: { harness: "codex", threadId: "snoozed" },
+      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("snoozed") },
       metadata: { archived: false, pinned: true, snoozed: true },
       title: "Snoozed pin",
     },

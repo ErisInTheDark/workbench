@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect stable transcript identity, live materialization, source replacement, enrichment survival, bounded hydration, and atomic settlement. Keywords: transcript, repository, test.
+ * No production exports. Tests protect stable transcript identity, live materialization, source replacement, enrichment survival, bounded hydration, and atomic settlement.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -13,7 +13,6 @@ import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/data
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import { resolveSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -25,6 +24,45 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+type StoredSteerEntry = Extract<WorkbenchTranscriptAtomicObservation, { kind: "steer" }>["entry"];
+
+const fixtureIdentityValues = {
+  NativeItemId: {
+    "item-1": fixtureIdentitySchemas.NativeItemIdSchema.parse("item-1"),
+    "item-2": fixtureIdentitySchemas.NativeItemIdSchema.parse("item-2"),
+  },
+  NativeThreadId: {
+    "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  },
+  NativeTurnId: {
+    "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "other": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+    "wrong-owner": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("wrong-owner"),
+  },
+  WorkbenchTurnId: {
+    "first": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("first"),
+    "known-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("known-turn"),
+    "live": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("live"),
+    "loaded": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("loaded"),
+    "metadata": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("metadata"),
+    "missing": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("missing"),
+    "newer": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("newer"),
+    "older": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("older"),
+    "partial": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("partial"),
+    "second": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("second"),
+    "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+    "turn-0": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-0"),
+    "turn-8": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-8"),
+  },
+};
 
 function createRepository(options: { onStatement?: (sql: string) => void } = {}) {
   const database = options.onStatement
@@ -41,8 +79,8 @@ function createRepository(options: { onStatement?: (sql: string) => void } = {})
 function threadObservation(threadId = "thread"): Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" }> {
   return {
     kind: "thread",
-    threadId,
-    projectId: "project",
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    projectId: fixtureIdentityValues.ProjectId["project"],
     projectRoot: "C:/project",
     title: "Thread",
     createdAt: 1,
@@ -58,13 +96,13 @@ function turnObservation(
 ): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> {
   return {
     kind: "turn",
-    threadId,
-    turnId,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
     turnIndex,
     harnessId: "codex",
     nativeLocation: "C:/project",
-    nativeThreadId: "native-thread",
-    nativeTurnId: turnId,
+    nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(turnId),
     state: "completed",
     createdAt: turnIndex + 2,
     startedAt: turnIndex + 2,
@@ -84,8 +122,8 @@ function canonicalWindowSelectCount(itemCount: number) {
       turnObservation("turn", 0),
       ...Array.from({ length: itemCount }, (_, index): WorkbenchTranscriptAtomicObservation => ({
         kind: "item",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         lifecycle: "completed",
         observedAt: index + 3,
         item: {
@@ -116,9 +154,9 @@ function canonicalWindow(
   return {
     kind: "canonicalWindow",
     contentVersion: 3,
-    materializedTurnIds,
+    materializedTurnIds: materializedTurnIds.map((id) => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id)),
     observations,
-    threadId,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
   };
 }
 
@@ -128,12 +166,12 @@ function providerTurnScope(
   threadId = "thread",
 ): WorkbenchTranscriptObservation {
   return {
-    completeTurnIds,
+    completeTurnIds: completeTurnIds.map((id) => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id)),
     kind: "providerTurnScope",
     observations: observations.map((observation) => observation.kind === "item"
       ? { ...observation, item: withWorkbenchThreadItemIdentity(observation.item, getCodexItemIdentityKind(observation.item)) }
       : observation),
-    threadId,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
   };
 }
 
@@ -145,14 +183,14 @@ test("canonical reads convert only selected retained bodies and preserve old ref
       turnObservation("older", 0),
       turnObservation("newer", 1),
       ...["older", "newer"].map((turnId): WorkbenchTranscriptAtomicObservation => ({
-        kind: "item", threadId: "thread", turnId, lifecycle: "completed", observedAt: 4,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), lifecycle: "completed", observedAt: 4,
         item: { type: "reasoning", id: `${turnId}-reasoning`, summary: ["preserve"], content: [] },
         timeline: { itemId: `${turnId}-reasoning`, aliases: [`${turnId}-alias`],
           firstSeenAt: 3, lastSeenAt: 4, startedAt: 3, completedAt: 4 },
       })),
       {
         kind: "questionnaire", observedAt: 5, entry: {
-          threadId: "thread", turnId: "newer", itemId: "questionnaire", requestKey: "question",
+          threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.newer, itemId: "questionnaire", requestKey: "question",
           insertAfterItemId: null, insertAfterItemIndex: null,
           request: { id: "question", title: "", summary: "", submitLabel: "", questions: [{
             id: "choice", header: "", question: "Choose", allowOther: false, isSecret: false, options: [],
@@ -163,7 +201,7 @@ test("canonical reads convert only selected retained bodies and preserve old ref
     ], ["older", "newer"])]);
     const before = repository.read({ threadId: "thread", turnLimit: 2 })!;
     const identities = new WorkbenchThreadIdentityRepository(database);
-    const thread = identities.resolve({ threadId: "native-thread" })!;
+    const thread = identities.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("native-thread") })!;
     const snapshot = repository.read({ threadId: thread.threadId, turnIds: ["newer"], turnLimit: 1 })!;
     assert.ok(snapshot);
     assert.equal(snapshot.loadedTurnIds.length, 1);
@@ -177,9 +215,9 @@ test("canonical reads convert only selected retained bodies and preserve old ref
     assert.equal(untouched.public_id, null);
     const items = new WorkbenchTranscriptIdentityRepository(database);
     const reasoningId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "newer-reasoning")!.public_id;
-    assert.equal(items.resolve({ threadId: thread.threadId, itemId: "newer-alias" })?.itemId, reasoningId);
+    assert.equal(items.resolve({ threadId: thread.threadId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("newer-alias") })?.itemId, reasoningId);
     const questionnaireId = snapshot.rows.threadItems.find(({ type }) => type === "questionnaire")!.public_id;
-    assert.equal(items.resolve({ threadId: thread.threadId, itemId: "workbench:questionnaire-history:questionnaire" })?.itemId, questionnaireId);
+    assert.equal(items.resolve({ threadId: thread.threadId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("workbench:questionnaire-history:questionnaire") })?.itemId, questionnaireId);
     const reopened = new WorkbenchTranscriptRepository(database);
     assert.deepEqual(reopened.read({ threadId: "thread", turnIds: ["newer"], turnLimit: 1 }), snapshot);
     assert.deepEqual(reopened.read({ threadId: thread.threadId, turnIds: snapshot.loadedTurnIds, turnLimit: 1 }), snapshot);
@@ -196,12 +234,12 @@ test("failed retained item conversion rolls back turn identities and earlier ite
     repository.settle([canonicalWindow([
       threadObservation(), turnObservation("turn", 0),
       ...["first", "second"].map((id): WorkbenchTranscriptAtomicObservation => ({
-        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 4,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 4,
         item: { id, type: "reasoning", summary: [id], content: [] },
         timeline: { itemId: id, aliases: ["conflicting-alias"], firstSeenAt: 3, lastSeenAt: 4, startedAt: 3, completedAt: 4 },
       })),
     ], ["turn"])]);
-    const thread = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: "native-thread" })!;
+    const thread = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("native-thread") })!;
     assert.throws(() => repository.read({ threadId: thread.threadId, turnLimit: 1 }),
       /UNIQUE constraint|conflicting aliases/iu);
     assert.deepEqual(database.prepare("SELECT id, identity_origin FROM thread_turns").all(),
@@ -219,9 +257,9 @@ test("metadata-only catalogs transfer native identity without claiming a turn bo
   const { database, repository } = createRepository();
   try {
     const identity = new WorkbenchThreadIdentityRepository(database);
-    const native = { harness: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread" };
+    const native = { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") };
     const thread = identity.observe({
-      native, projectId: "project", projectRoot: "C:/project", title: "Thread",
+      native, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project", title: "Thread",
       createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const catalog = {
@@ -235,11 +273,11 @@ test("metadata-only catalogs transfer native identity without claiming a turn bo
     assert.equal(repository.read({ threadId: thread.threadId, turnLimit: 1 }), null);
     repository.settle([{
       kind: "canonicalWindow", threadId: thread.threadId, contentVersion: 3,
-      materializedTurnIds: ["known-turn"],
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["known-turn"]],
       observations: [
         ...catalog.catalog,
         {
-          kind: "item", threadId: thread.threadId, turnId: "known-turn", lifecycle: "completed", observedAt: 3,
+          kind: "item", threadId: thread.threadId, turnId: fixtureIdentityValues.WorkbenchTurnId["known-turn"], lifecycle: "completed", observedAt: 3,
           item: {
             id: "message", type: "agentMessage", phase: "commentary", text: "Loaded later",
             memoryCitation: null, delivery: null, questions: null,
@@ -263,12 +301,12 @@ test("body recording reuses admitted identities and keeps provisional source reu
     const identities = new WorkbenchTranscriptIdentityRepository(database);
     const observations = ["first", "second"].map((turnId): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => {
       const identity = identities.admit({
-        threadId: "thread",
-        sources: [{ turnId, sourceId: "item-1", kind: "provisional" }],
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        sources: [{ turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), sourceId: "item-1", kind: "provisional" }],
         legacyAliases: [],
       });
       return {
-        kind: "item", threadId: "thread", turnId, publicItemId: identity.itemId,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), publicItemId: identity.itemId,
         lifecycle: "completed", observedAt: 5,
         item: withWorkbenchThreadItemIdentity({
           id: "item-1", type: "agentMessage", text: turnId, phase: "commentary",
@@ -302,13 +340,13 @@ test("body recording reuses admitted identities and keeps provisional source reu
     assert.deepEqual(afterReread.rows.threadItemAssistantMessages.map(({ text }) => text), ["first updated", "second updated"]);
 
     const failedIdentity = identities.admit({
-      threadId: "thread", sources: [{ turnId: "second", sourceId: "bad", kind: "stable" }], legacyAliases: [],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["second"], sourceId: "bad", kind: "stable" }], legacyAliases: [],
     });
     assert.throws(() => repository.settle([{
       ...observations[1]!, publicItemId: failedIdentity.itemId, itemPosition: -1,
       item: { ...observations[1]!.item, id: "bad" },
     }]));
-    assert.equal(identities.resolve({ threadId: "thread", itemId: failedIdentity.itemId })?.itemId, failedIdentity.itemId);
+    assert.equal(identities.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], itemId: failedIdentity.itemId })?.itemId, failedIdentity.itemId);
     assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 2 }), afterReread);
   } finally {
     database.close();
@@ -320,14 +358,14 @@ test("body recording rejects unadmitted identity and mismatched source ownership
   try {
     repository.settle([threadObservation(), turnObservation("turn", 0)]);
     const identity = new WorkbenchTranscriptIdentityRepository(database).admit({
-      threadId: "thread", sources: [{ turnId: "turn", sourceId: "source", kind: "stable" }], legacyAliases: [],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: "source", kind: "stable" }], legacyAliases: [],
     });
     const observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 5,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 5,
       item: { id: "source", type: "contextCompaction" },
     };
     assert.throws(() => repository.settle([{
-      ...observation, publicItemId: "d3a73029-f4c9-4e60-894a-3dc7e4918405",
+      ...observation, publicItemId: fixtureIdentitySchemas.WorkbenchItemIdSchema.parse("d3a73029-f4c9-4e60-894a-3dc7e4918405"),
     }]), /identity.*admitted/iu);
     assert.throws(() => repository.settle([{
       ...observation, publicItemId: identity.itemId, item: { ...observation.item, id: "unrelated" },
@@ -342,7 +380,7 @@ test("a delayed compatibility window cannot replace a directly materialized live
   const { database, repository } = createRepository();
   try {
     const item = {
-      kind: "item", threadId: "thread", turnId: "live", lifecycle: "completed", observedAt: 20,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["live"], lifecycle: "completed", observedAt: 20,
       item: { id: "answer", type: "agentMessage", text: "live answer", phase: "commentary", memoryCitation: null, delivery: null, questions: null },
     } satisfies WorkbenchTranscriptAtomicObservation;
     repository.settle([threadObservation(), turnObservation("live", 1), item]);
@@ -378,7 +416,7 @@ test("first historical bodies complete missing timing without changing retained 
     const unloaded = { ...turnObservation("unloaded", 2), durationMs: null };
     const live = { ...turnObservation("live", 3), durationMs: null };
     repository.settle([{
-      kind: "usageWindow", threadId: "thread",
+      kind: "usageWindow", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       catalog: [threadObservation(), missing, known, unloaded, live],
       observations: [],
     }]);
@@ -414,11 +452,11 @@ test("usage-only import seeds catalog parents but never materializes transcript 
   const { database, repository } = createRepository();
   try {
     repository.settle([{
-      kind: "usageWindow", threadId: "thread",
+      kind: "usageWindow", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       catalog: [threadObservation(), turnObservation("turn", 0)],
       observations: [{
         kind: "turnUsageContext", model: "recorded-model", serviceTier: null,
-        observedAt: 5, threadId: "thread", turnId: "turn",
+        observedAt: 5, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       }],
     }]);
     assert.equal(repository.read({ threadId: "thread", turnIds: ["turn"], turnLimit: 1 }), null);
@@ -426,7 +464,7 @@ test("usage-only import seeds catalog parents but never materializes transcript 
     repository.settle([turnObservation("turn", 0)]);
     const before = repository.read({ threadId: "thread", turnIds: ["turn"], turnLimit: 1 });
     repository.settle([{
-      kind: "usageWindow", threadId: "thread",
+      kind: "usageWindow", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       catalog: [threadObservation(), { ...turnObservation("turn", 0), state: "inProgress", endedAt: null }],
       observations: [],
     }]);
@@ -463,7 +501,7 @@ test("patch observations retain partial evidence and failed feedback through ech
       }],
     };
     const observation: WorkbenchTranscriptAtomicObservation = {
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 9, item,
     };
     repository.settle([threadObservation(), turnObservation("turn", 0), observation]);
     const readItem = () => {
@@ -497,7 +535,7 @@ test("native output content and queue acceptance survive echoes and omitted prov
       workbenchInjectionAcceptedAt: 9,
     };
     const observation: WorkbenchTranscriptAtomicObservation = {
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 9, item,
     };
     repository.settle([threadObservation(), turnObservation("turn", 0), observation]);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
@@ -528,7 +566,7 @@ test("selected legacy opaque outputs become supported without losing identity or
       output: [{ type: "input_audio", audio_url: "audio" }],
     };
     const observation: WorkbenchTranscriptAtomicObservation = {
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item: unsupported,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 9, item: unsupported,
     };
     repository.settle([threadObservation(), turnObservation("turn", 0), observation, { ...observation, item: { ...unsupported, id: "unsupported" } }]);
     const original = repository.read({ threadId: "thread", turnLimit: 1 })!;
@@ -562,8 +600,8 @@ test("standalone provider turns establish a readable live materialization", () =
 
     repository.settle([{
       kind: "item",
-      threadId: "thread",
-      turnId: "live",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["live"],
       lifecycle: "completed",
       observedAt: 4,
       item: {
@@ -599,8 +637,8 @@ test("source ids stay thread-scoped while repeated same-thread items keep their 
   const { database, repository } = createRepository();
   const item = (threadId: string, turnId: string, text: string): WorkbenchTranscriptAtomicObservation => ({
     kind: "item",
-    threadId,
-    turnId,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
     lifecycle: "completed",
     observedAt: 4,
     item: {
@@ -666,8 +704,8 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
     lifecycle: timeline?.completedAt ? "completed" : "streaming",
     observedAt,
     ...(timeline ? { timeline } : {}),
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
   });
   try {
     repository.settle([
@@ -766,7 +804,7 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
 
 test("top-level mutations reject a metadata-only compatibility turn", () => {
   const { database, repository } = createRepository();
-  const steer: WorkbenchSteerHistoryEntry = {
+  const steer: StoredSteerEntry = {
     attemptedAt: 3,
     canonicalItemId: null,
     clientUserMessageId: "client",
@@ -776,8 +814,8 @@ test("top-level mutations reject a metadata-only compatibility turn", () => {
     requestId: "1",
     resolvedAt: 4,
     status: "failed",
-    threadId: "thread",
-    turnId: "metadata",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.metadata,
   };
   try {
     repository.settle([canonicalWindow([
@@ -791,8 +829,8 @@ test("top-level mutations reject a metadata-only compatibility turn", () => {
 
     const observations: WorkbenchTranscriptAtomicObservation[] = [{
       kind: "item",
-      threadId: "thread",
-      turnId: "metadata",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["metadata"],
       lifecycle: "completed",
       observedAt: 4,
       item: {
@@ -827,8 +865,8 @@ test("top-level mutations reject a metadata-only compatibility turn", () => {
         requestKey: "request",
         resolvedAt: 4,
         response: { answers: { choice: { answers: ["one"] } } },
-        threadId: "thread",
-        turnId: "metadata",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["metadata"],
       },
       observedAt: 4,
     }, {
@@ -850,8 +888,8 @@ test("top-level mutations reject a metadata-only compatibility turn", () => {
         recordedAt: 4,
         session: "session",
         state: "completed",
-        threadId: "thread",
-        turnId: "metadata",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["metadata"],
       },
     }];
     for (const observation of observations) {
@@ -886,8 +924,8 @@ test("source replacement keeps canonical identity and Browse enrichment while re
       recordedAt: 5,
       session: "research",
       state: "completed",
-      threadId: "thread",
-      turnId: "turn-0",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
       detailKind: "text",
       detailLabel: "snapshot",
       detailText: "done",
@@ -899,8 +937,8 @@ test("source replacement keeps canonical identity and Browse enrichment while re
       turnObservation("turn-0", 0),
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn-0",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
         lifecycle: "completed",
         observedAt: 3,
         item: {
@@ -912,8 +950,8 @@ test("source replacement keeps canonical identity and Browse enrichment while re
       },
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn-0",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
         lifecycle: "streaming",
         observedAt: 4,
         item: {
@@ -937,8 +975,8 @@ test("source replacement keeps canonical identity and Browse enrichment while re
 
     repository.settle([{
       kind: "item",
-      threadId: "thread",
-      turnId: "turn-0",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
       lifecycle: "completed",
       observedAt: 6,
       item: {
@@ -1002,7 +1040,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
       ...browseObservation,
       asset: { ...browseAsset, byteLength: browseAsset.byteLength + 1 },
     }]), /changed content-addressed metadata/u);
-    const identity = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: "thread" });
+    const identity = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread") });
     assert.ok(identity);
     const converted = repository.read({ threadId: identity.threadId, turnLimit: 10 });
     assert.ok(converted);
@@ -1010,7 +1048,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
     repository.settle([{
       ...browseObservation,
       asset: { ...browseAsset, storageKey: canonicalAssetUrl },
-      entry: { ...browseObservation.entry, threadId: identity.threadId, turnId: converted.turns[0]!.id, assetUrl: canonicalAssetUrl },
+      entry: { ...browseObservation.entry, threadId: identity.threadId, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(converted.turns[0]!.id), assetUrl: canonicalAssetUrl },
     }]);
     const repeated = repository.read({ threadId: identity.threadId, turnLimit: 10 });
     assert.ok(repeated);
@@ -1028,14 +1066,14 @@ for (const windowed of [false, true]) {
     const { database, repository } = createRepository();
     try {
       const turns = [turnObservation("first", 0), turnObservation("second", 1)];
-      repository.settle([{ kind: "turnCatalog", threadId: "thread", catalog: [threadObservation(), ...turns] }]);
+      repository.settle([{ kind: "turnCatalog", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], catalog: [threadObservation(), ...turns] }]);
       const identity = new WorkbenchTranscriptIdentityRepository(database).admit({
-        threadId: "thread",
-        sources: [{ turnId: "first", sourceId: "command", kind: "stable" }],
-        legacyAliases: [{ turnId: "first", alias: "old-command-reference" }],
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["first"], sourceId: "command", kind: "stable" }],
+        legacyAliases: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["first"], alias: "old-command-reference" }],
       });
       const command = {
-        kind: "item", threadId: "thread", turnId: "first", publicItemId: identity.itemId,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["first"], publicItemId: identity.itemId,
         lifecycle: "completed", observedAt: 3,
         item: {
           type: "commandExecution", id: "command", command: "inspect", cwd: "C:/project",
@@ -1047,7 +1085,7 @@ for (const windowed of [false, true]) {
           kind: "browse", entry: {
             action: "snapshot", actionIndex, assetUrl: null, commandItemId, durationMs: 1,
             entryKey: `${turnId}-${commandItemId}`, recordedAt: 4, session: "research",
-            state: "completed", threadId: "thread", turnId, detailText: "result",
+            state: "completed", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId), detailText: "result",
           },
       });
       const observations = [
@@ -1065,6 +1103,10 @@ for (const windowed of [false, true]) {
       assert.ok(rows.every((entry) => entry.item_id === root.id));
       assert.equal((database.prepare("SELECT COUNT(*) AS count FROM transcript_native_records WHERE turn_id = 'second'")
         .get() as { count: number }).count, 1);
+      const evidence = database.prepare("SELECT native_item_id, payload_json FROM transcript_native_records WHERE turn_id = 'second'")
+        .get() as { native_item_id: string | null; payload_json: string };
+      assert.equal(evidence.native_item_id, null, "an unresolved canonical command reference is not a native item identity");
+      assert.equal(JSON.parse(evidence.payload_json).commandItemId, identity.itemId);
     } finally {
       database.close();
     }
@@ -1073,7 +1115,7 @@ for (const windowed of [false, true]) {
 
 test("failed and interrupted steers keep the renderer's synthetic item identity", () => {
   const { database, repository } = createRepository();
-  const entries: WorkbenchSteerHistoryEntry[] = [
+  const entries: StoredSteerEntry[] = [
     {
       attemptedAt: 3,
       canonicalItemId: null,
@@ -1084,8 +1126,8 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
       requestId: "1",
       resolvedAt: 4,
       status: "failed",
-      threadId: "thread",
-      turnId: "turn-0",
+      threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
     },
     {
       attemptedAt: 5,
@@ -1097,8 +1139,8 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
       requestId: "2",
       resolvedAt: 6,
       status: "interrupted",
-      threadId: "thread",
-      turnId: "turn-0",
+      threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
     },
   ];
   try {
@@ -1134,25 +1176,25 @@ test("interaction bodies reuse admitted identities and positions through steer s
   try {
     repository.settle([threadObservation(), turnObservation("turn", 0)]);
     const identities = new WorkbenchTranscriptIdentityRepository(database);
-    const steer: WorkbenchSteerHistoryEntry = {
+    const steer: StoredSteerEntry = {
       attemptedAt: 3, canonicalItemId: null, clientUserMessageId: "client", entryKey: "request",
       error: "delivery failed", input: [{ type: "text", text: "keep this", text_elements: [] }],
-      requestId: "1", resolvedAt: 4, status: "failed", threadId: "thread", turnId: "turn",
+      requestId: "1", resolvedAt: 4, status: "failed", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
     };
     const interrupted = { ...steer, status: "interrupted" as const, error: null, resolvedAt: 5 };
     const steerIdentity = identities.admit({
-      threadId: "thread", sources: [], legacyAliases: [steer, interrupted].map((entry) => ({
-        turnId: "turn", alias: resolveSteerHistoryItemId(entry),
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [], legacyAliases: [steer, interrupted].map((entry) => ({
+        turnId: fixtureIdentityValues.WorkbenchTurnId.turn, alias: resolveSteerHistoryItemId(entry),
       })),
     });
     const questionnaireIdentity = identities.admit({
-      threadId: "thread", sources: [],
-      legacyAliases: [{ turnId: "turn", alias: "native-questionnaire" }],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [],
+      legacyAliases: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], alias: "native-questionnaire" }],
     });
     const questionnaire = {
       kind: "questionnaire" as const, observedAt: 4, publicItemId: questionnaireIdentity.itemId,
       entry: {
-        threadId: "thread", turnId: "turn", itemId: "native-questionnaire", requestKey: "request",
+        threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn, itemId: "native-questionnaire", requestKey: "request",
         insertAfterItemId: null, insertAfterItemIndex: null, resolvedAt: 4,
         request: { id: "1", title: "", summary: "", submitLabel: "", questions: [] },
         response: { answers: {} },
@@ -1187,8 +1229,8 @@ test("turn usage settlement keeps context while replacing cumulative token updat
         model: "gpt-5.4",
         observedAt: 3,
         serviceTier: "fast",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       },
       {
         cumulative: {
@@ -1201,8 +1243,8 @@ test("turn usage settlement keeps context while replacing cumulative token updat
         },
         kind: "turnTokenUsage",
         observedAt: 4,
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         usageDataVersion: 2,
       },
       {
@@ -1216,8 +1258,8 @@ test("turn usage settlement keeps context while replacing cumulative token updat
         },
         kind: "turnTokenUsage",
         observedAt: 5,
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         usageDataVersion: 2,
       },
     ]);
@@ -1251,16 +1293,16 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
     observedAt: number,
   ): WorkbenchTranscriptAtomicObservation => ({
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt,
     item: { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" },
   });
   const command = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 4,
     item: {
@@ -1304,15 +1346,15 @@ test("provider settlement converts retained bodies before reconciliation without
       memoryCitation: null, delivery: null, questions: null,
     }, id === "item-1" ? "provisional" : "stable");
     repository.settle([threadObservation(), turnObservation("older", 0), turnObservation("turn", 1), {
-      kind: "item", threadId: "thread", turnId: "older", lifecycle: "completed", observedAt: 3,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["older"], lifecycle: "completed", observedAt: 3,
       item: { id: "older-reasoning", type: "reasoning", summary: ["older"], content: [] },
     }, {
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 4,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 4,
       item: message("item-1"),
     }]);
     const identities = new WorkbenchThreadIdentityRepository(database);
-    const thread = identities.resolve({ threadId: "native-thread" })!;
-    const turn = identities.resolveTurn({ threadId: thread.threadId, turnId: "turn" })!;
+    const thread = identities.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("native-thread") })!;
+    const turn = identities.resolveTurn({ threadId: thread.threadId, turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse("turn") })!;
     const items = new WorkbenchTranscriptIdentityRepository(database);
     items.admit({
       threadId: thread.threadId,
@@ -1333,7 +1375,7 @@ test("provider settlement converts retained bodies before reconciliation without
       { ...turnObservation("turn", 1, thread.threadId), turnId: turn.turnId },
       incoming,
     ], [turn.turnId], thread.threadId);
-    assert.throws(() => repository.settle([scope, { ...incoming, threadId: "wrong-owner" }]));
+    assert.throws(() => repository.settle([scope, { ...incoming, threadId: fixtureIdentityValues.WorkbenchThreadId["wrong-owner"] }]));
     assert.equal((database.prepare("SELECT public_id FROM thread_items WHERE source_id = 'item-1'").get() as { public_id: string | null }).public_id, null,
       "Failed settlement must roll back retained identity conversion");
     repository.settle([scope]);
@@ -1347,7 +1389,7 @@ test("provider settlement converts retained bodies before reconciliation without
     assert.equal(snapshot.rows.threadItemAssistantMessages[0]!.text, message("canonical-message").text);
     for (const itemId of ["item-1", "canonical-message", target.itemId]) {
       assert.equal(new WorkbenchTranscriptIdentityRepository(database).resolve({
-        threadId: thread.threadId, turnId: turn.turnId, itemId,
+        threadId: thread.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(itemId),
       })?.itemId, target.itemId);
     }
     assert.equal((database.prepare("SELECT public_id FROM thread_items WHERE source_id = 'older-reasoning'").get() as { public_id: string | null }).public_id, null,
@@ -1367,9 +1409,9 @@ for (const repeatedSource of [false, true]) {
       repository.settle([threadObservation(), turn]);
       const identities = new WorkbenchTranscriptIdentityRepository(database);
       const observation = (id: string, text: string): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
-        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 3,
         publicItemId: identities.admit({
-          threadId: "thread", sources: [{ turnId: "turn", sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
           legacyAliases: [],
         }).itemId,
         item: withWorkbenchThreadItemIdentity({ id, type: "plan", text }, getCodexItemIdentityKind({ id })),
@@ -1391,7 +1433,7 @@ for (const repeatedSource of [false, true]) {
         assert.ok("data" in projection);
         assert.deepEqual(projection.data.turns[0]!.items.map((item) => item.type === "plan" ? item.text : null),
           ["before", "first step, then second step", "after"]);
-        assert.equal(identities.resolve({ threadId: "thread", itemId: alias.item.id })?.itemId, stored.publicItemId);
+        assert.equal(identities.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(alias.item.id) })?.itemId, stored.publicItemId);
         assert.deepEqual(database.pragma("foreign_key_check"), []);
       }
       assert.equal(warnings.mock.callCount(), repeatedSource ? 2 : 0,
@@ -1411,11 +1453,11 @@ for (const residual of [false, true]) {
         const identities = new WorkbenchTranscriptIdentityRepository(database);
         const reasoning = (id: string, summary: string[]): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => {
           const identity = identities.admit({
-            threadId: "thread", sources: [{ turnId: "turn", sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
+            threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
             legacyAliases: [],
           });
           return {
-            kind: "item", threadId: "thread", turnId: "turn", publicItemId: identity.itemId,
+            kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], publicItemId: identity.itemId,
             lifecycle: "completed", observedAt: 3,
             item: withWorkbenchThreadItemIdentity({ id, type: "reasoning", summary, content: [] }, getCodexItemIdentityKind({ id })),
           };
@@ -1441,7 +1483,7 @@ for (const residual of [false, true]) {
         ]);
         assert.deepEqual(items.flatMap((item) => item.type === "reasoning" ? item.summary.filter(Boolean) : []),
           ["alpha", "beta", ...(residual ? ["new thought"] : [])]);
-        assert.equal(identities.resolve({ threadId: "thread", itemId: "item-1" })?.itemId, aggregate.publicItemId,
+        assert.equal(identities.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("item-1") })?.itemId, aggregate.publicItemId,
           "One aggregate cannot become an alias of multiple canonical items.");
         assert.deepEqual(database.pragma("foreign_key_check"), []);
         assert.equal(warnings.mock.callCount(), 0, "Aggregate and direct evidence may represent the same reasoning.");
@@ -1458,13 +1500,13 @@ for (const targetHasBody of [false, true]) {
       repository.settle([threadObservation(), turn]);
       const identities = new WorkbenchTranscriptIdentityRepository(database);
       const source = identities.admit({
-        threadId: "thread", sources: [{ turnId: "turn", sourceId: "item-1", kind: "provisional" }], legacyAliases: [],
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: "item-1", kind: "provisional" }], legacyAliases: [],
       });
       const target = identities.admit({
-        threadId: "thread", sources: [{ turnId: "turn", sourceId: "message", kind: "stable" }], legacyAliases: [],
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: "message", kind: "stable" }], legacyAliases: [],
       });
       const observation = (publicItemId: string, id: string): WorkbenchTranscriptAtomicObservation => ({
-        kind: "item", threadId: "thread", turnId: "turn", publicItemId,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], publicItemId: fixtureIdentitySchemas.WorkbenchItemIdSchema.parse(publicItemId),
         lifecycle: "completed", observedAt: 3,
         item: withWorkbenchThreadItemIdentity({
           id, type: "agentMessage", text: "one fact", phase: "commentary",
@@ -1474,9 +1516,9 @@ for (const targetHasBody of [false, true]) {
       repository.settle([observation(source.itemId, "item-1")]);
       const sourceRoot = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems[0]!;
       repository.settle([{
-        kind: "nativeEvidence", threadId: "thread", turnId: "turn", itemId: source.itemId,
-        harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread",
-        nativeTurnId: "turn", nativeItemId: "item-1", nativeEventId: null, clientId: null,
+        kind: "nativeEvidence", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], itemId: source.itemId,
+        harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+        nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"], nativeItemId: fixtureIdentityValues.NativeItemId["item-1"], nativeEventId: null, clientId: null,
         nativeSequence: null, recordKind: "event", payloadJson: '{"fact":"retained"}', recordedAt: 3,
       }]);
       if (targetHasBody) repository.settle([observation(target.itemId, "message")]);
@@ -1495,7 +1537,7 @@ for (const targetHasBody of [false, true]) {
       assert.equal(snapshot.rows.threadItemAssistantMessages[0]?.text, "one fact");
       const reloadedIdentities = new WorkbenchTranscriptIdentityRepository(database);
       for (const itemId of [source.itemId, target.itemId, "item-1", "message"]) {
-        assert.equal(reloadedIdentities.resolve({ threadId: "thread", turnId: "turn", itemId })?.itemId, target.itemId);
+        assert.equal(reloadedIdentities.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(itemId) })?.itemId, target.itemId);
       }
       assert.deepEqual(database.prepare("SELECT item_id, payload_json FROM transcript_native_records").all(), [
         { item_id: expectedRootId, payload_json: '{"fact":"retained"}' },
@@ -1530,7 +1572,7 @@ for (const scenario of [
     const { database, repository } = createRepository();
     const observedTurn = turnObservation("turn", 0);
     const message = (id: string): WorkbenchTranscriptAtomicObservation => ({
-      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+      kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 3,
       item: {
         id, type: "agentMessage", text: id, phase: "commentary",
         memoryCitation: null, delivery: null, questions: null,
@@ -1554,7 +1596,7 @@ for (const scenario of [
 
 test("complete provider scopes collapse proven aliases while preserving admitted facts and placement", () => {
   const { database, repository } = createRepository();
-  const failedSteer: WorkbenchSteerHistoryEntry = {
+  const failedSteer: StoredSteerEntry = {
     attemptedAt: 8,
     canonicalItemId: null,
     clientUserMessageId: "failed-client",
@@ -1564,8 +1606,8 @@ test("complete provider scopes collapse proven aliases while preserving admitted
     requestId: "steer-request",
     resolvedAt: 9,
     status: "failed",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
   };
   const questionnaire = {
     kind: "questionnaire",
@@ -1590,15 +1632,15 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       requestKey: "questionnaire-request",
       resolvedAt: 7,
       response: { answers: { choice: { answers: ["one"] } } },
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     },
     observedAt: 7,
   } satisfies WorkbenchTranscriptAtomicObservation;
   const command = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 6,
     item: {
@@ -1635,14 +1677,14 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       recordedAt: 10,
       session: "session",
       state: "completed",
-      threadId: "thread",
-      turnId: "turn",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     },
   } satisfies WorkbenchTranscriptAtomicObservation;
   const user = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 3,
     timeline: {
@@ -1661,24 +1703,24 @@ test("complete provider scopes collapse proven aliases while preserving admitted
   } satisfies WorkbenchTranscriptAtomicObservation;
   const reasoningA = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 4,
     item: { content: [], id: "rs-a", summary: ["alpha"], type: "reasoning" },
   } satisfies WorkbenchTranscriptAtomicObservation;
   const reasoningB = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 5,
     item: { content: ["beta"], id: "rs-b", summary: [], type: "reasoning" },
   } satisfies WorkbenchTranscriptAtomicObservation;
   const answer = {
     kind: "item",
-    threadId: "thread",
-    turnId: "turn",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
     lifecycle: "completed",
     observedAt: 12,
     item: {
@@ -1725,8 +1767,8 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       { kind: "steer", entry: failedSteer, observedAt: 9 },
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         lifecycle: "interrupted",
         observedAt: 10,
         item: {
@@ -1739,8 +1781,8 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       },
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
         lifecycle: "completed",
         observedAt: 11,
         item: {
@@ -1758,9 +1800,9 @@ test("complete provider scopes collapse proven aliases while preserving admitted
     ], ["turn"])]);
 
     repository.settle([{
-      kind: "nativeEvidence", threadId: "thread", turnId: "turn", itemId: "item-2",
-      harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread",
-      nativeTurnId: "turn", nativeItemId: "item-2", nativeEventId: null, clientId: null,
+      kind: "nativeEvidence", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("item-2"),
+      harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"],
+      nativeTurnId: fixtureIdentityValues.NativeTurnId["turn"], nativeItemId: fixtureIdentityValues.NativeItemId["item-2"], nativeEventId: null, clientId: null,
       nativeSequence: null, recordKind: "snapshot", payloadJson: '{"aggregate":true}', recordedAt: 19,
     }]);
     const replacement = providerTurnScope([
@@ -1860,8 +1902,8 @@ test("complete provider scopes keep metadata-only turns unmaterialized", () => {
       turnObservation("loaded", 1),
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "loaded",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["loaded"],
         lifecycle: "completed",
         observedAt: 5,
         item: {
@@ -1916,8 +1958,8 @@ test("settled questionnaires may reuse one provider request key across turns", (
       requestKey: "reused",
       resolvedAt,
       response: { answers: { choice: { answers: [turnId] } } },
-      threadId: "thread",
-      turnId,
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
     },
     observedAt: resolvedAt,
   });
@@ -1965,8 +2007,8 @@ test("hydration pages keep full turn metadata and load only the requested immuta
         turnObservation(`turn-${turnIndex}`, turnIndex),
         {
           kind: "item",
-          threadId: "thread",
-          turnId: `turn-${turnIndex}`,
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(`turn-${turnIndex}`),
           lifecycle: "completed",
           observedAt: turnIndex + 10,
           item: {
@@ -2012,8 +2054,8 @@ test("JIT windows seed independent turns without importing old interactions into
   ));
   const message = (id: string, text: string): WorkbenchTranscriptAtomicObservation => ({
     kind: "item",
-    threadId: "thread",
-    turnId: "turn-8",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn-8"],
     lifecycle: "completed",
     observedAt: 20,
     item: { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" },
@@ -2070,8 +2112,8 @@ test("JIT windows seed independent turns without importing old interactions into
           requestKey: "questionnaire",
           resolvedAt: 21,
           response: { answers: {} },
-          threadId: "thread",
-          turnId: "turn-8",
+          threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+          turnId: fixtureIdentityValues.WorkbenchTurnId["turn-8"],
         },
         observedAt: 21,
       },
@@ -2087,8 +2129,8 @@ test("JIT windows seed independent turns without importing old interactions into
       ...turnHistory,
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn-0",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
         lifecycle: "completed",
         observedAt: 22,
         item: { id: "ancestor", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "ancestor", type: "agentMessage" },
@@ -2114,8 +2156,8 @@ test("an old content stamp never deletes stored turns when importing an independ
         turnObservation("partial", 2),
         {
           kind: "item",
-          threadId: "thread",
-          turnId: "partial",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentityValues.WorkbenchTurnId["partial"],
           lifecycle: "completed",
           observedAt: 3,
           item: { id: "partial-item", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "partial", type: "agentMessage" },
@@ -2131,16 +2173,16 @@ test("an old content stamp never deletes stored turns when importing an independ
     repository.settle([{
       kind: "canonicalWindow",
       contentVersion: 3,
-      materializedTurnIds: ["older", "newer"],
-      threadId: "thread",
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["older"], fixtureIdentityValues.WorkbenchTurnId["newer"]],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
       observations: [
         threadObservation(),
         turnObservation("older", 0),
         turnObservation("newer", 1),
         {
           kind: "item",
-          threadId: "thread",
-          turnId: "older",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+          turnId: fixtureIdentityValues.WorkbenchTurnId["older"],
           lifecycle: "completed",
           observedAt: 20,
           timeline: {
@@ -2175,14 +2217,14 @@ test("an old content stamp never deletes stored turns when importing an independ
     assert.throws(() => repository.settle([{
       kind: "canonicalWindow",
       contentVersion: 3,
-      materializedTurnIds: ["missing"],
-      threadId: "other",
+      materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["missing"]],
+      threadId: fixtureIdentityValues.WorkbenchThreadId["other"],
       observations: [
         threadObservation("other"),
         {
           kind: "item",
-          threadId: "other",
-          turnId: "missing",
+          threadId: fixtureIdentityValues.WorkbenchThreadId["other"],
+          turnId: fixtureIdentityValues.WorkbenchTurnId["missing"],
           lifecycle: "completed",
           observedAt: 30,
           item: { id: "invalid", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "invalid", type: "agentMessage" },
@@ -2219,7 +2261,7 @@ test("collaboration tools preserve native status and relationships through SQLit
       threadObservation(),
       turnObservation("turn", 0),
       ...items.map((item): WorkbenchTranscriptAtomicObservation => ({
-        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3, item,
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 3, item,
       })),
     ]);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
@@ -2242,7 +2284,7 @@ test("unsupported function output retains all parts in opaque storage", () => {
     repository.settle([
       threadObservation(),
       turnObservation("turn", 0),
-      { kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3, item },
+      { kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], lifecycle: "completed", observedAt: 3, item },
     ]);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
     assert.ok(snapshot);
@@ -2262,16 +2304,16 @@ test("unsupported items remain opaque and a later invalid observation rolls back
     assert.throws(() => repository.settle([
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "turn-0",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
         lifecycle: "completed",
         observedAt: 3,
         item: { type: "imageView", id: "opaque", path: "C:/project/image.png" },
       },
       {
         kind: "item",
-        threadId: "thread",
-        turnId: "missing",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["missing"],
         lifecycle: "completed",
         observedAt: 4,
         item: {
@@ -2291,8 +2333,8 @@ test("unsupported items remain opaque and a later invalid observation rolls back
 
     repository.settle([{
       kind: "item",
-      threadId: "thread",
-      turnId: "turn-0",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn-0"],
       lifecycle: "completed",
       observedAt: 5,
       item: { type: "imageView", id: "opaque", path: "C:/project/image.png" },
@@ -2325,8 +2367,8 @@ test("capture-gap settlement records one closed thread-owned failure interval", 
         openedAt: 10,
         reason: "sqlite transcript settlement failed",
         state: "reconciled",
-        threadId: "thread",
-        turnId: "turn",
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       },
     ]);
     assert.deepEqual(

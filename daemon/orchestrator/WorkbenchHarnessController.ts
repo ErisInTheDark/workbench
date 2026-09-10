@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchHarnessRuntimePort: stable bridge operations supplied to reloadable harness registrations. Keywords: harness, bridge, port, lifecycle.
- * - WorkbenchHarnessAdapter: exhaustive provider capability registration. Keywords: harness, capability, recovery.
- * - default WorkbenchHarnessController: validate registrations and own browser, server, Browse, and recovery routing. Keywords: harness, routing, recovery.
+ * - WorkbenchHarnessRuntimePort: stable bridge operations supplied to reloadable harness registrations.
+ * - WorkbenchHarnessAdapter: exhaustive provider capability registration.
+ * - default WorkbenchHarnessController: own browser, server, Browse, and recovery routing.
  * - WorkbenchHarnessControllerOptions: turn admission and public identity boundary.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
@@ -20,12 +20,14 @@ import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIde
 import { mapWorkbenchProviderRequest, mapNativeProviderResponse } from "./thread-identity-workbench-mapping";
 import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
 import type { WorkbenchThreadIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
+import { NativeThreadIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId, type ProjectId } from "workbench-shared/workbench/identity";
+import type { WorkbenchTurnIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
 
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
   request(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse>;
-  readThread(threadId: string): Promise<ThreadReadResponse>;
-  steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<string | null>;
+  readThread(threadId: NativeThreadId): Promise<ThreadReadResponse>;
+  steerTurn(threadId: NativeThreadId, expectedTurnId: NativeTurnId, input: UserInput[]): Promise<string | null>;
   recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
   readLoadedThreads?: () => readonly Thread[];
 }
@@ -42,7 +44,7 @@ type WorkbenchHarnessRecoveryCapability =
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
       recoverAvailable?(signal?: AbortSignal): Promise<void>;
-      resumeThread(threadId: string): Promise<void>;
+      resumeThread(threadId: NativeThreadId): Promise<void>;
     };
 
 export interface WorkbenchHarnessAdapter {
@@ -60,7 +62,7 @@ export interface WorkbenchHarnessControllerOptions {
   admitTurnStart?: () => void;
   identities?: WorkbenchThreadIdentityController;
   itemIdentities?: WorkbenchTranscriptIdentityController;
-  resolveProject?: (cwd: string) => Promise<{ projectId: string; projectRoot: string }>;
+  resolveProject?: (cwd: string) => Promise<{ projectId: ProjectId; projectRoot: string }>;
 }
 
 function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
@@ -101,7 +103,7 @@ export default class WorkbenchHarnessController {
     const inputs = await Promise.all(threads.map(async (thread) => ({
       thread, metadata: {
         ...await this.resolveProject!(thread.cwd),
-        native: { harness, nativeLocation: thread.cwd, nativeThreadId: thread.id },
+        native: { harness, nativeLocation: thread.cwd, nativeThreadId: NativeThreadIdSchema.parse(thread.id) },
         title: thread.name ?? "", createdAt: thread.createdAt * 1_000,
         updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
       },
@@ -109,7 +111,7 @@ export default class WorkbenchHarnessController {
     await admitProviderThreads({ threads: this.identities, items: this.itemIdentities }, inputs);
   }
 
-  async admitNotifications(harness: WorkbenchHarness, threadId: string, notifications: readonly JsonRpcNotification[]) {
+  async admitNotifications(harness: WorkbenchHarness, threadId: NativeThreadId, notifications: readonly JsonRpcNotification[]) {
     if (!this.identities || !this.itemIdentities) throw new Error("Provider identity admission is unavailable.");
     const native = this.identities.knownNativeBinding(harness, threadId);
     await admitProviderNotifications({ threads: this.identities, items: this.itemIdentities }, native, notifications as ServerNotification[]);
@@ -168,7 +170,7 @@ export default class WorkbenchHarnessController {
     const params = request.params;
     if (this.identities && params && typeof params === "object" && "threadId" in params
       && typeof params.threadId === "string") {
-      await this.resolveThreadIdentity({ threadId: params.threadId, harness });
+      await this.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(params.threadId), harness });
     }
     return this.identities ? mapWorkbenchProviderRequest(this.identities, harness, request) : { harness, request };
   }
@@ -188,7 +190,7 @@ export default class WorkbenchHarnessController {
     return await this.identities.resolve(input);
   }
 
-  async resolveTurnIdentity(input: WorkbenchThreadIdentityLookup & { turnId: string }) {
+  async resolveTurnIdentity(input: WorkbenchThreadIdentityLookup & Pick<WorkbenchTurnIdentityLookup, "turnId">) {
     if (!this.identities || !this.itemIdentities) throw new Error("Turn identity resolution is unavailable.");
     const thread = await this.resolveThreadIdentity(input);
     if (!thread) throw new Error("Thread metadata is unavailable for turn identity resolution.");
@@ -236,11 +238,11 @@ export default class WorkbenchHarnessController {
       : response;
   }
 
-  async readThread(harness: WorkbenchHarness, threadId: string) {
+  async readThread(harness: WorkbenchHarness, threadId: NativeThreadId) {
     return await this.getAdapter(harness).browse.readThread(threadId);
   }
 
-  async steerTurn(harness: WorkbenchHarness, threadId: string, expectedTurnId: string, input: UserInput[]) {
+  async steerTurn(harness: WorkbenchHarness, threadId: NativeThreadId, expectedTurnId: NativeTurnId, input: UserInput[]) {
     return await this.getAdapter(harness).browse.steerTurn(threadId, expectedTurnId, input);
   }
 
@@ -254,7 +256,7 @@ export default class WorkbenchHarnessController {
     if (recovery.kind === "turn") await recovery.recoverAvailable?.(signal);
   }
 
-  async resumeThread(harness: WorkbenchHarness, threadId: string) {
+  async resumeThread(harness: WorkbenchHarness, threadId: NativeThreadId) {
     const recovery = this.getAdapter(harness).recovery;
     if (recovery.kind !== "turn") throw new Error(`Manual thread resume is unavailable for ${harness} threads.`);
     await recovery.resumeThread(threadId);

@@ -1,5 +1,4 @@
 /*
- * Keywords: thread ownership, admission, cancellation, reconnect, transcript.
  * Exports: none. Tests protect the shared thread surface through controlled adapter ports.
  */
 import assert from "node:assert/strict";
@@ -10,6 +9,21 @@ import type { ThreadTranscriptProjectionState } from "./transcript/ThreadTranscr
 import WorkbenchThreadController, { type ThreadControllerPorts } from "./WorkbenchThreadController";
 import ThreadObservationController from "./thread/ThreadObservationController";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "draft": fixtureIdentitySchemas.DraftIdSchema.parse("draft"),
+  },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
+    "missing": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing"),
+    "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  },
+};
 
 function fixture() {
   const requests: Array<{ subscriptionId: string; resolve: (value: object) => void }> = [];
@@ -23,9 +37,9 @@ function fixture() {
       return new Promise<object>(resolve => requests.push({ ...params as { subscriptionId: string }, resolve }));
     },
   });
-  const target = { kind: "provider" as const, harness: "codex" as const, threadId: "thread" };
+  const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   const document: ThreadPayload = {
-    id: "thread", harness: "codex", isDraft: false, turns: [], browseResultEntries: [], turnHistory: [],
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), harness: "codex", isDraft: false, turns: [], browseResultEntries: [], turnHistory: [],
     agentNickname: null, agentPath: null, agentRole: null, createdAt: 1, cwd: "C:/project",
     model: null, name: null, path: null, preview: "", reasoningEffort: null, serviceTier: null,
     source: "codex", status: "idle", tokenUsage: null, updatedAt: 1,
@@ -65,9 +79,9 @@ function fixture() {
   const owner = new WorkbenchThreadController("project", target, ports);
   function admit(index = 0, children: WorkbenchThreadSidebarEntry[] = []) {
     const snapshot: WorkbenchThreadObservationSnapshot = {
-      projectId: "project", subscriptionId: requests[index]!.subscriptionId, target,
+      projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: requests[index]!.subscriptionId, target,
       entries: [{
-        activityAt: 1, title: "thread", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+        activityAt: 1, title: "thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
         metadata: { archived: false, pinned: true, snoozed: false },
         lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       }, ...children],
@@ -189,8 +203,8 @@ test("route activation never loads a tooltip-only consumer", async () => {
 
 test("draft recovery retains its local document without provider reads", async () => {
   const f = fixture();
-  const draft = new WorkbenchThreadController("project", { kind: "draft", draftId: "draft" }, f.ports);
-  f.publish({ ...f.document, id: "draft", isDraft: true });
+  const draft = new WorkbenchThreadController("project", { kind: "draft", draftId: fixtureIdentityValues.DraftId["draft"] }, f.ports);
+  f.publish({ ...f.document, id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true });
   const release = draft.acquire("view");
   const recovered = draft.recover();
   assert.equal(f.reads.length, 0);
@@ -206,7 +220,7 @@ test("a missing child fails at the common owner while its root remains available
   const root = f.owner.acquire("summary");
   f.admit();
   const child = new WorkbenchThreadController("project", {
-    kind: "subagent", parentThreadId: "thread", threadId: "missing",
+    kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["thread"], threadId: fixtureIdentityValues.WorkbenchThreadId["missing"],
   }, f.ports);
   const release = child.acquire("summary");
   assert.equal(child.getSnapshot().status, "failed");
@@ -305,10 +319,10 @@ test("family views coalesce child hydration and release only their own demand", 
   const f = fixture();
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
     activityAt: 1, createdAt: 1, updatedAt: 1, cwd: "C:/project", directSubagentIndex: 0,
-    entryKind: "subagent", identity: { harness: "codex", threadId: "child" },
+    entryKind: "subagent", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["child"] },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    name: "child", parentThreadId: "thread", pinned: false, profileId: "", profileName: "",
-    projectId: "project", title: "child",
+    name: "child", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["thread"], pinned: false, profileId: "", profileName: "",
+    projectId: fixtureIdentityValues.ProjectId["project"], title: "child",
   };
   let document: ThreadPayload | null = null;
   let accept!: () => void;
@@ -319,7 +333,7 @@ test("family views coalesce child hydration and release only their own demand", 
   const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
   let nextTimer = 0;
   const child = new WorkbenchThreadController("project", {
-    kind: "subagent", harness: "codex", parentThreadId: "thread", threadId: "child",
+    kind: "subagent", harness: "codex", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["thread"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"],
   }, {
     ...f.ports,
     getChild: () => child,
@@ -336,7 +350,7 @@ test("family views coalesce child hydration and release only their own demand", 
       if (refreshFailure) throw new Error("refresh failed");
       await admit();
       await page;
-      document = { ...f.document, id: "child", turns: [{
+      document = { ...f.document, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"), turns: [{
         id: "turn", status: "inProgress", items: [], itemsView: "full", error: null, startedAt: 1, completedAt: null, durationMs: null,
       }] };
       for (const listener of listeners) listener();

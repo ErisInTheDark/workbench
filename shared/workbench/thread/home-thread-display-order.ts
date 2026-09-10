@@ -1,17 +1,17 @@
 /*
- * Keywords: home, sidebar, thread, folder, archive, ordering.
  * Exports:
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder: folder-free, project-qualified home order.
  * - WorkbenchHomeThreadEntry/WorkbenchHomeThreadDisplayItem/WorkbenchHomeThreadList: qualified rows, folder blocks, and list sections.
  * - normalizeWorkbenchHomeThreadDisplayOrder: conform persisted home layout.
  * - getWorkbenchHomeThreadKey/getWorkbenchHomeFolderKey: qualify thread and folder identities.
  * - resolveWorkbenchHomeThreadSectionKeys: flatten ordered section membership.
- * - projectWorkbenchHomeThreadList: combine project sidebars with project-owned folders and a separate archived tail. Keywords: sidebar, folder, projection, archive.
+ * - projectWorkbenchHomeThreadList: combine project sidebars with project-owned folders and a separate archived tail.
  * - moveWorkbenchHomeThreadDisplayItem: move a qualified thread block.
  * - replaceWorkbenchHomeThreadDisplayMember/removeWorkbenchHomeThreadDisplayMember: replace or remove home membership.
  * - removeWorkbenchThreadFromProjectFolder: remove project-owned folder membership separately.
  */
 
+import { ThreadDisplayKeySchema, type FolderId, type ProjectId, type ProjectThreadDisplayKey } from "../identity.ts";
 import {
   getProjectQualifiedThreadDisplayKey,
   getThreadDisplayFolderKey,
@@ -42,18 +42,18 @@ export type { WorkbenchHomeThreadDisplayOrder };
 
 export interface WorkbenchHomeThreadEntry {
   entry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
-  projectId: string;
-  threadKey: string;
+  projectId: ProjectId;
+  threadKey: ProjectThreadDisplayKey;
 }
 
 export type WorkbenchHomeThreadDisplayItem =
-  | { entry: WorkbenchHomeThreadEntry; itemKind: "thread"; threadKeys: [string] }
+  | { entry: WorkbenchHomeThreadEntry; itemKind: "thread"; threadKeys: [ProjectThreadDisplayKey] }
   | {
     entries: WorkbenchHomeThreadEntry[];
     folder: ThreadDisplayFolder;
     itemKind: "folder";
-    projectId: string;
-    threadKeys: string[];
+    projectId: ProjectId;
+    threadKeys: ProjectThreadDisplayKey[];
   };
 
 export interface WorkbenchHomeThreadList {
@@ -72,11 +72,11 @@ export function normalizeWorkbenchHomeThreadDisplayOrder(candidate: unknown): Wo
   return order;
 }
 
-export function getWorkbenchHomeThreadKey(projectId: string, entry: WorkbenchThreadSidebarEntry) {
+export function getWorkbenchHomeThreadKey(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) {
   return getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry));
 }
 
-export function getWorkbenchHomeFolderKey(projectId: string, folderId: string) {
+export function getWorkbenchHomeFolderKey(projectId: ProjectId, folderId: FolderId) {
   return getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayFolderKey(folderId));
 }
 
@@ -118,7 +118,7 @@ function collapseProjectFolders(
   const folderByMember = new Map<string, ReturnType<typeof folders.get>>();
   for (const value of folders.values()) {
     for (const localThreadKey of value!.folder.threadKeys) {
-      folderByMember.set(getProjectQualifiedThreadDisplayKey(value!.projectId, localThreadKey), value);
+      folderByMember.set(getProjectQualifiedThreadDisplayKey(value!.projectId, ThreadDisplayKeySchema.parse(localThreadKey)), value);
     }
   }
   const entriesByKey = new Map(orderedEntries.map((entry) => [entry.threadKey, entry]));
@@ -130,7 +130,7 @@ function collapseProjectFolders(
     if (emittedFolders.has(folderKey)) return [];
     emittedFolders.add(folderKey);
     const entries = owner.folder.threadKeys.flatMap((localThreadKey) => {
-      const member = entriesByKey.get(getProjectQualifiedThreadDisplayKey(owner.projectId, localThreadKey));
+      const member = entriesByKey.get(getProjectQualifiedThreadDisplayKey(owner.projectId, ThreadDisplayKeySchema.parse(localThreadKey)));
       return member ? [member] : [];
     });
     return entries.length ? [{
@@ -178,8 +178,8 @@ export function projectWorkbenchHomeThreadList(
   };
 }
 
-function orderedSectionKeys(
-  entries: readonly ThreadDisplayLayoutEntry[],
+function orderedSectionKeys<Key extends string>(
+  entries: readonly ThreadDisplayLayoutEntry<Key>[],
   candidate: unknown,
   section: WorkbenchThreadDisplaySection,
 ) {
@@ -192,8 +192,8 @@ function orderedSectionKeys(
   ).flatMap((item) => item.itemKind === "thread" ? [item.entry.key] : item.entries.map(({ key }) => key));
 }
 
-export function resolveWorkbenchHomeThreadSectionKeys(
-  entries: readonly ThreadDisplayLayoutEntry[],
+export function resolveWorkbenchHomeThreadSectionKeys<Key extends string>(
+  entries: readonly ThreadDisplayLayoutEntry<Key>[],
   candidate: unknown,
   section: WorkbenchThreadDisplaySection,
 ) {

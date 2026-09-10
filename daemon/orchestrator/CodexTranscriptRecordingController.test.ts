@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect source-owned JSON-first recording and explicit compatibility import. Keywords: codex, transcript, recording, test.
+ * No production exports. Tests protect source-owned JSON-first recording and explicit compatibility import.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,17 +8,27 @@ import CodexTranscriptRecordingController, {
   CodexTranscriptSqliteRecordingFailure,
 } from "./CodexTranscriptRecordingController.ts";
 import type {
-  WorkbenchTranscriptObservation,
+  NativeTranscriptObservation,
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
-const observation: WorkbenchTranscriptObservation = {
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  NativeThreadId: {
+    "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
+  },
+};
+
+const observation: NativeTranscriptObservation = {
   activityAt: 1,
   createdAt: 1,
   kind: "thread",
-  projectId: "project",
+  projectId: fixtureIdentityValues.ProjectId["project"],
   projectRoot: "C:/project",
-  threadId: "thread",
+  threadId: fixtureIdentityValues.NativeThreadId["thread"],
   title: "Thread",
   updatedAt: 1,
 };
@@ -51,7 +61,7 @@ test("live recording never invokes the compatibility reader", async () => {
   const controller = new CodexTranscriptRecordingController({
     recordSqlite: async () => { sqliteWrites += 1; },
   });
-  const throwingCompatibilityReader = async (): Promise<readonly WorkbenchTranscriptObservation[]> => {
+  const throwingCompatibilityReader = async (): Promise<readonly NativeTranscriptObservation[]> => {
     throw new Error("legacy compatibility reader crossed the live boundary");
   };
 
@@ -72,10 +82,10 @@ test("live recording never invokes the compatibility reader", async () => {
 });
 
 test("historical compatibility import records its explicitly loaded window", async () => {
-  const batches: readonly WorkbenchTranscriptObservation[][] = [];
+  const batches: NativeTranscriptObservation[][] = [];
   const controller = new CodexTranscriptRecordingController({
     recordSqlite: async (observations) => {
-      (batches as WorkbenchTranscriptObservation[][]).push([...observations]);
+      batches.push([...observations]);
     },
   });
   await controller.importCompatibilityWindow(async () => [observation]);
@@ -102,7 +112,7 @@ test("provider recovery context reaches SQLite after legacy recording", async ()
 
 test("provider facts and crossed Workbench facts settle together as unrecoverable", async () => {
   const order: string[] = [];
-  const batches: WorkbenchTranscriptObservation[][] = [];
+  const batches: NativeTranscriptObservation[][] = [];
   const contexts: WorkbenchTranscriptRecordingContext[] = [];
   const controller = new CodexTranscriptRecordingController({
     recordSqlite: async (observations, context) => {

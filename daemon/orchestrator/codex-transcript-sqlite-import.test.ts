@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect complete Codex history collapse, stable global indexes, exact timelines, and settled interaction placement. Keywords: codex, transcript, sqlite, import.
+ * No production exports. Tests protect complete Codex history collapse, stable global indexes, exact timelines, and settled interaction placement.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -7,6 +7,13 @@ import test from "node:test";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function thread(): Thread & { workbenchTurnHistory: WorkbenchThreadTurnHistoryEntry[] } {
   return {
@@ -118,7 +125,7 @@ test("complete import uses full history order, exact timeline facts, and durable
       activityAt: 6_000,
       createdAt: 1_000,
       nativeLocation: "C:/repo",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       projectRoot: "C:/repo",
       title: "Thread",
       updatedAt: 6_000,
@@ -182,7 +189,7 @@ test("reused provider request keys keep questionnaire observations in their owni
       activityAt: 6_000,
       createdAt: 1_000,
       nativeLocation: "C:/repo",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       projectRoot: "C:/repo",
       title: "Thread",
       updatedAt: 6_000,
@@ -227,7 +234,7 @@ test("latest-only import omits items owned by an unloaded earlier turn", () => {
       activityAt: 6_000,
       createdAt: 1_000,
       nativeLocation: "C:/repo",
-      projectId: "project",
+      projectId: fixtureIdentityValues.ProjectId["project"],
       projectRoot: "C:/repo",
       title: "Thread",
       updatedAt: 6_000,

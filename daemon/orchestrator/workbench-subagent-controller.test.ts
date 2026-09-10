@@ -18,6 +18,7 @@ import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 async function profileFixture(context: TestContext) {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
@@ -48,8 +49,24 @@ function incomingAgentMessage(call: HarnessCall | undefined) {
   return readWorkbenchAgentMessageItem(item);
 }
 
-const callerThreadId = "parent-thread";
-const childThreadId = "child-thread";
+const callerThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent-thread");
+const childThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child-thread");
+
+function subagentFixture() {
+  const database = createThreadStateTestDatabase();
+  for (const id of [callerThreadId, childThreadId, "different-parent", "unrelated-thread"]) {
+    database.admitThread("web/workbench", id);
+  }
+  return {
+    database,
+    identities: database.identities.threads,
+    publicThreadId: async (threadId: fixtureIdentitySchemas.ThreadReference | fixtureIdentitySchemas.WorkbenchThreadId, projectId: fixtureIdentitySchemas.ProjectId) => {
+      const identity = await database.identities.threads.resolve({ threadId, projectId });
+      assert.ok(identity);
+      return identity.threadId;
+    },
+  };
+}
 const questionnaire: WorkbenchUserInputRequest = {
   id: "questionnaire-1",
   questions: [{
@@ -171,7 +188,7 @@ function createProjectResolver(expectedCwd: string) {
     rootPath: cwd,
   };
   const project = {
-    id: "web/workbench",
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("web/workbench"),
     kind: "git" as const,
     root: cwd,
     rootPath: cwd,
@@ -184,11 +201,14 @@ function createProjectResolver(expectedCwd: string) {
 }
 
 test("creates with one client and delivers native agent output before empty questionnaire resolution", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const committed: WorkbenchSubagentRelationship[] = [];
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
       const client = new FakeHarnessClient(cwd);
@@ -201,7 +221,7 @@ test("creates with one client and delivers native agent output before empty ques
     },
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
+    subagentStore: new WorkbenchSubagentStore(fixture.database),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -294,11 +314,14 @@ test("creates with one client and delivers native agent output before empty ques
 });
 
 test("starts an idle direct parent through the pre-reload store surface", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
-  const subagentStore = new WorkbenchSubagentStore(createThreadStateTestDatabase());
+  const subagentStore = new WorkbenchSubagentStore(fixture.database);
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
       const client = new FakeHarnessClient(cwd);
@@ -338,10 +361,13 @@ test("starts an idle direct parent through the pre-reload store surface", async 
 });
 
 test("starts an idle child with attributed parent-agent input", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
       const client = new FakeHarnessClient(cwd, false, "completed", "completed");
@@ -351,7 +377,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
+    subagentStore: new WorkbenchSubagentStore(fixture.database),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -376,10 +402,13 @@ test("starts an idle child with attributed parent-agent input", async (context) 
 });
 
 test("delivers native output to an active direct parent and rejects callers without a relationship", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
       const client = new FakeHarnessClient(cwd, false, "inProgress");
@@ -389,7 +418,7 @@ test("delivers native output to an active direct parent and rejects callers with
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
+    subagentStore: new WorkbenchSubagentStore(fixture.database),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -422,15 +451,18 @@ test("delivers native output to an active direct parent and rejects callers with
 });
 
 test("keeps relationship storage independent from lifecycle through create, message, and stop", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
+    subagentStore: new WorkbenchSubagentStore(fixture.database),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -466,15 +498,18 @@ test("keeps relationship storage independent from lifecycle through create, mess
 });
 
 test("keeps a created child durable when its first turn fails to start", async (context) => {
+  const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const controller = new WorkbenchSubagentController({
+    identities: fixture.identities,
+    publicThreadId: fixture.publicThreadId,
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd, true),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
-    subagentStore: new WorkbenchSubagentStore(createThreadStateTestDatabase()),
+    subagentStore: new WorkbenchSubagentStore(fixture.database),
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });

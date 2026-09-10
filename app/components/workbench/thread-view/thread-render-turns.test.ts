@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect logical rendering across hidden unfinished-turn continuations. Keywords: thread, rendering, continuation, test.
+ * No production exports. Node tests protect logical rendering across hidden unfinished-turn continuations.
  */
 
 import assert from "node:assert/strict";
@@ -9,6 +9,7 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import projectThreadRenderTurns from "./thread-render-turns";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function textInput(text: string) {
   return { text, text_elements: [], type: "text" as const };
@@ -55,7 +56,7 @@ function thread(turns: Turn[]): ThreadPayload {
     createdAt: 1,
     cwd: "C:/workspace",
     harness: "codex",
-    id: "thread",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     isDraft: false,
     model: null,
     name: null,

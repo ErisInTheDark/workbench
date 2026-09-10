@@ -11,13 +11,15 @@ import {
   getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
   normalizeThreadDisplayLayout, ThreadDisplayLayoutSchema, THREAD_DISPLAY_LAYOUT_SECTIONS,
   removeThreadDisplayLayoutMember,
+  getThreadDisplayDraftKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey,
   type ThreadDisplayFolder, type ThreadDisplayLayout, type ThreadDisplayLayoutSection,
 } from "workbench-shared/workbench/thread/thread-display-layout";
+import { ThreadReferenceSchema, type DraftId, type FolderId, type ProjectId, type ThreadDisplayKey, type ThreadReference, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
-export type WorkbenchThreadLayoutOwner = { kind: "project"; projectId: string } | { kind: "pinned" | "home" };
+export type WorkbenchThreadLayoutOwner = { kind: "project"; projectId: ProjectId } | { kind: "pinned" | "home" };
 export interface WorkbenchThreadLayoutReferences {
-  resolveThread(projectId: string, harness: WorkbenchHarness, threadId: string): string;
-  readThread(threadId: string): { projectId: string; harness: WorkbenchHarness; threadId: string };
+  resolveThread(projectId: ProjectId, harness: WorkbenchHarness, threadId: ThreadReference): WorkbenchThreadId;
+  readThread(threadId: WorkbenchThreadId): { projectId: ProjectId; harness: WorkbenchHarness; threadId: WorkbenchThreadId };
 }
 
 type LayoutItem = {
@@ -25,13 +27,13 @@ type LayoutItem = {
   section: ThreadDisplayLayoutSection;
   item_kind: "thread" | "draft" | "folder";
   positioned: 0 | 1;
-  thread_id: string | null;
-  draft_id: string | null;
-  draft_project_id: string | null;
-  folder_id: string | null;
+  thread_id: WorkbenchThreadId | null;
+  draft_id: DraftId | null;
+  draft_project_id: ProjectId | null;
+  folder_id: FolderId | null;
 };
 type FolderRow = {
-  id: string; folder_id: string; section: ThreadDisplayLayoutSection; title: string; folder_index: number;
+  id: string; folder_id: FolderId; section: ThreadDisplayLayoutSection; title: string; folder_index: number;
 };
 
 export default class WorkbenchThreadStateLayoutRepository {
@@ -92,7 +94,7 @@ export default class WorkbenchThreadStateLayoutRepository {
     return { revision: layout.revision, displayOrder: ThreadDisplayLayoutSchema.parse(displayOrder) };
   }
 
-  removeDraft(projectId: string, draftId: string) {
+  removeDraft(projectId: ProjectId, draftId: DraftId) {
     const owners = this.database.prepare(`
       SELECT DISTINCT layout.owner_kind, project.project_id
       FROM workbench_sidebar_layout_drafts item
@@ -101,13 +103,14 @@ export default class WorkbenchThreadStateLayoutRepository {
       JOIN workbench_sidebar_layouts layout ON layout.id = base.layout_id
       LEFT JOIN workbench_sidebar_project_layouts project ON project.layout_id = layout.id
       WHERE draft.project_id = ? AND draft.draft_id = ?
-    `).all(projectId, draftId) as Array<{ owner_kind: "project" | "home" | "pinned"; project_id: string | null }>;
+    `).all(projectId, draftId) as Array<{ owner_kind: "project" | "home" | "pinned"; project_id: ProjectId | null }>;
     for (const row of owners) {
       const owner: WorkbenchThreadLayoutOwner = row.owner_kind === "project"
         ? { kind: "project", projectId: row.project_id! } : { kind: row.owner_kind };
       const stored = this.read(owner)!;
-      const key = owner.kind === "project" ? `draft:${draftId}`
-        : getProjectQualifiedThreadDisplayKey(projectId, `draft:${draftId}`);
+      const localKey = getThreadDisplayDraftKey(draftId);
+      const key = owner.kind === "project" ? localKey
+        : getProjectQualifiedThreadDisplayKey(projectId, localKey);
       this.replace(owner, stored.revision, removeThreadDisplayLayoutMember(stored.displayOrder, key));
     }
   }
@@ -121,7 +124,7 @@ export default class WorkbenchThreadStateLayoutRepository {
       const id = previous?.id ?? randomUUID();
       const previousItems = previous ? this.readItems(id) : [];
       const previousFolders = previous ? this.readFolders(id) : [];
-      const previousIds = new Map(previousItems.map((item) => [this.itemKey(owner, item), item.id]));
+      const previousIds = new Map<string, string>(previousItems.map((item) => [this.itemKey(owner, item), item.id]));
       this.database.prepare(`
         INSERT INTO workbench_sidebar_layouts(id, owner_kind, revision) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET revision = excluded.revision
@@ -187,7 +190,7 @@ export default class WorkbenchThreadStateLayoutRepository {
             if ((harness !== "codex" && harness !== "copilot" && harness !== "opencode") || !threadId) {
               throw new Error("Layout thread reference is invalid.");
             }
-            const canonicalId = this.references.resolveThread(local.projectId, harness, threadId);
+            const canonicalId = this.references.resolveThread(local.projectId, harness, ThreadReferenceSchema.parse(threadId));
             this.database.prepare(`
               INSERT INTO workbench_sidebar_layout_threads(item_id, item_kind, thread_id) VALUES (?, 'thread', ?)
             `).run(item.id, canonicalId);
@@ -262,19 +265,19 @@ export default class WorkbenchThreadStateLayoutRepository {
   private itemKey(owner: WorkbenchThreadLayoutOwner, row: LayoutItem) {
     if (row.item_kind === "folder") {
       if (!row.folder_id || owner.kind === "home") throw new Error("Layout folder metadata is incomplete.");
-      return `folder:${row.folder_id}`;
+      return getThreadDisplayFolderKey(row.folder_id);
     }
-    let projectId: string;
-    let threadKey: string;
+    let projectId: ProjectId;
+    let threadKey: ThreadDisplayKey;
     if (row.item_kind === "draft") {
       if (!row.draft_id || !row.draft_project_id) throw new Error("Layout draft metadata is incomplete.");
       projectId = row.draft_project_id;
-      threadKey = `draft:${row.draft_id}`;
+      threadKey = getThreadDisplayDraftKey(row.draft_id);
     } else {
       if (!row.thread_id) throw new Error("Layout thread metadata is incomplete.");
       const reference = this.references.readThread(row.thread_id);
       projectId = reference.projectId;
-      threadKey = `${reference.harness}:${reference.threadId}`;
+      threadKey = getThreadDisplayThreadKey(reference.harness, reference.threadId);
     }
     if (owner.kind === "project") {
       if (projectId !== owner.projectId) throw new Error("Layout reference belongs to another project.");

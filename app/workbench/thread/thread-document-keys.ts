@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - createThreadDocumentKey: build the harness-scoped identity key for a thread document. Keywords: thread, document, identity, harness.
- * - createThreadDocumentKeyForThread: build a document key from a thread payload. Keywords: thread, document, payload, identity.
- * - getThreadDocumentFromSnapshot: resolve a thread payload from a document snapshot by thread id. Keywords: thread, document, snapshot, lookup.
+ * - createThreadDocumentKey: build the harness-scoped identity key for a thread document.
+ * - createThreadDocumentKeyForThread: build a document key from a thread payload.
+ * - getThreadDocumentFromSnapshot: resolve a thread payload from a document snapshot by thread id.
  */
 
 import type { ThreadPayload, WorkbenchHarness, WorkbenchThreadDocumentSnapshot } from "workbench-shared/types";
+import { ThreadDocumentKeySchema, type DraftId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
-export function createThreadDocumentKey(harness: WorkbenchHarness, threadId: string) {
-  return `${harness}:${threadId}`;
+export function createThreadDocumentKey(harness: WorkbenchHarness, threadId: WorkbenchThreadId | DraftId) {
+  return ThreadDocumentKeySchema.parse(`${harness}:${threadId}`);
 }
 
 export function createThreadDocumentKeyForThread(thread: Pick<ThreadPayload, "harness" | "id">) {

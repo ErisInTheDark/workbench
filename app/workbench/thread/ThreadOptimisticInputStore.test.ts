@@ -1,7 +1,6 @@
 /*
- * Keywords: optimistic, identity, submission time, turn history, tests.
  * Exports:
- * - No production exports; Node tests cover optimistic steer/initial identity, delivery placement, and history reconciliation. Keywords: optimistic, steer, initial, delivery, test.
+ * - No production exports; Node tests cover optimistic steer/initial identity, delivery placement, and history reconciliation.
  */
 
 import assert from "node:assert/strict";
@@ -13,6 +12,7 @@ import ThreadOptimisticInputStore, { isPendingInitialOptimisticInputItem } from 
 import { applySteerHistoryToThread } from "workbench-shared/workbench/thread/thread-steer-history";
 import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function input(text: string) {
   return [{ text, text_elements: [], type: "text" as const }];
@@ -22,10 +22,10 @@ function user(id: string, clientId: string | null, text: string): Extract<Thread
   return { clientId, content: input(text), id, type: "userMessage" };
 }
 
-function thread(items: ThreadItem[] = []): ThreadPayload {
+function thread(items: ThreadItem[] = []): Extract<ThreadPayload, { isDraft: false }> {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
@@ -167,7 +167,7 @@ test("clear does not reuse local handles and deleteThread is exact-key scoped", 
   store.clear();
   const second = store.enqueueInitial(thread(), "turn", input("second"));
   assert.notEqual(first.handle, second.handle);
-  const other = { ...thread(), id: "other" };
+  const other = { ...thread(), id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other") };
   store.enqueueInitial(other, "turn", input("other"));
   store.deleteThread("codex:thread");
   assert.equal(store.apply(thread(), []).turns[0]?.items.length, 0);

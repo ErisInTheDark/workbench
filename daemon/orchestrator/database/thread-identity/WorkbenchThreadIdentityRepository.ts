@@ -5,6 +5,11 @@
 import { randomUUID } from "node:crypto";
 
 import type Database from "better-sqlite3";
+import {
+  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema,
+  WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  type ProjectId, type ThreadReference, type WorkbenchThreadId,
+} from "workbench-shared/workbench/identity";
 
 import { nativeLocationKey } from "./native-location-key.ts";
 import { compileWorkbenchDatabaseStatement, updateRows } from "workbench-shared/database/workbench-database-statements";
@@ -186,7 +191,7 @@ export default class WorkbenchThreadIdentityRepository {
       const owners = imported.get(key(binding));
       if (!owners?.size) continue;
       if (owners.size !== 1) throw new Error("Native thread identity has conflicting imported Workbench owners.");
-      const owner = this.resolveInTransaction({ threadId: owners.values().next().value! })!;
+      const owner = this.resolveInTransaction({ threadId: ThreadReferenceSchema.parse(owners.values().next().value!) })!;
       if (owner.threadId === binding.thread_id) {
         this.database.prepare("DELETE FROM workbench_pending_import_threads WHERE thread_id = ?").run(binding.thread_id);
         continue;
@@ -229,7 +234,7 @@ export default class WorkbenchThreadIdentityRepository {
     }
   }
 
-  preserveLegacyAlias(threadId: string, alias: string) {
+  preserveLegacyAlias(threadId: WorkbenchThreadId, alias: string) {
     this.database.transaction(() => {
       this.database.prepare("INSERT OR IGNORE INTO workbench_thread_legacy_aliases(alias, thread_id) VALUES (?, ?)")
         .run(alias, threadId);
@@ -296,7 +301,7 @@ export default class WorkbenchThreadIdentityRepository {
       const shifted: WorkbenchTurnIdentityRecord[] = [];
       for (const previous of existing.values()) {
         const current = this.turnRow(previous.id);
-        if (current && !requested.has(current.id) && current.turn_index !== previous.turn_index) {
+        if (current && !requested.has(WorkbenchTurnIdSchema.parse(current.id)) && current.turn_index !== previous.turn_index) {
           shifted.push(this.canonicalTurn(current));
         }
       }
@@ -419,10 +424,11 @@ export default class WorkbenchThreadIdentityRepository {
 
   private turnRecord(row: TurnRow): WorkbenchTurnIdentityRecord {
     return {
-      threadId: row.thread_id, turnId: row.id, turnIndex: row.turn_index,
+      threadId: WorkbenchThreadIdSchema.parse(row.thread_id), turnId: WorkbenchTurnIdSchema.parse(row.id), turnIndex: row.turn_index,
       native: {
         harness: row.harness_id, nativeLocation: row.native_location,
-        nativeThreadId: row.native_thread_id, nativeTurnId: row.native_turn_id,
+        nativeThreadId: NativeThreadIdSchema.parse(row.native_thread_id),
+        nativeTurnId: row.native_turn_id === null ? null : NativeTurnIdSchema.parse(row.native_turn_id),
       },
     };
   }
@@ -489,7 +495,7 @@ export default class WorkbenchThreadIdentityRepository {
       .get(threadId) as ThreadRow | undefined;
   }
 
-  admitRetainedReference(input: { reference: string; projectId: string; projectRoot: string }): WorkbenchThreadIdentityRecord {
+  admitRetainedReference(input: { reference: ThreadReference; projectId: ProjectId; projectRoot: string }): WorkbenchThreadIdentityRecord {
     return this.database.transaction(() => {
       const existing = this.resolve({ threadId: input.reference, projectId: input.projectId });
       if (existing) return existing;
@@ -524,12 +530,16 @@ export default class WorkbenchThreadIdentityRepository {
       SELECT harness_id, native_location, native_thread_id, 1, NULL
       FROM workbench_pending_import_threads WHERE thread_id = ?
       ORDER BY pending DESC, turnIndex DESC
-    `).all(threadId, threadId) as Array<Omit<WorkbenchThreadIdentityBinding, "pending"> & { pending: number }>;
+    `).all(threadId, threadId) as Array<{
+      harness: string; nativeLocation: string; nativeThreadId: string; pending: number; turnIndex: number | null;
+    }>;
     return {
-      threadId: row.id,
-      projectId: row.project_id,
+      threadId: WorkbenchThreadIdSchema.parse(row.id),
+      projectId: ProjectIdSchema.parse(row.project_id),
       projectRoot: row.project_root,
-      bindings: bindings.map((binding) => ({ ...binding, pending: Boolean(binding.pending) })),
+      bindings: bindings.map((binding) => ({
+        ...binding, nativeThreadId: NativeThreadIdSchema.parse(binding.nativeThreadId), pending: Boolean(binding.pending),
+      })),
     };
   }
 }

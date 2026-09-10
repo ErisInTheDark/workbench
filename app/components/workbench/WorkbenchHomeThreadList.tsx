@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchHomeThreadList: render one projectless thread list with global priority order, project-owned folders, owner context, and guarded drag actions. Keywords: home, threads, folders, project, drag.
- * - Local render helpers: render home-qualified rows, folder blocks, drop markers, creation links, and settled pagination. Keywords: sidebar, order, disclosure, navigation.
+ * - default WorkbenchHomeThreadList: render one projectless thread list with global priority order, project-owned folders, owner context, and guarded drag actions.
+ * - Local render helpers: render home-qualified rows, folder blocks, drop markers, creation links, and settled pagination.
  */
 "use client";
 
@@ -30,7 +30,8 @@ import {
   type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadPriority, WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { FolderId, ProjectThreadDisplayKey } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadPriority, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
@@ -49,7 +50,7 @@ const SETTLED_THREAD_PAGE_SIZE = 50;
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type HomeThreadActions = ReturnType<typeof WorkbenchThreadSidebarActionsProvider.useActions>;
 
-function targetForEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget {
+function targetForEntry(entry: WorkbenchThreadSidebarEntry): import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
@@ -82,7 +83,7 @@ export default function WorkbenchHomeThreadList({
   attentionLabelsByThreadId: Record<string, string | undefined>;
   createProject: WorkbenchProjectOption;
   currentTarget: WorkbenchThreadTarget | null;
-  onCreateThread: (ownerProjectId: string, folderId?: string) => void;
+  onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
@@ -103,7 +104,7 @@ export default function WorkbenchHomeThreadList({
   const settledLimit = preferences.settledThreadItemLimit;
   const historyItems: WorkbenchHomeThreadDisplayItem[] = [
     ...list.settledItems,
-    ...list.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const, threadKeys: [entry.threadKey] as [string] })),
+    ...list.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const, threadKeys: [entry.threadKey] as [ProjectThreadDisplayKey] })),
   ];
   let settledThreadCount = 0;
   const displayedHistoryItems = historyItems.filter((item, index) => {

@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, questionnaire, search, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, questionnaire, cancellation, transport.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute structured commands while preserving direct-port lifecycles.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
+import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import {
   parseWorkbenchAgentCliCommand,
@@ -25,8 +26,8 @@ import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
-  resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: string; nativeThreadId: string; harness: WorkbenchHarness }>;
-  checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+  resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId; harness: WorkbenchHarness }>;
+  checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: WorkbenchThreadId }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeQuestionnaireRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -288,10 +289,10 @@ export default class WorkbenchAgentCommandController {
       if (callerHarness !== "codex") throw new Error("A managed Codex thread is required for the apply_patch claim hook.");
       if (!this.direct.checkApplyPatchClaims) throw new Error("The apply_patch claim checker is not configured.");
       const hook = parseCodexApplyPatchClaimHook(form.get("hookInput") ?? "");
-      const caller = callerThreadId && this.direct.resolveCaller
-        ? await this.direct.resolveCaller(callerThreadId, hook.cwd, callerHarness) : null;
-      if (callerThreadId && hook.sessionId !== (caller?.nativeThreadId ?? callerThreadId)) throw new Error("Codex hook session_id does not match the managed thread.");
-      const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: hook.sessionId });
+      if (!this.direct.resolveCaller) throw new Error("The apply_patch caller identity resolver is not configured.");
+      const caller = await this.direct.resolveCaller(callerThreadId ?? hook.sessionId, hook.cwd, callerHarness);
+      if (hook.sessionId !== caller.nativeThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
+      const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: caller.threadId });
       if (result.allowed) {
         decision = allowCodexApplyPatch();
       } else {

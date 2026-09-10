@@ -1,10 +1,10 @@
 /*
- * Keywords: database, identity, transcript, reload graph, lifecycle.
  * Exports:
- * default WorkbenchDatabaseNode: own SQLite readiness, thread identity, transcript and Codex sandbox network registrations, reload replacement, and closure. Keywords: database, identity, transcript, Codex, network, graph, lifecycle.
+ * - default WorkbenchDatabaseNode: own SQLite readiness, identity, transcript and sandbox network registrations, replacement and closure.
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type {
@@ -129,10 +129,10 @@ export default new ReloadableNode<
     const captureGaps = new CaptureGapController({
       markerPath: captureGapMarkerPath,
       resolveReference: async (reference) => {
-        const thread = await threadIdentity.resolve({ threadId: reference.threadId });
+        const thread = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference.threadId) });
         if (!thread) return reference;
         const turn = reference.turnId
-          ? await threadIdentity.resolveTurn({ threadId: thread.threadId, turnId: reference.turnId })
+          ? await threadIdentity.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(reference.turnId) })
           : null;
         return { threadId: thread.threadId, turnId: turn?.turnId ?? reference.turnId };
       },

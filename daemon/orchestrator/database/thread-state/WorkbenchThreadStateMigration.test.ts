@@ -10,6 +10,25 @@ import { defineRelationalThreadStateSchema } from "../workbench-database-schema"
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadStateMigration, { type WorkbenchThreadStateRelationshipSource } from "./WorkbenchThreadStateMigration";
 import { parseProjectImport } from "./workbench-thread-state-document-source";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  NativeThreadId: {
+    "empty-parent": fixtureIdentitySchemas.NativeThreadIdSchema.parse("empty-parent"),
+    "parent-native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("parent-native"),
+    "retained-parent": fixtureIdentitySchemas.NativeThreadIdSchema.parse("retained-parent"),
+  },
+  ProjectId: {
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  ThreadReference: {
+    "child": fixtureIdentitySchemas.ThreadReferenceSchema.parse("child"),
+    "empty-parent": fixtureIdentitySchemas.ThreadReferenceSchema.parse("empty-parent"),
+    "parent-native": fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent-native"),
+    "retained-parent": fixtureIdentitySchemas.ThreadReferenceSchema.parse("retained-parent"),
+  },
+};
 
 const schema = defineRelationalThreadStateSchema(23);
 
@@ -19,28 +38,28 @@ test("missing parent metadata preserves relationship ownership without inventing
   try {
     applyWorkbenchDatabaseSchema(database, schema, { targetVersion: 22 });
     const relationships: WorkbenchThreadStateRelationshipSource[] = [{
-      parentThreadId: "retained-parent", nextDirectSubagentIndex: 5,
+      parentThreadId: fixtureIdentityValues.ThreadReference["retained-parent"], nextDirectSubagentIndex: 5,
       relationships: [{
-        kind: "active", threadId: "child", parentThreadId: "retained-parent", projectId: "project",
+        kind: "active", threadId: fixtureIdentityValues.ThreadReference["child"], parentThreadId: fixtureIdentityValues.ThreadReference["retained-parent"], projectId: fixtureIdentityValues.ProjectId["project"],
         harness: "opencode", cwd: "C:/Retained/Project", name: "child", title: "child",
         profileId: "profile", profileName: "profile", createdAt: 1, updatedAt: 2, directSubagentIndex: 4,
       }],
     }];
     const migration = new WorkbenchThreadStateMigration(database);
     const conflicting = structuredClone(relationships);
-    conflicting[0]!.relationships.push({ ...conflicting[0]!.relationships[0]!, projectId: "other" });
+    conflicting[0]!.relationships.push({ ...conflicting[0]!.relationships[0]!, projectId: fixtureIdentityValues.ProjectId["other"] });
     assert.throws(() => migration.run(schema, conflicting, 30), /project ownership/);
     assert.equal(database.pragma("user_version", { simple: true }), 22);
     assert.equal(database.prepare("SELECT count(*) FROM workbench_threads").pluck().get(), 0);
     migration.run(schema, relationships, 31);
     const identities = new WorkbenchThreadIdentityRepository(database);
-    const parent = identities.resolve({ projectId: "project", threadId: "retained-parent" })!;
+    const parent = identities.resolve({ projectId: fixtureIdentityValues.ProjectId["project"], threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("retained-parent") })!;
     assert.deepEqual(parent.bindings, []);
     assert.equal(database.prepare("SELECT count(*) FROM workbench_thread_states WHERE thread_id = ?").pluck().get(parent.threadId), 0);
     assert.equal(database.prepare("SELECT next_direct_subagent_index FROM workbench_subagent_parents WHERE parent_thread_id = ?").pluck().get(parent.threadId), 5);
     assert.equal(identities.observe({
-      native: { harness: "codex", nativeThreadId: "retained-parent", nativeLocation: "C:/Retained/Project" },
-      projectId: "project", projectRoot: "C:/Retained/Project", title: "real parent", createdAt: 1, updatedAt: 40, activityAt: 40,
+      native: { harness: "codex", nativeThreadId: fixtureIdentityValues.NativeThreadId["retained-parent"], nativeLocation: "C:/Retained/Project" },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/Retained/Project", title: "real parent", createdAt: 1, updatedAt: 40, activityAt: 40,
     }).threadId, parent.threadId);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
@@ -54,12 +73,12 @@ test("conversion admits archived metadata and preserves canonical titles, empty 
     const identities = new WorkbenchThreadIdentityRepository(database);
     const projectRoot = path.resolve("migration-project");
     const parent = identities.observe({
-      native: { harness: "codex", nativeThreadId: "parent-native", nativeLocation: projectRoot },
-      projectId: "project", projectRoot, title: "parent", createdAt: 1, updatedAt: 1, activityAt: 1,
+      native: { harness: "codex", nativeThreadId: fixtureIdentityValues.NativeThreadId["parent-native"], nativeLocation: projectRoot },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot, title: "parent", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const emptyParent = identities.observe({
-      native: { harness: "codex", nativeThreadId: "empty-parent", nativeLocation: projectRoot },
-      projectId: "project", projectRoot, title: "empty parent", createdAt: 1, updatedAt: 1, activityAt: 1,
+      native: { harness: "codex", nativeThreadId: fixtureIdentityValues.NativeThreadId["empty-parent"], nativeLocation: projectRoot },
+      projectId: fixtureIdentityValues.ProjectId["project"], projectRoot, title: "empty parent", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const source = JSON.stringify({
       version: 4, newThreadProfile: null, drafts: [], displayOrder: {},
@@ -77,14 +96,14 @@ test("conversion admits archived metadata and preserves canonical titles, empty 
       "project", "copilot", "archived-native", "previous title", 4,
     );
     const relationships: WorkbenchThreadStateRelationshipSource[] = [{
-      parentThreadId: "parent-native", nextDirectSubagentIndex: 17,
+      parentThreadId: fixtureIdentityValues.ThreadReference["parent-native"], nextDirectSubagentIndex: 17,
       relationships: [{
         kind: "reserved" as const, reservationId: "74eb14aa-97bc-43e6-a37f-e2633bf88d6b",
-        parentThreadId: "parent-native", projectId: "project", harness: "opencode" as const,
+        parentThreadId: fixtureIdentityValues.ThreadReference["parent-native"], projectId: fixtureIdentityValues.ProjectId["project"], harness: "opencode" as const,
         cwd: projectRoot, name: "reserved child", title: "reserved title", profileId: "profile", profileName: "profile name",
         createdAt: 3, updatedAt: 5, directSubagentIndex: 2,
       }],
-    }, { parentThreadId: "empty-parent", nextDirectSubagentIndex: 9, relationships: [] }];
+    }, { parentThreadId: fixtureIdentityValues.ThreadReference["empty-parent"], nextDirectSubagentIndex: 9, relationships: [] }];
     // Fail after readback but before the receipt. Both DDL and admitted identities
     // must roll back with the source-document deletion.
     database.exec("CREATE TRIGGER fail_retirement BEFORE DELETE ON workbench_thread_state_projects BEGIN SELECT RAISE(ABORT, 'injected retirement failure'); END");
@@ -92,12 +111,12 @@ test("conversion admits archived metadata and preserves canonical titles, empty 
     assert.throws(() => migration.run(schema, relationships, 30), /injected retirement failure/);
     assert.equal(database.pragma("user_version", { simple: true }), 22);
     assert.equal(database.prepare("SELECT document_json FROM workbench_thread_state_projects").pluck().get(), source);
-    assert.equal(identities.resolve({ projectId: "project", harness: "copilot", threadId: "archived-native" }), null);
+    assert.equal(identities.resolve({ projectId: fixtureIdentityValues.ProjectId["project"], harness: "copilot", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("archived-native") }), null);
     assert.equal(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'workbench_thread_state_import'").get(), undefined);
     database.exec("DROP TRIGGER fail_retirement");
     assert.deepEqual(migration.run(schema, relationships, 31), { imported: true });
 
-    const archived = identities.resolve({ projectId: "project", harness: "copilot", threadId: "archived-native" })!;
+    const archived = identities.resolve({ projectId: fixtureIdentityValues.ProjectId["project"], harness: "copilot", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("archived-native") })!;
     assert.ok(archived);
     assert.deepEqual(database.prepare(`
       SELECT state.title, state.activity_at, state.provider_observed, top.archived, top.order_at,
@@ -141,7 +160,7 @@ test("conversion refuses a source fact that compatibility repair would discard",
       gitArc: { importantUnsupportedFact: "must survive" },
     }],
   };
-  assert.throws(() => parseProjectImport(JSON.stringify(source), "project"), /import would/);
+  assert.throws(() => parseProjectImport(JSON.stringify(source), fixtureIdentityValues.ProjectId["project"]), /import would/);
 });
 
 test("draft conversion uses composer settings without retaining conflicting aliases", () => {
@@ -150,18 +169,18 @@ test("draft conversion uses composer settings without retaining conflicting alia
     reasoningEffort: null, serviceTier: null,
   };
   const draft = {
-    draftId: "b15d6643-e876-407d-a706-27c832ab47e5", projectId: "project",
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("b15d6643-e876-407d-a706-27c832ab47e5"), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     attachments: [], clientUpdatedAt: 1, createdAt: 1, updatedAt: 1, profileId: null, prompt: "preserve",
     composerSettings: settings, harness: "codex", model: "old",
     agent: "old-agent", reasoningEffort: "old-effort", serviceTier: "old-tier",
   };
   const source = (value: object) => JSON.stringify({ version: 4, records: [], drafts: [value], newThreadProfile: null });
-  const converted = parseProjectImport(source(draft), "project").drafts[0]!;
+  const converted = parseProjectImport(source(draft), fixtureIdentityValues.ProjectId["project"]).drafts[0]!;
   assert.deepEqual(converted.composerSettings, settings);
   assert.equal(converted.prompt, draft.prompt);
-  assert.deepEqual(parseProjectImport(source(converted), "project").drafts, [converted]);
-  const recovered = parseProjectImport(source({ ...draft, composerSettings: {} }), "project").drafts[0]!;
+  assert.deepEqual(parseProjectImport(source(converted), fixtureIdentityValues.ProjectId["project"]).drafts, [converted]);
+  const recovered = parseProjectImport(source({ ...draft, composerSettings: {} }), fixtureIdentityValues.ProjectId["project"]).drafts[0]!;
   assert.equal(recovered.composerSettings.harness, "codex");
   assert.equal(recovered.composerSettings.model, "old");
-  assert.throws(() => parseProjectImport(source({ ...draft, unsupportedFact: true }), "project"), /draft facts/);
+  assert.throws(() => parseProjectImport(source({ ...draft, unsupportedFact: true }), fixtureIdentityValues.ProjectId["project"]), /draft facts/);
 });

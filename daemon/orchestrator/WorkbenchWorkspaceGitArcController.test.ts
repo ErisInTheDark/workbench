@@ -15,6 +15,7 @@ import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcContro
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const execFileAsync = promisify(execFile);
 
@@ -275,7 +276,7 @@ function createWorkspace(primary: string, secondary: string): AgentEndpointProje
   ];
   return {
     cwd: primary,
-    project: { id: "workspace", kind: "workspace", root: primary, rootPath: primary, roots },
+    project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("workspace"), kind: "workspace", root: primary, rootPath: primary, roots },
     root: roots[0]!,
   };
 }

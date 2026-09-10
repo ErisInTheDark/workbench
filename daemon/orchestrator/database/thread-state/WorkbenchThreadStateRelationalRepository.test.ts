@@ -11,6 +11,17 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadStateRelationalRepository from "./WorkbenchThreadStateRelationalRepository";
 import { parseProjectDocument } from "./workbench-thread-state-document-source";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  DraftId: {
+    "f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f": fixtureIdentitySchemas.DraftIdSchema.parse("f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"),
+  },
+  ProjectId: {
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 function openDatabase() {
   const database = new Database(":memory:");
@@ -22,8 +33,8 @@ function openDatabase() {
 function seedIdentities(database: Database.Database, projectId: string, ...nativeIds: string[]) {
   const owner = new WorkbenchThreadIdentityRepository(database);
   return nativeIds.map((nativeThreadId) => owner.observe({
-    native: { harness: "codex", nativeLocation: `C:/${projectId}`, nativeThreadId },
-    projectId, projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
+    native: { harness: "codex", nativeLocation: `C:/${projectId}`, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
   }).threadId);
 }
 
@@ -32,19 +43,19 @@ test("relational batches roll back invalid references and preserve valid draft p
   try {
     const [threadId] = seedIdentities(database, "project", "promoted");
     const draft: WorkbenchThreadDraft = {
-      draftId: "f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f", projectId: "project",
+      draftId: fixtureIdentityValues.DraftId["f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"], projectId: fixtureIdentityValues.ProjectId["project"],
       prompt: "retain this draft", profileId: null,
       composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
       clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
       attachments: [{ id: "second", url: "image:second" }, { id: "first", url: "image:first" }],
     };
-    const projectOwner = { kind: "project" as const, projectId: "project" };
+    const projectOwner = { kind: "project" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
     const pinnedOwner = { kind: "pinned" as const };
     const draftKey = `draft:${draft.draftId}`;
     const threadKey = `codex:${threadId}`;
     const position = { above: [], below: [] };
     const projectOrder = { pinned: { [draftKey]: position } };
-    const pinnedOrder = { pinned: { [getProjectQualifiedThreadDisplayKey("project", draftKey)]: position } };
+    const pinnedOrder = { pinned: { [getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse(draftKey))]: position } };
     const repository = new WorkbenchThreadStateRelationalRepository(database);
     repository.commit({
       drafts: [{ draft, pinned: true, snoozed: false }],
@@ -52,9 +63,9 @@ test("relational batches roll back invalid references and preserve valid draft p
         { owner: projectOwner, revision: 1, displayOrder: projectOrder },
         { owner: pinnedOwner, revision: 1, displayOrder: pinnedOrder },
       ],
-      pinnedImports: ["project"],
+      pinnedImports: [fixtureIdentityValues.ProjectId["project"]],
     });
-    assert.deepEqual(repository.readDrafts("project"), [{ draft, pinned: true, snoozed: false }]);
+    assert.deepEqual(repository.readDrafts(fixtureIdentityValues.ProjectId["project"]), [{ draft, pinned: true, snoozed: false }]);
     const record: WorkbenchThreadStateRecord = {
       entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title: "promoted", activityAt: 1,
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
@@ -66,15 +77,15 @@ test("relational batches roll back invalid references and preserve valid draft p
       layouts: [
         { owner: projectOwner, revision: 2, displayOrder: { pinned: { [threadKey]: position } } },
         { owner: pinnedOwner, revision: 2, displayOrder: {
-          pinned: { [getProjectQualifiedThreadDisplayKey("project", "draft:missing")]: position },
+          pinned: { [getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("draft:missing"))]: position },
         } },
       ],
     }), /missing draft/);
-    assert.deepEqual(repository.readDrafts("project"), [{ draft, pinned: true, snoozed: false }]);
+    assert.deepEqual(repository.readDrafts(fixtureIdentityValues.ProjectId["project"]), [{ draft, pinned: true, snoozed: false }]);
     assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [threadId!] }), []);
     assert.deepEqual(repository.readLayout(projectOwner), { revision: 1, displayOrder: projectOrder });
     assert.deepEqual(repository.readLayout(pinnedOwner), { revision: 1, displayOrder: pinnedOrder });
-    const nextPinned = { pinned: { [getProjectQualifiedThreadDisplayKey("project", threadKey)]: position } };
+    const nextPinned = { pinned: { [getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["project"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse(threadKey))]: position } };
     repository.commit({
       records: [record], deletedDraftIds: [draft.draftId],
       layouts: [
@@ -82,7 +93,7 @@ test("relational batches roll back invalid references and preserve valid draft p
         { owner: pinnedOwner, revision: 2, displayOrder: nextPinned },
       ],
     });
-    assert.deepEqual(repository.readDrafts("project"), []);
+    assert.deepEqual(repository.readDrafts(fixtureIdentityValues.ProjectId["project"]), []);
     assert.deepEqual(repository.readLayout(pinnedOwner), { revision: 2, displayOrder: nextPinned });
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.title, "promoted");
     assert.deepEqual(repository.readPinnedImports(), ["project"]);
@@ -95,7 +106,7 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
   try {
     const [firstId, secondId] = seedIdentities(database, "project", "first", "second");
     const record = (threadId: string, title: string): WorkbenchThreadStateRecord => ({
-      entryKind: "thread", identity: { harness: "codex", threadId }, title, activityAt: 1,
+      entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, title, activityAt: 1,
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
@@ -107,7 +118,7 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     });
     const first = record(firstId!, "first");
     const second = record(secondId!, "second");
-    first.snoozedUntil = { projectId: "project", identity: second.identity };
+    first.snoozedUntil = { projectId: fixtureIdentityValues.ProjectId["project"], identity: second.identity };
     const repository = new WorkbenchThreadStateRelationalRepository(database);
     repository.writeRecords([first, second]);
     database.exec(`
@@ -136,10 +147,10 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
 test("unsupported draft attachments fail source admission rather than disappearing during repair", () => {
   assert.throws(() => parseProjectDocument(JSON.stringify({
     version: 4, records: [], drafts: [{
-      draftId: "16263085-fd8e-4555-ac66-adf75d59f7c2", harness: "codex",
+      draftId: fixtureIdentitySchemas.DraftIdSchema.parse("16263085-fd8e-4555-ac66-adf75d59f7c2"), harness: "codex",
       attachments: [{ provider: "opaque" }],
     }],
-  }), "project"), /unsupported draft attachments/);
+  }), fixtureIdentityValues.ProjectId["project"]), /unsupported draft attachments/);
 });
 
 test("live reads retain parent-status inputs without decoding settled history", () => {
@@ -175,18 +186,18 @@ test("live reads retain parent-status inputs without decoding settled history", 
       VALUES ('incomplete-archive-observation', ?, 'arc', 1)
     `).run(archived);
     const repository = new WorkbenchThreadStateRelationalRepository(database);
-    assert.deepEqual(new Set(repository.readRecords({ selection: "live", projectId: "project" }).map(record => record.identity.threadId)), new Set([live, child]));
+    assert.deepEqual(new Set(repository.readRecords({ selection: "live", projectId: fixtureIdentityValues.ProjectId["project"] }).map(record => record.identity.threadId)), new Set([live, child]));
     assert.deepEqual(repository.readRecords({ selection: "children", parentThreadId: live! }).map(record => record.identity.threadId), [child]);
-    assert.deepEqual(repository.readRecords({ selection: "threads", projectId: "other", threadIds: [live!] }), []);
+    assert.deepEqual(repository.readRecords({ selection: "threads", projectId: fixtureIdentityValues.ProjectId["other"], threadIds: [live!] }), []);
     assert.equal(repository.readNextArchiveEligibility(), 2);
     assert.deepEqual(repository.readArchiveEligible(2).map(({ record }) => record.identity.threadId), [settled]);
-    assert.equal(repository.readProjectActivity("project"), 5);
+    assert.equal(repository.readProjectActivity(fixtureIdentityValues.ProjectId["project"]), 5);
     assert.throws(() => repository.readRecords({ selection: "threads", threadIds: [archived!] }), /unique summary/);
     database.prepare("DELETE FROM workbench_thread_git_observations WHERE thread_id = ?").run(archived);
-    assert.equal(repository.readRecords({ selection: "project", projectId: "project" }).length, 5);
+    assert.equal(repository.readRecords({ selection: "project", projectId: fixtureIdentityValues.ProjectId["project"] }).length, 5);
     database.prepare("UPDATE workbench_thread_lifecycle SET lifecycle_kind = 'completed', reason = 'providerInactive', settled = 1 WHERE thread_id = ?").run(live);
-    assert.deepEqual(new Set(repository.readRecords({ selection: "live", projectId: "project" }).map(record => record.identity.threadId)), new Set([live, child]));
+    assert.deepEqual(new Set(repository.readRecords({ selection: "live", projectId: fixtureIdentityValues.ProjectId["project"] }).map(record => record.identity.threadId)), new Set([live, child]));
     database.prepare("UPDATE workbench_thread_lifecycle SET lifecycle_kind = 'completed', reason = 'providerInactive', settled = 1 WHERE thread_id = ?").run(child);
-    assert.deepEqual(repository.readRecords({ selection: "live", projectId: "project" }), []);
+    assert.deepEqual(repository.readRecords({ selection: "live", projectId: fixtureIdentityValues.ProjectId["project"] }), []);
   } finally { database.close(); }
 });

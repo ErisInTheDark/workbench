@@ -1,16 +1,22 @@
 /*
- * Keywords: observations, bootstrap race, release, disconnect, revision.
  * Exports: none. Tests protect connection-owned delivery without stale resurrection.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadObservationController from "./WorkbenchThreadObservationController";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const fixtureIdentityValues = {
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+};
 
 const request = {
-  projectId: "project",
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   subscriptionId: "253ad0f8-04d1-4c4b-b03f-7b6f357dddf9",
-  target: { kind: "provider" as const, harness: "codex" as const, threadId: "thread" },
+  target: { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
 };
 
 function snapshot(revision: number): WorkbenchThreadObservationSnapshot {
@@ -22,14 +28,14 @@ test("an update during bootstrap wins over its older read and remains live", asy
   const owner = new WorkbenchThreadObservationController((_connection, value) => delivered.push(value));
   let finish!: (value: WorkbenchThreadObservationSnapshot) => void;
   const opening = owner.observe("viewer", request, () => new Promise(resolve => { finish = resolve; }));
-  owner.update("project", () => snapshot(2));
+  owner.update(fixtureIdentityValues.ProjectId["project"], () => snapshot(2));
   finish(snapshot(1));
   assert.equal((await opening).revision, 2);
-  owner.update("project", () => snapshot(3));
+  owner.update(fixtureIdentityValues.ProjectId["project"], () => snapshot(3));
   assert.deepEqual(delivered.map(value => value.revision), [2, 3]);
-  assert.equal(owner.hasProject("project"), true);
+  assert.equal(owner.hasProject(fixtureIdentityValues.ProjectId["project"]), true);
   owner.dispose();
-  assert.equal(owner.hasProject("project"), false);
+  assert.equal(owner.hasProject(fixtureIdentityValues.ProjectId["project"]), false);
 });
 
 for (const end of ["release", "disconnect", "dispose"] as const) {
@@ -44,9 +50,9 @@ for (const end of ["release", "disconnect", "dispose"] as const) {
     else owner.dispose();
     finish(snapshot(1));
     await rejected;
-    owner.update("project", () => snapshot(2));
+    owner.update(fixtureIdentityValues.ProjectId["project"], () => snapshot(2));
     assert.equal(delivered.length, 0);
-    assert.equal(owner.hasProject("project"), false);
+    assert.equal(owner.hasProject(fixtureIdentityValues.ProjectId["project"]), false);
   });
 }
 
@@ -57,7 +63,7 @@ test("subscription ids are connection scoped and a failed bootstrap releases onl
   await assert.rejects(owner.observe("second", request, async () => { throw new Error("read failed"); }), /read failed/);
   await owner.observe("second", request, async () => snapshot(1));
   owner.release("first", request.subscriptionId);
-  owner.update("project", () => snapshot(2));
+  owner.update(fixtureIdentityValues.ProjectId["project"], () => snapshot(2));
   assert.deepEqual(connections, ["second"]);
   owner.dispose();
 });

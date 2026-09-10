@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect temporary SQLite shadow liveness without masking durable history gaps. Keywords: transcript, SQLite, projection, live, overlay, test.
+ * No production exports. Tests protect temporary SQLite shadow liveness without masking durable history gaps.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -13,6 +13,7 @@ import type {
   WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import reconcileTranscriptProjectionWithLiveThread from "./reconcile-transcript-projection-with-live-thread";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 function message(id: string, text: string): ThreadItem {
   return { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" };
@@ -40,7 +41,7 @@ function thread(turns: Turn[]): ThreadPayload {
     createdAt: 1,
     cwd: "C:/project",
     harness: "codex",
-    id: "thread",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     isDraft: false,
     model: null,
     name: "Thread",
@@ -91,7 +92,7 @@ function projection(turns: Turn[]): WorkbenchTranscriptProjection {
       activityAt: 2,
       createdAt: 1,
       id: "thread",
-      projectId: "project",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       projectRoot: "C:/project",
       title: "Thread",
       updatedAt: 2,

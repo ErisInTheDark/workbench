@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcIntersectionCard: subscribe to and render plan intersections or active claimants blocking a Git arc wait. Keywords: thread, plan, wait, claim, intersection, sidebar, tooltip.
+ * - default ThreadGitArcIntersectionCard: subscribe to and render plan intersections or active claimants blocking a Git arc wait.
  */
 "use client";
 
@@ -15,6 +15,7 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 function formatThreadCount(count: number, state: "active" | "snoozed") {
   return `${count} ${state} ${count === 1 ? "thread" : "threads"}`;
@@ -36,7 +37,7 @@ export default function ThreadGitArcIntersectionCard({
   threadId: string;
 }) {
   const selector = useMemo(() => createWorkbenchThreadPlanIntersectionSelector({ harness, threadId }), [harness, threadId]);
-  const projectSidebar = useWorkbenchProjectThreadSidebar(projectId);
+  const projectSidebar = useWorkbenchProjectThreadSidebar(projectId ? ProjectIdSchema.parse(projectId) : "");
   const intersections = useMemo(() => selector(projectSidebar), [projectSidebar, selector]);
   if (!intersections.hasPlannedClaims) return null;
   const waiting = mode === "wait";

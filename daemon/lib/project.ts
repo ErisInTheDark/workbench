@@ -1,22 +1,24 @@
 /*
  * Exports:
- * - appRoot: absolute path to the Workbench server workspace. Keywords: project, app root, workspace.
- * - projectRoot: absolute path to the repository root used by the workbench. Keywords: project, repo root, workspace.
- * - projectsRoot: absolute configured root scanned for selectable projects. Keywords: projects, discovery, root.
- * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.
- * - safeResolve/safeResolveProjectPath: resolve and validate project-relative paths inside a selected project root. Keywords: path, resolve, safety.
- * - isPathWithinRoot: test whether an absolute path belongs to a project root. Keywords: path, root, thread filter.
- * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: find selectable git projects and VS Code workspaces with preferred icons, newest HEAD activity first, then resolve their roots. Keywords: project, workspace, discovery, catalog, icon, id, last commit.
- * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create project entries, validate deletion targets, or permanently delete one project file. Keywords: create, delete, file, directory.
- * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
- * - getProjectSnapshot/getProjectSnapshotFromResolvedProject: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
- * - resolveExternalFileLinkRoot: find the owning git root for an absolute local file link. Keywords: file link, absolute path, git root.
- * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified workspace paths. Keywords: workspace root, file path, qualified path.
- * - listProjectSkills/listProjectSkillDefinitions/listProjectSkillDefinitionsFromRoot: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
- * - listUserInvocableAgents/listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
+ * - appRoot: absolute Workbench server workspace.
+ * - projectRoot: absolute Workbench repository root.
+ * - projectsRoot: configured discovery root.
+ * - normalizeRelativePath: normalise transport paths.
+ * - safeResolve/safeResolveProjectPath: validate project-relative paths.
+ * - isPathWithinRoot: check absolute path containment.
+ * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: discover and resolve selectable projects.
+ * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
+ * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
+ * - buildTree/buildProjectTree: build visible explorer trees.
+ * - getProjectSnapshot/getProjectSnapshotFromResolvedProject: assemble tree, roots and Git changes.
+ * - resolveExternalFileLinkRoot: locate a file link's Git root.
+ * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified paths.
+ * - listProjectSkills/listProjectSkillDefinitions/listProjectSkillDefinitionsFromRoot: discover project skills.
+ * - listUserInvocableAgents/listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover and read project agents.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 
 import { getGitChanges } from "./git";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -336,7 +338,7 @@ export interface ResolvedProjectRoot {
 }
 
 export interface ResolvedProject {
-  id: string;
+  id: ProjectId;
   kind: WorkbenchProjectOption["kind"];
   root: string;
   rootPath: string;
@@ -356,7 +358,7 @@ function createSingleProjectRoot(discoveryRootDir: string, canonicalRootDir: str
 
 async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOption> {
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".";
-  const id = normalizeProjectId(relativePath) || ".";
+  const id = (normalizeProjectId(relativePath) || ".") as ProjectId;
   const canonicalRootDir = await resolveCanonicalPath(rootDir);
   const root = createSingleProjectRoot(rootDir, canonicalRootDir);
   const icon = await discoverWorkbenchProjectIcon([root]);
@@ -382,7 +384,7 @@ async function createWorkbenchLibraryProjectOption(): Promise<WorkbenchProjectOp
     rootPath: normalizeRelativePath(workbenchLibraryRoot),
   };
   return {
-    id: WORKBENCH_LIBRARY_PROJECT_ID,
+    id: WORKBENCH_LIBRARY_PROJECT_ID as ProjectId,
     kind: "workbench-library",
     lastCommitTimeMs: null,
     name: "Workbench Library",
@@ -554,7 +556,7 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
   }
 
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, workspacePath)) || path.basename(workspacePath);
-  const id = normalizeProjectId(relativePath);
+  const id = normalizeProjectId(relativePath) as ProjectId;
   const name = path.basename(workspacePath, WORKSPACE_FILE_EXTENSION);
   const icon = await discoverWorkbenchProjectIcon(roots);
 

@@ -1,5 +1,4 @@
 /*
- * Keywords: retained database, startup replay, identity upgrade, isolated copy, recovery evidence.
  * No exports. Explicit non-paid replay upgrades only a private backup of the selected database.
  */
 import assert from "node:assert/strict";
@@ -22,6 +21,7 @@ import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } fro
 import { createCodexTranscriptSqliteImport } from "../daemon/orchestrator/codex-transcript-sqlite-import";
 import { createCodexTranscriptProviderTurnScopeObservation } from "../daemon/orchestrator/codex-transcript-provider-observations";
 import { mapNativeProviderResponse } from "../daemon/orchestrator/thread-identity-workbench-mapping";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "../shared/workbench/identity";
 
 const input = process.env.WORKBENCH_REPLAY_DATABASE;
 
@@ -67,7 +67,7 @@ test("retained database upgrades and resolves existing identities without modify
       .all() as Array<{ id: string; project_id: string }>;
     const admitted = [];
     for (const row of references) {
-      const identity = repository.resolve({ threadId: row.id, projectId: row.project_id });
+      const identity = repository.resolve({ threadId: ThreadReferenceSchema.parse(row.id), projectId: ProjectIdSchema.parse(row.project_id) });
       assert.ok(identity, "Every retained thread must retain its canonical identity");
       assert.equal(identity.projectId, row.project_id);
       admitted.push({ reference: row.id, projectId: row.project_id, threadId: identity.threadId });
@@ -179,10 +179,10 @@ test(`retained history imports and projects repeatedly through ${settlement} set
     const thread = await measure("stored window", () => store.readStoredThreadWindow(manifest.threadId, manifest.turnIds));
     assert.ok(thread);
     assert.deepEqual(new Set(thread.turns.map(({ id }) => id)), new Set(manifest.turnIds));
-    const native = { harness: "codex", nativeLocation: thread.cwd, nativeThreadId: thread.id };
+    const native = { harness: "codex", nativeLocation: thread.cwd, nativeThreadId: NativeThreadIdSchema.parse(thread.id) };
     const owners = { threads, items };
     const context = {
-      projectId: manifest.projectId, projectRoot: manifest.projectRoot, nativeLocation: thread.cwd,
+      projectId: ProjectIdSchema.parse(manifest.projectId), projectRoot: manifest.projectRoot, nativeLocation: thread.cwd,
       title: thread.name ?? "", createdAt: thread.createdAt * 1_000,
       updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
     };
@@ -194,8 +194,16 @@ test(`retained history imports and projects repeatedly through ${settlement} set
       await measure(`provider admission ${pass}`, () => admitProviderThreads(owners, [{ metadata: { ...context, native }, thread }]));
       report.stage = `page context admission ${pass}`;
       await admitNativeTranscriptObservations(owners, [
-        ...entries.questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry, observedAt: entry.resolvedAt })),
-        ...entries.steerEntries.map((entry) => ({ kind: "steer" as const, entry, observedAt: entry.resolvedAt ?? entry.attemptedAt })),
+        ...entries.questionnaireEntries.map((entry) => ({
+          kind: "questionnaire" as const,
+          entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
+          observedAt: entry.resolvedAt,
+        })),
+        ...entries.steerEntries.map((entry) => ({
+          kind: "steer" as const,
+          entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
+          observedAt: entry.resolvedAt ?? entry.attemptedAt,
+        })),
       ]);
       report.stage = `full page response ${pass}`;
       const page = await measure(`page response ${pass}`, () => mapNativeProviderResponse(owners, "codex", {

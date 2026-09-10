@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadList: render filtered Workbench-wide pins, mixed-project folders, rows, actions, and drag order. Keywords: pinned, global, placement, folders, sidebar.
- * - Local helpers: derive pinned targets and collision-safe layout keys. Keywords: draft, provider, project, identity.
+ * - default WorkbenchPinnedThreadList: render filtered Workbench-wide pins, mixed-project folders, rows, actions, and drag order.
+ * - Local helpers: derive pinned targets and collision-safe layout keys.
  */
 "use client";
 
@@ -27,7 +27,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchThreadTarget,
+  type WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { PinIcon } from "./workbench-icons";
 import Draggable from "./drag/Draggable";
@@ -43,6 +43,8 @@ import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActio
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
+import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import type { WorkbenchThreadTarget as CanonicalThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type GlobalPinnedEntry = { entry: WorkbenchPinnedThreadSummaryEntry; project: WorkbenchProjectOption };
@@ -61,7 +63,7 @@ type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActi
   | "projectThreadSummaries"
 >;
 
-function targetForEntry(entry: WorkbenchPinnedThreadSummaryEntry): WorkbenchThreadTarget {
+function targetForEntry(entry: WorkbenchPinnedThreadSummaryEntry): CanonicalThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: entry.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
@@ -69,8 +71,8 @@ function targetForEntry(entry: WorkbenchPinnedThreadSummaryEntry): WorkbenchThre
 
 function displayKeyForEntry(entry: WorkbenchPinnedThreadSummaryEntry) {
   return entry.entryKind === "draft"
-    ? `draft:${entry.draftId}`
-    : `${entry.identity.harness}:${entry.identity.threadId}`;
+    ? getThreadDisplayDraftKey(entry.draftId)
+    : getThreadDisplayThreadKey(entry.identity.harness, entry.identity.threadId);
 }
 
 export default function WorkbenchPinnedThreadList({

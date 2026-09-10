@@ -4,9 +4,19 @@ import test from "node:test";
 
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+
+function threadGitIdentities() {
+  const database = createThreadStateTestDatabase();
+  for (const nativeId of ["thread-one", "thread-two", "thread-three"]) {
+    database.admitThread("project", `wb:${nativeId}`, "codex", nativeId);
+  }
+  return database.identities.threads;
+}
 
 test("preserves thread Git selection and commit responses behind the orchestrator boundary", async () => {
   const feature = new WorkbenchThreadGitFeature({
+    identities: threadGitIdentities(),
     createThreadGit: async () => ({
       add: async () => ({ changedPaths: ["src/one.ts"], selectedPaths: ["src/one.ts"] }),
       commit: async () => ({ commit: "a".repeat(40), committedPaths: ["src/one.ts"], selectedPaths: ["src/one.ts"] }),
@@ -42,6 +52,7 @@ test("serializes sibling thread Git operations per worktree while unrelated work
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const firstStarted = new Promise<void>((resolve) => { announceFirst = resolve; });
   const feature = new WorkbenchThreadGitFeature({
+    identities: threadGitIdentities(),
     createThreadGit: async ({ targetWorktree, threadId }) => ({
       add: async () => ({ changedPaths: [], selectedPaths: [] }),
       commit: async () => {

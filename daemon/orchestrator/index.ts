@@ -1,6 +1,5 @@
 /*
- * Keywords: orchestrator, process, reload, health, websocket, Browse, codex, copilot, opencode.
- * No exports. Starts the bridge server and graph host, wires stable recovery ingress,
+ * Exports: none. Starts the bridge server and graph host, wires stable recovery ingress,
  * and provides process-owned harness, reload, and supervisor ports to reloadable nodes.
  */
 import http from "node:http";
@@ -11,6 +10,7 @@ import { WebSocketServer } from "ws";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
     OrchestratorReloadResponse,
     OrchestratorReloadScope,
@@ -107,7 +107,7 @@ const featureHost = new ReloadableNodeHost<OrchestratorProcessContext, Orchestra
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => featureHost.get("modules"),
   admitThreads: (threads) => featureHost.run("harnesses", (owner) => owner.admitThreads("copilot", threads), "Copilot thread identity"),
-  admitNotifications: (threadId, notifications) => featureHost.run("harnesses", (owner) => owner.admitNotifications("copilot", threadId, notifications), "Copilot event identity"),
+  admitNotifications: (threadId, notifications) => featureHost.run("harnesses", (owner) => owner.admitNotifications("copilot", NativeThreadIdSchema.parse(threadId), notifications), "Copilot event identity"),
   onNotification: (notification) => {
     broadcastToClients("copilot", notification);
   },
@@ -270,9 +270,9 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     browseResultCallbacks: {
       listHarnesses: () => featureHost.get("harnesses").listHarnesses(),
       logError: (message) => logError("browse-results", message),
-      readThread: async (harness, threadId) => await featureHost.get("harnesses").readThread(harness, threadId),
+      readThread: async (harness, threadId) => await featureHost.get("harnesses").readThread(harness, NativeThreadIdSchema.parse(threadId)),
       recordResult: async (entry) => await runAfterCodexBridgeReload((bridge) => bridge.recordBrowseResultForBrowse(entry)),
-      steerTurn: async (harness, threadId, expectedTurnId, input) => await featureHost.get("harnesses").steerTurn(harness, threadId, expectedTurnId, input),
+      steerTurn: async (harness, threadId, expectedTurnId, input) => await featureHost.get("harnesses").steerTurn(harness, NativeThreadIdSchema.parse(threadId), NativeTurnIdSchema.parse(expectedTurnId), input),
     },
     codexAppServerOptions: {
       log,
@@ -359,9 +359,15 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
         (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }),
         "project catalog: turn recovery cwd",
       );
+      const identity = await featureHost.run(
+        "threadIdentity",
+        (owner) => owner.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness }),
+        "thread identity: recovery failure",
+      );
+      if (!identity) throw new Error("Turn recovery failure has no matching Workbench thread identity.");
       await featureHost.run(
         "threadState",
-        (feature) => feature.controller.reportRecoveryFailed(project.project.id, harness, threadId),
+        (feature) => feature.controller.reportRecoveryFailed(project.project.id, harness, identity.threadId),
         "thread state: report recovery failure",
       );
     },
