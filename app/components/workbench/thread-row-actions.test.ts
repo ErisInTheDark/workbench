@@ -33,6 +33,10 @@ const pending: typeof stopped = {
     request: { id: "question", title: "Choose", summary: "", submitLabel: "Submit", questions: [] },
   },
 };
+const completed: typeof stopped = {
+  ...stopped,
+  lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+};
 
 test("stopped sidebar rows settle directly while retaining priority and claim blockers", () => {
   assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", shiftAction: null });
@@ -45,17 +49,21 @@ test("stopped sidebar rows settle directly while retaining priority and claim bl
   assert.equal(getThreadRowActions(claimed, "main").baseAction, null);
 });
 
-test("a sidebar questionnaire offers completion, never the direct-settle shortcut", () => {
-  assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "complete", shiftAction: "snooze" });
-  assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "complete", shiftAction: "snooze" });
-  assert.equal(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main").baseAction, null);
+test("a sidebar questionnaire offers snooze first and completion as the shift action", () => {
+  assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "snooze", shiftAction: "complete" });
+  assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "snooze", shiftAction: "complete" });
+  assert.deepEqual(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main"), { baseAction: null, shiftAction: "snooze" });
 });
 
 test("pinned summaries preserve questionnaire completion without enabling shift settlement", () => {
   const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [{
     ...pending, metadata: { archived: false, pinned: true, snoozed: false }, waitingFor: "other",
   }], 1);
-  assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "complete", shiftAction: "snooze" });
+  assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "snooze", shiftAction: "complete" });
+});
+
+test("completed rows keep settlement primary and add snooze as the shift action", () => {
+  assert.deepEqual(getThreadRowActions(completed, "main"), { baseAction: "settle", shiftAction: "snooze" });
 });
 
 test("subagent pending input retains its existing action restrictions", () => {

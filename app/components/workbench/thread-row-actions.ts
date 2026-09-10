@@ -27,10 +27,11 @@ export function getThreadRowActions(
     && (!entry.waitingFor || hasQuestionnaire);
   const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry);
   const baseAction = group === "settled" || group === "archived" ? "restore" : group === "snoozed" ? "wake"
-    : canComplete ? "complete" : settlementAvailable ? "settle" : null;
+    : canComplete ? "snooze" : settlementAvailable ? "settle" : null;
   const shiftAction = entry.entryKind === "subagent" ? null
     : group === "settled" ? "archive"
-    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "needsAttention" ? "snooze"
+    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "needsAttention" ? canComplete ? "complete" : "snooze"
+    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "completed" ? "snooze"
     : null;
   return { baseAction, shiftAction };
 }
