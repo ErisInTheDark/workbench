@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { Fragment, useMemo, type Ref } from "react";
+import { Fragment, useMemo, useState, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -81,6 +81,16 @@ export default function ThreadTranscriptProjection({
   subagents: readonly WorkbenchSubagentSummary[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
+  const [initialInactive, setInitialInactive] = useState(() => ({
+    threadId: projection.thread.id,
+    itemIds: new Set(projection.turns.filter(turn => turn.status !== "inProgress").flatMap(turn => turn.items.map(item => item.id))),
+  }));
+  if (initialInactive.threadId !== projection.thread.id) {
+    setInitialInactive({
+      threadId: projection.thread.id,
+      itemIds: new Set(projection.turns.filter(turn => turn.status !== "inProgress").flatMap(turn => turn.items.map(item => item.id))),
+    });
+  }
   const turnsById = useMemo(
     () => new Map(projection.turns.map((turn) => [turn.id, turn])),
     [projection.turns],
@@ -122,6 +132,7 @@ export default function ThreadTranscriptProjection({
               : "pb-3"}
             >
               <ThreadTranscriptItemsDetails
+                initialInactiveItemIds={initialInactive.threadId === projection.thread.id ? initialInactive.itemIds : new Set<string>()}
                 initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                 browseResultEntries={browseResultEntries}
                 hiddenReasoningStep={hiddenReasoningStep}

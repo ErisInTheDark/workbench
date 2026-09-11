@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state. Keywords: thread, disclosure, chevron.
- * - ThreadDisclosureStaticRow: render a disclosure-aligned non-expandable row with a dot or supplied marker. Keywords: thread, disclosure, static row, marker.
+ * - ThreadDisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
  * - Local helpers: joinClasses for compact className composition. Keywords: css, class names.
  */
 "use client";
@@ -170,6 +170,7 @@ export function ThreadDisclosureStaticRow ({
   marker,
   markerClassName,
   markerLabel,
+  onClick,
   summary,
   summaryClassName,
 }: {
@@ -177,14 +178,19 @@ export function ThreadDisclosureStaticRow ({
   marker?: ReactNode;
   markerClassName?: string;
   markerLabel?: string;
+  onClick?: () => void;
   summary: ReactNode;
   summaryClassName?: string;
 }) {
+  const Row = onClick ? "button" : "div";
   return (
     <div className={joinClasses("min-w-0 max-w-full py-2", className)}>
-      <div
+      <Row
+        type={onClick ? "button" : undefined}
+        onClick={onClick}
         className={joinClasses(
           "flex min-w-0 max-w-full items-center gap-2 text-muted",
+          onClick ? "group/worked w-full cursor-pointer text-left transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none" : undefined,
           summaryClassName,
         )}
       >
@@ -201,7 +207,7 @@ export function ThreadDisclosureStaticRow ({
           )}
         </span>
         <div className="min-w-0 flex-1">{summary}</div>
-      </div>
+      </Row>
     </div>
   );
 }

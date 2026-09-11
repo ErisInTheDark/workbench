@@ -180,6 +180,22 @@ function ActiveThreadScrollViewport ({
   }, []);
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
+    getViewport: () => viewportRef.current,
+    preserveOffscreenLayout: () => {
+      const viewport = viewportRef.current;
+      if (!viewport || pendingTransitionRef.current) return () => {};
+      const previousHeight = viewport.scrollHeight;
+      const previousTop = viewport.scrollTop;
+      const previousMode = modeRef.current;
+      return () => {
+        if (viewportRef.current !== viewport || modeRef.current !== previousMode || pendingTransitionRef.current) return;
+        // Preserve distance from the bottom when content strictly above the reader changes.
+        // Reverse flex already uses that distance as its coordinate.
+        viewport.scrollTop = previousMode === "bottom-following"
+          ? previousTop
+          : previousTop + viewport.scrollHeight - previousHeight;
+      };
+    },
     isWithinBottomDistance,
     reportComposerArmed,
   }), [isWithinBottomDistance, reportComposerArmed]);

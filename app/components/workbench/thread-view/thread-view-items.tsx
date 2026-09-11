@@ -2,7 +2,7 @@
  * Keywords: transcript rendering, grouping, generic item matching, incoming agent, native output, hidden skill transport.
  * Exports:
  * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
- * - ThreadTranscriptItemsDetails: render adjacent provider or relational items through shared command and reasoning grouping. Keywords: workbench, transcript, grouping, items.
+ * - ThreadTranscriptItemsDetails: render shared item groups with optional SQL-only off-screen worked runs.
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
@@ -22,6 +22,7 @@ import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   findWorkbenchThreadItemTimelineEntry,
+  getThreadItemTimelineDurationMs,
   upsertWorkbenchThreadItemTimelineEntry,
   type WorkbenchThreadItemTimelineEntry,
 } from "workbench-shared/workbench/thread/thread-item-timeline";
@@ -36,7 +37,6 @@ import type {
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import {
-  isSyntheticQuestionnaireHistoryItem,
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
 } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 
@@ -46,9 +46,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
-import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
@@ -59,18 +57,12 @@ import {
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
-  getWorkbenchMcpShellCommandItem,
   shouldUseWorkbenchMcpSpecializedRenderer,
   getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
-  isThreadContextMatcherClaim,
-  isWorkbenchThreadStatusMatcherClaim,
-  isWorkbenchThreadTitleSetMatcherClaim,
   parseWorkbenchSubagentCommand,
-  parseWorkbenchThreadStatusCommand,
-  parseWorkbenchThreadTitleCommand,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
@@ -80,11 +72,9 @@ import {
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
-  type CommandShell,
 } from "../../../workbench/thread/thread-command-matchers";
 import {
   getSubagentSummary,
-  getWorkbenchSubagentCommandTargetKey,
   resolveWorkbenchSubagentCommandTargets,
 } from "../../../workbench/thread/thread-subagents";
 import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
@@ -130,16 +120,11 @@ import ThreadWebSearchItem, {
 } from "./ThreadWebSearchItem";
 import {
   getThreadReasoningSteps,
-  omitThreadReasoningStep,
   projectThreadReasoningMarkdown,
   type ThreadReasoningStepReference,
 } from "./thread-reasoning-display";
-import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
 import {
   getThreadSubagentWaitTiming,
-  groupThreadSubagentWaitRenderEntries,
-  type ThreadSubagentWaitRenderEntry,
-  type ThreadSubagentWaitRenderGroup,
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
@@ -152,39 +137,23 @@ import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
+import {
+  buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
+  hasReasoningSteps, isBrowseCommandItem,
+  type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type ThreadRenderableBlock,
+} from "./thread-render-blocks";
+import ThreadWorkedRun from "./ThreadWorkedRun";
+import { partitionWorkedRows } from "./thread-worked-run";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
-type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
-type McpCommandItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
-type CommandSequenceItem = CommandItem | McpCommandItem;
 type CommandBlockItem =
   | Pick<CommandItem, "command" | "commandActions" | "cwd" | "shell">
   | { display: ThreadCommandSummaryDisplay };
-type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
-type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
-type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "fileChange" } | { type: "reasoning" }>;
-
-type ThreadRenderableBlock =
-  | { kind: "commandSequence"; items: CommandSequenceItem[] }
-  | { kind: "fileChangeSequence"; items: FileChangeItem[] }
-  | { kind: "reasoningSequence"; items: ReasoningItem[] }
-  | { kind: "webSearchSequence"; items: WebSearchItem[] }
-  | { kind: "item"; item: NonGroupedItem };
-
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
-
-interface HiddenThreadItemIds {
-  controlAgentMessages?: boolean;
-  controlUserMessages?: boolean;
-  dynamicToolCallIds?: ReadonlySet<string> | null;
-  itemIds?: ReadonlySet<string> | null;
-  reasoningStep?: ThreadReasoningStepReference | null;
-  webSearchItemIds?: ReadonlySet<string> | null;
-}
 
 function isProjectedInteractionItem(
   item: WorkbenchProjectedTranscriptItem,
@@ -209,12 +178,6 @@ function adaptProjectedInteractionItem(
     tool: WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
     type: "dynamicToolCall",
   };
-}
-
-function isOpenCodeQuestionToolCall(item: ThreadItem) {
-  return item.type === "dynamicToolCall"
-    && item.namespace === "opencode"
-    && item.tool === "question";
 }
 
 function ThreadContentLoadingSkeleton () {
@@ -321,41 +284,6 @@ function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessa
     && block.item.id === finalAgentMessageId;
 }
 
-function getNarrativeTextForSnapshotDedupe(item: ThreadItem) {
-  switch (item.type) {
-    case "agentMessage":
-    case "plan":
-      return item.text;
-    case "reasoning":
-      return [...item.summary, ...item.content].join("\n");
-    default:
-      return null;
-  }
-}
-
-function normalizeNarrativeTextForSnapshotDedupe(value: string) {
-  return value
-    .replace(/\s+/gu, " ")
-    .replace(/[^\p{L}\p{N}\s#`./:-]+/gu, "")
-    .trim()
-    .toLowerCase();
-}
-
-function getNarrativeSnapshotDedupeKey(item: ThreadItem) {
-  const text = getNarrativeTextForSnapshotDedupe(item);
-  if (!text) {
-    return null;
-  }
-
-  const normalizedText = normalizeNarrativeTextForSnapshotDedupe(text);
-  return normalizedText.length >= 40 ? normalizedText.slice(0, 120) : null;
-}
-
-function isGenericSnapshotNarrativeArtifact(item: ThreadItem) {
-  return getWorkbenchThreadItemIdentityKind(item) === "provisional"
-    && (item.type === "agentMessage" || item.type === "plan" || item.type === "reasoning");
-}
-
 function getWorkedSummaryForDuration(durationMs: number | null) {
   return durationMs === null
     ? "Worked"
@@ -368,201 +296,6 @@ function getWorkedSummaryForDuration(durationMs: number | null) {
 
 function getWorkedSummary (turn: Turn) {
   return getWorkedSummaryForDuration(turn.durationMs);
-}
-
-function buildRenderableBlocks (
-  items: ThreadItem[],
-  hiddenItemIds: HiddenThreadItemIds = {},
-  fallbackCommandCwd = ".",
-): ThreadRenderableBlock[] {
-  const blocks: ThreadRenderableBlock[] = [];
-  let pendingCommands: CommandSequenceItem[] = [];
-  let pendingFileChanges: FileChangeItem[] = [];
-  let pendingReasoning: ReasoningItem[] = [];
-  let pendingWebSearches: WebSearchItem[] = [];
-  const hasSyntheticQuestionnaireHistory = items.some(isSyntheticQuestionnaireHistoryItem);
-  const narrativeSnapshotDedupeKeys = new Set<string>();
-  let hasSeenContextCompaction = false;
-
-  const flushPendingCommands = () => {
-    if (!pendingCommands.length) {
-      return;
-    }
-
-    blocks.push({
-      kind: "commandSequence",
-      items: pendingCommands,
-    });
-    pendingCommands = [];
-  };
-
-  const flushPendingReasoning = () => {
-    if (!pendingReasoning.length) {
-      return;
-    }
-
-    blocks.push({
-      kind: "reasoningSequence",
-      items: pendingReasoning,
-    });
-    pendingReasoning = [];
-  };
-
-  const flushPendingFileChanges = () => {
-    if (!pendingFileChanges.length) {
-      return;
-    }
-
-    blocks.push({
-      kind: "fileChangeSequence",
-      items: pendingFileChanges,
-    });
-    pendingFileChanges = [];
-  };
-
-  const flushPendingWebSearches = () => {
-    if (!pendingWebSearches.length) {
-      return;
-    }
-
-    blocks.push({
-      kind: "webSearchSequence",
-      items: pendingWebSearches,
-    });
-    pendingWebSearches = [];
-  };
-
-  const appendCommandItem = (item: CommandSequenceItem) => {
-    flushPendingReasoning();
-    flushPendingFileChanges();
-    flushPendingWebSearches();
-    pendingCommands.push(item);
-  };
-
-  for (const item of items) {
-    if (hiddenItemIds.itemIds?.has(item.id)) {
-      continue;
-    }
-    if (item.type === "userMessage" && (
-      isWorkbenchHiddenSystemSteerInput(item.content)
-      || (item.content.length > 0 && item.content.every(isWorkbenchActivatedSkillsInput))
-    )) {
-      continue;
-    }
-    const narrativeSnapshotDedupeKey = getNarrativeSnapshotDedupeKey(item);
-    if (
-      hasSeenContextCompaction
-      && narrativeSnapshotDedupeKey
-      && isGenericSnapshotNarrativeArtifact(item)
-      && narrativeSnapshotDedupeKeys.has(narrativeSnapshotDedupeKey)
-    ) {
-      continue;
-    }
-    if (narrativeSnapshotDedupeKey) {
-      narrativeSnapshotDedupeKeys.add(narrativeSnapshotDedupeKey);
-    }
-    if (item.type === "contextCompaction") {
-      hasSeenContextCompaction = true;
-    }
-
-    if (item.type === "agentMessage" && !item.text.trim()) {
-      continue;
-    }
-
-    if (item.type === "agentMessage" && hiddenItemIds.controlAgentMessages) {
-      continue;
-    }
-
-    if (item.type === "userMessage" && hiddenItemIds.controlUserMessages && isWorkbenchControlUserMessage(item)) {
-      continue;
-    }
-
-    if (item.type === "commandExecution") {
-      if (!isHiddenCommandExecution(item.command)) appendCommandItem(item);
-      continue;
-    }
-
-    if (item.type === "mcpToolCall") {
-      const commandItem = getWorkbenchMcpShellCommandItem(item, fallbackCommandCwd);
-      if (commandItem) {
-        if (!isHiddenCommandExecution(commandItem.command)) appendCommandItem(commandItem);
-        continue;
-      }
-      const route = getWorkbenchMcpCommandRoute({
-        argumentsValue: item.arguments,
-        server: item.server,
-        tool: item.tool,
-      });
-      if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) {
-        continue;
-      }
-      if (route?.kind === "simple" && route.rendering.claimedBy !== "browse.command") {
-        appendCommandItem(item);
-        continue;
-      }
-    }
-
-    if (item.type === "reasoning") {
-      const visibleItem = omitThreadReasoningStep(item, hiddenItemIds.reasoningStep);
-      if (!visibleItem || !hasReasoningSteps(visibleItem)) {
-        continue;
-      }
-
-      flushPendingCommands();
-      flushPendingFileChanges();
-      flushPendingWebSearches();
-      pendingReasoning.push(visibleItem);
-      continue;
-    }
-
-    if (item.type === "fileChange") {
-      flushPendingCommands();
-      flushPendingReasoning();
-      flushPendingWebSearches();
-      pendingFileChanges.push(item);
-      continue;
-    }
-
-    if (item.type === "webSearch") {
-      flushPendingCommands();
-      flushPendingReasoning();
-      flushPendingFileChanges();
-      if (hiddenItemIds.webSearchItemIds?.has(item.id) || isThreadWebSearchPlaceholder(item)) {
-        continue;
-      }
-      pendingWebSearches.push(item);
-      continue;
-    }
-
-    if (
-      item.type === "dynamicToolCall"
-      && (
-        hiddenItemIds.dynamicToolCallIds?.has(item.id)
-        || (hasSyntheticQuestionnaireHistory && isOpenCodeQuestionToolCall(item))
-      )
-    ) {
-      flushPendingCommands();
-      flushPendingReasoning();
-      flushPendingFileChanges();
-      flushPendingWebSearches();
-      continue;
-    }
-
-    flushPendingCommands();
-    flushPendingReasoning();
-    flushPendingFileChanges();
-    flushPendingWebSearches();
-    blocks.push({
-      kind: "item",
-      item,
-    });
-  }
-
-  flushPendingCommands();
-  flushPendingReasoning();
-  flushPendingFileChanges();
-  flushPendingWebSearches();
-  return blocks;
 }
 
 interface StableRenderableBlockEntry {
@@ -658,31 +391,6 @@ function createBrowseResultEntryDetailRows(entries: readonly WorkbenchBrowseResu
         target: useDetailAsTarget && entry.detailText ? { kind: "code" as const, text: entry.detailText } : null,
       };
     });
-}
-
-function isHiddenCommandExecution (command: string) {
-  if (/^report_intent(?:\s|$)/i.test(command.trim())) {
-    return true;
-  }
-
-  const display = getThreadCommandDisplay({
-    command,
-    commandActions: [],
-    cwd: "",
-  });
-  const hasDedicatedRenderer = Boolean(
-    getGitArcMatcherAction(display.claimedBy)
-    || isThreadContextMatcherClaim(display.claimedBy)
-    || isWorkbenchThreadStatusMatcherClaim(display.claimedBy)
-    || isWorkbenchThreadTitleSetMatcherClaim(display.claimedBy)
-    || display.claimedBy?.split(",").includes("workbench-cli.subagent"),
-  );
-  return display.omitFromDisplay && !hasDedicatedRenderer;
-}
-
-function hasReasoningSteps (item: ReasoningItem) {
-  return item.summary.some((section) => section.trim())
-    || item.content.some((section) => section.trim());
 }
 
 function ThreadUserInputLine ({
@@ -1429,197 +1137,6 @@ function mergeCommandDetailRowsWithBrowseOutput(
       state: row.state ?? sidecarRow?.state ?? getDefaultBrowseDetailRowState(rows, outputRows, commandStatus, index),
     };
   });
-}
-
-function isBrowseCommandItem({
-  item,
-  knownSkills,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  item: CommandSequenceItem;
-  knownSkills?: WorkbenchSkillSummary[];
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  if (item.type === "mcpToolCall") {
-    return false;
-  }
-  const display = getThreadCommandDisplay({
-    command: item.command,
-    commandActions: item.commandActions,
-    cwd: item.cwd,
-    knownSkills,
-    projectRootPath,
-    shell: item.shell,
-    workspaceRoots,
-  });
-  return isBrowseCommandMatcherClaim(display.claimedBy);
-}
-
-function isThreadContextCommandItem({
-  item,
-  knownSkills,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  item: CommandItem;
-  knownSkills?: WorkbenchSkillSummary[];
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  const display = getThreadCommandDisplay({
-    command: item.command,
-    commandActions: item.commandActions,
-    cwd: item.cwd,
-    knownSkills,
-    projectRootPath,
-    shell: item.shell,
-    workspaceRoots,
-  });
-  return isThreadContextMatcherClaim(display.claimedBy);
-}
-
-type CommandSequenceRenderSegment =
-  | { items: CommandSequenceItem[]; kind: "commands" }
-  | { item: CommandItem; kind: "gitArc" }
-  | { item: CommandItem; kind: "subagent" }
-  | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
-  | { item: CommandItem; kind: "threadContext" }
-  | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
-  | { item: CommandItem; kind: "threadTitle"; title: string };
-
-function buildCommandSequenceRenderSegments({
-  items,
-  knownSkills,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  items: CommandSequenceItem[];
-  knownSkills?: WorkbenchSkillSummary[];
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  const segments: CommandSequenceRenderSegment[] = [];
-  let pendingCommands: CommandSequenceItem[] = [];
-  let pendingSubagentWaits: ThreadSubagentWaitRenderEntry<CommandItem>[] = [];
-
-  const flushPendingCommands = () => {
-    if (!pendingCommands.length) {
-      return;
-    }
-
-    segments.push({
-      items: pendingCommands,
-      kind: "commands",
-    });
-    pendingCommands = [];
-  };
-
-  const flushPendingSubagentWaits = () => {
-    if (!pendingSubagentWaits.length) {
-      return;
-    }
-
-    segments.push(...groupThreadSubagentWaitRenderEntries(pendingSubagentWaits).map((group) => ({
-      group,
-      kind: "subagentWait" as const,
-    })));
-    pendingSubagentWaits = [];
-  };
-
-  for (const item of items) {
-    if (item.type === "mcpToolCall") {
-      flushPendingSubagentWaits();
-      if (item.status !== "completed" || item.error) {
-        flushPendingCommands();
-        segments.push({ items: [item], kind: "commands" });
-      } else {
-        pendingCommands.push(item);
-      }
-      continue;
-    }
-
-    const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
-    if (
-      isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })
-      && (commandOutcome === "completed" || commandOutcome === "inProgress")
-    ) {
-      flushPendingCommands();
-      flushPendingSubagentWaits();
-      segments.push({
-        item,
-        kind: "threadContext",
-      });
-      continue;
-    }
-
-    const commandDisplay = getThreadCommandDisplay({
-      command: item.command,
-      commandActions: item.commandActions,
-      cwd: item.cwd,
-      knownSkills,
-      projectRootPath,
-      shell: item.shell,
-      workspaceRoots,
-    });
-    const threadTitleCommand = isWorkbenchThreadTitleSetMatcherClaim(commandDisplay.claimedBy)
-      ? parseWorkbenchThreadTitleCommand(commandDisplay.unwrappedCommand, item.commandActions)
-      : null;
-    if (threadTitleCommand?.action === "set") {
-      flushPendingCommands();
-      flushPendingSubagentWaits();
-      segments.push({ item, kind: "threadTitle", title: threadTitleCommand.title });
-      continue;
-    }
-    const threadStatusCommand = isWorkbenchThreadStatusMatcherClaim(commandDisplay.claimedBy)
-      ? parseWorkbenchThreadStatusCommand(commandDisplay.unwrappedCommand, item.commandActions)
-      : null;
-    if (threadStatusCommand && (commandOutcome === "completed" || commandOutcome === "inProgress")) {
-      flushPendingCommands();
-      flushPendingSubagentWaits();
-      segments.push({ item, kind: "threadStatus", status: threadStatusCommand.status });
-      continue;
-    }
-    if (getGitArcMatcherAction(commandDisplay.claimedBy)) {
-      flushPendingCommands();
-      flushPendingSubagentWaits();
-      segments.push({ item, kind: "gitArc" });
-      continue;
-    }
-    const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
-    if (subagentCommand?.action === "wait" && subagentCommand.targets.length) {
-      flushPendingCommands();
-      pendingSubagentWaits.push({
-        item,
-        outcome: getThreadCommandExecutionOutcome(item.status, item.exitCode),
-        targetKeys: subagentCommand.targets.map(getWorkbenchSubagentCommandTargetKey),
-      });
-      continue;
-    }
-
-    flushPendingSubagentWaits();
-    if (subagentCommand) {
-      flushPendingCommands();
-      segments.push({
-        item,
-        kind: "subagent",
-      });
-      continue;
-    }
-
-    if (getThreadCommandExecutionOutcome(item.status, item.exitCode) !== "completed") {
-      flushPendingCommands();
-      segments.push({ items: [item], kind: "commands" });
-      continue;
-    }
-
-    pendingCommands.push(item);
-  }
-
-  flushPendingCommands();
-  flushPendingSubagentWaits();
-  return segments;
 }
 
 function ThreadSubagentCurrentActivityPreview ({
@@ -2784,6 +2301,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
 ));
 
 interface ThreadTranscriptItemsDetailsProps {
+  initialInactiveItemIds?: ReadonlySet<string>;
   initialUserItemId?: string | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
@@ -2807,6 +2325,7 @@ interface ThreadTranscriptItemsDetailsProps {
 }
 
 export function ThreadTranscriptItemsDetails ({
+  initialInactiveItemIds,
   initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   hiddenReasoningStep = null,
@@ -2829,8 +2348,8 @@ export function ThreadTranscriptItemsDetails ({
   workspaceRoots,
 }: ThreadTranscriptItemsDetailsProps) {
   type RenderEntry =
-    | { block: ThreadRenderableBlock; kind: "block" }
-    | { item: WorkbenchProjectedGenericItem; kind: "generic" };
+    | { block: ThreadRenderableBlock; kind: "block"; eligible: boolean }
+    | { item: WorkbenchProjectedGenericItem; kind: "generic"; eligible: false };
   const entries: RenderEntry[] = [];
   const renderItemTimeline = useMemo(() => {
     let timeline = itemTimeline ?? [];
@@ -2853,13 +2372,15 @@ export function ThreadTranscriptItemsDetails ({
       pendingItems,
       { reasoningStep: hiddenReasoningStep },
       threadCwdPath,
-    ).map((block) => ({ block, kind: "block" as const })));
+    ).flatMap((block) => initialInactiveItemIds
+      ? getWorkedBlockRows(block, { knownSkills, projectRootPath, workspaceRoots }).map(row => ({ ...row, kind: "block" as const }))
+      : [{ block, eligible: false, kind: "block" as const }]));
     pendingItems = [];
   };
   for (const item of items) {
     if (item.type === "generic") {
       flushItems();
-      entries.push({ item, kind: "generic" });
+      entries.push({ item, kind: "generic", eligible: false });
     } else {
       pendingItems.push(isProjectedInteractionItem(item)
         ? adaptProjectedInteractionItem(item)
@@ -2877,9 +2398,7 @@ export function ThreadTranscriptItemsDetails ({
   ))?.id
     ?? null;
 
-  return (
-    <div className="space-y-2">
-      {entries.map((entry, index) => entry.kind === "generic" ? (
+  const renderEntry = (entry: RenderEntry, index: number) => entry.kind === "generic" ? (
         <ThreadGenericItem key={`generic:${entry.item.id}`} item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
       ) : (
         <ThreadRenderableBlockView
@@ -2906,9 +2425,28 @@ export function ThreadTranscriptItemsDetails ({
           turnStatus={turnStatus}
           workspaceRoots={workspaceRoots}
         />
-      ))}
-    </div>
-  );
+      );
+  if (!initialInactiveItemIds) return <div className="space-y-2">{entries.map(renderEntry)}</div>;
+  let offset = 0;
+  return <div className="space-y-2">{partitionWorkedRows(entries).map(group => {
+    const start = offset;
+    offset += group.length;
+    const children = group.map((entry, index) => renderEntry(entry, start + index));
+    if (!group[0]?.eligible || group.length < 5) return children;
+    const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
+    const activity = ids.map(id => {
+      const timeline = findWorkbenchThreadItemTimelineEntry(id, renderItemTimeline);
+      const times = timeline ? [timeline.startedAt, timeline.firstSeenAt, timeline.completedAt, timeline.lastSeenAt].filter((time): time is number => time !== null) : [];
+      return times.length ? Math.max(...times) : null;
+    });
+    return <ThreadWorkedRun
+      key={ids.join(":")}
+      count={group.length}
+      durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
+      initialInactive={ids.every(id => initialInactiveItemIds.has(id))}
+      newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
+    >{children}</ThreadWorkedRun>;
+  })}</div>;
 }
 
 export function ThreadTranscriptItemDetails ({
