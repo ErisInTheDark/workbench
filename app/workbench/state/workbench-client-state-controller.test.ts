@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect schema-derived app-state conformance and browser revision application. Keywords: app, state, browser, conformance, polling.
+ * No production exports. Tests protect app-state conformance and browser revision application.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,6 +12,27 @@ import { WORKBENCH_BROWSER_STATE_HEADER } from "workbench-shared/state/workbench
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+
+test("font size survives a later state snapshot and retains legacy whole-rem values", async () => {
+  for (const [stored, expected] of [[116, 1.16], [1, 1]]) {
+    const rows = emptyRows();
+    rows.globalPreferences.push({
+      key: "editorFontSize", integer_value: stored, boolean_value: null, text_value: null, deleted: 0, revision: 1,
+    });
+    const controller = new WorkbenchClientStateController({
+      mode: "http",
+      fetcher: async () => Response.json(response("snapshot", 1, rows)),
+      schedule: () => 1,
+      cancelSchedule: () => {},
+    });
+    try {
+      await controller.bootstrap();
+      assert.equal(controller.records("globalPreference")[0]?.preference.value, expected);
+      await controller.bootstrap();
+      assert.equal(controller.records("globalPreference")[0]?.preference.value, expected);
+    } finally { controller.dispose(); }
+  }
+});
 
 function emptyRows(): WorkbenchClientStateRows {
   return {

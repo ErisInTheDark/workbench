@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchRangeInput: native horizontal range input with shared track/thumb styling.
+ * - default WorkbenchRangeInput: native range with shared track/thumb styling.
  */
 "use client";
 
@@ -11,7 +11,8 @@ export default function WorkbenchRangeInput({ className = "", variant = "step", 
     {...props}
     type="range"
     className={`
-      relative z-10 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none disabled:cursor-not-allowed
+      relative z-10 cursor-pointer appearance-none bg-transparent focus-visible:outline-none disabled:cursor-not-allowed
+      w-full
       [&::-webkit-slider-runnable-track]:rounded-full
       [&::-webkit-slider-thumb]:appearance-none
       [&::-webkit-slider-thumb]:rounded-full
@@ -38,9 +39,9 @@ export default function WorkbenchRangeInput({ className = "", variant = "step", 
         [&::-moz-range-thumb]:size-4
         [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:shadow
       ` : `
-        [&::-webkit-slider-runnable-track]:h-[0.28rem]
+        [&::-webkit-slider-runnable-track]:h-[0.28rem] [&::-webkit-slider-thumb]:mt-[-0.36rem]
         [&::-webkit-slider-runnable-track]:bg-[var(--slider-step-color)]
-        [&::-webkit-slider-thumb]:mt-[-0.36rem] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4
+        [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4
         [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-[color-mix(in_srgb,var(--text)_28%,transparent)]
         [&::-webkit-slider-thumb]:bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]
         [&::-moz-range-track]:h-[0.28rem]

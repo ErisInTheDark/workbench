@@ -1,4 +1,4 @@
-/* No production exports. Real SQLite wards protect revisioned global preferences, app-state mutation, and structured draft hydration. Keywords: app state, SQLite, global sidebar, persistence. */
+/* No production exports. Tests protect revisioned preferences, app-state mutation and structured draft hydration. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -11,6 +11,28 @@ import { appStateSchema } from "workbench-shared/state/workbench-app-state-schem
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
+import { conformWorkbenchClientStateResponse } from "../workbench/state/workbench-client-state-conformance";
+
+test("fractional font sizes survive global and project saves, browser conformance and restart", async context => {
+  const fixture = await controllerFixture(context);
+  const records = [
+    { kind: "globalPreference" as const, preference: { key: "editorFontSize" as const, value: 1.16 } },
+    { kind: "projectPreference" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "project", preference: { key: "editorFontSize" as const, enabled: true, value: 1.48 } },
+  ];
+  try {
+    for (const record of records) {
+      const saved = await fixture.controller.mutate({ action: "put", record });
+      const conformed = conformWorkbenchClientStateResponse(saved);
+      assert.equal(conformed.success, true);
+      assert.deepEqual(projectedRecords(saved), [record]);
+    }
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(projectedRecords(restarted.read()).filter(record => record.kind === "globalPreference" || record.kind === "projectPreference"), records);
+  } finally { await restarted.close(); }
+});
 
 function projectedRecords(response: WorkbenchClientStateResponse) {
   return projectWorkbenchClientStateRows(response.rows).flatMap((change) => (

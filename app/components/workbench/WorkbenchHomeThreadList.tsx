@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - default WorkbenchHomeThreadList: render one projectless thread list with global priority order, project-owned folders, owner context, and guarded drag actions.
- * - Local render helpers: render home-qualified rows, folder blocks, drop markers, creation links, and settled pagination.
  */
 "use client";
 
@@ -32,7 +31,7 @@ import {
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import type { FolderId, ProjectThreadDisplayKey } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadPriority, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
+import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import Draggable from "./drag/Draggable";
@@ -292,11 +291,16 @@ export default function WorkbenchHomeThreadList({
 
   const renderFolderCreateThread = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => {
     const target = { folderId: item.folder.folderId, kind: "new" as const };
+    const selected = selectedOwnerProjectId === item.projectId && isWorkbenchThreadTargetSelected(target, currentTarget);
     return (
       <a
         href={createHomeThreadHref(item.projectId, target)}
         title="Create new thread"
-        className={`${workbenchThreadListButtonClassName} text-muted`}
+        aria-current={selected ? "page" : undefined}
+        className={`
+          ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
+          ${selected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+        `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();
@@ -370,12 +374,17 @@ export default function WorkbenchHomeThreadList({
     />
   );
 
+  const blankThreadSelected = selectedOwnerProjectId === createProject.id && isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
   return (
     <DropTargetBoundary className="space-y-1">
       <a
         href={createHomeThreadHref(createProject.id, { kind: "new" })}
         title="Create new thread"
-        className={`${workbenchThreadListButtonClassName} mt-1 text-muted`}
+        aria-current={blankThreadSelected ? "page" : undefined}
+        className={`
+          ${workbenchOptionRowClassName} mt-1 min-h-9 w-full md:min-h-8
+          ${blankThreadSelected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+        `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();

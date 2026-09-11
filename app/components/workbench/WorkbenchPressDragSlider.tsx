@@ -4,29 +4,42 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ComponentPropsWithRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import PressDragSliderController, { type PressDragSliderRange } from "./PressDragSliderController";
 import { positionWorkbenchPopover } from "./workbench-popover-geometry";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchRangeInput from "./WorkbenchRangeInput";
 
+function SliderTrigger ({ icon, label, children, ...props }: ComponentPropsWithRef<"button"> & { icon?: ReactNode; label: string }) {
+  return icon
+    ? <WorkbenchIconButton {...props} label={label} display="hover-border">{icon}</WorkbenchIconButton>
+    : <button {...props}>{children}</button>;
+}
+
 export default function WorkbenchPressDragSlider ({
-  value, min, max, step, label, format, colour, onChange, disabled = false, valueText, valueOptions, presentation = "popover",
+  ref, value, min, max, step, label, format, colour, onChange, onPreview, disabled = false, valueText, valueOptions, presentation = "popover", icon, side = "above", subgrid,
 }: PressDragSliderRange & {
   label: string;
   format: (value: number) => string;
   colour: (fraction: number) => string;
   onChange: (value: number) => void;
+  onPreview?: (value: number | null) => void;
   disabled?: boolean;
   valueText?: string;
   valueOptions?: readonly string[];
   presentation?: "popover" | "inline";
+  ref?: Ref<HTMLButtonElement>;
+  icon?: ReactNode;
+  side?: "above" | "below";
+  subgrid?: boolean;
 }) {
   const [controller] = useState(() => new PressDragSliderController());
   const control = useRef<HTMLButtonElement | HTMLInputElement>(null);
+  useImperativeHandle(ref, () => control.current as HTMLButtonElement);
   const pointer = useRef<number | null>(null);
   const touch = useRef<{ id: number; left: number; top: number } | null>(null);
-  const [preview, setPreview] = useState<number | null>(null);
+  const preview = useSyncExternalStore(controller.subscribePreview, controller.getPreview, controller.getPreview);
   const [position, setPosition] = useState<ReturnType<typeof positionWorkbenchPopover> | null>(null);
   const range = { value, min, max, step };
   const shown = preview ?? value;
@@ -43,7 +56,6 @@ export default function WorkbenchPressDragSlider ({
   function cancel () {
     controller.cancel();
     touch.current = null;
-    setPreview(null);
     const id = pointer.current;
     pointer.current = null;
     if (id !== null && control.current?.hasPointerCapture(id)) control.current.releasePointerCapture(id);
@@ -52,7 +64,17 @@ export default function WorkbenchPressDragSlider ({
   useEffect(() => {
     cancel();
     return () => controller.cancel();
-  }, [controller, value, min, max, step, disabled, presentation]);
+  }, [controller, value, min, max, step, disabled, presentation, side]);
+
+  useEffect(() => {
+    if (!onPreview) return;
+    onPreview(controller.getPreview());
+    const unsubscribe = controller.subscribePreview(onPreview);
+    return () => {
+      unsubscribe();
+      onPreview(null);
+    };
+  }, [controller, onPreview]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -66,6 +88,11 @@ export default function WorkbenchPressDragSlider ({
         const box = control.current?.getBoundingClientRect();
         if (box) controller.cancelTouchHoldAfterMovement(Math.hypot(box.left - touch.current.left, box.top - touch.current.top));
         return;
+      }
+      // Live font changes may scroll the content without moving its sticky zoom trigger.
+      if (onPreview && controller.isActive && position && control.current) {
+        const next = getPopoverPosition(control.current);
+        if (next.left === position.left && next.top === position.top) return;
       }
       cancel();
     };
@@ -83,7 +110,7 @@ export default function WorkbenchPressDragSlider ({
       window.visualViewport?.removeEventListener("resize", cancel);
       window.visualViewport?.removeEventListener("scroll", onScroll);
     };
-  }, [controller]);
+  }, [controller, onPreview, position, side]);
 
   useEffect(() => {
     if (presentation !== "popover") return;
@@ -97,17 +124,21 @@ export default function WorkbenchPressDragSlider ({
     return () => element?.removeEventListener("touchmove", preventActiveScroll);
   }, [controller, presentation]);
 
-  function beginPopover(element: HTMLElement, y: number) {
-    element.focus({ preventScroll: true });
+  function getPopoverPosition(element: HTMLElement) {
     const viewport = window.visualViewport;
-    const box = positionWorkbenchPopover(element.getBoundingClientRect(), { width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight, left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0 }, { width: 72, height: 216 });
+    return positionWorkbenchPopover(element.getBoundingClientRect(), { width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight, left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0 }, { width: 72, height: 216, side });
+  }
+
+  function beginPopover (element: HTMLElement, y: number) {
+    element.focus({ preventScroll: true });
+    const box = getPopoverPosition(element);
     setPosition(box);
-    controller.begin(range, y, Math.max(1, box.height - 48));
-    setPreview(value);
+    // Downward popovers map the pointer to thumb centres inside the padded track.
+    controller.begin(range, y, Math.max(1, box.height - (side === "below" ? 72 : 48)), side === "below" ? box.top + 50 : undefined);
   }
 
   if (presentation === "inline") return <div
-    className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
+    className={`grid min-w-0 flex-1 items-center gap-3 ${subgrid ? "grid-cols-subgrid col-span-2" : "grid-cols-[minmax(0,1fr)_auto]"}`}
     style={{ "--slider-step-color": colour(fraction) } as CSSProperties}
   >
     <WorkbenchRangeInput
@@ -126,10 +157,9 @@ export default function WorkbenchPressDragSlider ({
         controller.begin(range, 0, 1);
         pointer.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
-        setPreview(value);
       }}
       onChange={(event) => {
-        setPreview(controller.setPreview(event.currentTarget.valueAsNumber));
+        controller.setPreview(event.currentTarget.valueAsNumber);
       }}
       onKeyDown={(event) => {
         const next = controller.keyboard(range, event.key);
@@ -153,7 +183,9 @@ export default function WorkbenchPressDragSlider ({
   </div>;
 
   return <>
-    <button
+    <SliderTrigger
+      icon={icon}
+      label={label}
       ref={(element) => { control.current = element; }}
       type="button"
       role="slider"
@@ -164,7 +196,7 @@ export default function WorkbenchPressDragSlider ({
       aria-valuetext={shownText}
       aria-orientation="vertical"
       disabled={disabled}
-      className="relative isolate shrink-0 touch-auto select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"
+      className={icon ? "touch-auto select-none" : "relative isolate shrink-0 touch-auto select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"}
       onPointerDown={(event) => {
         if (event.pointerType === "touch" || event.button !== 0 || pointer.current !== null) return;
         event.preventDefault();
@@ -183,7 +215,7 @@ export default function WorkbenchPressDragSlider ({
       onTouchMove={(event) => {
         if (event.touches.length !== 1) { cancel(); return; }
         const contact = Array.from(event.touches).find(entry => entry.identifier === touch.current?.id);
-        if (contact) setPreview(controller.moveTouch(contact.clientX, contact.clientY));
+        if (contact) controller.moveTouch(contact.clientX, contact.clientY);
       }}
       onTouchEnd={(event) => {
         const contact = Array.from(event.changedTouches).find(entry => entry.identifier === touch.current?.id);
@@ -196,7 +228,7 @@ export default function WorkbenchPressDragSlider ({
       onTouchCancel={cancel}
       onContextMenu={(event) => { if (touch.current) event.preventDefault(); }}
       onPointerMove={(event) => {
-        if (pointer.current === event.pointerId) setPreview(controller.move(event.clientY));
+        if (pointer.current === event.pointerId) controller.move(event.clientY);
       }}
       onPointerUp={(event) => {
         if (pointer.current !== event.pointerId) return;
@@ -215,10 +247,10 @@ export default function WorkbenchPressDragSlider ({
         event.preventDefault();
         if (next !== value) onChange(next);
       }}
-    >{valueLabel}</button>
+    >{valueLabel}</SliderTrigger>
     {preview !== null && position ? createPortal(
       <div aria-hidden="true" style={position} className="pointer-events-none fixed z-[60] flex flex-col items-center gap-3 rounded-xl bg-bg p-3 text-text shadow-xl ring-1 ring-[color-mix(in_srgb,var(--text)_10%,transparent)]">
-        <span className="text-xs font-semibold capitalize">{format(shown)}</span>
+        <span className="h-4 shrink-0 whitespace-nowrap text-xs font-semibold capitalize">{format(shown)}</span>
         <div className="relative min-h-0 w-5 flex-1 rounded-full" style={{ background: colour(fraction) }}>
           <div className="absolute inset-x-0 inset-y-0.5">
             <span className="absolute left-0.5 size-4 rounded-full bg-white shadow" style={{ bottom: `calc(${fraction * 100}% - ${fraction}rem)` }} />

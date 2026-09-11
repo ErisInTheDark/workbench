@@ -18,12 +18,18 @@ export type WorkbenchClientStateProjectionChange =
   | { change: "upsert"; record: WorkbenchClientStateRecord; revision: number };
 
 function scalarValue(row: {
+  key: string;
   boolean_value?: number | null;
   integer_value?: number | null;
   text_value?: string | null;
 }) {
   if (row.boolean_value !== undefined && row.boolean_value !== null) return row.boolean_value === 1;
-  if (row.integer_value !== undefined && row.integer_value !== null) return row.integer_value;
+  if (row.integer_value !== undefined && row.integer_value !== null) {
+    // Before fixed-point storage, 1rem was the only supported size SQLite could save.
+    return row.key === "editorFontSize" && row.integer_value !== 1
+      ? row.integer_value / 100
+      : row.integer_value;
+  }
   if (row.text_value !== undefined && row.text_value !== null) return row.text_value;
   throw new Error("Live app preference row has no value.");
 }

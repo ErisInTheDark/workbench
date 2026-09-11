@@ -1,20 +1,20 @@
 /*
  * Exports:
- * - WorkbenchDialogElements: grouped dialog shell and action button elements for imperative workbench flows. Keywords: workbench, dialog, DOM, refs.
- * - SaveConflictDialogDomSurface: required save-conflict dialog surface for overwrite and reload flows. Keywords: workbench, dialog, DOM, save conflict.
- * - ResetDraftDialogDomSurface: required reset-draft dialog surface for reset actions. Keywords: workbench, dialog, DOM, reset draft.
- * - DialogDomSurface: grouped dialog capability surfaces used by the runtime. Keywords: workbench, dialog, DOM, capability.
- * - ToolbarDomSurface: grouped floating toolbar capability surface for editor formatting actions. Keywords: workbench, toolbar, DOM, capability.
- * - EditorDomSurface: grouped editor capability surface owned by the React shell. Keywords: workbench, editor, DOM, capability.
- * - StatusDisplaySurface: grouped status label surface for file path and status messages. Keywords: workbench, status, DOM, capability.
- * - ControlButtonsDomSurface: grouped editor button surface for save, reset, and zoom controls. Keywords: workbench, controls, DOM, capability.
- * - WorkbenchDomSurfaces: typed React-owned grouped DOM surfaces required by the workbench runtime. Keywords: workbench, DOM, refs, capability surfaces.
- * - WorkbenchEditorDomSurfaces: narrowed DOM surfaces consumed by the editor client. Keywords: workbench, editor, DOM, capability surfaces.
- * - hasRequiredEditorDomSurface: validate the required editor DOM surface before boot. Keywords: workbench, DOM, guard, editor.
- * - hasRequiredStatusDisplaySurface: validate the required status DOM surface before boot. Keywords: workbench, DOM, guard, status.
- * - hasRequiredControlButtonsDomSurface: validate the required control button surface before boot. Keywords: workbench, DOM, guard, controls.
- * - hasRequiredDialogDomSurface: validate the required dialog surface before boot. Keywords: workbench, DOM, guard, dialogs.
- * - hasRequiredToolbarDomSurface: validate the required toolbar surface before boot. Keywords: workbench, DOM, guard, toolbar.
+ * - WorkbenchDialogElements: dialog shell and action elements for imperative flows.
+ * - SaveConflictDialogDomSurface: required overwrite and reload dialog elements.
+ * - ResetDraftDialogDomSurface: required draft-reset dialog elements.
+ * - DialogDomSurface: grouped runtime dialog capabilities.
+ * - ToolbarDomSurface: floating formatting toolbar elements.
+ * - EditorDomSurface: React-owned editor elements.
+ * - StatusDisplaySurface: file path and status labels.
+ * - ControlButtonsDomSurface: save, reset and zoom-trigger elements.
+ * - WorkbenchDomSurfaces: React-owned DOM capabilities required by the runtime.
+ * - WorkbenchEditorDomSurfaces: DOM capabilities consumed by the editor client.
+ * - hasRequiredEditorDomSurface: validate editor elements before boot.
+ * - hasRequiredStatusDisplaySurface: validate status elements before boot.
+ * - hasRequiredControlButtonsDomSurface: validate control elements before boot.
+ * - hasRequiredDialogDomSurface: validate dialog elements before boot.
+ * - hasRequiredToolbarDomSurface: validate toolbar elements before boot.
  */
 
 export interface WorkbenchDialogElements {
@@ -73,8 +73,7 @@ export interface StatusDisplaySurface {
 export interface ControlButtonsDomSurface {
   resetDraftButton: HTMLButtonElement;
   saveFileButton: HTMLButtonElement;
-  zoomInButton: HTMLButtonElement;
-  zoomOutButton: HTMLButtonElement;
+  zoomButton: HTMLButtonElement;
 }
 
 export interface WorkbenchDomSurfaces {
@@ -105,8 +104,7 @@ export function hasRequiredControlButtonsDomSurface(surface: Partial<ControlButt
   return Boolean(
     surface?.resetDraftButton
       && surface?.saveFileButton
-      && surface?.zoomInButton
-      && surface?.zoomOutButton,
+      && surface?.zoomButton,
   );
 }
 

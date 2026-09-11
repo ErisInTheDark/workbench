@@ -1,9 +1,10 @@
 /*
- * Keywords: search, sidebar, trigger.
  * Exports:
  * - default WorkbenchSearchInput: accessible sidebar search button.
  */
 "use client";
+
+import { SearchIcon } from "./workbench-icons";
 
 export default function WorkbenchSearchInput({ onOpen }: { onOpen(): void }) {
   return (
@@ -13,10 +14,7 @@ export default function WorkbenchSearchInput({ onOpen }: { onOpen(): void }) {
       onClick={onOpen}
       type="button"
     >
-      <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-search-icon lucide-search shrink-0">
-        <path d="m21 21-4.34-4.34" />
-        <circle cx="11" cy="11" r="8" />
-      </svg>
+      <SearchIcon className="size-[1em] shrink-0" />
       <span>Search</span>
     </button>
   );

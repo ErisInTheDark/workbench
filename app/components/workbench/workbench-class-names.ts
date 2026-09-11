@@ -1,18 +1,24 @@
 /*
  * Exports:
- * - workbenchIconButtonClassName: shared chrome button styling for workbench controls, including invalid save state. Keywords: workbench, button, chrome.
- * - workbenchNewEntryButtonClassName: compact create-entry button styling that reveals within entry rows. Keywords: workbench, explorer, create.
- * - workbenchThreadListButtonClassName: full-width thread list button layout and interaction styling. Keywords: workbench, thread list, button.
- * - workbenchThreadListLabelClassName: truncated thread label styling for sidebar rows. Keywords: workbench, thread list, label.
- * - workbenchFloatingToolbarClassName: floating editor toolbar shell layout and responsive behavior. Keywords: workbench, toolbar, floating.
- * - workbenchFloatingToolbarGroupClassName: shared group layout for toolbar button clusters. Keywords: workbench, toolbar, group.
- * - workbenchDiffGutterClassName: editor diff gutter container styling. Keywords: workbench, editor, diff gutter.
- * - workbenchRevisionHoverToolbarClassName: revision hover toolbar shell with kind-specific background states. Keywords: workbench, revision, toolbar.
+ * - workbenchOptionSelectedClassName/workbenchOptionHoverClassName: shared option surface states.
+ * - workbenchOptionRowClassName: compact option surface for navigation and explorer rows.
+ * - workbenchNewEntryButtonClassName: reveal compact create-entry controls within entry rows.
+ * - workbenchThreadListButtonClassName: full-width thread list button layout and interaction styling.
+ * - workbenchThreadListLabelClassName: truncated thread label styling for sidebar rows.
+ * - workbenchFloatingToolbarClassName: floating editor toolbar shell layout and responsive behaviour.
+ * - workbenchFloatingToolbarGroupClassName: group layout for toolbar button clusters.
+ * - workbenchDiffGutterClassName: editor diff gutter container styling.
+ * - workbenchRevisionHoverToolbarClassName: revision hover toolbar shell with kind-specific backgrounds.
+ * - workbenchRevisionActionButtonClassName: text actions in revision hover toolbars.
  */
 
-export const workbenchIconButtonClassName = "inline-flex min-h-[2.65rem] min-w-[2.65rem] items-center justify-center rounded-[0.7rem] p-[0.55rem] text-inherit transition-[background-color,color,opacity] duration-150 ease-out hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none data-[invalid=true]:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[invalid=true]:text-danger data-[invalid=true]:hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] data-[invalid=true]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] [&[data-invalid=true]_.save-icon-slash]:opacity-100 [&[data-invalid=true]_.save-icon-main]:opacity-45";
+export const workbenchRevisionActionButtonClassName = "pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none";
 
-export const workbenchNewEntryButtonClassName = "!min-h-0 !min-w-0 !p-1 h-full shrink-0 aspect-square md:opacity-0 md:transition-opacity md:duration-150 md:group-hover/entry-row:opacity-100 md:group-has-[:focus-visible]/entry-row:opacity-100";
+export const workbenchOptionSelectedClassName = "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]";
+export const workbenchOptionHoverClassName = "hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]";
+export const workbenchOptionRowClassName = "inline-flex min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition [&:not(:disabled)]:hover:border-[color-mix(in_srgb,var(--text)_22%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-default disabled:opacity-60 md:py-0.5";
+
+export const workbenchNewEntryButtonClassName = "md:opacity-0 md:transition-opacity md:duration-150 md:group-hover/entry-row:opacity-100 md:group-has-[:focus-visible]/entry-row:opacity-100";
 
 export const workbenchThreadListButtonClassName = "flex w-full min-w-0 items-center rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1";
 

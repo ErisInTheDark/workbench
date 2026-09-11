@@ -1,12 +1,12 @@
 "use client";
 
 /*
- * default CodexSandboxNetworkSetting: render and mutate server-owned global or project Codex sandbox network settings. Keywords: Codex, sandbox, network, settings.
+ * - default CodexSandboxNetworkSetting: render and mutate server-owned global or project sandbox network settings.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { WorkbenchCodexSandboxNetworkSettings } from "workbench-shared/types";
-import { workbenchIconButtonClassName } from "./workbench-class-names";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import { ReloadIcon } from "./workbench-icons";
 import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
@@ -94,18 +94,19 @@ export default function CodexSandboxNetworkSetting ({
         }}
       />
       {hasProjectOverride ? (
-        <button
+        <WorkbenchIconButton
           type="button"
-          aria-label="Reset Codex sandbox network access to global"
+          label="Reset Codex sandbox network access to global"
+          display="hover-border"
           title="Reset Codex sandbox network access to global"
-          className={`${workbenchIconButtonClassName} absolute top-1/2 right-3 -translate-y-1/2`}
+          className="absolute top-1/2 right-3 -translate-y-1/2"
           disabled={isLoading}
           onClick={() => {
             update(null);
           }}
         >
           <ReloadIcon />
-        </button>
+        </WorkbenchIconButton>
       ) : null}
       {error ? (
         <p className="m-0 text-[0.78rem] leading-5 text-danger">{error}</p>

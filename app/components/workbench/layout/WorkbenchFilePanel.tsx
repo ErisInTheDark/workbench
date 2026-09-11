@@ -1,17 +1,20 @@
 /*
  * Exports:
- * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces. Keywords: workbench, file panel, split layout, editor.
+ * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 
 import type { WorkbenchControls } from "workbench-shared/types";
 import type { WorkbenchFilePanelClient, WorkbenchFilePanelClientOptions, WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import type { WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
+import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import {
   workbenchDiffGutterClassName,
-  workbenchIconButtonClassName,
+  workbenchRevisionActionButtonClassName,
 } from "../workbench-class-names";
 import {
   WorkbenchDialog,
@@ -23,8 +26,6 @@ import {
   PanelExpandIcon,
   PanelMinimizeIcon,
   SaveIcon,
-  ZoomInIcon,
-  ZoomOutIcon,
 } from "../workbench-icons";
 
 interface WorkbenchFilePanelProps {
@@ -33,6 +34,7 @@ interface WorkbenchFilePanelProps {
   controls: WorkbenchControls | null;
   editorFontClassName: string;
   fontSizeRem: number;
+  baseFontSizeRem?: number;
   hasSidebarRestoreInset?: boolean;
   isFocused: boolean;
   isMinimized?: boolean;
@@ -51,6 +53,7 @@ interface WorkbenchFilePanelProps {
 }
 
 export default function WorkbenchFilePanel ({
+  baseFontSizeRem,
   clientOptions,
   contained = false,
   controls,
@@ -79,8 +82,7 @@ export default function WorkbenchFilePanel ({
   const statusLineRef = useRef<HTMLParagraphElement>(null);
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
-  const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
-  const zoomInButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
   const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
   const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
@@ -111,8 +113,7 @@ export default function WorkbenchFilePanel ({
       || !statusLineRef.current
       || !resetDraftButtonRef.current
       || !saveFileButtonRef.current
-      || !zoomOutButtonRef.current
-      || !zoomInButtonRef.current
+      || !zoomButtonRef.current
       || !saveConflictDialogRef.current
       || !saveConflictSummaryRef.current
       || !saveConflictExpectedRef.current
@@ -144,8 +145,7 @@ export default function WorkbenchFilePanel ({
       controls: {
         resetDraftButton: resetDraftButtonRef.current,
         saveFileButton: saveFileButtonRef.current,
-        zoomInButton: zoomInButtonRef.current,
-        zoomOutButton: zoomOutButtonRef.current,
+        zoomButton: zoomButtonRef.current,
       },
       dialogs: {
         saveConflict: {
@@ -205,16 +205,11 @@ export default function WorkbenchFilePanel ({
     clientRef.current?.setFontSize(fontSizeRem, { persist: false });
   }, [fontSizeRem]);
 
-  function handlePanelZoomCapture(event: MouseEvent<HTMLButtonElement>, nextZoomDelta: number) {
-    if (!onPanelZoomDeltaChange) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopImmediatePropagation();
-    onPanelZoomDeltaChange(nextZoomDelta);
-  }
+  const panelBaseFontSize = baseFontSizeRem ?? fontSizeRem;
+  const usesPanelZoom = Boolean(onPanelZoomDeltaChange);
+  const previewZoom = useCallback((value: number | null) => {
+    clientRef.current?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);
+  }, [usesPanelZoom, panelBaseFontSize]);
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
@@ -257,79 +252,68 @@ export default function WorkbenchFilePanel ({
           </div>
           <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
             {onMinimizeToggle ? (
-              <button
+              <WorkbenchIconButton
                 type="button"
                 title={isMinimized ? "Expand panel" : "Minimize panel"}
-                aria-label={isMinimized ? "Expand panel" : "Minimize panel"}
-                className={workbenchIconButtonClassName}
+                label={isMinimized ? "Expand panel" : "Minimize panel"}
+                display="hover-border"
                 onClick={onMinimizeToggle}
               >
                 {isMinimized ? <PanelExpandIcon /> : <PanelMinimizeIcon />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-              </button>
+              </WorkbenchIconButton>
             ) : null}
             <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-              <button
-                ref={zoomOutButtonRef}
-                type="button"
-                title="Decrease editor text size"
-                aria-label="Decrease editor text size"
-                className={workbenchIconButtonClassName}
-                onClickCapture={(event) => {
-                  handlePanelZoomCapture(event, panelZoomDelta - 1);
+              <WorkbenchZoomButton
+                ref={zoomButtonRef}
+                label="Editor text size"
+                disabled={isMinimized || !showManualFileActions || !snapshot}
+                min={onPanelZoomDeltaChange ? Math.floor(Number(((MIN_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6))) : MIN_EDITOR_FONT_SIZE}
+                max={onPanelZoomDeltaChange ? Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6))) : MAX_EDITOR_FONT_SIZE}
+                step={onPanelZoomDeltaChange ? 1 : 0.08}
+                value={onPanelZoomDeltaChange ? panelZoomDelta : snapshot?.fontSize ?? fontSizeRem}
+                onPreview={previewZoom}
+                format={value => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, onPanelZoomDeltaChange ? panelBaseFontSize + value * 0.08 : value)).toFixed(2)}rem`}
+                onChange={(value) => {
+                  if (onPanelZoomDeltaChange) onPanelZoomDeltaChange(value);
+                  else clientRef.current?.setFontSize(value);
                 }}
-              >
-                <ZoomOutIcon />
-                <span className="sr-only">Decrease editor text size</span>
-              </button>
-              <button
-                ref={zoomInButtonRef}
-                type="button"
-                title="Increase editor text size"
-                aria-label="Increase editor text size"
-                className={workbenchIconButtonClassName}
-                onClickCapture={(event) => {
-                  handlePanelZoomCapture(event, panelZoomDelta + 1);
-                }}
-              >
-                <ZoomInIcon />
-                <span className="sr-only">Increase editor text size</span>
-              </button>
+              />
             </div>
             <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-              <button
+              <WorkbenchIconButton
                 ref={saveFileButtonRef}
                 type="button"
                 title="Save current file"
-                aria-label="Save current file"
-                className={workbenchIconButtonClassName}
+                label="Save current file"
+                display="hover-border"
                 data-invalid="false"
               >
                 <SaveIcon />
                 <span className="sr-only">Save current file</span>
-              </button>
-              <button
+              </WorkbenchIconButton>
+              <WorkbenchIconButton
                 ref={resetDraftButtonRef}
                 type="button"
                 title="Discard the current draft"
-                aria-label="Discard the current draft"
-                className={workbenchIconButtonClassName}
+                label="Discard the current draft"
+                display="hover-border"
               >
                 <BinIcon />
                 <span className="sr-only">Discard the current draft</span>
-              </button>
+              </WorkbenchIconButton>
             </div>
             {onClose ? (
-              <button
+              <WorkbenchIconButton
                 type="button"
                 title="Close panel"
-                aria-label="Close panel"
-                className={workbenchIconButtonClassName}
+                label="Close panel"
+                display="hover-border"
                 onClick={onClose}
               >
                 <PanelCloseIcon />
                 <span className="sr-only">Close panel</span>
-              </button>
+              </WorkbenchIconButton>
             ) : null}
           </div>
         </div>
@@ -405,8 +389,8 @@ export default function WorkbenchFilePanel ({
 
       <div ref={floatingToolbarRef} className="pointer-events-none fixed left-0 top-0 z-30 hidden" hidden />
       <div ref={revisionHoverToolbarRef} className="pointer-events-none fixed left-0 top-0 z-30 hidden" hidden>
-        <button ref={revisionHoverAcceptButtonRef} type="button" className={workbenchIconButtonClassName}>Accept</button>
-        <button ref={revisionHoverRejectButtonRef} type="button" className={workbenchIconButtonClassName}>Reject</button>
+        <button ref={revisionHoverAcceptButtonRef} type="button" className={workbenchRevisionActionButtonClassName}>Accept</button>
+        <button ref={revisionHoverRejectButtonRef} type="button" className={workbenchRevisionActionButtonClassName}>Reject</button>
       </div>
     </div>
   );

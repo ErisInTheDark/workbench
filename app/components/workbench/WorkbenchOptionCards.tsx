@@ -9,6 +9,7 @@
 import type { ReactNode } from "react";
 
 import { WorkbenchCheckboxMarker } from "./WorkbenchCheckbox";
+import { workbenchOptionHoverClassName, workbenchOptionSelectedClassName } from "./workbench-class-names";
 
 type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
   ariaLabel: string;
@@ -80,10 +81,10 @@ export function WorkbenchOptionCard ({
           density === "tight" && isComposed ? "gap-1" : "gap-3",
         ),
     !compactInline && (isChecked
-      ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
+      ? workbenchOptionSelectedClassName
       : isHistoryMode || disabled
         ? "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
-        : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]"),
+        : `border-[color-mix(in_srgb,var(--text)_10%,transparent)] ${workbenchOptionHoverClassName}`),
     compactInline && !isHistoryMode && !disabled && "hover:text-text",
     disabled && "cursor-not-allowed opacity-45",
     className,

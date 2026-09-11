@@ -38,7 +38,7 @@ import {
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
-import { PlayIcon, SnoozedThreadIcon, StopIcon } from "../workbench-icons";
+import { PlayIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -434,7 +434,7 @@ export default function ThreadComposer ({
         void stop();
       }}
     >
-      {stopControlState.action === "snooze" ? <SnoozedThreadIcon className="h-4.5 w-4.5" /> : <StopIcon className="h-4.5 w-4.5" />}
+      {stopControlState.action === "snooze" ? <SnoozedThreadIcon className="h-4.5 w-4.5" /> : <SquareIcon className="h-4.5 w-4.5" />}
     </PrimaryButton>
   ) : null;
   const resumeButton = canRecoverInterruptedTurn ? (
@@ -676,10 +676,12 @@ export default function ThreadComposer ({
                     <PrimaryButton
                       type="submit"
                       disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
-                      className="text-[0.84em]"
+                      shape="circle"
+                      aria-label={isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
+                      title={isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                       pendingHalo={isSending || isAttaching}
                     >
-                      {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
+                      <SendHorizontalIcon />
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}

@@ -34,7 +34,10 @@ type GlobalPreferenceForKey<TKey extends WorkbenchGlobalPreference["key"]> = Ext
 function scalarColumns(preference: ScalarPreference) {
   return {
     boolean_value: typeof preference.value === "boolean" ? Number(preference.value) as 0 | 1 : null,
-    integer_value: typeof preference.value === "number" ? preference.value : null,
+    // Font sizes use hundredths of a rem in the STRICT integer storage slot.
+    integer_value: typeof preference.value === "number"
+      ? preference.key === "editorFontSize" ? Math.round(preference.value * 100) : preference.value
+      : null,
     text_value: typeof preference.value === "string" ? preference.value : null,
   };
 }

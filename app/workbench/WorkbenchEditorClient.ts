@@ -1,17 +1,16 @@
 /*
  * Exports:
- * - createInitialEditorUIStateSnapshot: create the default editor UI snapshot used before the editor client is constructed. Keywords: workbench, editor, UI, snapshot, initial state.
- * - EditorMode: current editor rendering mode. Keywords: workbench, editor, mode.
- * - SaveGuardIssue: persisted editor save-guard mismatch details. Keywords: workbench, editor, save guard, mismatch.
- * - EditorUIState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
- * - EditorUIStateSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
- * - EditorUIStateListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
- * - EditOperationHooks: optional post-mutation hooks used by the editor mutation runtime to restore selection-sensitive DOM state. Keywords: workbench, editor, mutation, hooks, selection.
- * - WorkbenchEditorControllerOptions: grouped controller dependencies injected from the coordinator so the editor client can own controller composition without owning higher-level orchestration. Keywords: workbench, editor, controller, composition, callbacks.
- * - WorkbenchEditorMutationRuntimeOptions: coordinator-owned callbacks the editor runtime still needs for history, draft inspection, and replay while Stage 1 ownership moves behind the editor boundary. Keywords: workbench, editor, mutation, history, draft, replay.
- * - WorkbenchEditorClientOptions: callbacks, mutation-runtime dependencies, structural-edit dependencies, controller inputs, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, mutation, controller, structure, status, state.
- * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, editor-controller composition, revision toolbar state access, editor-owned mutation sequencing, and structural input handling. Keywords: workbench, editor, client, diff gutter, format, revision, list structure, rich input, mutation, dispose.
- * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, editor controller composition, mutation sequencing, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, controller, format, revision, rich input, mutation, diff gutter, listeners, default export.
+ * - createInitialEditorUIStateSnapshot: default UI snapshot before client construction.
+ * - EditorMode: current rendering mode.
+ * - SaveGuardIssue: persisted save-guard mismatch details.
+ * - EditorUIState: editor font size, transient status and thread labels.
+ * - EditorUIStateSnapshot: readonly editor UI projection.
+ * - EditorUIStateListener: subscriber signature for shell changes.
+ * - EditOperationHooks: post-mutation selection restoration hooks.
+ * - WorkbenchEditorControllerOptions: dependencies for editor controller composition.
+ * - WorkbenchEditorMutationRuntimeOptions: history, draft inspection and replay callbacks.
+ * - WorkbenchEditorClientOptions: editor callbacks, dependencies and state readers.
+ * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, mutations and event cleanup.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "workbench-shared/types";
@@ -232,6 +231,7 @@ interface WorkbenchEditorClient {
   scheduleDiffGutterRefresh: () => void;
   setHoveredRevisionNode: (node: HTMLElement | null) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
+  previewFontSize: (fontSize: number | null) => void;
   setSaveButtonState: () => void;
   setStatusMessage: (message: string) => void;
   showResetDraftDialog: () => void;
@@ -659,6 +659,7 @@ function WorkbenchEditorClient(
 ): WorkbenchEditorClient {
   const listeners = new Set<EditorUIStateListener>();
   const state = createInitialEditorState();
+  let fontSizePreview: number | null = null;
   const signal = lifecycle.getSignal();
   const editor = surfaces.editor.editor;
   const customCaret = surfaces.editor.customCaret;
@@ -740,7 +741,7 @@ function WorkbenchEditorClient(
   }
 
   function applyEditorFontSize() {
-    editor.style.fontSize = `${state.fontSize}rem`;
+    editor.style.fontSize = `${fontSizePreview ?? state.fontSize}rem`;
   }
 
   function getMinimumToolbarTop(viewport = getVisualViewportMetrics()) {
@@ -748,8 +749,7 @@ function WorkbenchEditorClient(
     const headerChromeElements: HTMLElement[] = [
       statusDisplay.filePathLabel,
       statusDisplay.statusLine,
-      controls.zoomOutButton,
-      controls.zoomInButton,
+      controls.zoomButton,
       controls.saveFileButton,
       controls.resetDraftButton,
     ];
@@ -1517,6 +1517,11 @@ function WorkbenchEditorClient(
     emit();
   }
 
+  function previewFontSize(fontSize: number | null) {
+    fontSizePreview = fontSize === null ? null : Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number(fontSize.toFixed(2))));
+    applyEditorFontSize();
+  }
+
   const preserveToolbarSelection = (event: Event) => {
     scheduleToolbarInteractionReset();
     captureToolbarSelection();
@@ -1582,14 +1587,6 @@ function WorkbenchEditorClient(
 
   controls.resetDraftButton.addEventListener("click", () => {
     showResetDraftDialog();
-  }, { signal });
-
-  controls.zoomOutButton.addEventListener("click", () => {
-    changeFontSize(-0.08);
-  }, { signal });
-
-  controls.zoomInButton.addEventListener("click", () => {
-    changeFontSize(0.08);
   }, { signal });
 
   dialogSurface.saveConflict.keepEditing.addEventListener("click", () => {
@@ -1871,6 +1868,7 @@ function WorkbenchEditorClient(
     scheduleDiffGutterRefresh,
     setHoveredRevisionNode,
     setFontSize,
+    previewFontSize,
     setSaveButtonState,
     setStatusMessage,
     showResetDraftDialog,

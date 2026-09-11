@@ -25,8 +25,20 @@
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
  * - AsteriskIcon/PlusIcon: amend and fresh-commit choices.
  * - SparkleIcon/ReplyArrowIcon: creation and reply glyphs.
- * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: file-change glyphs.
+ * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: file-change aliases.
  * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: token input, cache and output glyphs.
+ * - SendHorizontalIcon: outlined send glyph.
+ * - SquareIcon/SquareFilledIcon: outlined and filled squares.
+ * - PanelLeftCloseIcon/PanelLeftOpenIcon: panel visibility glyphs.
+ * - SquareMinusIcon/SquarePlusIcon/XIcon: geometric panel-action glyphs.
+ * - SettingsIcon/ChartNoAxesCombinedIcon: settings and chart glyphs.
+ * - EyeIcon/EyeOffIcon/SearchIcon: visibility and search glyphs.
+ * - FilePlusIcon/ExternalLinkIcon: file creation and external navigation glyphs.
+ * - ArrowLeftIcon/ArrowRightIcon/ArrowUpIcon/ReplyIcon: directional glyphs.
+ * - FolderGit2Icon/BrowserTerminalIcon/RefreshCwIcon: project, browser and refresh glyphs.
+ * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
+ * - SquarePenIcon/CheckCheckIcon/AlarmClockIcon/ZzzIcon: editing and status glyphs.
+ * - Trash2Icon/TrashIcon/PencilIcon/ListEndIcon/TriangleAlertIcon: miscellaneous base glyphs.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 
@@ -165,7 +177,7 @@ export function SaveIcon () {
   );
 }
 
-export function BinIcon ({ className = "size-5" }: IconProps) {
+export function Trash2Icon ({ className = "size-5" }: IconProps) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
       <path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -183,17 +195,15 @@ export function ZoomOutIcon () {
   );
 }
 
-export function ZoomInIcon () {
+export function ZoomInIcon ({ className = "size-5" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <circle cx="8.75" cy="8.75" r="5.25" />
-      <path d="M8.75 5.75V11.75M5.75 8.75H11.75" strokeLinecap="round" />
-      <path d="M14 14L17.5 17.5" strokeLinecap="round" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <circle cx="11" cy="11" r="8" /><line x1="21" x2="16.65" y1="21" y2="16.65" /><line x1="11" x2="11" y1="8" y2="14" /><line x1="8" x2="14" y1="11" y2="11" />
     </svg>
   );
 }
 
-export function BackArrowIcon () {
+export function ArrowLeftIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M12.75 4.75L7.25 10L12.75 15.25" strokeLinecap="round" strokeLinejoin="round" />
@@ -202,27 +212,25 @@ export function BackArrowIcon () {
   );
 }
 
-export function SidebarCollapseIcon () {
+export function PanelLeftCloseIcon ({ className = "size-5" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <rect x="3.5" y="4" width="13" height="12" rx="1.5" />
-      <path d="M8 4V16" />
-      <path d="M12.5 7.5L10 10L12.5 12.5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" />
     </svg>
   );
 }
 
-export function SidebarExpandIcon () {
+export function PanelLeftOpenIcon () {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <rect x="3.5" y="4" width="13" height="12" rx="1.5" />
-      <path d="M8 4V16" />
-      <path d="M10.5 7.5L13 10L10.5 12.5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="size-5">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M9 3v18" />
+      <path d="m14 9 3 3-3 3" />
     </svg>
   );
 }
 
-export function PanelMinimizeIcon () {
+export function SquareMinusIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <rect x="4" y="4" width="12" height="12" rx="1.6" />
@@ -231,7 +239,7 @@ export function PanelMinimizeIcon () {
   );
 }
 
-export function PanelExpandIcon () {
+export function SquarePlusIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <rect x="4" y="4" width="12" height="12" rx="1.6" />
@@ -240,19 +248,18 @@ export function PanelExpandIcon () {
   );
 }
 
-export function PanelCloseIcon () {
+export function XIcon ({ className = "size-4" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M6.25 6.25L13.75 13.75M13.75 6.25L6.25 13.75" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className={className}>
+      <path d="M18 6 6 18" /><path d="m6 6 12 12" />
     </svg>
   );
 }
 
-export function GearIcon () {
+export function SettingsIcon ({ className = "size-5" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M8.45 2.75H11.55L12.12 5.05C12.5 5.2 12.86 5.4 13.18 5.66L15.38 4.98L16.92 7.64L15.28 9.28C15.34 9.74 15.34 10.26 15.28 10.72L16.92 12.36L15.38 15.02L13.18 14.34C12.86 14.6 12.5 14.8 12.12 14.95L11.55 17.25H8.45L7.88 14.95C7.5 14.8 7.14 14.6 6.82 14.34L4.62 15.02L3.08 12.36L4.72 10.72C4.66 10.26 4.66 9.74 4.72 9.28L3.08 7.64L4.62 4.98L6.82 5.66C7.14 5.4 7.5 5.2 7.88 5.05L8.45 2.75Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="10" cy="10" r="2.45" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
@@ -275,7 +282,7 @@ export function HomeIcon ({ className = "size-5" }: IconProps) {
   );
 }
 
-export function ProjectIcon ({ className = "size-4" }: IconProps) {
+export function FolderGit2Icon ({ className = "size-4" }: IconProps) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
       <path d="M18 19a5 5 0 0 1-5-5v8" />
@@ -286,7 +293,7 @@ export function ProjectIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function BrowserSessionIcon ({ className = "size-4" }: IconProps) {
+export function BrowserTerminalIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <rect x="3.25" y="4.25" width="13.5" height="10.75" rx="1.8" />
@@ -298,7 +305,7 @@ export function BrowserSessionIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function ReloadIcon () {
+export function RefreshCwIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M16.25 9.25A6.25 6.25 0 0 0 5.3 5.12L3.75 6.75" strokeLinecap="round" strokeLinejoin="round" />
@@ -309,7 +316,7 @@ export function ReloadIcon () {
   );
 }
 
-export function StopIcon ({ className = "size-4" }: IconProps) {
+export function SquareFilledIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
       <rect x="2.5" y="2.5" width="11" height="11" rx="1.9" fill="currentColor" />
@@ -328,8 +335,8 @@ export function PauseIcon ({ className = "size-4" }: IconProps) {
 
 export function PlayIcon ({ className = "size-4" }: IconProps) {
   return (
-    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
-      <path d="M5 3.5v9l7-4.5-7-4.5z" fill="currentColor" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />
     </svg>
   );
 }
@@ -343,7 +350,7 @@ export function ClockIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function WarningIcon ({ className = "size-4" }: IconProps) {
+export function TriangleAlertIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 16 16" className={className} fill="none" stroke="currentColor" strokeWidth="1.55" aria-hidden="true">
       <path d="M8 2.7L14 13.3H2L8 2.7Z" strokeLinecap="round" strokeLinejoin="round" />
@@ -408,22 +415,21 @@ function MessageCircleIcon({ className, paths }: IconProps & { paths: readonly s
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>{paths.map((path) => <path d={path} key={path} />)}</svg>;
 }
 
-export function DraftThreadIcon({ className = "size-4" }: IconProps) {
+export function MessageCircleDashedIcon({ className = "size-4" }: IconProps) {
   return <MessageCircleIcon className={className} paths={["M10.1 2.182a10 10 0 0 1 3.8 0", "M13.9 21.818a10 10 0 0 1-3.8 0", "M17.609 3.72a10 10 0 0 1 2.69 2.7", "M2.182 13.9a10 10 0 0 1 0-3.8", "M20.28 17.61a10 10 0 0 1-2.7 2.69", "M21.818 10.1a10 10 0 0 1 0 3.8", "M3.721 6.391a10 10 0 0 1 2.7-2.69", "m6.163 21.117-2.906.85a1 1 0 0 1-1.236-1.169l.965-2.98"]} />;
 }
-export function ComposerDraftIcon({ className = "size-4" }: IconProps) {
+export function SquarePenIcon({ className = "size-4" }: IconProps) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" /></svg>;
 }
-export function NeedsAttentionThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
-export function CompletedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
-export function ProposedCommitThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M7.5 12h2.9m3.2 0h2.9", "M13.6 12a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0"]} />; }
-export function WorkingThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
-export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
-export function DiscardDraftIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 6 18", "m6 6 12 12"]} />; }
-export function SettleThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
-export function RestoreThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></svg>; }
-export function UnsnoozeThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></svg>; }
-export function SnoozedThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></svg>; }
+export function MessageCircleQuestionMarkIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
+export function MessageCircleCheckIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
+export function MessageCircleGitCommitIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M7.5 12h2.9m3.2 0h2.9", "M13.6 12a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0"]} />; }
+export function MessageCircleMoreIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
+export function MessageCircleXIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
+export function CheckCheckIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
+export function ArrowUpIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></svg>; }
+export function AlarmClockIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></svg>; }
+export function ZzzIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></svg>; }
 
 export function FlagIcon ({ className = "size-4" }: IconProps) {
   return (
@@ -443,7 +449,7 @@ export function FlagIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function OpenThreadIcon ({ className = "size-4" }: IconProps) {
+export function ArrowRightIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M4 10H15.5" strokeLinecap="round" />
@@ -473,11 +479,10 @@ export function WrapTextIcon ({ className = "size-4" }: { className?: string }) 
   );
 }
 
-export function PreviewIcon ({ className = "size-4" }: { className?: string }) {
+export function EyeIcon ({ className = "size-4" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
-      <path d="M2.75 10C4.35 6.9 6.75 5.35 10 5.35C13.25 5.35 15.65 6.9 17.25 10C15.65 13.1 13.25 14.65 10 14.65C6.75 14.65 4.35 13.1 2.75 10Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="10" cy="10" r="2.15" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
@@ -509,10 +514,10 @@ export function CheckIcon ({ className = "size-4" }: { className?: string }) {
   );
 }
 
-export function StatsIcon () {
+export function ChartNoAxesCombinedIcon ({ className = "size-5" }: IconProps) {
   return (
-    <svg aria-hidden="true" className="size-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 20 20">
-      <path d="M3.25 16.25V10.5M8 16.25V6.75M12.75 16.25V9M17.5 16.25V3.75" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M12 16v5" /><path d="M16 14.639V21" /><path d="M20 10.656V21" /><path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15" /><path d="M4 18.463V21" /><path d="M8 14.656V21" />
     </svg>
   );
 }
@@ -545,7 +550,7 @@ export function SparkleIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function ReplyArrowIcon ({ className = "size-4" }: IconProps) {
+export function ReplyIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M8 5.25L4.25 9L8 12.75" strokeLinecap="round" strokeLinejoin="round" />
@@ -554,11 +559,13 @@ export function ReplyArrowIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function FileAddIcon ({ className = "size-4" }: IconProps) {
-  return <SparkleIcon className={className} />;
+export function FilePlusIcon ({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M9 15h6" /><path d="M12 18v-6" />
+  </svg>;
 }
 
-export function FileDeleteIcon ({ className = "size-4" }: IconProps) {
+export function TrashIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M3.75 6.5H16.25" strokeLinecap="round" />
@@ -569,7 +576,7 @@ export function FileDeleteIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function FileUpdateIcon ({ className = "size-4" }: IconProps) {
+export function PencilIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M4.5 14.6L5.15 11.65L12.65 4.15C13.2 3.6 14.1 3.6 14.65 4.15L15.85 5.35C16.4 5.9 16.4 6.8 15.85 7.35L8.35 14.85L5.4 15.5C4.85 15.62 4.38 15.15 4.5 14.6Z" strokeLinecap="round" strokeLinejoin="round" />
@@ -578,7 +585,7 @@ export function FileUpdateIcon ({ className = "size-4" }: IconProps) {
   );
 }
 
-export function FileMoveIcon ({ className = "size-4" }: IconProps) {
+export function ListEndIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M4.5 10H15.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -587,3 +594,67 @@ export function FileMoveIcon ({ className = "size-4" }: IconProps) {
     </svg>
   );
 }
+
+export function SendHorizontalIcon({ className = "size-5" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z" /><path d="M6 12h16" />
+  </svg>;
+}
+
+export function SquareIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+  </svg>;
+}
+
+export function EyeOffIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /><path d="m2 2 20 20" />
+  </svg>;
+}
+
+export function ExternalLinkIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+  </svg>;
+}
+
+export function SearchIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+    <path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" />
+  </svg>;
+}
+
+export const BinIcon = Trash2Icon;
+export const BackArrowIcon = ArrowLeftIcon;
+export const SidebarCollapseIcon = PanelLeftCloseIcon;
+export const SidebarExpandIcon = PanelLeftOpenIcon;
+export const PanelMinimizeIcon = SquareMinusIcon;
+export const PanelExpandIcon = SquarePlusIcon;
+export const PanelCloseIcon = XIcon;
+export const GearIcon = SettingsIcon;
+export const ProjectIcon = FolderGit2Icon;
+export const BrowserSessionIcon = BrowserTerminalIcon;
+export const ReloadIcon = RefreshCwIcon;
+export const StopIcon = SquareFilledIcon;
+export const WarningIcon = TriangleAlertIcon;
+export const DraftThreadIcon = MessageCircleDashedIcon;
+export const ComposerDraftIcon = SquarePenIcon;
+export const NeedsAttentionThreadIcon = MessageCircleQuestionMarkIcon;
+export const CompletedThreadIcon = MessageCircleCheckIcon;
+export const ProposedCommitThreadIcon = MessageCircleGitCommitIcon;
+export const WorkingThreadIcon = MessageCircleMoreIcon;
+export const StoppedThreadIcon = MessageCircleXIcon;
+export const DiscardDraftIcon = XIcon;
+export const SettleThreadIcon = CheckCheckIcon;
+export const RestoreThreadIcon = ArrowUpIcon;
+export const UnsnoozeThreadIcon = AlarmClockIcon;
+export const SnoozedThreadIcon = ZzzIcon;
+export const OpenThreadIcon = ArrowRightIcon;
+export const PreviewIcon = EyeIcon;
+export const StatsIcon = ChartNoAxesCombinedIcon;
+export const ReplyArrowIcon = ReplyIcon;
+export const FileAddIcon = FilePlusIcon;
+export const FileDeleteIcon = TrashIcon;
+export const FileUpdateIcon = PencilIcon;
+export const FileMoveIcon = ListEndIcon;

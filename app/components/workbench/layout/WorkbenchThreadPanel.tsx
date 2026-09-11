@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadPanel: hydrate through an identity-bound controller and render one thread target inside a split panel. Keywords: workbench, thread controller, thread panel, split layout.
+ * - default WorkbenchThreadPanel: hydrate through an identity-bound controller and render one thread target inside a split panel.
  */
 "use client";
 
@@ -12,13 +12,13 @@ import ThreadView from "../thread-view/ThreadView";
 import { useWorkbenchThread } from "../use-workbench-thread";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
-import { workbenchIconButtonClassName } from "../workbench-class-names";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import WorkbenchZoomButton from "../WorkbenchZoomButton";
+import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
 import {
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
-  ZoomInIcon,
-  ZoomOutIcon,
 } from "../workbench-icons";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
@@ -58,6 +58,7 @@ export default function WorkbenchThreadPanel ({
 }: WorkbenchThreadPanelProps) {
   const threadController = useWorkbenchThread(threadViewProps.projectId, threadViewProps.threadTarget, undefined, threadViewProps.routeOwned ? "route" : "summary");
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
+  const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,7 +92,7 @@ export default function WorkbenchThreadPanel ({
     };
   }, [threadActivityTimestampMs, threadDisplaySource?.id]);
 
-  const effectiveFontSizeRem = Math.min(1.72, Math.max(0.84, Number((threadViewProps.fontSizeRem + panelZoomDelta * 0.08).toFixed(2))));
+  const effectiveFontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number((threadViewProps.fontSizeRem + (zoomPreview ?? panelZoomDelta) * 0.08).toFixed(2))));
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
@@ -125,54 +126,41 @@ export default function WorkbenchThreadPanel ({
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onMinimizeToggle ? (
-              <button
+              <WorkbenchIconButton
                 type="button"
                 title={isMinimized ? "Expand panel" : "Minimize panel"}
-                aria-label={isMinimized ? "Expand panel" : "Minimize panel"}
-                className={workbenchIconButtonClassName}
+                label={isMinimized ? "Expand panel" : "Minimize panel"}
+                display="hover-border"
                 onClick={onMinimizeToggle}
               >
                 {isMinimized ? <PanelExpandIcon /> : <PanelMinimizeIcon />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-              </button>
+              </WorkbenchIconButton>
             ) : null}
             <div className="flex items-center gap-1.5" hidden={isMinimized}>
-              <button
-                type="button"
-                title="Decrease thread text size"
-                aria-label="Decrease thread text size"
-                className={workbenchIconButtonClassName}
-                onClick={() => {
-                  onPanelZoomDeltaChange?.(panelZoomDelta - 1);
-                }}
-              >
-                <ZoomOutIcon />
-                <span className="sr-only">Decrease thread text size</span>
-              </button>
-              <button
-                type="button"
-                title="Increase thread text size"
-                aria-label="Increase thread text size"
-                className={workbenchIconButtonClassName}
-                onClick={() => {
-                  onPanelZoomDeltaChange?.(panelZoomDelta + 1);
-                }}
-              >
-                <ZoomInIcon />
-                <span className="sr-only">Increase thread text size</span>
-              </button>
+              <WorkbenchZoomButton
+                label="Thread text size"
+                disabled={isMinimized || !onPanelZoomDeltaChange}
+                min={Math.floor(Number(((MIN_EDITOR_FONT_SIZE - threadViewProps.fontSizeRem) / 0.08).toFixed(6)))}
+                max={Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - threadViewProps.fontSizeRem) / 0.08).toFixed(6)))}
+                step={1}
+                value={panelZoomDelta}
+                onPreview={setZoomPreview}
+                format={delta => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, threadViewProps.fontSizeRem + delta * 0.08)).toFixed(2)}rem`}
+                onChange={(value) => onPanelZoomDeltaChange?.(value)}
+              />
             </div>
             {onClose ? (
-              <button
+              <WorkbenchIconButton
                 type="button"
                 title="Close panel"
-                aria-label="Close panel"
-                className={workbenchIconButtonClassName}
+                label="Close panel"
+                display="hover-border"
                 onClick={onClose}
               >
                 <PanelCloseIcon />
                 <span className="sr-only">Close panel</span>
-              </button>
+              </WorkbenchIconButton>
             ) : null}
           </div>
         </div>

@@ -30,6 +30,7 @@ import {
   isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import PrimaryButton from "../PrimaryButton";
+import { SendHorizontalIcon } from "../workbench-icons";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -363,10 +364,13 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         void handleSubmit();
       }}
       disabled={isSubmitting || isAttaching}
-      className={joinClasses("justify-self-end text-[0.84em]", compact && "!px-3 !py-1")}
+      className="justify-self-end"
+      shape="circle"
+      aria-label={isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
+      title={isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
       pendingHalo={isSubmitting || isAttaching}
     >
-      {isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
+      <SendHorizontalIcon />
     </PrimaryButton>
   );
 

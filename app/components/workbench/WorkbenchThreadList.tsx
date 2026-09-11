@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - default WorkbenchThreadList: render project-owned main, snoozed, and settled threads with optional pinned priority rows.
- * - Local helpers: derive thread targets and stable mixed-item keys and counts.
  */
 "use client";
 
@@ -40,7 +39,7 @@ import {
 import { isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import type { FolderId, ProjectId, ThreadDisplayKey, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
+import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
@@ -355,7 +354,11 @@ export default function WorkbenchThreadList({
       <a
         href={getThreadHref(target)}
         title={createThreadLabel}
-        className={`${workbenchThreadListButtonClassName}${selected ? " text-accent" : " text-muted"}`}
+        aria-current={selected ? "page" : undefined}
+        className={`
+          ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
+          ${selected ? `${workbenchOptionSelectedClassName} text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+        `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();
@@ -425,7 +428,11 @@ export default function WorkbenchThreadList({
       <a
         href={getThreadHref({ kind: "new" })}
         title={createThreadLabel}
-        className={`${workbenchThreadListButtonClassName} mt-1${blankThreadSelected ? " text-accent" : " text-muted"}`}
+        aria-current={blankThreadSelected ? "page" : undefined}
+        className={`
+          ${workbenchOptionRowClassName} mt-1 min-h-9 w-full md:min-h-8
+          ${blankThreadSelected ? `${workbenchOptionSelectedClassName} text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+        `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();

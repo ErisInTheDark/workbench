@@ -1,32 +1,41 @@
 /*
  * Exports:
- * - default WorkbenchIconButton: circular bordered action with shared focus, disabled and danger styling.
+ * - default WorkbenchIconButton: circular action or link with shared border, focus, pressed and invalid styling.
  */
 "use client";
 
 import type { ComponentPropsWithRef } from "react";
 
-type WorkbenchIconButtonProps = Omit<ComponentPropsWithRef<"button">, "aria-label"> & {
+type WorkbenchIconButtonProps = {
   label: string;
-  size?: "small" | "medium";
+  size?: "compact" | "small" | "medium";
   tone?: "default" | "danger";
-};
+  display?: "bordered" | "hover-border";
+} & (
+  | (Omit<ComponentPropsWithRef<"button">, "aria-label"> & { as?: "button" })
+  | (Omit<ComponentPropsWithRef<"a">, "aria-label"> & { as: "a" })
+);
 
 export default function WorkbenchIconButton({
-  label, size = "medium", tone = "default", className = "", type = "button", title = label, ...props
+  label, size = "medium", tone = "default", display = "bordered", className = "", title = label, ...props
 }: WorkbenchIconButtonProps) {
-  return <button
-    {...props}
-    type={type}
-    aria-label={label}
-    title={title}
-    className={`
-      inline-flex shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent text-muted transition
-      enabled:hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] enabled:hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]
+  const classes = `
+      inline-flex shrink-0 items-center justify-center rounded-full border bg-transparent text-muted transition
+      [&:not(:disabled)]:hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] [&:not(:disabled)]:hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45
-      ${size === "small" ? "size-8" : "size-9"}
-      ${tone === "danger" ? "enabled:hover:text-danger" : "enabled:hover:text-text"}
+      aria-pressed:text-text data-[thread-codeblock-toggle-state=active]:text-text
+      data-[invalid=true]:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[invalid=true]:text-danger
+      data-[invalid=true]:hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] data-[invalid=true]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]
+      [&[data-invalid=true]_.save-icon-slash]:opacity-100 [&[data-invalid=true]_.save-icon-main]:opacity-45
+      ${display === "hover-border" ? "border-transparent" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}
+      ${size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9"}
+      ${tone === "danger" ? "[&:not(:disabled)]:hover:text-danger" : "[&:not(:disabled)]:hover:text-text"}
       ${className}
-    `}
-  />;
+    `;
+  if (props.as === "a") {
+    const { as, ...linkProps } = props;
+    return <a {...linkProps} aria-label={label} title={title} className={classes} />;
+  }
+  const { as, type = "button", ...buttonProps } = props;
+  return <button {...buttonProps} type={type} aria-label={label} title={title} className={classes} />;
 }

@@ -8,38 +8,38 @@
 "use client";
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import WorkbenchPopover from "../WorkbenchPopover";
-import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
-import ChevronIcon from "../ChevronIcon";
-import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
-import { ReloadIcon, ZapIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import ThreadHarnessControl from "./ThreadHarnessControl";
-import ThreadProfilePicker from "./ThreadProfilePicker";
-import ThreadModelPicker from "./ThreadModelPicker";
-import ThreadAgentPicker from "./ThreadAgentPicker";
-import type ThreadProfileEditorController from "./ThreadProfileEditorController";
-import type { ProfileEditorSection } from "./ThreadProfileEditorController";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import ChevronIcon from "../ChevronIcon";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { ReloadIcon, ZapIcon } from "../workbench-icons";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import WorkbenchPopover from "../WorkbenchPopover";
+import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
+import ThreadAgentPicker from "./ThreadAgentPicker";
+import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
+import ThreadHarnessControl from "./ThreadHarnessControl";
+import ThreadModelPicker from "./ThreadModelPicker";
+import type ThreadProfileEditorController from "./ThreadProfileEditorController";
+import type { ProfileEditorSection } from "./ThreadProfileEditorController";
+import ThreadProfilePicker from "./ThreadProfilePicker";
 
-export function formatProfileContext(tokens: number) {
+export function formatProfileContext (tokens: number) {
   return tokens >= 1_000_000 ? `${Number((tokens / 1_000_000).toFixed(3))}M` : `${Math.round(tokens / 1000)}K`;
 }
-export function profileEffortColour(fraction: number) {
+export function profileEffortColour (fraction: number) {
   return `color-mix(in srgb,var(--accent) ${20 + fraction * 80}%,transparent)`;
 }
-export function profileContextColour(fraction: number) {
+export function profileContextColour (fraction: number) {
   const stops = ["#3b82f6", "#22c55e", "#eab308", "#f97316", "#ef4444", "#9ca3af"];
   const position = Math.max(0, Math.min(1, fraction)) * (stops.length - 1);
   const index = Math.floor(position);
   return `color-mix(in srgb,${stops[index]} ${(1 - (position - index)) * 100}%,${stops[Math.min(index + 1, stops.length - 1)]})`;
 }
 
-export default function ThreadProfileEditor({
+export default function ThreadProfileEditor ({
   anchor, trigger, controller, slot, fallbackSettings, onCustomChange, onRefreshModels, onRefreshAgents, onHarnessToggle, onHarnessSelect, canToggleHarness,
 }: {
   anchor: HTMLElement;
@@ -95,7 +95,7 @@ export default function ThreadProfileEditor({
         aria-expanded={active}
         aria-controls={`${sectionId}-${section}-content`}
         className={`
-          flex min-w-0 items-center gap-2 px-4 py-3 text-left text-sm text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
+          flex min-w-0 items-center gap-2 px-4 py-1.5 text-left text-sm text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
           ${active ? "border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
         `}
         onClick={() => controller.disclose(section, !active)}
@@ -112,7 +112,7 @@ export default function ThreadProfileEditor({
         role="region"
         aria-labelledby={`${sectionId}-${section}-summary`}
         hidden={!active}
-        className="min-h-0 overflow-y-auto overscroll-contain px-4 pb-3"
+        className="min-h-0 overflow-y-auto overscroll-contain px-4 py-3 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
       >{content}</div>
     </section>;
   };
@@ -124,7 +124,7 @@ export default function ThreadProfileEditor({
   const rows = ["profile", "harness", "model", ...(showsEffort || showsFastMode ? ["effort"] : []), ...(capability ? ["context"] : []), "agent"];
 
   return <WorkbenchPopover anchor={anchor} trigger={trigger} label="Profile customisation" onClose={controller.close}>
-    <header className="min-w-0 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-4 py-3">
+    <header className="min-w-0 px-4 py-3">
       <ThreadComposerPickerHeader
         title="Profile customisation"
         closeLabel="Close profile customisation"
@@ -139,7 +139,7 @@ export default function ThreadProfileEditor({
       {profiles.snapshot.error ? <p role="alert" className="m-0 pt-2 text-sm text-danger">{profiles.snapshot.error}</p> : null}
     </header>
     <div
-      className="grid min-h-0 min-w-0 content-start overflow-hidden divide-y divide-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+      className="grid min-h-0 min-w-0 content-start overflow-hidden pb-2"
       style={{ gridTemplateRows: rows.map(row => row === state.activeSection ? "minmax(0,1fr)" : "auto").join(" ") }}
     >
       {block("profile", "Profile", profile?.name || (profile ? profile.model : "Custom"), <ThreadProfilePicker
@@ -169,21 +169,23 @@ export default function ThreadProfileEditor({
           })}
         />
       </>)}
-      {showsEffort || showsFastMode ? <div className="flex min-w-0 items-center gap-3 px-4 py-2 text-sm">
-        <span>{showsEffort ? "Effort" : "Fast mode"}</span>
-        {showsEffort ? <WorkbenchPressDragSlider presentation="inline" key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} /> : null}
+      {showsEffort || showsFastMode || capability ? <div className="grid [grid-template-columns:auto_1fr_auto_auto] pr-3">
+        {showsEffort ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
+          <span className="text-muted">Effort</span>
+          <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
+        </div> : null}
         {showsFastMode ? <WorkbenchIconButton
           size="small"
           label={settings.serviceTier === "fast" ? "Turn fast mode off" : "Turn fast mode on"}
           title={settings.serviceTier === "fast" ? "Fast mode is on" : "Fast mode is off"}
           aria-pressed={settings.serviceTier === "fast"}
-          className={`ml-auto ${settings.serviceTier === "fast" ? "text-text" : ""}`}
+          className={`row-span-2 self-center ml-auto ${settings.serviceTier === "fast" ? "text-text" : ""}`}
           onClick={() => update({ serviceTier: settings.serviceTier === "fast" ? null : "fast" })}
         ><ZapIcon /></WorkbenchIconButton> : null}
-      </div> : null}
-      {capability ? <div className="flex min-w-0 items-center gap-3 px-4 py-2 text-sm">
-        <span className="shrink-0">Context window</span>
-        <WorkbenchPressDragSlider presentation="inline" key={`${settings.harness}:${settings.model}:context`} label="Context window" min={capability.defaultTokens} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
+        {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
+          <span className="text-muted">Context</span>
+          <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={capability.defaultTokens} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
+        </div> : null}
       </div> : null}
       {block("agent", "Agent definition", state.agents.find((entry) => entry.path === settings.agentPath)?.name ?? getWorkbenchAgentPathLabel(settings.agentPath) ?? "Default agent", <ThreadAgentPicker
         agents={state.agents} error={state.agentsError} isLoading={state.agentsLoading}

@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { positionWorkbenchPopover } from "./workbench-popover-geometry";
 
+test("top toolbar popovers open centred below their trigger", () => {
+  const anchor = { left: 400, top: 12, width: 36, height: 36 };
+  const desired = { width: 72, height: 216, side: "below" as const };
+  const box = positionWorkbenchPopover(anchor, { width: 1000, height: 800 }, desired);
+  assert.equal(box.left + box.width / 2, anchor.left + anchor.width / 2);
+  assert.ok(box.top > anchor.top + anchor.height);
+  assert.ok(box.top + box.height <= 800 - 12);
+});
+
 test("end alignment follows the ribbon edge while preserving viewport containment", () => {
   const desired = { width: 440, height: 560, align: "end" as const };
   const viewport = { width: 1400, height: 1000 };

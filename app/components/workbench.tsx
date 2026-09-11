@@ -119,7 +119,8 @@ import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
-import PrimaryButton from "./workbench/PrimaryButton";
+import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
+import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
@@ -133,7 +134,9 @@ import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import {
     workbenchFloatingToolbarClassName,
     workbenchFloatingToolbarGroupClassName,
-    workbenchIconButtonClassName,
+    workbenchOptionHoverClassName,
+    workbenchOptionRowClassName,
+    workbenchRevisionActionButtonClassName,
     workbenchNewEntryButtonClassName,
     workbenchRevisionHoverToolbarClassName
 } from "./workbench/workbench-class-names";
@@ -159,7 +162,7 @@ import {
     BrowserSessionIcon,
     CopyIcon,
     DraftThreadIcon,
-    FileMoveIcon,
+    ExternalLinkIcon,
     FolderOpenIcon,
     GearIcon,
     HomeIcon,
@@ -170,8 +173,6 @@ import {
     SparkleIcon,
     StatsIcon,
     StopIcon,
-    ZoomInIcon,
-    ZoomOutIcon
 } from "./workbench/workbench-icons";
 import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
@@ -556,8 +557,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
   const shellHeaderRef = useRef<HTMLElement>(null);
-  const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
-  const zoomInButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
   const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
   const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
@@ -574,7 +574,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mobileShellHeaderDirectionRef = useRef<"up" | "down" | null>(null);
   const mobileShellHeaderDirectionTravelRef = useRef(0);
   const mobileShellHeaderVisibleRef = useRef(true);
-  const pendingEditorFontSizeSyncRef = useRef<number | null>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const searchActivationRef = useRef<(result: WorkbenchSearchResult) => void>(() => undefined);
@@ -605,8 +604,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       || !statusLineRef.current
       || !resetDraftButtonRef.current
       || !saveFileButtonRef.current
-      || !zoomOutButtonRef.current
-      || !zoomInButtonRef.current
+      || !zoomButtonRef.current
       || !saveConflictDialogRef.current
       || !saveConflictSummaryRef.current
       || !saveConflictExpectedRef.current
@@ -626,8 +624,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       controls: {
         resetDraftButton: resetDraftButtonRef.current,
         saveFileButton: saveFileButtonRef.current,
-        zoomInButton: zoomInButtonRef.current,
-        zoomOutButton: zoomOutButtonRef.current,
+        zoomButton: zoomButtonRef.current,
       },
       dialogs: {
         saveConflict: {
@@ -892,6 +889,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : createDefaultProjectWorkbenchSettings()
   ), [clientState.daemonRegistrationId, clientState.records, explorer.currentProjectId]);
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
+  const [editorFontSizePreview, setEditorFontSizePreview] = useState<number | null>(null);
+  const displayedEditorFontSize = editorFontSizePreview ?? resolvedSettings.editorFontSize;
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
     () => {
@@ -1047,34 +1046,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     document.documentElement.dataset.workbenchTheme = resolvedSettings.theme;
   }, [resolvedSettings.theme]);
 
-  useEffect(() => {
-    pendingEditorFontSizeSyncRef.current = resolvedSettings.editorFontSize;
-    controls?.setEditorFontSize(resolvedSettings.editorFontSize);
-  }, [controls, resolvedSettings.editorFontSize]);
-
-  useEffect(() => {
-    if (pendingEditorFontSizeSyncRef.current !== null) {
-      if (explorer.fontSize === pendingEditorFontSizeSyncRef.current) {
-        pendingEditorFontSizeSyncRef.current = null;
-      }
-      return;
-    }
-
-    if (!controls || explorer.fontSize === resolvedSettings.editorFontSize) {
-      return;
-    }
-
+  const updateEditorFontSize = useCallback((fontSize: number) => {
     if (projectSettings.editorFontSize.enabled) {
-      updateProjectSetting("editorFontSize", explorer.fontSize);
+      updateProjectSetting("editorFontSize", fontSize);
       return;
     }
-
-    updateGlobalSetting("editorFontSize", explorer.fontSize);
+    updateGlobalSetting("editorFontSize", fontSize);
   }, [
-    controls,
-    explorer.fontSize,
     projectSettings.editorFontSize.enabled,
-    resolvedSettings.editorFontSize,
     updateGlobalSetting,
     updateProjectSetting,
   ]);
@@ -1242,9 +1221,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     toggleSidebar: () => {
       if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
     },
-    zoomIn: () => zoomInButtonRef.current?.click(),
-    zoomOut: () => zoomOutButtonRef.current?.click(),
-  }), [activeProjectId, isMobile, navigateToRoute, searchController]);
+    zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
+    zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
+  }), [activeProjectId, isMobile, navigateToRoute, resolvedSettings.editorFontSize, searchController, updateEditorFontSize]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
       case "action":
@@ -2153,7 +2132,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     id: `project-entry:${node.type}:${node.path}`,
     items: [
       {
-        icon: <FileMoveIcon className="size-4" />,
+        icon: <ExternalLinkIcon className="size-4" />,
         id: "reveal",
         label: "Show in File Explorer",
         onSelect: () => {
@@ -2509,17 +2488,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             }}
           />
           {override.enabled ? (
-            <button
+            <WorkbenchIconButton
               type="button"
-              aria-label={`Reset ${definition.label} to global`}
+              label={`Reset ${definition.label} to global`}
+              display="hover-border"
               title={`Reset ${definition.label} to global`}
-              className={`${workbenchIconButtonClassName} absolute top-1/2 right-3 -translate-y-1/2`}
+              className="absolute top-1/2 right-3 -translate-y-1/2"
               onClick={() => {
                 resetProjectSettingOverride(key);
               }}
             >
               <ReloadIcon />
-            </button>
+            </WorkbenchIconButton>
           ) : null}
         </section>
       );
@@ -2536,17 +2516,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{definition.description}</p>
           </div>
           {override.enabled ? (
-            <button
+            <WorkbenchIconButton
               type="button"
-              aria-label={`Reset ${definition.label} to global`}
+              label={`Reset ${definition.label} to global`}
+              display="hover-border"
               title={`Reset ${definition.label} to global`}
-              className={`${workbenchIconButtonClassName} shrink-0`}
               onClick={() => {
                 resetProjectSettingOverride(key);
               }}
             >
               <ReloadIcon />
-            </button>
+            </WorkbenchIconButton>
           ) : null}
         </div>
         {renderSettingControl(key, displayedValue, false, (nextValue) => {
@@ -2619,24 +2599,26 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           />
           {isEffectiveDesktopSidebarCollapsed ? (
             <>
-              <button
+              <WorkbenchIconButton
                 type="button"
-                aria-label="Show sidebar"
+                label="Show sidebar"
+                display="hover-border"
                 title="Show sidebar"
-                className={`${workbenchIconButtonClassName} fixed left-3 top-3 z-40 hidden text-muted md:inline-flex`}
+                className="fixed left-3 top-3 z-40 hidden md:inline-flex"
                 onClick={() => {
                   setSidebarCollapsed(false);
                 }}
               >
                 <SidebarExpandIcon />
                 <span className="sr-only">Show sidebar</span>
-              </button>
+              </WorkbenchIconButton>
               {showMosaicView ? (
-                <button
+                <WorkbenchIconButton
                   type="button"
-                  aria-label="Drag to create a new thread panel"
+                  label="Drag to create a new thread panel"
+                  display="hover-border"
                   title="Drag to create a new thread panel"
-                  className={`${workbenchIconButtonClassName} fixed left-14 top-3 z-40 hidden cursor-grab text-muted active:cursor-grabbing md:inline-flex`}
+                  className="fixed left-14 top-3 z-40 hidden cursor-grab active:cursor-grabbing md:inline-flex"
                   onClick={(event) => {
                     event.preventDefault();
                   }}
@@ -2649,7 +2631,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 >
                   <SparkleIcon className="size-5" />
                   <span className="sr-only">Drag to create a new thread panel</span>
-                </button>
+                </WorkbenchIconButton>
               ) : null}
             </>
           ) : null}
@@ -2662,9 +2644,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pr-2">
                 <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
-                  <a
-                    aria-label="Open home"
-                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                  <WorkbenchIconButton
+                    as="a"
+                    label="Open home"
+                    display="hover-border"
                     href={createHomeHref()}
                     onClick={(event) => {
                       if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -2675,38 +2658,41 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <HomeIcon />
                     <span className="sr-only">Open home</span>
-                  </a>
-                  <a
-                    aria-label="Open statistics"
-                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                  </WorkbenchIconButton>
+                  <WorkbenchIconButton
+                    as="a"
+                    label="Open statistics"
+                    display="hover-border"
                     href={createStatsHref(activeProjectId)}
                     onClick={(event) => openStatsScopeFromLink(event, activeProjectId)}
                     title="Open statistics"
                   >
                     <StatsIcon />
                     <span className="sr-only">Open statistics</span>
-                  </a>
-                  <a
-                    aria-label="Open settings"
-                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                  </WorkbenchIconButton>
+                  <WorkbenchIconButton
+                    as="a"
+                    label="Open settings"
+                    display="hover-border"
                     href={createSettingsHref(activeProjectId, "global")}
                     onClick={openSettingsFromLink}
                     title="Open settings"
                   >
                     <GearIcon />
                     <span className="sr-only">Open settings</span>
-                  </a>
+                  </WorkbenchIconButton>
                   {usesDesktopSidebarCollapse ? (
-                    <button
-                      aria-label="Hide sidebar"
-                      className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
+                    <WorkbenchIconButton
+                      label="Hide sidebar"
+                      display="hover-border"
+                      className="hidden md:inline-flex"
                       onClick={() => setSidebarCollapsed(true)}
                       title="Hide sidebar"
                       type="button"
                     >
                       <SidebarCollapseIcon />
                       <span className="sr-only">Hide sidebar</span>
-                    </button>
+                    </WorkbenchIconButton>
                   ) : null}
                 </header>
                 <WorkbenchSearchInput onOpen={() => searchController.open()} />
@@ -2776,13 +2762,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">
-                          <button
+                          <WorkbenchIconButton
                             type="button"
-                            aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                            label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                            display="hover-border"
+                            size="small"
                             aria-pressed={showUnopenableFiles}
                             disabled={!explorer.currentProjectId || isProjectTreeLoading}
                             title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                            className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
+                            className={workbenchNewEntryButtonClassName}
                             onClick={() => {
                               updateProjectSetting("showUnopenableFiles", !showUnopenableFiles);
                             }}
@@ -2791,12 +2779,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <span className="sr-only">
                               {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             </span>
-                          </button>
-                          <button
+                          </WorkbenchIconButton>
+                          <WorkbenchIconButton
                             type="button"
-                            aria-label="Create in project"
+                            label="Create in project"
+                            display="hover-border"
+                            size="small"
                             title="Create in project"
-                            className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                            className={workbenchNewEntryButtonClassName}
                             disabled={!explorer.currentProjectId || isProjectTreeLoading}
                             onClick={() => {
                               openCreateDialog("");
@@ -2804,7 +2794,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           >
                             <NewEntryIcon />
                             <span className="sr-only">Create in project</span>
-                          </button>
+                          </WorkbenchIconButton>
                         </div>
                       )}
                       contentClassName="space-y-2"
@@ -2942,19 +2932,20 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     )}
                   </div>
                   <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-                    <button
+                    <WorkbenchIconButton
                       type="button"
-                      aria-label="Back to file explorer"
+                      label="Back to file explorer"
+                      display="hover-border"
                       title="Back to file explorer"
                       hidden={!isMobile || mobilePane !== "editor"}
-                      className={`${workbenchIconButtonClassName} shrink-0 md:hidden`}
+                      className="md:hidden"
                       onClick={() => {
                         navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
                       }}
                     >
                       <BackArrowIcon />
                       <span className="sr-only">Back to file explorer</span>
-                    </button>
+                    </WorkbenchIconButton>
                     <div className="flex items-center gap-1.5">
                       {canShowSelectedTranscriptMode ? (
                         <WorkbenchTranscriptModeControl
@@ -2964,53 +2955,41 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onRotate={rotateTranscriptMode}
                         />
                       ) : null}
-                      <button
-                        id="zoom-out"
-                        ref={zoomOutButtonRef}
-                        type="button"
-                        title="Decrease editor text size"
-                        aria-label="Decrease editor text size"
-                        className={workbenchIconButtonClassName}
-                      >
-                        <ZoomOutIcon />
-                        <span className="sr-only">Decrease editor text size</span>
-                      </button>
-                      <button
-                        id="zoom-in"
-                        ref={zoomInButtonRef}
-                        type="button"
-                        title="Increase editor text size"
-                        aria-label="Increase editor text size"
-                        className={workbenchIconButtonClassName}
-                      >
-                        <ZoomInIcon />
-                        <span className="sr-only">Increase editor text size</span>
-                      </button>
+                      <WorkbenchZoomButton
+                        ref={zoomButtonRef}
+                        label="Editor text size"
+                        disabled={!shouldShowShellHeader || (isMobile && !isMobileShellHeaderVisible)}
+                        min={MIN_EDITOR_FONT_SIZE}
+                        max={MAX_EDITOR_FONT_SIZE}
+                        value={resolvedSettings.editorFontSize}
+                        onPreview={setEditorFontSizePreview}
+                        onChange={updateEditorFontSize}
+                      />
                     </div>
                     <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView}>
-                      <button
+                      <WorkbenchIconButton
                         id="save-file"
                         ref={saveFileButtonRef}
                         type="button"
                         title="Save current file"
-                        aria-label="Save current file"
-                        className={workbenchIconButtonClassName}
+                        label="Save current file"
+                        display="hover-border"
                         data-invalid="false"
                       >
                         <SaveIcon />
                         <span className="sr-only">Save current file</span>
-                      </button>
-                      <button
+                      </WorkbenchIconButton>
+                      <WorkbenchIconButton
                         id="reset-draft"
                         ref={resetDraftButtonRef}
                         type="button"
                         title="Discard the current draft"
-                        aria-label="Discard the current draft"
-                        className={workbenchIconButtonClassName}
+                        label="Discard the current draft"
+                        display="hover-border"
                       >
                         <BinIcon />
                         <span className="sr-only">Discard the current draft</span>
-                      </button>
+                      </WorkbenchIconButton>
                     </div>
                   </div>
                 </div>
@@ -3028,7 +3007,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       draftLeadingContent={projectRotator}
-                      fontSizeRem={resolvedSettings.editorFontSize}
+                      fontSizeRem={displayedEditorFontSize}
                       getThreadHref={(target) => !activeProjectId
                         ? createHomeThreadHref(threadProjectId, target)
                         : isForeignThreadProject
@@ -3140,9 +3119,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : showEmptyState && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
                     <div className="flex w-full max-w-[42rem] flex-col gap-8">
-                      <PrimaryButton
+                      <button
                         type="button"
-                        className="w-fit gap-2"
+                        className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} w-fit border-transparent px-4 py-2 text-[0.84rem] text-text md:py-2`}
                         onClick={() => {
                           if (!controls || !sidebarCreateProjectId) return;
                           navigateToRoute(!activeProjectId
@@ -3152,7 +3131,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       >
                         <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
                         <span>Create new thread</span>
-                      </PrimaryButton>
+                      </button>
                       {quickOpenPaths.length ? (
                         <div className="space-y-2">
                           {quickOpenPaths.map((path) => (
@@ -3202,7 +3181,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onSplitResize={resizeMosaicSplit}
                     renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
                       const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
-                      const panelFontSizeRem = clampEditorFontSize(resolvedSettings.editorFontSize + panelZoomDelta * 0.08);
+                      const panelFontSizeRem = clampEditorFontSize(displayedEditorFontSize + panelZoomDelta * 0.08);
                       const isMinimized = Boolean(mosaicPanel?.minimized);
                       const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
                       const hasSidebarRestoreInset = isEffectiveDesktopSidebarCollapsed
@@ -3221,6 +3200,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             controls={controls}
                             editorFontClassName={editorFontClassName}
                             fontSizeRem={panelFontSizeRem}
+                            baseFontSizeRem={displayedEditorFontSize}
                             hasSidebarRestoreInset={hasSidebarRestoreInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
@@ -3251,7 +3231,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             routeOwned
                             composerSpellCheck={resolvedSettings.composerSpellCheck}
                             fallbackThreadSummary={target.target.kind === "provider" || target.target.kind === "subagent" ? threadSummariesById.get(getWorkbenchThreadTargetRootId(target.target)) ?? null : null}
-                            fontSizeRem={resolvedSettings.editorFontSize}
+                            fontSizeRem={displayedEditorFontSize}
                             hasSidebarRestoreInset={hasSidebarRestoreInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
@@ -3321,7 +3301,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   <WorkbenchFilePanel
                     controls={controls}
                     editorFontClassName={editorFontClassName}
-                    fontSizeRem={resolvedSettings.editorFontSize}
+                    fontSizeRem={displayedEditorFontSize}
                     isFocused
                     onFocus={() => { }}
                     path={effectiveFilePath}
@@ -3659,7 +3639,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={revisionHoverAcceptButtonRef}
               type="button"
               title="Accept revision"
-              className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              className={workbenchRevisionActionButtonClassName}
             >
               accept
             </button>
@@ -3668,7 +3648,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={revisionHoverRejectButtonRef}
               type="button"
               title="Reject revision"
-              className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              className={workbenchRevisionActionButtonClassName}
             >
               reject
             </button>

@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - renderThreadMarkdown: render shared markdown parse nodes into React thread display elements. Keywords: thread, markdown, React, renderer.
- * - Local helpers: render inline/block nodes, notices, code-block controls, SVG previews, and diff code-block rows. Keywords: markdown, notice, code, diff, SVG.
+ * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers.
  */
 
 import { Fragment, type ReactNode } from "react";
@@ -31,6 +30,7 @@ import {
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
+import WorkbenchIconButton from "../WorkbenchIconButton";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
@@ -41,24 +41,8 @@ import ThreadPreviewFrame from "./ThreadPreviewFrame";
 // reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
 const CODE_BLOCK_HEADER_BUTTON_CLASS = [
-  "inline-flex",
-  "size-[1.45rem]",
-  "shrink-0",
-  "items-center",
-  "justify-center",
-  "rounded-[0.38rem]",
-  "text-muted",
-  "transition-[background-color,color,opacity]",
-  "duration-150",
-  "ease-out",
-  "hover:bg-accent-soft",
-  "hover:text-accent",
-  "focus-visible:bg-accent-soft",
-  "focus-visible:text-accent",
-  "focus-visible:outline-none",
   "data-[thread-codeblock-copy-state=copied]:text-success",
   "data-[thread-codeblock-copy-state=failed]:text-danger",
-  "data-[thread-codeblock-toggle-state=active]:text-accent",
 ].join(" ");
 const HEADING_CLASSES = {
   1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
@@ -627,9 +611,11 @@ function renderThreadBlock (
               {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
             </span>
             <div className="flex shrink-0 items-center gap-1">
-              <button
+              <WorkbenchIconButton
                 type="button"
-                aria-label="Copy code block"
+                label="Copy code block"
+                display="hover-border"
+                size="compact"
                 className={`${CODE_BLOCK_HEADER_BUTTON_CLASS} group`}
                 data-thread-codeblock-copy="true"
                 data-thread-codeblock-copy-state="idle"
@@ -641,11 +627,13 @@ function renderThreadBlock (
                 <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
                   <CheckIcon />
                 </span>
-              </button>
+              </WorkbenchIconButton>
               {isSvgCodeBlock ? (
-                <button
+                <WorkbenchIconButton
                   type="button"
-                  aria-label="Preview SVG code block"
+                  label="Preview SVG code block"
+                  display="hover-border"
+                  size="compact"
                   aria-pressed={false}
                   className={CODE_BLOCK_HEADER_BUTTON_CLASS}
                   data-thread-codeblock-svg-preview="true"
@@ -653,11 +641,13 @@ function renderThreadBlock (
                   title="Preview SVG code block"
                 >
                   <PreviewIcon />
-                </button>
+                </WorkbenchIconButton>
               ) : null}
-              <button
+              <WorkbenchIconButton
                 type="button"
-                aria-label="Toggle code block line wrapping"
+                label="Toggle code block line wrapping"
+                display="hover-border"
+                size="compact"
                 aria-pressed={false}
                 className={CODE_BLOCK_HEADER_BUTTON_CLASS}
                 data-thread-codeblock-toggle-state="idle"
@@ -665,7 +655,7 @@ function renderThreadBlock (
                 title="Toggle code block line wrapping"
               >
                 <WrapTextIcon />
-              </button>
+              </WorkbenchIconButton>
             </div>
           </div>
           <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">

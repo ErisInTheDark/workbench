@@ -15,8 +15,9 @@ function constrain(range: PressDragSliderRange, value: number) {
 }
 
 export default class PressDragSliderController {
-  private gesture: { range: PressDragSliderRange; startY: number; height: number; preview: number } | null = null;
+  private gesture: { range: PressDragSliderRange; startY: number; height: number; trackTop?: number; moved: boolean; preview: number } | null = null;
   private hold: { x: number; y: number; latestY: number; cancel: () => void } | null = null;
+  private readonly previewListeners = new Set<(value: number | null) => void>();
 
   constructor(private readonly schedule: (activate: () => void, delay: number) => () => void = (activate, delay) => {
     const timer = setTimeout(activate, delay);
@@ -24,6 +25,18 @@ export default class PressDragSliderController {
   }) {}
 
   get isActive() { return this.gesture !== null; }
+
+  getPreview = () => this.gesture?.preview ?? null;
+
+  subscribePreview = (listener: (value: number | null) => void) => {
+    this.previewListeners.add(listener);
+    return () => { this.previewListeners.delete(listener); };
+  };
+
+  private publishPreview(previous: number | null) {
+    const value = this.getPreview();
+    if (value !== previous) for (const listener of this.previewListeners) listener(value);
+  }
 
   holdTouch(x: number, y: number, activate: (y: number) => void) {
     this.cancel();
@@ -49,21 +62,28 @@ export default class PressDragSliderController {
     return this.move(y);
   }
 
-  begin(range: PressDragSliderRange, startY: number, height: number) {
+  begin(range: PressDragSliderRange, startY: number, height: number, trackTop?: number) {
     this.cancel();
-    this.gesture = { range: { ...range }, startY, height: Math.max(1, height), preview: constrain(range, range.value) };
+    this.gesture = { range: { ...range }, startY, height: Math.max(1, height), trackTop, moved: false, preview: constrain(range, range.value) };
+    this.publishPreview(null);
   }
 
   move(y: number) {
     const gesture = this.gesture;
     if (!gesture) return null;
-    gesture.preview = constrain(gesture.range, gesture.range.value + (gesture.startY - y) / gesture.height * (gesture.range.max - gesture.range.min));
-    return gesture.preview;
+    if (gesture.trackTop !== undefined && !gesture.moved && y === gesture.startY) return gesture.preview;
+    gesture.moved = true;
+    const value = gesture.trackTop === undefined
+      ? gesture.range.value + (gesture.startY - y) / gesture.height * (gesture.range.max - gesture.range.min)
+      : gesture.range.max - (y - gesture.trackTop) / gesture.height * (gesture.range.max - gesture.range.min);
+    return this.setPreview(value);
   }
 
   setPreview(value: number) {
     if (!this.gesture) return null;
+    const previous = this.gesture.preview;
     this.gesture.preview = constrain(this.gesture.range, value);
+    this.publishPreview(previous);
     return this.gesture.preview;
   }
 
@@ -74,9 +94,11 @@ export default class PressDragSliderController {
   }
 
   cancel() {
+    const previous = this.getPreview();
     this.hold?.cancel();
     this.hold = null;
     this.gesture = null;
+    this.publishPreview(previous);
   }
 
   keyboard(range: PressDragSliderRange, key: string) {

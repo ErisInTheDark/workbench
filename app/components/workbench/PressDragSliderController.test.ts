@@ -3,6 +3,41 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import PressDragSliderController from "./PressDragSliderController";
 
+test("preview subscribers see drag changes before commit and cancellation clears them", () => {
+  const slider = new PressDragSliderController();
+  const previews: Array<number | null> = [];
+  const unsubscribe = slider.subscribePreview(value => previews.push(value));
+  const range = { value: 50, min: 0, max: 100, step: 10 };
+  assert.equal(slider.getPreview(), null);
+  slider.begin(range, 200, 100);
+  slider.move(180);
+  slider.move(179);
+  assert.deepEqual(previews, [50, 70]);
+  assert.equal(slider.getPreview(), 70);
+  assert.equal(slider.commit(), 70);
+  assert.deepEqual(previews, [50, 70, null]);
+  slider.begin(range, 200, 100);
+  slider.setPreview(30);
+  slider.cancel();
+  assert.deepEqual(previews.slice(3), [50, 30, null]);
+  unsubscribe();
+  slider.begin(range, 200, 100);
+  assert.equal(previews.length, 6);
+});
+
+test("absolute tracks preserve a stationary press and map drag positions to both bounds", () => {
+  const slider = new PressDragSliderController();
+  const range = { value: 1.08, min: 0.84, max: 1.72, step: 0.08 };
+  slider.begin(range, 25, 144, 100);
+  assert.equal(slider.move(25), range.value);
+  assert.equal(slider.move(100), range.max);
+  assert.equal(slider.move(244), range.min);
+  assert.equal(slider.move(25), range.max);
+  assert.equal(slider.move(244), range.min);
+  assert.equal(slider.commit(), range.min);
+  assert.equal(slider.move(100), null);
+});
+
 function touchFixture() {
   let now = 0;
   const tasks: Array<{ at: number; run: () => void; cancelled: boolean }> = [];

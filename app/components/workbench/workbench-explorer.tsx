@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - NewEntryIcon: render the create-entry glyph used in the explorer. Keywords: workbench, explorer, icon.
- * - FileVisibilityIcon: render the eye glyph used by the explorer file-visibility toggle. Keywords: workbench, explorer, icon, visibility.
- * - SidebarLoadingSkeleton: render animated placeholder rows for loading sidebar sections. Keywords: sidebar, loading, skeleton.
- * - BrowseSessionsList: render active Browse sessions in the workbench sidebar. Keywords: workbench, browse, sessions, sidebar.
- * - ExplorerTree: render the recursive project tree with current, modified, and create-entry state. Keywords: workbench, explorer, tree.
- * - Local helpers: support modified markers, change summaries, and recursive directory state. Keywords: recursion, tree state, helpers.
+ * - NewEntryIcon: shared file-creation glyph alias.
+ * - FileVisibilityIcon: select the shared eye glyph for the current file-visibility state.
+ * - SidebarLoadingSkeleton: animated placeholder rows for loading sidebar sections.
+ * - BrowseSessionsList: active Browse sessions in the sidebar.
+ * - ExplorerTree: recursive project tree with current, modified and create-entry state.
  */
 "use client";
 
@@ -21,32 +20,21 @@ import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag
 import ChevronIcon from "./ChevronIcon";
 import ContextMenuCapability from "./ContextMenuCapability";
 import {
-  workbenchIconButtonClassName,
+  workbenchOptionHoverClassName,
+  workbenchOptionRowClassName,
+  workbenchOptionSelectedClassName,
   workbenchNewEntryButtonClassName,
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { BrowserSessionIcon } from "./workbench-icons";
+import { BrowserSessionIcon, EyeIcon, EyeOffIcon, FilePlusIcon } from "./workbench-icons";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
-export function NewEntryIcon () {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M6 2.75H11.75L15.5 6.5V16.25C15.5 16.94 14.94 17.5 14.25 17.5H6C5.31 17.5 4.75 16.94 4.75 16.25V4C4.75 3.31 5.31 2.75 6 2.75Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M11.75 2.75V6.5H15.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M10.125 9V14M7.625 11.5H12.625" strokeLinecap="round" />
-    </svg>
-  );
-}
+export const NewEntryIcon = FilePlusIcon;
 
 export function FileVisibilityIcon ({ visible }: { visible: boolean }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M2.75 10C4.41 6.78 6.98 5.17 10 5.17C13.02 5.17 15.59 6.78 17.25 10C15.59 13.22 13.02 14.83 10 14.83C6.98 14.83 4.41 13.22 2.75 10Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="10" cy="10" r="2.2" />
-      {visible ? null : <path d="M4.1 4.1 15.9 15.9" strokeLinecap="round" />}
-    </svg>
-  );
+  return visible ? <EyeIcon /> : <EyeOffIcon />;
 }
 
 export function SidebarLoadingSkeleton ({
@@ -332,7 +320,8 @@ export function ExplorerTree ({
                   <button
                     data-role="tree-button"
                     type="button"
-                    className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5"
+                    aria-expanded={isExpanded}
+                    className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} max-w-full border-transparent text-muted hover:text-text`}
                     onClick={() => {
                       controls?.toggleDirectory(node.path);
                     }}
@@ -350,18 +339,20 @@ export function ExplorerTree ({
                     <ExplorerModifiedDot hidden={!isModified} />
                     <ExplorerChangeSummary summary={changeSummary} />
                   </button>
-                  <button
+                  <WorkbenchIconButton
                     type="button"
-                    aria-label={`Create in ${node.name}`}
+                    label={`Create in ${node.name}`}
+                    display="hover-border"
+                    size="small"
                     title={`Create in ${node.name}`}
-                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                    className={workbenchNewEntryButtonClassName}
                     onClick={() => {
                       onCreateInDirectory?.(node.path);
                     }}
                   >
                     <NewEntryIcon />
                     <span className="sr-only">{`Create in ${node.name}`}</span>
-                  </button>
+                  </WorkbenchIconButton>
                 </div>
               </ContextMenuCapability>
               {isExpanded ? (
@@ -408,7 +399,11 @@ export function ExplorerTree ({
                   aria-disabled={!isOpenable}
                   disabled={!isOpenable}
                   title={isOpenable ? node.name : disabledTitle}
-                  className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted disabled:focus-visible:bg-transparent disabled:focus-visible:text-muted md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={`
+                    ${workbenchOptionRowClassName} max-w-full
+                    ${isCurrent ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `border-transparent text-muted ${isOpenable ? `${workbenchOptionHoverClassName} hover:text-text` : ""}`}
+                  `}
                   onPointerDown={(event) => {
                     if (!isOpenable) {
                       return;

@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - WorkbenchFilePanelSnapshot: readonly projection of one mounted file panel state. Keywords: workbench, file, panel, snapshot.
- * - WorkbenchFilePanelListener: subscriber signature for mounted file panel changes. Keywords: workbench, file, panel, subscribe.
- * - WorkbenchFilePanelClientOptions: collaborators needed by one mounted file panel controller. Keywords: workbench, file, panel, options.
- * - WorkbenchFilePanelClient: public imperative API for one mounted file panel. Keywords: workbench, file, panel, API.
- * - default WorkbenchFilePanelClient: create a panel-scoped file editor owner with independent DOM, history, draft, conflict, and cleanup lifecycle. Keywords: workbench, file, panel, editor, lifecycle, default export.
+ * - WorkbenchFilePanelSnapshot: readonly mounted file panel state.
+ * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
+ * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
+ * - WorkbenchFilePanelClient: imperative mounted file panel API.
+ * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts and cleanup.
  */
 
 import type { ChangeSummary } from "workbench-shared/types";
@@ -93,6 +93,7 @@ export interface WorkbenchFilePanelClient {
   refreshCurrentFileFromDiskIfSafe: () => Promise<void>;
   saveCurrentFile: (options?: { force?: boolean }) => Promise<void>;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
+  previewFontSize: (fontSize: number | null) => void;
   setStatusMessage: (message?: string) => void;
   showThreadPlaceholder: (threadId: string, label: string, statusMessage?: string) => void;
   subscribe: (listener: WorkbenchFilePanelListener) => () => void;
@@ -630,6 +631,7 @@ function WorkbenchFilePanelClient(
     refreshCurrentFileFromDiskIfSafe,
     saveCurrentFile,
     setFontSize,
+    previewFontSize: editorClient.previewFontSize,
     setStatusMessage,
     showThreadPlaceholder,
     subscribe,
