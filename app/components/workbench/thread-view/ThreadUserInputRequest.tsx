@@ -1,7 +1,6 @@
 /*
- * Keywords: questionnaire, draft session, title, header, freeform, quick response, compact, submission.
  * Exports:
- * - default ThreadUserInputRequest: render questionnaire-owned titles, single-question framing, and full or compact live, preview, historical, freeform, and quick-response inputs. Keywords: questionnaire, title, header, custom input, freeform, quick response, compact.
+ * - default ThreadUserInputRequest: render full or compact questionnaires, including loading, live answers, previews, and history.
  * Local components bind a keyed editing session and render approval command context.
  */
 "use client";
@@ -127,6 +126,33 @@ type ThreadUserInputRequestProps =
   | InteractiveThreadUserInputRequestProps
   | PreviewThreadUserInputRequestProps;
 
+type LoadingThreadUserInputRequestProps = {
+  mode: "loading";
+  presentation?: "compact" | "full";
+};
+
+function ThreadUserInputRequestFrame({
+  children,
+  compact,
+  loading = false,
+}: {
+  children: ReactNode;
+  compact: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <div
+      aria-busy={loading || undefined}
+      aria-label={loading ? "Loading questionnaire" : undefined}
+      role={loading ? "status" : undefined}
+      className={joinClasses("thread-user-input-request px-1 py-1", compact ? "space-y-2" : "space-y-4")}
+      data-thread-user-input-presentation={compact ? "compact" : "full"}
+    >
+      {children}
+    </div>
+  );
+}
+
 function ThreadApprovalCommandSummary ({
   knownSkills,
   projectRootPath,
@@ -168,7 +194,24 @@ function ThreadApprovalCommandSummary ({
   );
 }
 
-export default function ThreadUserInputRequest (props: ThreadUserInputRequestProps) {
+export default function ThreadUserInputRequest (props: ThreadUserInputRequestProps | LoadingThreadUserInputRequestProps) {
+  if (props.mode === "loading") {
+    const compact = props.presentation === "compact";
+    return (
+      <ThreadUserInputRequestFrame compact={compact} loading>
+        <div className={joinClasses("thread-user-input-request-content", compact ? "space-y-2.5" : "space-y-4")} aria-hidden="true">
+          <div className="space-y-1 text-[1.02em] leading-[1.35]">
+            <div className="h-[1.35em] w-4/5 rounded workbench-skeleton" />
+            <div className="h-[1.35em] w-1/2 rounded workbench-skeleton" />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="min-h-[2.45rem] min-w-0 flex-1 rounded-lg workbench-skeleton" />
+            <div className="size-8 shrink-0 rounded-full workbench-skeleton" />
+          </div>
+        </div>
+      </ThreadUserInputRequestFrame>
+    );
+  }
   return <ThreadUserInputRequestContent key={`${props.mode}:${props.request.id}`} {...props} />;
 }
 
@@ -328,10 +371,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   );
 
   return (
-    <div
-      className={joinClasses("thread-user-input-request px-1 py-1", compact ? "space-y-2" : "space-y-4")}
-      data-thread-user-input-presentation={compact ? "compact" : "full"}
-    >
+    <ThreadUserInputRequestFrame compact={compact}>
       <div className={joinClasses("thread-user-input-request-content", compact ? "space-y-2.5" : "space-y-4")}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
@@ -679,6 +719,6 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       {interactiveProps && error ? (
         <p className="m-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
       ) : null}
-    </div>
+    </ThreadUserInputRequestFrame>
   );
 }

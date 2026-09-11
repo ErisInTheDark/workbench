@@ -1819,12 +1819,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const renderThreadTooltipDetails = useCallback((entry: WorkbenchThreadSidebarEntry) => {
     if (entry.entryKind === "draft") return null;
     const threadId = entry.identity.threadId;
-    const pendingRequest = visibleUserInputRequestsByThreadId[threadId] ?? null;
-    const proposalId = entry.gitArc?.proposals.find(({ status }) => status === "proposed")?.proposalId ?? null;
-    const hasPlannedWork = Boolean(entry.gitArcPlan?.scopePaths.length);
-    const hasQuestionnaire = Boolean(pendingRequest || entry.pendingQuestionnaire || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
-      || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"));
-    if (!hasQuestionnaire && !proposalId && !hasPlannedWork) return null;
     const rootThreadId = entry.entryKind === "subagent" ? entry.parentThreadId : threadId;
     const cwd = entry.entryKind === "subagent"
       ? entry.cwd
@@ -1853,7 +1847,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     );
   }, [
     activeProjectId,
-    controls,
     explorer.projectFilePaths,
     explorer.rootPath,
     materializedThreadRootIds,
@@ -1862,9 +1855,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     projectThreadSidebars.projects,
     projectThreadSummaries.projects,
     resolvedSettings.composerSpellCheck,
-    threads,
     threadSummariesById,
-    visibleUserInputRequestsByThreadId,
   ]);
   const sidebarLifecycleSignal = useMemo(() => {
     const entries = projectThreadSidebars.projects.flatMap(({ entries: projectEntries }) => projectEntries);

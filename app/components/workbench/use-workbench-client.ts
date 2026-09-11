@@ -255,10 +255,11 @@ export function useWorkbenchThreadTitleHistory(projectId: ProjectId, harness: Wo
 
 export function useWorkbenchProjectThreadSummaries(explicitClient?: WorkbenchClientController) {
   const store = useWorkbenchThreadSidebarStore(explicitClient);
+  const getSnapshot = store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES);
   return useSyncExternalStore(
     store?.subscribe ?? EMPTY_SUBSCRIBE,
-    store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
-    () => EMPTY_PROJECT_THREAD_SUMMARIES,
+    getSnapshot,
+    getSnapshot,
   );
 }
 

@@ -1,7 +1,6 @@
 /*
- * Keywords: git, proposal, command outcome, commit lifecycle.
  * Exports:
- * - default ThreadCheckpointCommitItem: render and operate a durable checkpoint commit proposal with a frozen file set. Keywords: thread, checkpoint, proposal, commit, newer changes.
+ * - default ThreadCheckpointCommitItem: load, edit, and commit durable proposals with frozen file sets.
  */
 "use client";
 
@@ -65,13 +64,13 @@ function ThreadCheckpointCommitController({
   const [amendDescription, setAmendDescription] = useState(intent?.description ?? "");
   const [commitTitle, setCommitTitle] = useState(
     (intent?.amend ? intent.freshTitle : intent?.title)
-      ?? (presentation && presentation !== "full" ? "Commit proposal" : ""),
+      ?? "",
   );
   const [commitDescription, setCommitDescription] = useState(
     (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
   );
   const [committing, setCommitting] = useState(false);
-  const [state, setState] = useState<CheckpointCommitCardState>({ status: "pending" });
+  const [state, setState] = useState<CheckpointCommitCardState>({ status: proposalId ? "pending" : "idle" });
   const intentOwnsMessage = proposalIntentOwnsMessage(intent);
   const amendTitleHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
   const amendDescriptionHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
@@ -151,7 +150,7 @@ function ThreadCheckpointCommitController({
 
   useEffect(() => {
     if (!proposalId) {
-      setState({ status: "pending" });
+      setState({ status: "idle" });
       return;
     }
     const controller = new AbortController();
@@ -234,6 +233,10 @@ function ThreadCheckpointCommitController({
       embedded={embedded}
       freshCommitAvailable={freshCommitAvailable}
       includeNewer={includeNewer}
+      messageAvailability={{
+        title: commitMode === "amend" ? amendTitleHydrated.current : commitTitleHydrated.current,
+        description: commitMode === "amend" ? amendDescriptionHydrated.current : commitDescriptionHydrated.current,
+      }}
       onCommit={() => void commit()}
       onCommitModeChange={setCommitMode}
       onDescriptionChange={changeDescription}
@@ -313,7 +316,7 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
         projectId={props.projectId}
         projectRootPath={props.projectRootPath}
         sourceItemId={props.sourceItemId}
-        state={{ status: "pending" }}
+        state={{ status: "idle" }}
         title={resolvedIntent?.title ?? "Commit proposal"}
         workspaceRoots={props.workspaceRoots}
       />

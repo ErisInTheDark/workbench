@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access.
- * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content.
+ * Local helpers derive pinned-draft targets and render bounded tooltip details.
  */
 "use client";
 
@@ -213,7 +213,14 @@ export default function WorkbenchThreadListItem({
     : entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel.trim() || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
-  const tooltipStatus = lifecycle?.kind === "needsAttention" && tooltipDetails ? "Needs attention" : status;
+  const hasAttentionDetails = entry.entryKind !== "draft" && Boolean(
+    attentionLabel.trim() || hasProposedCommit
+    || ("gitArcPlan" in entry && entry.gitArcPlan?.scopePaths.length)
+    || ("pendingQuestionnaire" in entry && entry.pendingQuestionnaire)
+    || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
+    || (lifecycle?.kind === "needsAttention" && lifecycle.reason === "pendingInput")
+  );
+  const tooltipStatus = lifecycle?.kind === "needsAttention" && tooltipDetails && hasAttentionDetails ? "Needs attention" : status;
   const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   const timestamp = new Date(entry.activityAt);
   const dateTime = timestamp.toISOString();

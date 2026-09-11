@@ -13,7 +13,7 @@ import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
-import ThreadLoadingSkeleton from "./thread-view/ThreadLoadingSkeleton";
+import { useWorkbenchProjectThreadSummaries, useWorkbenchThreadSidebarEntry } from "./use-workbench-client";
 
 export default function WorkbenchThreadTooltipDetails({
   cwd,
@@ -44,20 +44,32 @@ export default function WorkbenchThreadTooltipDetails({
 }) {
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
+  const sidebarEntry = useWorkbenchThreadSidebarEntry(projectId, harness, threadId);
+  const summaries = useWorkbenchProjectThreadSummaries();
+  const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (
+    entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
+  ));
+  const entry = questionnaire.thread.state.entry ?? sidebarEntry ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
   const pendingRequest = questionnaire.request;
-  const proposalId = questionnaire.thread.state.entry?.gitArc?.proposals.find(proposal => proposal.status === "proposed")?.proposalId ?? null;
+  const proposalId = entry?.gitArc?.proposals.find(proposal => proposal.status === "proposed")?.proposalId ?? null;
+  const questionnaireLoading = !pendingRequest && Boolean(entry && (
+    ("pendingQuestionnaire" in entry && entry.pendingQuestionnaire)
+    || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
+    || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput")
+  ));
   const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.state.canRead);
-  if (questionnaire.thread.state.status === "loading") return <ThreadLoadingSkeleton />;
   if (questionnaire.thread.state.status === "failed") return null;
   return (
     <div className="flex min-w-0 flex-col gap-2" data-thread-tooltip-details="true">
-      {pendingRequest ? (
+      {pendingRequest || questionnaireLoading ? (
         <section
           aria-label="Pending questionnaire"
           className="rounded-[0.8rem] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] p-2"
-          data-thread-tooltip-questionnaire={questionnaireIsLive ? "live" : "preview"}
+          data-thread-tooltip-questionnaire={questionnaireLoading ? "loading" : questionnaireIsLive ? "live" : "preview"}
         >
-          {questionnaireIsLive ? (
+          {!pendingRequest ? (
+            <ThreadUserInputRequest mode="loading" presentation="compact" />
+          ) : questionnaireIsLive ? (
             <ThreadUserInputRequest
               key={`${projectId}:${threadId}:${pendingRequest.requestKey}`}
               draft={questionnaire.draft}

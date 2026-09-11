@@ -10,7 +10,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchPendingUserInputRequest, WorkbenchThreadSidebarStore } from "workbench-shared/types";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
@@ -60,6 +60,8 @@ async function renderDetails(
     proposalId?: string | null;
     sidebarStore?: WorkbenchThreadSidebarStore | null;
     disconnected?: boolean;
+    observationPending?: boolean;
+    awaitingDocument?: boolean;
   } = {},
 ) {
   const request = options.pendingRequest === undefined ? pendingRequest : options.pendingRequest;
@@ -68,8 +70,13 @@ async function renderDetails(
     checkpointCommit: "a".repeat(40), claimedPaths: ["src/feature"], intentDescription: "", intentName: "test",
     phase: "active", proposals: [{ proposalId, status: "proposed" }], updatedAt: "2026-09-10",
   } : null);
-  const owner = new ThreadObservationController({ request: async (method, params) => method.endsWith("/release") ? {} : {
-    observation: { ...params, entries: [observedEntry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation" },
+  let admit!: () => void;
+  const admission = new Promise<void>(resolve => { admit = resolve; });
+  if (!options.observationPending) admit();
+  const owner = new ThreadObservationController({ request: async (method, params) => {
+    if (method.endsWith("/release")) return {};
+    await admission;
+    return { observation: { ...params, entries: [observedEntry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation" } };
   } });
   let ready!: () => void;
   const loaded = new Promise<void>(resolve => { ready = resolve; });
@@ -77,8 +84,10 @@ async function renderDetails(
   const consumer = owner.acquire("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, () => {
     if (["ready", "failed"].includes(owner.getSnapshot(key).status)) ready();
   });
-  await loaded;
-  assert.equal(owner.getSnapshot(key).status, "ready");
+  if (!options.observationPending) {
+    await loaded;
+    assert.equal(owner.getSnapshot(key).status, "ready");
+  }
   if (options.disconnected) owner.disconnect();
   const client = createClient(options.sidebarStore ?? null);
   client.controls = canRead ? {} as NonNullable<WorkbenchClientController["controls"]> : null;
@@ -98,6 +107,8 @@ async function renderDetails(
     reportError: message => { throw new Error(message); },
   });
   const releaseThread = thread.acquire("summary");
+  const releaseRoute = options.awaitingDocument ? thread.acquire("route") : null;
+  if (options.awaitingDocument || options.observationPending) assert.equal(thread.getSnapshot().status, "loading");
   client.mounted!.getThreadController = () => thread;
   const html = renderWithClient(
     createElement(WorkbenchThreadTooltipDetails, {
@@ -112,6 +123,9 @@ async function renderDetails(
     options.sidebarStore ?? null,
     client,
   );
+  admit();
+  await loaded;
+  releaseRoute?.();
   consumer.release();
   releaseThread();
   thread.dispose();
@@ -205,23 +219,111 @@ test("materialized thread roots render questionnaire and proposal previews", asy
   assert.doesNotMatch(html, /data-thread-questionnaire-submit|data-thread-checkpoint-commit-action/u);
 });
 
-test("unmounted thread roots render the real compact questionnaire and proposal actions", async () => {
+test("unmounted thread roots render live questionnaire actions while the proposal loads", async () => {
   const html = await renderDetails(false);
   assert.match(html, /data-thread-tooltip-questionnaire="live"/u);
   assert.match(html, /data-thread-tooltip-proposal="commit"/u);
   assert.match(html, /data-thread-questionnaire-submit="true"/u);
-  assert.match(html, /data-thread-checkpoint-commit-action="true"/u);
+  assert.match(html, /aria-busy="true"/u);
+  assert.doesNotMatch(html, /data-thread-checkpoint-commit-action/u);
 });
 
 test("proposals without cwd remain preview-only", async () => {
   const html = await renderDetails(false, null);
   assert.match(html, /data-thread-tooltip-proposal="preview"/u);
   assert.doesNotMatch(html, /data-thread-checkpoint-commit-action/u);
+  assert.doesNotMatch(html, /aria-busy="true"/u);
 });
 
 test("reconnecting preserves the admitted questionnaire presentation", async () => {
   const html = await renderDetails(false, "C:/workspace", true, { disconnected: true });
   assert.match(html, /data-thread-tooltip-questionnaire="live"/u);
+});
+
+test("available questionnaire and plan details survive pending thread observation", async () => {
+  const html = await renderDetails(false, "C:/workspace", true, {
+    observationPending: true,
+    proposalId: null,
+    sidebarStore: planStore,
+  });
+  assert.match(html, /data-thread-tooltip-questionnaire="live"/u);
+  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+});
+
+test("known questionnaire gets its own busy section before the request is admitted", async () => {
+  const entry = {
+    ...planThread("thread"),
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "questionnaire:one", settled: false },
+  } satisfies WorkbenchThreadSidebarEntry;
+  const sidebarStore = {
+    ...planStore,
+    getProjectSnapshot: () => ({ ...planSnapshot, entries: [entry] }),
+  };
+  const html = await renderDetails(false, "C:/workspace", true, {
+    observationPending: true, pendingRequest: null, proposalId: null, sidebarStore,
+  });
+  assert.match(html, /data-thread-tooltip-questionnaire="loading"/u);
+  assert.match(html, /aria-busy="true"/u);
+  assert.doesNotMatch(html, /role="textbox"|data-thread-questionnaire-submit|data-thread-tooltip-proposal/u);
+});
+
+test("transcript readiness does not hide admitted questionnaire and proposal details", async () => {
+  const html = await renderDetails(true, "C:/workspace", true, { awaitingDocument: true });
+  assert.match(html, /data-thread-tooltip-questionnaire="preview"/u);
+  assert.match(html, /data-thread-tooltip-proposal="preview"/u);
+});
+
+test("cold pinned tooltips use project-qualified summary hints for each pending component", async () => {
+  const pinned = {
+    ...planThread("thread", {
+      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "",
+      phase: "active", proposals: [{ proposalId: "pinned-proposal", status: "proposed" }], updatedAt: "2026-09-11",
+    }),
+    canCompleteQuestionnaire: true,
+    metadata: { archived: false, pinned: true, snoozed: false },
+    status: "needsAttention",
+  } satisfies WorkbenchPinnedThreadSummaryEntry;
+  const summary = {
+    counts: { completed: 0, needsAttention: 0, needsAttentionActive: 1, proposedCommit: 1, stopped: 0, working: 0 },
+    lastThreadUpdateAt: null, pinnedThreads: [pinned],
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, unsettledThreads: [],
+  };
+  const sidebarStore: WorkbenchThreadSidebarStore = {
+    ...planStore,
+    getProjectSnapshot: () => null,
+    getProjectThreadSummaries: () => ({ projects: [summary] }),
+  };
+  const html = await renderDetails(false, "C:/workspace", true, {
+    observationPending: true, pendingRequest: null, proposalId: null, sidebarStore,
+  });
+  assert.match(html, /data-thread-tooltip-questionnaire="loading"/u);
+  assert.match(html, /data-thread-tooltip-proposal="commit"/u);
+
+  const otherProjectHtml = await renderDetails(false, "C:/workspace", true, {
+    observationPending: true, pendingRequest: null, proposalId: null,
+    sidebarStore: {
+      ...sidebarStore,
+      getProjectThreadSummaries: () => ({
+        projects: [{ ...summary, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other-project") }],
+      }),
+    },
+  });
+  assert.doesNotMatch(otherProjectHtml, /data-thread-tooltip-questionnaire|data-thread-tooltip-proposal|aria-busy="true"/u);
+});
+
+test("admitted metadata removes obsolete sidebar questionnaire and proposal hints", async () => {
+  const entry = {
+    ...planThread("thread", {
+      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "",
+      phase: "active", proposals: [{ proposalId: "obsolete", status: "proposed" }], updatedAt: "2026-09-11",
+    }),
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "obsolete", settled: false },
+  } satisfies WorkbenchThreadSidebarEntry;
+  const html = await renderDetails(false, "C:/workspace", true, {
+    pendingRequest: null, proposalId: null,
+    sidebarStore: { ...planStore, getProjectSnapshot: () => ({ ...planSnapshot, entries: [entry] }) },
+  });
+  assert.doesNotMatch(html, /data-thread-tooltip-questionnaire|data-thread-tooltip-proposal|aria-busy="true"/u);
 });
 
 test("planned-work tooltips keep active intersection navigation and omit planned intersections", async () => {

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - CheckpointCommitCardState: describe pending enrichment, error, and loaded proposal card states. Keywords: checkpoint, commit, card, state.
- * - default ThreadCheckpointCommitCard: render full, compact-preview, or compact-commit proposal cards with owned edit and commit controls. Keywords: checkpoint, commit, amend, proposal, changeset, actions, compact.
+ * - CheckpointCommitCardState: distinguish static previews, pending enrichment, failures, and loaded proposals.
+ * - default ThreadCheckpointCommitCard: render proposal fields, loading shapes, and edit/commit controls in full or compact layouts.
  */
 "use client";
 
@@ -16,7 +16,7 @@ import { AsteriskIcon, CheckIcon, PlusIcon } from "../workbench-icons";
 import WorkbenchModeRow from "../WorkbenchModeRow";
 import PlaintextEditable from "./PlaintextEditable";
 import GitArcIcon from "./GitArcIcon";
-import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import {
   ThreadFileChangeList,
@@ -26,7 +26,8 @@ import {
 export type CheckpointCommitCardState =
   | { error: string; failure?: GitArcFailure; retryable: boolean; status: "error" }
   | { proposal: GitCheckpointProposal; status: "loaded" }
-  | { status: "pending" };
+  | { status: "pending" }
+  | { status: "idle" };
 
 export default function ThreadCheckpointCommitCard({
   commitMode,
@@ -35,6 +36,7 @@ export default function ThreadCheckpointCommitCard({
   embedded = false,
   freshCommitAvailable,
   includeNewer,
+  messageAvailability,
   onCommit,
   onCommitModeChange,
   onDescriptionChange,
@@ -57,6 +59,7 @@ export default function ThreadCheckpointCommitCard({
   embedded?: boolean;
   freshCommitAvailable: boolean;
   includeNewer: boolean;
+  messageAvailability?: { title: boolean; description: boolean };
   onCommit: () => void;
   onCommitModeChange: (value: "amend" | "commit") => void;
   onDescriptionChange: (value: string) => void;
@@ -77,6 +80,11 @@ export default function ThreadCheckpointCommitCard({
   const compact = presentation !== "full";
   const compactCanCommit = presentation === "compact-commit";
   const compactPreview = presentation === "compact-preview";
+  const pending = state.status === "pending";
+  const titlePending = pending && !(messageAvailability?.title ?? Boolean(title.trim()));
+  const descriptionPending = pending && !(messageAvailability?.description ?? Boolean(description.trim()));
+  const titleClassName = compact ? "min-h-5 text-[0.88em]" : "min-h-6 text-[0.94em]";
+  const descriptionClassName = compact ? "min-h-5 text-[0.76em] leading-4" : "min-h-7 text-[0.8em] leading-5";
   const committedAmendable = proposal?.status === "committed" && proposal.amendability?.status === "available";
   const committedOutsideProposal = proposal?.status === "unavailable"
     && proposal.unavailableReasonCode === "committed-outside-proposal";
@@ -128,6 +136,7 @@ export default function ThreadCheckpointCommitCard({
   return (
     <article
       aria-label="Checkpoint commit proposal"
+      aria-busy={pending || undefined}
       className={compact
         ? "w-full px-0 py-0"
         : embedded
@@ -153,18 +162,24 @@ export default function ThreadCheckpointCommitCard({
               </span>
             ) : null}
             <div className="min-w-0 flex-1">
-              <PlaintextEditable
-                ariaLabel="Commit title"
-                className={`${compact ? "min-h-5 text-[0.88em]" : "min-h-6 text-[0.94em]"} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
-                onChange={onTitleChange}
-                onKeyDown={commitFromEditable}
-                placeholder="Commit title"
-                readOnly={!editable}
-                value={title}
-              />
+              {titlePending ? (
+                <div className={`${titleClassName} flex items-center py-0.5`} aria-hidden="true">
+                  <span className="h-[1em] w-4/5 rounded workbench-skeleton" />
+                </div>
+              ) : (
+                <PlaintextEditable
+                  ariaLabel="Commit title"
+                  className={`${titleClassName} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
+                  onChange={onTitleChange}
+                  onKeyDown={commitFromEditable}
+                  placeholder="Commit title"
+                  readOnly={!editable}
+                  value={title}
+                />
+              )}
             </div>
           </div>
-          {editable || description.trim() ? (
+          {pending || editable || description.trim() ? (
             <div className="flex min-w-0 items-start gap-1">
               {descriptionWillChange ? (
                 <span aria-label="Commit description differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
@@ -172,15 +187,21 @@ export default function ThreadCheckpointCommitCard({
                 </span>
               ) : null}
               <div className="min-w-0 flex-1">
-                <PlaintextEditable
-                  ariaLabel="Commit description"
-                  className={`${compact ? "min-h-5 text-[0.76em] leading-4" : "min-h-7 text-[0.8em] leading-5"} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
-                  onChange={onDescriptionChange}
-                  onKeyDown={commitFromEditable}
-                  placeholder="Optional description"
-                  readOnly={!editable}
-                  value={description}
-                />
+                {descriptionPending ? (
+                  <div className={`${descriptionClassName} flex items-center py-0.5`} aria-hidden="true">
+                    <span className="h-[1em] w-3/5 rounded workbench-skeleton" />
+                  </div>
+                ) : (
+                  <PlaintextEditable
+                    ariaLabel="Commit description"
+                    className={`${descriptionClassName} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
+                    onChange={onDescriptionChange}
+                    onKeyDown={commitFromEditable}
+                    placeholder="Optional description"
+                    readOnly={!editable}
+                    value={description}
+                  />
+                )}
               </div>
             </div>
           ) : null}
@@ -200,7 +221,19 @@ export default function ThreadCheckpointCommitCard({
       ) : null}
 
       <div data-thread-checkpoint-card-changes="true">
-        <ThreadDisclosure
+        {pending && !paths.length ? (
+          <ThreadDisclosureStaticRow
+            className="mt-1.5 py-0.5"
+            marker={<span className="size-3 rounded workbench-skeleton" />}
+            summaryClassName="text-[0.82em] leading-[1.5]"
+            summary={(
+              <span className="flex min-w-0 items-center justify-between gap-3" aria-hidden="true">
+                <span className="h-[1em] w-1/2 rounded workbench-skeleton" />
+                {!compactPreview ? <span className="h-7 w-16 shrink-0 rounded-full workbench-skeleton" /> : null}
+              </span>
+            )}
+          />
+        ) : <ThreadDisclosure
           className="mt-1.5 py-0.5"
           contentClassName="mt-1 rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2"
           summary={(
@@ -273,8 +306,19 @@ export default function ThreadCheckpointCommitCard({
                       Try again
                     </button>
                   ) : <span className="text-[0.78em] text-[color:var(--danger)]">Unavailable</span>
+                ) : pending ? (
+                  !compactPreview ? <span className="h-7 w-16 rounded-full workbench-skeleton" aria-hidden="true" /> : null
                 ) : !compact || compactCanCommit ? (
-                  <PrimaryButton className={`!px-3 ${compact ? "!py-1" : "!py-1.5"} !text-[0.78rem]`} data-thread-checkpoint-commit-action="true" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
+                  <PrimaryButton
+                    className={`
+                      !px-3 ${compact ? "!py-1" : "!py-1.5"}
+                      !text-[0.78rem]
+                    `}
+                    data-thread-checkpoint-commit-action="true"
+                    disabled={!canCommit}
+                    onClick={onCommit}
+                    pendingHalo={committing}
+                  >
                     {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : commitLabel}
                   </PrimaryButton>
                 ) : null}
@@ -325,7 +369,7 @@ export default function ThreadCheckpointCommitCard({
               The arc&apos;s claimed changes will appear here.
             </p>
           )}
-        </ThreadDisclosure>
+        </ThreadDisclosure>}
       </div>
     </article>
   );

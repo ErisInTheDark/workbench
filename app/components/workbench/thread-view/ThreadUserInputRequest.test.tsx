@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect single-question framing, freeform and quick responses, and compact questionnaire preview, live, history, and hydrated drafts. Keywords: questionnaire, title, prompt, freeform, quick response, compact, preview, live, history, draft.
+ * No production exports. Tests protect questionnaire loading, framing, answer modes, and hydrated drafts.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -58,6 +58,17 @@ const freeformRequest = {
   }],
   title: "Choice",
 } satisfies WorkbenchUserInputRequest;
+
+test("loading questionnaires need no request or draft and expose no answer controls", () => {
+  for (const presentation of ["full", "compact"] as const) {
+    const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+      mode: "loading",
+      presentation,
+    }));
+    assert.match(html, /aria-busy="true"/u);
+    assert.doesNotMatch(html, /role="textbox"|contenteditable="(?:true|plaintext-only)"|<button|<input/iu);
+  }
+});
 
 test("freeform-only live questionnaire renders one prompted input and submit action in both layouts", () => {
   for (const presentation of ["full", "compact"] as const) {
