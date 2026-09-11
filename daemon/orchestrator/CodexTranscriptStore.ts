@@ -302,10 +302,6 @@ function keepIndexedTurns(thread: Thread, entries: CodexTranscriptThreadFile["tu
     : { ...thread, turns };
 }
 
-function getLatestTurnId(entries: CodexTranscriptThreadFile["turnIndex"], upstreamTurns: Turn[]) {
-  return upstreamTurns.at(-1)?.id ?? entries.at(-1)?.turnId ?? null;
-}
-
 function getPreviousTurnId(entries: CodexTranscriptThreadFile["turnIndex"], beforeTurnId: string) {
   const index = entries.findIndex((entry) => entry.turnId === beforeTurnId);
   if (index <= 0) {
@@ -1329,7 +1325,7 @@ export default class CodexTranscriptStore {
       : [
         hydration?.mode === "previous"
           ? getPreviousTurnId(turnIndex, hydration.beforeTurnId)
-          : getLatestTurnId(turnIndex, indexedThread.turns),
+          : turnIndex.at(-1)?.turnId,
       ].filter((turnId): turnId is string => Boolean(turnId));
     const selectedTurnIds = new Set(requestedTurnIds);
     const selectedStoredTurnFiles = requestedTurnIds.length

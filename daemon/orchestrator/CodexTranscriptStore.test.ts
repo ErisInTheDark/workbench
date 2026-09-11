@@ -295,6 +295,24 @@ test("provider catalogs remain unloaded until one exact turn page materializes",
   assert.equal(await store.readProviderPreviousCursor("thread", "older"), null);
 }));
 
+test("latest windows follow merged chronology when provider pages omit newer stored turns", async () => withStore(async (store) => {
+  const earlier = transcriptTurn("earlier", ["earlier-item"]);
+  const latest = transcriptTurn("latest", ["response", "replacement-plan"]);
+  await store.recordHydratedThreadSnapshot({ id: 1, result: { thread: snapshot([earlier, latest]) } });
+  const read = async (turns: Thread["turns"], hydration: { mode: "latest" } | { mode: "previous"; beforeTurnId: string }) => {
+    const result = await store.hydrateThreadResponse(
+      { id: 2, method: "thread/read", params: { threadId: "thread" } },
+      { id: 2, result: { thread: snapshot(turns) } },
+      { hydration },
+    );
+    return (result.result as { thread: Thread }).thread.turns;
+  };
+  assert.deepEqual(await read([earlier], { mode: "latest" }), [latest]);
+  assert.deepEqual(await read([earlier], { mode: "previous", beforeTurnId: "latest" }), [earlier]);
+  const next = transcriptTurn("next", ["new-message"]);
+  assert.deepEqual(await read([next], { mode: "latest" }), [next]);
+}));
+
 test("partial provider catalogs preserve omitted stored turns and their content", async () => withStore(async (store) => {
   const stored = transcriptTurn("stored", ["stored-item"]);
   const latest = transcriptTurn("new", ["new-item"]);
