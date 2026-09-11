@@ -133,48 +133,6 @@ test("transcript client uses operation identities but never trusts their matchin
   client.dispose();
 });
 
-test("parity reporting uses its registered operation and conforms the acknowledgement", async () => {
-  const reports: WorkbenchTranscriptConformanceReport[] = [];
-  const requests: Array<{ method: string; params: unknown }> = [];
-  let receiveNotification: ((notification: { method: string; params: unknown }) => void) | undefined;
-  const diagnostic = {
-    threadId: "thread",
-    scope: "item" as const,
-    mismatch: "payload" as const,
-    jsonContext: [],
-    sqliteContext: [],
-  };
-  const client = new WorkbenchTranscriptClient({
-    reportConformance: (report) => reports.push(report),
-    transport: {
-      onNotification: (listener) => {
-        receiveNotification = listener;
-        return () => undefined;
-      },
-      request: async (method, params) => {
-        requests.push({ method, params });
-        return { reported: true, futureField: true };
-      },
-    },
-  });
-  receiveNotification?.({
-    method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1 },
-  });
-
-  await client.reportParity(diagnostic);
-  assert.deepEqual(requests, [{
-    method: workbenchTranscriptOperations.reportParity.method,
-    params: diagnostic,
-  }]);
-  assert.deepEqual(reports, [{
-    issues: [],
-    method: workbenchTranscriptOperations.reportParity.method,
-    repairedPaths: [["futureField"]],
-  }]);
-  client.dispose();
-});
-
 test("transcript client ignores a method-matched malformed notification after bounded reporting", async () => {
   let receiveNotification: ((notification: { method: string; params: unknown }) => void) | undefined;
   const reports: WorkbenchTranscriptConformanceReport[] = [];

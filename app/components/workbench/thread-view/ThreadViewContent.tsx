@@ -8,7 +8,6 @@ import { useWorkbenchThread } from "../use-workbench-thread";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import type { WorkbenchTranscriptModeValue } from "workbench-shared/state/workbench-client-state";
 import type {
   ThreadPayload,
   WorkbenchBrowseResultEntry,
@@ -86,7 +85,6 @@ import ThreadLiveActivity, { type LiveThreadActivity } from "./ThreadLiveActivit
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadTranscript from "./ThreadTranscript";
-import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
   getCurrentThreadReasoningActivity,
@@ -354,7 +352,6 @@ export default memo(function ThreadViewContent ({
   threadCodeBlockWrap,
   threadComposerDraft,
   threadComposerDraftsByThreadId,
-  transcriptMode = "json",
   rootTarget,
   threadTarget,
   viewInstanceKey = rootTarget.kind === "draft" ? rootTarget.draftId : rootTarget.threadId,
@@ -393,7 +390,6 @@ export default memo(function ThreadViewContent ({
   threadCodeBlockWrap: boolean;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
-  transcriptMode?: WorkbenchTranscriptModeValue;
   rootTarget: Exclude<WorkbenchThreadTarget, { kind: "new" }>;
   threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
@@ -490,7 +486,8 @@ export default memo(function ThreadViewContent ({
     [activeThread],
   );
   const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
-  const activeTranscriptSource = transcriptMode !== "json"
+  const usesSqlTranscript = activeThread?.harness === "codex" && !activeThread.isDraft;
+  const activeTranscriptSource = usesSqlTranscript
     && renderActiveThread
     && "threadId" in transcriptSource
     && transcriptSource.threadId === renderActiveThread.id
@@ -500,12 +497,12 @@ export default memo(function ThreadViewContent ({
     && "projection" in activeTranscriptSource
     ? activeTranscriptSource.projection
     : null;
-  const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id, transcriptMode]);
+  const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id]);
   const renderedHistoryTurnIds = useMemo(() => (
-    transcriptMode !== "json"
+    usesSqlTranscript
       ? activeTranscriptProjection?.turns ?? []
       : renderActiveThread?.turns ?? []
-  ).map(({ id }) => id), [activeTranscriptProjection?.turns, renderActiveThread?.turns, transcriptMode]);
+  ).map(({ id }) => id), [activeTranscriptProjection?.turns, renderActiveThread?.turns, usesSqlTranscript]);
   const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeHarnessUserInputRequest = activeThread
     ? activeThreadController.state.pendingQuestionnaire
@@ -513,12 +510,17 @@ export default memo(function ThreadViewContent ({
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
+  const activityTurn = useMemo(() => {
+    if (!usesSqlTranscript) return currentTurn;
+    const turn = activeTranscriptProjection?.turns.at(-1);
+    return turn ? {
+      ...turn,
+      items: turn.items.filter((item): item is ThreadPayload["turns"][number]["items"][number] => (
+        item.type !== "generic" && !("requestKey" in item)
+      )),
+    } : null;
+  }, [activeTranscriptProjection, currentTurn, usesSqlTranscript]);
   const visibleHistoryEntries = useMemo(() => renderActiveThread ? getThreadVisibleHistoryEntries(renderActiveThread) : [], [renderActiveThread]);
-  const visibleLoadedTurnIds = useMemo(() => new Set(
-    visibleHistoryEntries
-      .filter((entry) => entry.loadState === "loaded")
-      .map((entry) => entry.turnId),
-  ), [visibleHistoryEntries]);
   const pageBoundaryIndex = renderActiveThread?.nextPageCursor
     ? visibleHistoryEntries.findIndex((entry) => entry.turnId === renderActiveThread.nextPageCursor)
     : -1;
@@ -536,8 +538,8 @@ export default memo(function ThreadViewContent ({
   );
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
-    turn: currentTurn,
-  }), [activePendingUserInputRequest, currentTurn]);
+    turn: activityTurn,
+  }), [activePendingUserInputRequest, activityTurn]);
   const hiddenDynamicToolCallItemIds = useMemo(() => {
     if (!currentTurn || activePendingUserInputRequest?.harness !== "opencode") {
       return EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
@@ -684,7 +686,7 @@ export default memo(function ThreadViewContent ({
           viewport,
           boundaryKey: previousTurnLoadKey || null,
           requestStatus: previousTurnLoadStatus,
-          sourceReady: transcriptMode === "json" || activeTranscriptSource?.status === "ready",
+          sourceReady: !usesSqlTranscript || activeTranscriptSource?.status === "ready",
           renderedTurnIds: renderedHistoryTurnIds,
           nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
             && sentinelRect.bottom > viewportRect.top - 160 && sentinelRect.top < viewportRect.bottom),
@@ -1102,7 +1104,7 @@ export default memo(function ThreadViewContent ({
         ) : null}
 
         <div hidden={isDraftThreadView}>
-          {activeThread && transcriptMode !== "json" && renderActiveThread && previousTurnEntry ? (
+          {activeThread && usesSqlTranscript && renderActiveThread && previousTurnEntry ? (
             previousTurnLoadStatus === "loading" ? (
               <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
             ) : previousTurnLoadStatus === "failed" ? (
@@ -1113,30 +1115,8 @@ export default memo(function ThreadViewContent ({
             ) : null
           ) : null}
           {activeThread ? (
-            transcriptMode !== "json" && renderActiveThread ? (
+            usesSqlTranscript && renderActiveThread ? (
               activeTranscriptProjection ? (
-                transcriptMode === "compare" ? (
-                  <>
-                    {canLoadPreviousTurn ? (
-                      <div ref={setHistorySentinel} className="h-px" aria-hidden="true" />
-                    ) : null}
-                    <ThreadTranscriptComparison
-                      hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
-                      inlineMentionSources={inlineMentionSources}
-                      jsonBrowseResultEntries={activeThreadBrowseResultEntries}
-                      jsonThread={renderActiveThread}
-                      knownSkills={workbenchSkills}
-                      projectFilePaths={projectFilePaths}
-                      projectId={projectId}
-                      projectRootPath={projectRootPath}
-                      relatedThreadsById={relatedThreadsById}
-                      sqliteProjection={activeTranscriptProjection}
-                      subagents={subagents}
-                      visibleTurnIds={visibleLoadedTurnIds}
-                      workspaceRoots={workspaceFileLinkRoots}
-                    />
-                  </>
-                ) : (
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
@@ -1155,7 +1135,6 @@ export default memo(function ThreadViewContent ({
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
                   />
-                )
               ) : (
                 transcriptSourceMessage ? (
                   <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted">
@@ -1204,14 +1183,14 @@ export default memo(function ThreadViewContent ({
             </div>
           )}
         </div>
-        {liveActivity && activeThread && currentTurn ? (
+        {liveActivity && activeThread && activityTurn ? (
           <ThreadLiveActivity
             activity={liveActivity}
             inlineMentionSources={inlineMentionSources}
             isOpen={isLiveActivityOpen}
             onOpenChange={persistLiveActivityOpen}
             presentationSource={{
-              kind: "json",
+              kind: usesSqlTranscript ? "sqlite" : "json",
               sourceKey: `${activeThread.harness}:${activeThread.id}`,
             }}
             projectFilePaths={projectFilePaths}
@@ -1219,7 +1198,7 @@ export default memo(function ThreadViewContent ({
             projectRootPath={projectRootPath}
             threadCwdPath={activeThread.cwd}
             threadId={activeThread.id}
-            turnId={currentTurn.id}
+            turnId={activityTurn.id}
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}

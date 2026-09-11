@@ -130,7 +130,6 @@ import {
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
-import reconcileTranscriptProjectionWithLiveThread from "./transcript/reconcile-transcript-projection-with-live-thread";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
@@ -934,12 +933,7 @@ function WorkbenchThreadClient(
               textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
               if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
             },
-            reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
-              mergeLiveTurn: (incoming, live) => mergeLiveStreamingTurn(incoming, live, { settleStreamingKeys: false }),
-              projection, thread: selection.thread,
-            }),
             transcripts: {
-              reportParity: diagnostic => transcripts.reportParity(diagnostic),
               subscribe: (params, listener, streamListener) => transcripts.subscribe(params, listener, streamListener),
               unsubscribe: async params => {
                 // Closing this client closes the shared socket and releases all server subscriptions.

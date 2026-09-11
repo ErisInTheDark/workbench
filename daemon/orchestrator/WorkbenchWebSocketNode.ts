@@ -22,7 +22,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       stats: build.get("stats"),
       threadState: build.get("threadState").controller,
       transcript: build.get("transcript"),
-      transcriptShadowLog: build.get("transcriptShadowLog"),
     });
     controller.suspend();
     return {
@@ -45,7 +44,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog"],
+  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadIdentity", "transcriptIdentity", "transcript"],
   safeAll: true,
   scope: "server:websocket",
   sources: [

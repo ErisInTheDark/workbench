@@ -2,7 +2,6 @@
  * createSteerHistoryEntryFromRequest: admit one typed Workbench steer from a Codex request. Keywords: codex, transcript, steer, admission.
  * readSteerHistoryRequest: parse steer correlation without allocating transcript identity. Keywords: codex, steer, correlation.
  * getJsonRpcErrorMessage: read one bounded JSON-RPC steer failure. Keywords: codex, transcript, steer, error.
- * getNextSteerDispatchSequence: derive the next durable native-steer order. Keywords: codex, transcript, steer, order.
  * hasNativeSteerReconciliationEvidence: identify provider turns that can settle native steers. Keywords: codex, transcript, steer, provider.
  * reconcileNativeSteerEntriesForTurns: apply provider user-message and interruption evidence to native steers. Keywords: codex, transcript, steer, reconcile.
  * sortSteerEntries: order native and legacy steer history deterministically. Keywords: codex, transcript, steer, order.
@@ -20,7 +19,6 @@ import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/co
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
-import type { CodexTranscriptThreadFile } from "./codex-transcript-types.ts";
 
 function readTextElements(value: unknown): Extract<UserInput, { type: "text" }>["text_elements"] | null {
   if (!Array.isArray(value)) return null;
@@ -180,14 +178,6 @@ export function updateSteerEntryStatus(
     resolvedAt,
     status,
   };
-}
-
-export function getNextSteerDispatchSequence(file: CodexTranscriptThreadFile) {
-  if (file.nextSteerDispatchSequence !== undefined) return file.nextSteerDispatchSequence;
-  return (file.steerEntries ?? []).reduce(
-    (next, entry) => Math.max(next, (entry.dispatchSequence ?? -1) + 1),
-    0,
-  );
 }
 
 export function updateNativeSteerEntriesForUserMessage(

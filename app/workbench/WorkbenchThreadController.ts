@@ -293,7 +293,7 @@ export default class WorkbenchThreadController {
     }
     if (native.document?.harness === "codex" && !native.document.isDraft) {
       this.transcript ??= this.ports.createTranscript(transcript => this.publish({ ...this.snapshot, transcript }));
-      this.transcript.controller.select({ thread: native.document, browseResultEntries: native.document.browseResultEntries ?? [] });
+      this.transcript.controller.select({ thread: native.document });
     }
   }
 

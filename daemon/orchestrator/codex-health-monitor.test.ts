@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect health arming, failure thresholds, and transition skips. Keywords: codex, health, test.
+ * No production exports. Tests protect health arming, failure thresholds, deadlines and independent dispatch.
  */
 
 import assert from "node:assert/strict";
@@ -44,7 +44,8 @@ test("health monitor arms on success and signals only after the configured failu
   monitor.dispose();
 });
 
-test("health requests use their deadline without waiting behind another internal response", async () => {
+test("health requests use their deadline without waiting behind another internal response", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-health-deadline-"));
   const sentRequests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
@@ -56,10 +57,13 @@ test("health requests use their deadline without waiting behind another internal
     sendToClient: () => undefined,
     storageRoot,
   });
-  await assert.rejects(
+  const deadline = assert.rejects(
     bridge.handleServerRequest({ id: "health", method: "account/read", params: {} }, { timeoutMs: 20 }),
     /timed out after 20ms/u,
   );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(20);
+  await deadline;
   const blockingRequest = bridge.handleServerRequest({ id: "blocking", method: "account/read", params: {} });
   void blockingRequest.catch(() => undefined);
   await Promise.resolve();

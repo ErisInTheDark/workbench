@@ -192,8 +192,6 @@ class FakeWebSocket {
       queueMicrotask(() => this.respond(request.id, { subscribed: true }));
     } else if (request.method === "workbench/transcript/unsubscribe") {
       queueMicrotask(() => this.respond(request.id, { unsubscribed: true }));
-    } else if (request.method === "workbench/transcript/parity/report") {
-      queueMicrotask(() => this.respond(request.id, { reported: true }));
     } else if (request.method === "workbench/thread-state/observe") {
       const target = request.params?.target as { threadId: string; harness?: string };
       queueMicrotask(() => this.respond(request.id, { observation: {

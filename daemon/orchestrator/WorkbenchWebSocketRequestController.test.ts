@@ -65,7 +65,6 @@ function createController(options: {
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
-  transcriptShadowLog?: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
@@ -106,7 +105,6 @@ function createController(options: {
       subscribe: async () => undefined,
       unsubscribe: () => undefined,
     },
-    transcriptShadowLog: options.transcriptShadowLog,
     writeLine: (line) => { lines.push(line); },
   });
   return { controller, lines };
@@ -568,32 +566,11 @@ test("transcript dispatch decodes the exact shared operation before calling the 
 test("transcript diagnostics log only decoded bounded evidence and acknowledge it", async () => {
   const clock = new FakeClock();
   const sent: unknown[] = [];
-  const shadowRecords: unknown[] = [];
-  const { controller, lines } = createController({
-    clock,
-    transcriptShadowLog: {
-      flush: async () => undefined,
-      write: (record) => { shadowRecords.push(record); },
-    },
-  });
+  const { controller, lines } = createController({ clock });
   const client = createClient((data, callback) => {
     sent.push(JSON.parse(String(data)));
     callback?.();
   });
-  const diagnostic = {
-    threadId: "thread",
-    scope: "item",
-    mismatch: "payload",
-    jsonContext: [{
-      id: "item",
-      index: 0,
-      kind: "item",
-      payloadSignature: "abc123",
-      turnId: "turn",
-      type: "agentMessage",
-    }],
-    sqliteContext: [],
-  };
   const conformance = {
     issues: [{ code: "invalidValue", path: ["rows", "threadItems", 2, "type"] }],
     method: "workbench/transcript/updated",
@@ -601,38 +578,20 @@ test("transcript diagnostics log only decoded bounded evidence and acknowledge i
   };
 
   await controller.handleMessage(client, "connection-1", frame("workbench/transcript/conformance/report", 1, {
-    params: conformance,
-  }), false);
-  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/parity/report", 2, {
-    params: diagnostic,
+    params: { ...conformance, receivedPayload: "private content" },
   }), false);
   assert.deepEqual(sent.filter((message) => typeof message === "object" && message !== null && "id" in message), [
     { id: 1, result: { reported: true } },
-    { id: 2, result: { reported: true } },
   ]);
-  assert.deepEqual(lines.filter((line) => line.startsWith("[workbench-transcript-parity]")), []);
-  assert.deepEqual(shadowRecords, [{
-    event: "conformance-mismatch",
-    fields: conformance,
-    level: "warning",
-    source: "workbench-transcript-conformance",
-  }, {
-    event: "parity-mismatch",
-    fields: {
-      jsonContext: diagnostic.jsonContext,
-      mismatch: diagnostic.mismatch,
-      scope: diagnostic.scope,
-      sqliteContext: diagnostic.sqliteContext,
-    },
-    level: "warning",
-    source: "workbench-transcript-parity",
-    threadId: "thread",
-  }]);
+  const evidence = lines.filter(line => line.startsWith("[workbench-transcript-conformance] "));
+  assert.equal(evidence.length, 1);
+  assert.deepEqual(JSON.parse(evidence[0]!.slice("[workbench-transcript-conformance] ".length)), conformance);
+  assert.ok(lines.every(line => !line.includes("private content")));
 
-  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/parity/report", 3, {
-    params: { ...diagnostic, threadId: "thread\nsecret" },
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/conformance/report", 3, {
+    params: { ...conformance, method: "thread\nsecret" },
   }), false);
-  assert.equal(lines.filter((line) => line.startsWith("[workbench-transcript-parity]")).length, 0);
+  assert.equal(lines.filter(line => line.startsWith("[workbench-transcript-conformance] ")).length, 1);
   assert.ok(sent.some((message) => typeof message === "object" && message !== null && "error" in message));
   controller.dispose();
 });

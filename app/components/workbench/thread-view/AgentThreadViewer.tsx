@@ -1,17 +1,19 @@
 /*
  * Exports:
- * - default AgentThreadViewer: read and poll one thread from the app-server bridge in a chrome-free page.
+ * - default AgentThreadViewer: show a chrome-free SQL Codex view or another provider's existing projection.
  */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { WorkbenchThreadResponse } from "workbench-shared/workbench/thread/workbench-thread-identity";
 import { isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
-import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
+import StandaloneThreadController from "../../../workbench/transcript/StandaloneThreadController";
+import ThreadTextPresentationContext from "../ThreadTextPresentationContext";
 import ThreadRenderSurface from "./ThreadRenderSurface";
 
 const ACTIVE_THREAD_REFRESH_INTERVAL_MS = 1500;
@@ -52,26 +54,46 @@ async function readStandaloneThreadPayload(
     throw new Error(`${response.error.message}${detail}`);
   }
 
-  const payload = toThreadPayload(response.result.thread, harness);
-  if (harness !== "codex") {
-    return payload;
-  }
+  return toThreadPayload(response.result.thread, harness);
+}
 
-  const screenshotResponse = await client.sendRequest<{ data?: WorkbenchBrowseResultEntry[] }>({
-    method: "browse/result/list",
-    params: {
-      threadId,
-    },
-    workbenchHarness: harness,
-  }).catch(() => null);
-  if (!screenshotResponse || isCodexJsonRpcFailure(screenshotResponse)) {
-    return payload;
-  }
+const emptySubscribe = () => () => undefined;
+const emptySnapshot = () => null;
 
-  return {
-    ...payload,
-    browseResultEntries: screenshotResponse.result.data ?? [],
-  };
+function SqlThreadViewer({ threadId }: { threadId: string }) {
+  const [controller, setController] = useState<StandaloneThreadController | null>(null);
+  useEffect(() => {
+    const owner = new StandaloneThreadController(threadId);
+    setController(owner);
+    void owner.refresh();
+    return () => owner.dispose();
+  }, [threadId]);
+  const state = useSyncExternalStore(controller?.subscribe ?? emptySubscribe, controller?.getSnapshot ?? emptySnapshot, emptySnapshot);
+  const source = state?.source;
+  const projection = source?.status === "ready" || source?.status === "loading" ? source.projection : null;
+  const error = state?.error ?? (source?.status === "failed" ? source.message : null);
+  return (
+    <ThreadTextPresentationContext value={controller?.text ?? null}>
+      {error ? (
+        <div role="alert" className="mx-auto max-w-[56rem] px-5 pt-5 text-danger md:px-6">
+          <p>{error}</p>
+          <button type="button" className="rounded px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" onClick={() => void controller?.refresh()}>Retry</button>
+        </div>
+      ) : null}
+      <ThreadRenderSurface
+        thread={state?.thread}
+        emptyMessage={error ? "" : source?.status === "unavailable"
+          ? "Waiting for the transcript connection..."
+          : source?.status === "absent" ? "No thread activity was captured yet." : "Loading thread..."}
+        sql={{
+          projection,
+          loading: state?.loading ?? true,
+          canLoadPrevious: state?.nextCursor != null,
+          loadPrevious: () => { void controller?.loadPrevious(); },
+        }}
+      />
+    </ThreadTextPresentationContext>
+  );
 }
 
 export default function AgentThreadViewer({
@@ -102,6 +124,7 @@ export default function AgentThreadViewer({
   }, [initialThreadId, locationPathname, locationSearch]);
 
   useEffect(() => {
+    if (locationOptions.harness === "codex") return;
     if (!locationOptions.threadId) {
       setThread(null);
       setStatus("idle");
@@ -162,6 +185,8 @@ export default function AgentThreadViewer({
             Add a thread id to the URL, such as <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread/&lt;threadId&gt;</code> or <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread?threadId=&lt;threadId&gt;</code>.
           </p>
         </div>
+      ) : locationOptions.harness === "codex" ? (
+        <SqlThreadViewer key={locationOptions.threadId} threadId={locationOptions.threadId} />
       ) : (
         <>
           {status === "failed" ? (

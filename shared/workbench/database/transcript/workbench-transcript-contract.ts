@@ -2,7 +2,7 @@
  * transcriptSnapshotTables/WorkbenchTranscriptSnapshotRows: one table-selection owner for transcript snapshot types and conformance. Keywords: transcript, database, schema, snapshot.
  * WorkbenchTranscriptSnapshot/conformWorkbenchTranscriptSnapshot: shared relational transcript wire shape and schema-derived browser conformance. Keywords: transcript, browser, compatibility.
  * WorkbenchTranscriptOperation/workbenchTranscriptOperations: shared typed request and response operation registry. Keywords: transcript, websocket, protocol.
- * WorkbenchTranscriptConformanceReport/WorkbenchTranscriptParityDiagnostic: bounded structural and semantic mismatch evidence safe for browser-to-orchestrator logging. Keywords: transcript, conformance, parity, diagnostic.
+ * WorkbenchTranscriptConformanceReport: bounded structural mismatch evidence for browser-to-orchestrator logging.
  * WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: exact server dispatch union decoded by the shared registry. Keywords: transcript, websocket, request.
  * workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: shared notification identities and payload conformance. Keywords: transcript, websocket, capability, notification.
  * WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: conformed incremental presentation notifications.
@@ -83,41 +83,6 @@ export interface WorkbenchTranscriptReadRequest {
   threadId: string;
   turnIds?: string[];
   turnLimit: number;
-}
-
-export type WorkbenchTranscriptParityScope =
-  | "browse"
-  | "display"
-  | "item"
-  | "projection"
-  | "timeline"
-  | "turn";
-
-export type WorkbenchTranscriptParityMismatch =
-  | "extra"
-  | "missing"
-  | "order"
-  | "ownership"
-  | "payload"
-  | "projectionFailure"
-  | "segment"
-  | "type";
-
-export interface WorkbenchTranscriptParityContextEntry {
-  id: string;
-  index: number;
-  kind: "browse" | "item" | "segment" | "turn";
-  payloadSignature: string;
-  turnId: string | null;
-  type: string;
-}
-
-export interface WorkbenchTranscriptParityDiagnostic {
-  jsonContext: WorkbenchTranscriptParityContextEntry[];
-  mismatch: WorkbenchTranscriptParityMismatch;
-  scope: WorkbenchTranscriptParityScope;
-  sqliteContext: WorkbenchTranscriptParityContextEntry[];
-  threadId: string;
 }
 
 export interface WorkbenchTranscriptConformanceReport {
@@ -228,8 +193,7 @@ export interface WorkbenchTranscriptOperation<
   readonly conformResult: (value: unknown) => DatabaseConformanceResult<Result>;
 }
 
-const PARITY_CONTEXT_LIMIT = 7;
-const PARITY_TEXT_LIMIT = 200;
+const DIAGNOSTIC_TEXT_LIMIT = 200;
 const CONFORMANCE_ENTRY_LIMIT = 64;
 const CONFORMANCE_PATH_LIMIT = 8;
 const conformanceIssueCodes = new Set<DatabaseConformanceIssue["code"]>([
@@ -237,13 +201,11 @@ const conformanceIssueCodes = new Set<DatabaseConformanceIssue["code"]>([
   "invalidValue",
   "missingRequired",
 ]);
-const parityScopes = new Set<WorkbenchTranscriptParityScope>(["browse", "display", "item", "projection", "timeline", "turn"]);
-const parityMismatches = new Set<WorkbenchTranscriptParityMismatch>(["extra", "missing", "order", "ownership", "payload", "projectionFailure", "segment", "type"]);
 
 function boundedDiagnosticText(value: unknown) {
   return typeof value === "string"
     && value.length > 0
-    && value.length <= PARITY_TEXT_LIMIT
+    && value.length <= DIAGNOSTIC_TEXT_LIMIT
     && !/[\u0000-\u001f\u007f]/u.test(value)
     ? value
     : null;
@@ -313,67 +275,6 @@ function decodeConformanceReport(value: unknown): DecodeResult<WorkbenchTranscri
   };
 }
 
-function decodeParityContext(value: unknown): DecodeResult<WorkbenchTranscriptParityContextEntry[]> {
-  if (!Array.isArray(value) || value.length > PARITY_CONTEXT_LIMIT) {
-    return { success: false, message: "Transcript parity context must be a bounded array." };
-  }
-  const entries: WorkbenchTranscriptParityContextEntry[] = [];
-  for (const candidate of value) {
-    if (!isRecord(candidate)) return { success: false, message: "Transcript parity context entries must be objects." };
-    const id = boundedDiagnosticText(candidate.id);
-    const payloadSignature = boundedDiagnosticText(candidate.payloadSignature);
-    const type = boundedDiagnosticText(candidate.type);
-    const turnId = candidate.turnId === null
-      ? null
-      : boundedDiagnosticText(candidate.turnId) ?? undefined;
-    const index = candidate.index;
-    const kind = candidate.kind;
-    if (
-      id === null
-      || payloadSignature === null
-      || type === null
-      || turnId === undefined
-      || typeof index !== "number"
-      || !Number.isSafeInteger(index)
-      || index < 0
-      || (kind !== "browse" && kind !== "item" && kind !== "segment" && kind !== "turn")
-    ) {
-      return { success: false, message: "Transcript parity context contains an invalid entry." };
-    }
-    entries.push({ id, index, kind, payloadSignature, turnId, type });
-  }
-  return { success: true, data: entries };
-}
-
-function decodeParityDiagnostic(value: unknown): DecodeResult<WorkbenchTranscriptParityDiagnostic> {
-  if (!isRecord(value)) return { success: false, message: "Transcript parity params must be an object." };
-  const threadId = boundedDiagnosticText(value.threadId);
-  const scope = value.scope;
-  const mismatch = value.mismatch;
-  const jsonContext = decodeParityContext(value.jsonContext);
-  const sqliteContext = decodeParityContext(value.sqliteContext);
-  if (
-    threadId === null
-    || typeof scope !== "string"
-    || !parityScopes.has(scope as WorkbenchTranscriptParityScope)
-    || typeof mismatch !== "string"
-    || !parityMismatches.has(mismatch as WorkbenchTranscriptParityMismatch)
-    || !jsonContext.success
-    || !sqliteContext.success
-  ) {
-    return { success: false, message: "Transcript parity params are invalid or unbounded." };
-  }
-  return {
-    success: true,
-    data: {
-      threadId,
-      scope: scope as WorkbenchTranscriptParityScope,
-      mismatch: mismatch as WorkbenchTranscriptParityMismatch,
-      jsonContext: jsonContext.data,
-      sqliteContext: sqliteContext.data,
-    },
-  };
-}
 function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadRequest> {
   if (!isRecord(value)) return { success: false, message: "Transcript read params must be an object." };
   const threadId = typeof value.threadId === "string" ? value.threadId.trim() : "";
@@ -497,12 +398,6 @@ const reportConformanceOperation = Object.freeze({
   WorkbenchTranscriptConformanceReport,
   { reported: true }
 >;
-const reportParityOperation = Object.freeze({
-  kind: "reportParity",
-  method: "workbench/transcript/parity/report",
-  decodeParams: decodeParityDiagnostic,
-  conformResult: conformLiteralResult("reported"),
-}) satisfies WorkbenchTranscriptOperation<"reportParity", "workbench/transcript/parity/report", WorkbenchTranscriptParityDiagnostic, { reported: true }>;
 const unsubscribeOperation = Object.freeze({
   kind: "unsubscribe",
   method: "workbench/transcript/unsubscribe",
@@ -513,7 +408,6 @@ const unsubscribeOperation = Object.freeze({
 export const workbenchTranscriptOperations = Object.freeze({
   read: readOperation,
   reportConformance: reportConformanceOperation,
-  reportParity: reportParityOperation,
   subscribe: subscribeOperation,
   unsubscribe: unsubscribeOperation,
 });
@@ -521,7 +415,6 @@ export const workbenchTranscriptOperations = Object.freeze({
 export type WorkbenchTranscriptRequest =
   | { kind: "read"; operation: typeof readOperation; params: WorkbenchTranscriptReadRequest }
   | { kind: "reportConformance"; operation: typeof reportConformanceOperation; params: WorkbenchTranscriptConformanceReport }
-  | { kind: "reportParity"; operation: typeof reportParityOperation; params: WorkbenchTranscriptParityDiagnostic }
   | { kind: "subscribe"; operation: typeof subscribeOperation; params: WorkbenchTranscriptSubscribeParams }
   | { kind: "unsubscribe"; operation: typeof unsubscribeOperation; params: WorkbenchTranscriptUnsubscribeParams };
 
@@ -545,12 +438,6 @@ export function decodeWorkbenchTranscriptRequest(
     const decoded = operation.decodeParams(params);
     return "data" in decoded
       ? { success: true, data: { kind: "reportConformance", operation, params: decoded.data } }
-      : { success: false, message: decoded.message };
-  }
-  if (operation.kind === "reportParity") {
-    const decoded = operation.decodeParams(params);
-    return "data" in decoded
-      ? { success: true, data: { kind: "reportParity", operation, params: decoded.data } }
       : { success: false, message: decoded.message };
   }
   if (operation.kind === "subscribe") {

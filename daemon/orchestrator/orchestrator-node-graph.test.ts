@@ -85,7 +85,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     provides: nodes.get("server:database")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog"],
+    provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript"],
   });
   assert.deepEqual({
     lifecycle: nodes.get("server:codex/instructions")!.lifecycle,
@@ -142,7 +142,6 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
     owners("daemon/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
     ["server:database"],
   );
-  assert.deepEqual(owners("daemon/orchestrator/CodexTranscriptStore.ts"), ["server:codex"]);
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
   assert.equal(descriptors.get("server:process")!.paths.includes("daemon/orchestrator/WorkbenchCoreNode.ts"), false);
 });

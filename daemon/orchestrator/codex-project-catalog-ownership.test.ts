@@ -12,6 +12,7 @@ import type { AgentEndpointProjectResolution } from "../lib/workbench/project/ag
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
+import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { JsonRpcRequest } from "./bridge-types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -69,6 +70,12 @@ async function createThreadReadHarness(
 ) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-thread-recall-"));
   const sentRequests: JsonRpcRequest[] = [];
+  const sqliteReader = new CodexSqliteTranscriptReader(async () => null, async () => null);
+  const sqlReads: string[] = [];
+  sqliteReader.read = async (metadata) => {
+    sqlReads.push(metadata.id);
+    return { thread: metadata, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
+  };
   let bridge!: CodexStdioBridge;
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -89,8 +96,9 @@ async function createThreadReadHarness(
     resolveProjectFromCwd,
     sendToClient: () => undefined,
     storageRoot,
+    sqliteReader,
   });
-  return { bridge, sentRequests, storageRoot };
+  return { bridge, sentRequests, storageRoot, sqlReads };
 }
 
 test("stable Codex bridge delegates subagent requests through the current feature owner", async () => {
@@ -119,7 +127,7 @@ test("stable Codex bridge delegates subagent requests through the current featur
   await bridge.disposeImmediately();
 });
 
-test("Thread Recall preflights current catalog ownership before legacy-full hydration", async () => {
+test("Thread Recall preflights current catalog ownership before SQL history", async () => {
   const resolvedBy: string[] = [];
   let currentOwner = "alpha";
   const harness = await createThreadReadHarness(async (cwd) => {
@@ -144,18 +152,20 @@ test("Thread Recall preflights current catalog ownership before legacy-full hydr
 
   assert.equal(firstResponse?.error, undefined);
   assert.equal(secondResponse?.error, undefined);
-  assert.deepEqual(resolvedBy, ["alpha", "beta"]);
+  assert.ok(resolvedBy.includes("alpha"));
+  assert.ok(resolvedBy.includes("beta"));
+  assert.deepEqual(harness.sqlReads, ["thread-1", "thread-1"]);
   assert.deepEqual(harness.sentRequests.map((request) => request.params), [
     { includeTurns: false, threadId: "thread-1" },
-    { includeTurns: true, threadId: "thread-1" },
     { includeTurns: false, threadId: "thread-1" },
-    { includeTurns: true, threadId: "thread-1" },
+    { includeTurns: false, threadId: "thread-1" },
+    { includeTurns: false, threadId: "thread-1" },
   ]);
   await harness.bridge.dispose();
   await fs.rm(harness.storageRoot, { force: true, recursive: true });
 });
 
-test("failed Thread Recall ownership validation prevents the legacy-full read", async () => {
+test("failed Thread Recall ownership validation prevents SQL history access", async () => {
   const harness = await createThreadReadHarness(async () => { throw new Error("Thread Recall cwd is unknown."); });
 
   const response = await harness.bridge.handleBridgeRequest({
@@ -166,6 +176,7 @@ test("failed Thread Recall ownership validation prevents the legacy-full read", 
   });
 
   assert.match(response?.error?.message ?? "", /cwd is unknown/u);
+  assert.deepEqual(harness.sqlReads, []);
   assert.deepEqual(harness.sentRequests.map((request) => request.params), [
     { includeTurns: false, threadId: "thread-1" },
   ]);

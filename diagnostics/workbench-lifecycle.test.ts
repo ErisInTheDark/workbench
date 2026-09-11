@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import IsolatedWorkbench from "./IsolatedWorkbench";
@@ -37,6 +38,9 @@ test("real application survives reload expiry, migrated candidate failure, retry
   console.log(`lifecycle fixture: ${runtime.root}`);
   const appDatabase = path.join(runtime.project, ".workbench/app/app-state.sqlite3");
   const serverDatabase = path.join(runtime.project, ".workbench/workbench.sqlite3");
+  const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
+  const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
+  const retainedContents = '{"retained":"lifecycle cutover evidence"}';
   const runtimePath = "/api/workbench-app-runtime?version=3";
   const http = async (route: string, init?: RequestInit) => {
     const response = await fetch(new URL(route, runtime.appOrigin), {
@@ -102,8 +106,13 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const captured = await captureThreadStateMigrationSource(path.resolve(process.cwd(), ".."), runtime.root);
     await verifyThreadStateMigrationSource(captured);
     const capturedCounts = await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
+    await fs.mkdir(legacyRoot, { recursive: true });
+    await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
     const verifyTranscript = async () => {
+      assert.equal(await fs.readFile(retainedFile, "utf8"), retainedContents, "Reload must preserve legacy evidence");
+      assert.deepEqual((await fs.readdir(legacyRoot, { recursive: true })).filter(file => /\.(?:json|jsonl|ndjson)$/u.test(file)),
+        [path.basename(retainedFile)], "SQL reads and reload must not create legacy transcript files");
       const request = { threadId: transcript.threadId, turnLimit: 1 };
       const snapshot = await runtime.transcripts.read(request);
       assert.ok(snapshot);

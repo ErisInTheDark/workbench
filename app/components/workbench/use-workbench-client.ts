@@ -50,6 +50,7 @@ import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workb
 import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
 import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
+import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import { useWorkbenchThread } from "./use-workbench-thread";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
@@ -166,7 +167,8 @@ export function useWorkbenchThreadTextPresentationField(
   explicitClient?: WorkbenchClientController,
 ) {
   const providedClient = useContext(WorkbenchClientContext);
-  const controller = (explicitClient ?? providedClient)?.mounted?.threadTextPresentation ?? null;
+  const standaloneText = useContext(ThreadTextPresentationContext);
+  const controller = (explicitClient ?? providedClient)?.mounted?.threadTextPresentation ?? standaloneText;
   const stableKey = useMemo<ThreadTextPresentationKey | null>(() => key ? {
     field: key.field,
     index: key.index,

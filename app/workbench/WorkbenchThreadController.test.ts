@@ -68,7 +68,7 @@ function fixture() {
         controller: new ThreadTranscriptProjectionController({
           onStateChange: publish, turnLimit: 4,
           transcripts: {
-            subscribe: async () => {}, unsubscribe: async () => {}, reportParity: async () => {},
+            subscribe: async () => {}, unsubscribe: async () => {},
           },
         }),
         stopAvailability: () => {},

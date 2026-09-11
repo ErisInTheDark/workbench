@@ -76,7 +76,6 @@ export async function recoverCodexSqliteTranscripts(
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
   boundarySources: [
-    "daemon/orchestrator/CodexTranscriptStore.ts",
     "daemon/orchestrator/codex-transcript-*.ts",
   ].join("\n"),
   children: [],
@@ -105,14 +104,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       while (persistence.size) await Promise.allSettled([...persistence]);
     };
     const reportRecoveryFailure = (threadId: string | null, error: unknown) => {
-      build.get("transcriptShadowLog").write({
-        event: "capture-recovery-failed",
-        fields: {
-          ...(threadId ? { threadId } : {}),
-          message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-        },
-        level: "error", source: "codex-transcript",
-      });
+      console.error("[codex-transcript] capture recovery failed", threadId,
+        (error instanceof Error ? error.message : String(error)).slice(0, 500));
     };
     const startRecovery = () => {
       if (recovery) return;
@@ -252,7 +245,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       onTranscriptLiveUpdate: update => transcript.acceptLiveUpdate?.(update),
       restartingAppServer: build.isReplacing("harness:codex"),
-      transcriptShadowLog: build.get("transcriptShadowLog"),
     });
     let releaseLiveBoundary: (() => void) | undefined;
     return {
@@ -326,7 +318,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
@@ -341,7 +333,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/workbench-agent-mcp-request-registry.ts",
     "daemon/orchestrator/CodexBridgeTransitionController.ts",
     "daemon/orchestrator/CodexRecoverySupervisor.ts",
-    "daemon/orchestrator/CodexTranscriptRecordingController.ts",
     "daemon/orchestrator/copilot-bridge.ts",
     "daemon/orchestrator/copilot-thread-state.ts",
   ].join("\n"),

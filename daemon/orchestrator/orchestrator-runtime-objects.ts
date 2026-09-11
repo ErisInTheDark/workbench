@@ -7,7 +7,6 @@
  * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle and typed statement registration.
  * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings.
  * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration.
- * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration.
  * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
 import * as project from "../lib/project";
@@ -80,7 +79,6 @@ import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
-import type WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 
 export type OrchestratorReloadableModules = {
@@ -174,7 +172,6 @@ export interface OrchestratorTranscriptRegistration {
   unsubscribe(id: string): void;
 }
 
-export type OrchestratorTranscriptShadowLog = Pick<WorkbenchTranscriptShadowLog, "flush" | "write">;
 
 export interface OrchestratorRuntimeObjects {
   agentCommand: WorkbenchAgentCommandController;
@@ -209,7 +206,6 @@ export interface OrchestratorRuntimeObjects {
   transcriptIdentity: WorkbenchTranscriptIdentityController;
   threadState: WorkbenchThreadStateFeature;
   transcript: OrchestratorTranscriptRegistration;
-  transcriptShadowLog: OrchestratorTranscriptShadowLog;
   turnRecovery: WorkbenchTurnRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

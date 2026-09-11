@@ -83,13 +83,6 @@ import {
     type MobilePane,
 } from "../workbench/state/mobile-pane-url-state";
 import {
-    canPersistWorkbenchTranscriptMode,
-    getNextWorkbenchTranscriptMode,
-    readWorkbenchTranscriptMode,
-    resolveWorkbenchTranscriptMode,
-    writeWorkbenchTranscriptMode,
-} from "../workbench/state/workbench-transcript-mode";
-import {
     createDefaultProjectWorkbenchSettings,
     MAX_EDITOR_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE,
@@ -209,7 +202,6 @@ import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/Workbe
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
-import WorkbenchTranscriptModeControl from "./workbench/WorkbenchTranscriptModeControl";
 
 installBrowserRandomUuidPolyfill();
 
@@ -488,22 +480,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [groupedSidebarProjects],
   );
   const currentThread = threads.current;
-  const transcriptMode = useMemo(
-    () => readWorkbenchTranscriptMode(clientState.records),
-    [clientState.records],
-  );
   const threadDocuments = threads.documents;
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [selectionError, setSelectionError] = useState("");
-  const rotateTranscriptMode = useCallback((nextMode: ReturnType<typeof getNextWorkbenchTranscriptMode>) => {
-    void writeWorkbenchTranscriptMode(
-      clientStateController,
-      nextMode,
-    ).catch((error: Error) => {
-      setSelectionError(error.message);
-    });
-  }, [clientStateController]);
   const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const controls = workbenchClient.controls;
   useEffect(() => {
@@ -1908,16 +1888,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
-  const canShowSelectedTranscriptMode = isDirectThreadSurface
-    && threadForThreadView?.harness === "codex"
-    && !threadForThreadView.isDraft;
-  const canPersistSelectedTranscriptMode = canPersistWorkbenchTranscriptMode(clientState.schemaVersion);
-  const effectiveTranscriptMode = canShowSelectedTranscriptMode
-    ? resolveWorkbenchTranscriptMode(transcriptMode, { includeComparison: !isMobile })
-    : "json";
-  const nextTranscriptMode = getNextWorkbenchTranscriptMode(effectiveTranscriptMode, {
-    includeComparison: !isMobile,
-  });
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -2947,14 +2917,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <span className="sr-only">Back to file explorer</span>
                     </WorkbenchIconButton>
                     <div className="flex items-center gap-1.5">
-                      {canShowSelectedTranscriptMode ? (
-                        <WorkbenchTranscriptModeControl
-                          disabled={!canPersistSelectedTranscriptMode}
-                          mode={effectiveTranscriptMode}
-                          nextMode={nextTranscriptMode}
-                          onRotate={rotateTranscriptMode}
-                        />
-                      ) : null}
                       <WorkbenchZoomButton
                         ref={zoomButtonRef}
                         label="Editor text size"
@@ -3036,7 +2998,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                      transcriptMode={effectiveTranscriptMode}
                       viewInstanceKey={threadViewInstanceKey}
                     />
                 ) : null}

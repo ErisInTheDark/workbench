@@ -17,10 +17,11 @@ function deferred() {
 }
 
 for (const mode of ["initial", "replacement"] as const) {
-  test(`${mode} bridge recovery runs without holding readiness and cancels on retirement`, async () => {
+  test(`${mode} bridge recovery runs without holding readiness and cancels on retirement`, async (t) => {
     const entered = deferred();
     const release = deferred();
     const failures: object[] = [];
+    t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
     let bridge!: CodexStdioBridge;
     let cancelled = false;
     let available = 0;
@@ -52,7 +53,6 @@ for (const mode of ["initial", "replacement"] as const) {
       codexHealth: { start() {} },
       harnesses: { recoverAvailable: async () => { available++; } },
       transcript: { pendingRecoveryThreadIds: ["thread"], cutoverFailure: null },
-      transcriptShadowLog: { write(entry: object) { failures.push(entry); } },
     } as unknown as OrchestratorRuntimeObjects;
     const instance = CodexBridgeNode.create({
       createCodexBridgeOptions: () => ({

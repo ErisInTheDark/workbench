@@ -1,13 +1,15 @@
 /*
  * Exports:
- * - default ThreadRenderSurface: render a ThreadPayload through the chrome-free Workbench thread renderer. Keywords: thread, standalone, render lab, command matcher.
+ * - default ThreadRenderSurface: render standalone SQL transcripts or existing provider/render-lab payloads.
  */
 "use client";
 
 import type { CSSProperties } from "react";
 
 import type { ThreadPayload, WorkbenchProjectRoot } from "workbench-shared/types";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ThreadThreadContent } from "./thread-view-items";
+import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 function createThreadProjectRoots(thread: ThreadPayload | null | undefined): WorkbenchProjectRoot[] {
   if (!thread?.cwd) {
@@ -29,12 +31,19 @@ export default function ThreadRenderSurface({
   flattenCompletedWork = false,
   fontSizeRem = 1,
   thread,
+  sql,
 }: {
   className?: string;
   emptyMessage?: string;
   flattenCompletedWork?: boolean;
   fontSizeRem?: number;
   thread: ThreadPayload | null | undefined;
+  sql?: {
+    projection: WorkbenchTranscriptProjection | null;
+    loading: boolean;
+    canLoadPrevious: boolean;
+    loadPrevious: () => void;
+  };
 }) {
   const projectRoots = createThreadProjectRoots(thread);
   const style = {
@@ -47,7 +56,30 @@ export default function ThreadRenderSurface({
       data-standalone-thread-render-surface="true"
       style={style}
     >
-      <ThreadThreadContent
+      {sql ? (
+        <>
+          {sql.canLoadPrevious ? (
+            <button type="button" className="mb-3 rounded px-2 py-1 text-muted hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text" disabled={sql.loading} onClick={sql.loadPrevious}>
+              {sql.loading ? "Loading..." : "Load older turns"}
+            </button>
+          ) : null}
+          {sql.projection ? (
+            <ThreadTranscriptProjection
+              projection={sql.projection}
+              canLoadPreviousTurn={false}
+              historySentinelRef={null}
+              knownSkills={[]}
+              projectFilePaths={[]}
+              projectId={sql.projection.thread.projectId}
+              projectRootPath={sql.projection.thread.projectRoot}
+              presentationSource={{ kind: "sqlite", sourceKey: `codex:${sql.projection.thread.id}` }}
+              relatedThreadsById={{}}
+              subagents={[]}
+              workspaceRoots={[]}
+            />
+          ) : <p className="text-muted">{emptyMessage}</p>}
+        </>
+      ) : <ThreadThreadContent
         browseResultEntries={thread?.browseResultEntries ?? []}
         defaultOpenCompletedWork
         emptyMessage={emptyMessage}
@@ -59,7 +91,7 @@ export default function ThreadRenderSurface({
         projectRoots={projectRoots}
         thread={thread}
         threadCwdPath={thread?.cwd}
-      />
+      />}
     </div>
   );
 }

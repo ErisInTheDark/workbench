@@ -56,49 +56,6 @@ test("transcript requests resolve exact shared operation values and decode their
   assert.equal(decodeWorkbenchTranscriptRequest("workbench/transcript/read/fake", {}), null);
 });
 
-test("parity reports admit only bounded content-free diagnostic context", () => {
-  const context = {
-    id: "item",
-    index: 0,
-    kind: "item",
-    payloadSignature: "abc123",
-    turnId: "turn",
-    type: "agentMessage",
-  };
-  const diagnostic = {
-    threadId: "thread",
-    scope: "item",
-    mismatch: "payload",
-    jsonContext: [context],
-    sqliteContext: [],
-  };
-  const decoded = decodeWorkbenchTranscriptRequest(
-    workbenchTranscriptOperations.reportParity.method,
-    diagnostic,
-  );
-  assert.equal(decoded?.success, true);
-  if (decoded?.success) {
-    assert.equal(decoded.data.operation, workbenchTranscriptOperations.reportParity);
-    assert.deepEqual(decoded.data.params, diagnostic);
-  }
-
-  assert.equal(decodeWorkbenchTranscriptRequest(
-    workbenchTranscriptOperations.reportParity.method,
-    { ...diagnostic, threadId: "thread\nsecret" },
-  )?.success, false);
-  assert.equal(decodeWorkbenchTranscriptRequest(
-    workbenchTranscriptOperations.reportParity.method,
-    {
-      ...diagnostic,
-      jsonContext: [{ ...context, turnId: "turn\nsecret" }],
-    },
-  )?.success, false);
-  assert.equal(decodeWorkbenchTranscriptRequest(
-    workbenchTranscriptOperations.reportParity.method,
-    { ...diagnostic, jsonContext: Array.from({ length: 8 }, () => context) },
-  )?.success, false);
-});
-
 test("conformance reports admit only bounded structural paths without payload values", () => {
   const diagnostic = {
     issues: [{ code: "invalidValue", path: ["rows", "threadItems", 2, "type"] }],

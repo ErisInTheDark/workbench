@@ -37,17 +37,12 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   let nativeThreadId: string | null = null;
   let controller: ThreadTranscriptProjectionController | null = null;
   const release = path.join(runtime.project, ".workbench", "release-transcript-gate");
-  const forbiddenReads = path.join(runtime.root, "forbidden-transcript-reads.log");
+  const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
+  const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
+  const retainedContents = `{"retained":"${randomUUID()}"}`;
   try {
-    // Only the copied recorder is fault-injected. Its writer remains unchanged.
-    await fs.appendFile(path.join(runtime.project, "daemon/orchestrator/CodexTranscriptStore.ts"), `
-for (const method of ["readStoredTurnSnapshot", "readStoredThreadSnapshot", "readStoredThreadWindow", "readThreadContextEntries", "readProviderPreviousCursor"] as const) {
-  CodexTranscriptStore.prototype[method] = async () => {
-    await fs.appendFile(${JSON.stringify(forbiddenReads)}, method + "\\n");
-    throw new Error("Live diagnostic forbids legacy transcript reads: " + method);
-  };
-}
-`);
+    await fs.mkdir(legacyRoot, { recursive: true });
+    await fs.writeFile(retainedFile, retainedContents);
     const gateProof = `gate-${randomUUID()}`;
     await fs.writeFile(path.join(runtime.project, ".workbench/transcript-gate.mjs"), `
 import { watch, existsSync } from "node:fs";
@@ -101,7 +96,6 @@ await new Promise((resolve, reject) => {
       observed.state.status === "ready" ? observed.state.projection : null
     );
     let transcriptSelection = {
-      browseResultEntries: [],
       thread: toThreadPayload({ ...started.thread, id: WorkbenchThreadIdSchema.parse(threadId) }),
     };
     controller = new ThreadTranscriptProjectionController({
@@ -110,7 +104,6 @@ await new Promise((resolve, reject) => {
       onStateChange: state => { observed.state = state; },
       onText: () => { observed.texts++; },
       transcripts: {
-        reportParity: params => runtime.transcripts.reportParity(params),
         unsubscribe: params => runtime.transcripts.unsubscribe(params),
         subscribe: async (params, _legacy, stream) => {
           try {
@@ -215,7 +208,9 @@ await new Promise((resolve, reject) => {
     assert.ok(reopenedProjection.success);
     assert.deepEqual(reopenedProjection.data.turns, projection.data.turns, "Cold reopening must preserve all visible turn items");
     healthy();
-    await assert.rejects(fs.access(forbiddenReads), { code: "ENOENT" }, "Legacy read attempts must fail even when caught by production code");
+    assert.equal(await fs.readFile(retainedFile, "utf8"), retainedContents, "Cutover must preserve retained legacy files");
+    assert.deepEqual((await fs.readdir(legacyRoot, { recursive: true })).filter(file => /\.(?:json|jsonl|ndjson)$/u.test(file)),
+      [path.basename(retainedFile)], "Live recording and cold reopen must not create JSON transcript files");
     console.log("live admission, CLI/MCP and transcript checks passed");
   } catch (error) {
     console.error("live diagnostic failed", error);

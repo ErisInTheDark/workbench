@@ -9,7 +9,6 @@ import {
   conformWorkbenchTranscriptStreamed,
   type WorkbenchTranscriptConformanceReport,
   type WorkbenchTranscriptOperation,
-  type WorkbenchTranscriptParityDiagnostic,
   type WorkbenchTranscriptReadRequest,
   type WorkbenchTranscriptSnapshot,
   type WorkbenchTranscriptSubscribeParams,
@@ -96,10 +95,6 @@ export default class WorkbenchTranscriptClient {
     return (await this.request(workbenchTranscriptOperations.read, {
       ...params, ...(this.protocolVersion !== null && this.protocolVersion >= 2 ? { protocolVersion: 2 as const } : {}),
     })).snapshot;
-  }
-
-  async reportParity(params: WorkbenchTranscriptParityDiagnostic) {
-    await this.request(workbenchTranscriptOperations.reportParity, params);
   }
 
   async subscribe(

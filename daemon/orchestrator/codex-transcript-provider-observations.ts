@@ -13,7 +13,6 @@
  * - createCodexTurnTokenUsageObservationFromNotification: decode native token notifications.
  * - readCodexUsageContext: decode resolved or overridden model settings.
  * - createCodexModelRerouteObservation: retain explicit mixed-model evidence.
- * - createCodexUsageImport: project retained usage journals without transcript bodies.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -24,9 +23,7 @@ import type {
   NativeTranscriptAtomicObservation,
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
-  NativeTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
-import type { CodexTranscriptRawEvent, CodexTranscriptTurnIndexEntry } from "./codex-transcript-types.ts";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
@@ -78,64 +75,6 @@ export function createCodexModelRerouteObservation(notification: JsonRpcNotifica
   return createCodexTurnUsageContextObservation({
     model, modelChanged: model !== fromModel, serviceTier: null, observedAt, threadId, turnId,
   });
-}
-
-export function createCodexUsageImport(input: {
-  context: CodexTranscriptProviderContext;
-  thread: Thread;
-  turnIndex: readonly CodexTranscriptTurnIndexEntry[];
-  events: readonly CodexTranscriptRawEvent[];
-}): Extract<NativeTranscriptObservation, { kind: "usageWindow" }> {
-  const threadId = NativeThreadIdSchema.parse(input.thread.id);
-  const catalog: Extract<NativeTranscriptAtomicObservation, { kind: "thread" | "turn" }>[] = [
-    createCodexTranscriptProviderThreadObservation(threadId, input.context),
-    ...input.turnIndex.map((turn, turnIndex): Extract<NativeTranscriptAtomicObservation, { kind: "turn" }> => ({
-      kind: "turn", threadId, turnId: NativeTurnIdSchema.parse(turn.turnId), turnIndex, harnessId: "codex",
-      nativeLocation: input.context.nativeLocation, nativeThreadId: threadId, nativeTurnId: NativeTurnIdSchema.parse(turn.turnId),
-      state: turn.status ?? "admitted", createdAt: Math.round((turn.startedAt ?? input.thread.createdAt) * 1_000),
-      startedAt: secondsToMilliseconds(turn.startedAt), endedAt: secondsToMilliseconds(turn.completedAt), durationMs: null,
-    })),
-  ];
-  const turns = new Set(input.turnIndex.map(({ turnId }) => turnId));
-  const observations: Extract<NativeTranscriptAtomicObservation, { kind: "turnUsageContext" | "turnTokenUsage" }>[] = [];
-  let context: ReturnType<typeof readCodexUsageContext> | null = null;
-  let activeTurnId: string | null = null;
-  for (const event of [...input.events].sort((left, right) => left.receivedAt - right.receivedAt)) {
-    const notification = event.payload as JsonRpcNotification;
-    const params = asRecord(notification.params);
-    if (asString(params?.threadId) !== threadId) throw new Error("Retained usage event crossed thread ownership");
-    if (event.method === "thread/settings/updated") {
-      const previous = context;
-      context = readCodexUsageContext(params?.threadSettings);
-      if (activeTurnId && (context.model !== previous?.model || context.serviceTier !== previous?.serviceTier)) {
-        observations.push(createCodexTurnUsageContextObservation({
-          ...context, observedAt: event.receivedAt, threadId, turnId: activeTurnId,
-          modelChanged: Boolean(previous?.model && context.model && previous.model !== context.model),
-        }));
-      }
-      continue;
-    }
-    if (event.method === "turn/started") {
-      const turnId = asString(asRecord(params?.turn)?.id);
-      if (!turnId || !turns.has(turnId)) throw new Error("Retained usage start references an unknown catalog turn");
-      activeTurnId = turnId;
-      if (context?.model) {
-        observations.push(createCodexTurnUsageContextObservation({ ...context, observedAt: event.receivedAt, threadId, turnId }));
-      }
-      continue;
-    }
-    if (event.method === "turn/completed") {
-      if (asString(asRecord(params?.turn)?.id) === activeTurnId) activeTurnId = null;
-      continue;
-    }
-    const observation = createCodexModelRerouteObservation(notification, event.receivedAt)
-      ?? createCodexTurnTokenUsageObservationFromNotification(notification, event.receivedAt);
-    if (observation) {
-      if (!turns.has(observation.turnId)) throw new Error("Retained usage event references an unknown catalog turn");
-      observations.push(observation);
-    }
-  }
-  return { kind: "usageWindow", threadId, catalog, observations };
 }
 
 export function createCodexTurnTokenUsageObservation(input: {

@@ -21,7 +21,6 @@ import {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type {
   OrchestratorTranscriptRegistration,
-  OrchestratorTranscriptShadowLog,
 } from "./orchestrator-runtime-objects";
 import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
@@ -138,7 +137,6 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   threadState: Pick<WorkbenchThreadStateController, "acceptIntent" | "disconnect" | "handleRequest">;
   transcript: Pick<OrchestratorTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
-  transcriptShadowLog?: OrchestratorTranscriptShadowLog;
   writeLine?: (line: string) => void;
 }
 
@@ -202,7 +200,6 @@ export default class WorkbenchWebSocketRequestController {
   private readonly stream: WorkbenchWebSocketStreamController;
   private readonly threadState: WorkbenchWebSocketRequestControllerOptions["threadState"];
   private readonly transcript: WorkbenchWebSocketRequestControllerOptions["transcript"];
-  private readonly transcriptShadowLog: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
   private readonly transcriptSubscriptions = new Map<string, WorkbenchWebSocketTranscriptSubscriptionState>();
   private readonly transcriptCapabilitiesAnnounced = new WeakSet<BridgeClient>();
   private readonly statsObservers = new Map<string, { client: BridgeClient; connectionId: string }>();
@@ -226,7 +223,6 @@ export default class WorkbenchWebSocketRequestController {
     stats,
     threadState,
     transcript,
-    transcriptShadowLog,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.cancel = cancel;
@@ -256,7 +252,6 @@ export default class WorkbenchWebSocketRequestController {
     });
     this.threadState = threadState;
     this.transcript = transcript;
-    this.transcriptShadowLog = transcriptShadowLog;
     this.writeLine = writeLine;
     this.stats = stats;
     for (const state of initialState?.pending ?? []) this.restorePending(state);
@@ -679,34 +674,7 @@ export default class WorkbenchWebSocketRequestController {
       };
     }
     if (request.kind === "reportConformance") {
-      this.transcriptShadowLog?.write({
-        event: "conformance-mismatch",
-        fields: {
-          issues: request.params.issues.map((issue) => ({
-            code: issue.code,
-            path: [...issue.path],
-          })),
-          method: request.params.method,
-          repairedPaths: request.params.repairedPaths.map((path) => [...path]),
-        },
-        level: "warning",
-        source: "workbench-transcript-conformance",
-      });
-      return { reported: true };
-    }
-    if (request.kind === "reportParity") {
-      this.transcriptShadowLog?.write({
-        event: "parity-mismatch",
-        fields: {
-          jsonContext: request.params.jsonContext.map((entry) => ({ ...entry })),
-          mismatch: request.params.mismatch,
-          scope: request.params.scope,
-          sqliteContext: request.params.sqliteContext.map((entry) => ({ ...entry })),
-        },
-        level: "warning",
-        source: "workbench-transcript-parity",
-        threadId: request.params.threadId,
-      });
+      this.writeLine(`[workbench-transcript-conformance] ${JSON.stringify(request.params)}`);
       return { reported: true };
     }
     const { subscriptionId } = request.params;

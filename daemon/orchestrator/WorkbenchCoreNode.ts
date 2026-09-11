@@ -27,7 +27,6 @@ import type {
   OrchestratorReloadableModules,
   OrchestratorRuntimeObjects,
   OrchestratorTranscriptRegistration,
-  OrchestratorTranscriptShadowLog,
 } from "./orchestrator-runtime-objects";
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
@@ -48,7 +47,6 @@ import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotContro
 import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
-import { WorkbenchStatsHydrationResultSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
@@ -98,15 +96,6 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       id: "codex",
       internal: ports.codex,
       recovery: createRecoveryCapability("codex", controller),
-      usageHydration: async ({ threadId }) => {
-        const response = await ports.codex.request({
-          id: `workbench:stats:hydrate:${threadId}`,
-          method: "workbench/stats/usage/hydrate",
-          params: { threadId },
-        });
-        if (response.error) throw new Error(response.error.message);
-        return WorkbenchStatsHydrationResultSchema.parse(response.result);
-      },
       serverMethods: [
         "workbench/codex/message/admit",
         "thread/context/read",
@@ -142,7 +131,6 @@ function createWorkbenchCoreFeature(
   database: OrchestratorDatabaseRegistration,
   codexSandboxNetwork: OrchestratorRuntimeObjects["codexSandboxNetwork"],
   transcript: Pick<OrchestratorTranscriptRegistration, "read">,
-  transcriptShadowLog: OrchestratorTranscriptShadowLog,
   threadIdentity: OrchestratorRuntimeObjects["threadIdentity"],
   transcriptIdentity: OrchestratorRuntimeObjects["transcriptIdentity"],
   initialCatalog?: WorkbenchProjectsPayload,
@@ -175,12 +163,7 @@ function createWorkbenchCoreFeature(
   });
   const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot, database);
   const logThreadStateWarning = (message: string) => {
-    transcriptShadowLog.write({
-      event: "thread-state",
-      fields: { message: message.slice(0, 500) },
-      level: "warning",
-      source: "thread-state-ws",
-    });
+    console.warn("[thread-state-ws]", message.slice(0, 500));
   };
   const gitArc = new WorkbenchGitArcFeature({
     identities: threadIdentity,
@@ -243,12 +226,7 @@ function createWorkbenchCoreFeature(
     database,
     harnesses,
     log: (message) => {
-      transcriptShadowLog.write({
-        event: "stats",
-        fields: { message: message.slice(0, 500) },
-        level: "warning",
-        source: "stats",
-      });
+      console.warn("[stats]", message.slice(0, 500));
     },
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
@@ -329,12 +307,7 @@ function createWorkbenchCoreFeature(
       return ProjectIdSchema.parse(resolved.project.id);
     }),
     logError: (message) => {
-      transcriptShadowLog.write({
-        event: "questionnaire",
-        fields: { message },
-        level: "error",
-        source: "questionnaire",
-      });
+      console.error("[questionnaire]", message.slice(0, 500));
     },
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
@@ -470,7 +443,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("database"),
     get("codexSandboxNetwork"),
     get("transcript"),
-    get("transcriptShadowLog"),
     get("threadIdentity"),
     get("transcriptIdentity"),
     handoffState as WorkbenchProjectsPayload | undefined,
@@ -478,7 +450,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["codexSandboxNetwork", "database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["codexSandboxNetwork", "database", "reloadDirt", "turnRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:core",
   sources: [

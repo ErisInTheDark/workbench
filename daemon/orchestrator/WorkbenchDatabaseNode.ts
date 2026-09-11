@@ -25,8 +25,6 @@ import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
-import WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
-import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string; beforeMigration?(backupPath: string): void },
@@ -116,7 +114,6 @@ export default new ReloadableNode<
       ".workbench",
       "workbench-transcript-capture-gap.json",
     );
-    const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
     const database = new DatabaseController({
       databasePath,
@@ -138,9 +135,6 @@ export default new ReloadableNode<
       },
     });
     const transcript = new TranscriptController(database, captureGaps);
-    const transcriptShadowLog = new WorkbenchTranscriptShadowLog(shadowLogPath, (error) => {
-      logError("workbench-transcript-shadow", `internal diagnostic log failed: ${error.message}`);
-    });
     let shutdownPromise: Promise<void> | null = null;
     let committed = build.mode !== "replacement";
     const shutdown = () => {
@@ -150,7 +144,6 @@ export default new ReloadableNode<
           () => transcript.dispose(),
           () => threadIdentity.dispose(),
           () => transcriptIdentity.dispose(),
-          () => transcriptShadowLog.flush(),
           () => committed ? database.close() : database.abortPreparation(),
         ]) {
           try { await close(); }
@@ -172,7 +165,6 @@ export default new ReloadableNode<
           waitForIdle: () => Promise.resolve(),
           expire: () => undefined,
           detach: async () => {
-            await transcriptShadowLog.flush();
             await database.suspend();
             return state;
           },
@@ -183,12 +175,10 @@ export default new ReloadableNode<
           commit: shutdown,
         };
       },
-      registrations: { codexSandboxNetwork, database, threadIdentity, transcriptIdentity, transcript, transcriptShadowLog },
+      registrations: { codexSandboxNetwork, database, threadIdentity, transcriptIdentity, transcript },
       start: async (_reportPhase, signal) => {
         signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
-        signal?.throwIfAborted();
-        await transcriptShadowLog.start();
         signal?.throwIfAborted();
         await transcript.start();
         signal?.throwIfAborted();
@@ -201,7 +191,7 @@ export default new ReloadableNode<
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
   lifecycle: "handoff",
-  provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog"],
+  provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript"],
   requires: [],
   safeAll: true,
   scope: "server:database",

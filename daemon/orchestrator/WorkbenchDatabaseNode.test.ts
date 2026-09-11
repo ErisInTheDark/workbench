@@ -36,12 +36,10 @@ test("the database node proves readiness before exposing transcript work and clo
   );
   const database = instance.registrations.database!;
   const transcript = instance.registrations.transcript!;
-  const transcriptShadowLog = instance.registrations.transcriptShadowLog!;
   try {
     await instance.start();
     database.assertReady();
     assert.equal(transcript.failure, null);
-    transcriptShadowLog.write({ event: "ready", level: "info", source: "test" });
 
     await instance.dispose();
     assert.equal(database.state, "closed");
@@ -52,7 +50,7 @@ test("the database node proves readiness before exposing transcript work and clo
   }
 });
 
-test("database retirement still closes its worker when diagnostic persistence fails", async () => {
+test("database retirement still closes its worker when transcript disposal fails", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-close-"));
   const instance = WorkbenchDatabaseNode.create(
     { legacyMigrationProjectRoot: directory } as OrchestratorProcessContext,
@@ -67,10 +65,12 @@ test("database retirement still closes its worker when diagnostic persistence fa
   const database = instance.registrations.database!;
   try {
     await instance.start();
-    instance.registrations.transcriptShadowLog!.flush = async () => {
-      throw new Error("diagnostic storage failed");
+    const disposeTranscript = instance.registrations.transcript!.dispose.bind(instance.registrations.transcript);
+    instance.registrations.transcript!.dispose = () => {
+      disposeTranscript();
+      throw new Error("transcript disposal failed");
     };
-    await assert.rejects(async () => await instance.dispose(), /diagnostic storage failed/u);
+    await assert.rejects(async () => await instance.dispose(), /transcript disposal failed/u);
     assert.equal(database.state, "closed");
   } finally {
     await database.close();
