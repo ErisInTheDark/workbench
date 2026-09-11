@@ -41,6 +41,7 @@ import type {
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchSteerHistoryEntry,
     WorkbenchThreadContextReadResponse,
+    WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -102,6 +103,7 @@ import {
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
 import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-event-routing";
+import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import {
   encodeTranscriptPathSegment,
   extractItem,
@@ -111,13 +113,14 @@ import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionA
 import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
+import type CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import CodexTranscriptRecordingController, {
   CodexTranscriptSqliteRecordingFailure,
 } from "./CodexTranscriptRecordingController";
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
 import { log, logError } from "./process-helpers";
 import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
-import { admitProviderNotifications, admitProviderThreads, mapProviderNotification } from "./thread-identity-provider-mapping";
+import { admitProviderNotifications, admitProviderThreads, mapProviderNotification, mapProviderThread } from "./thread-identity-provider-mapping";
 import type { TranscriptTextField, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import {
   admitNativeTranscriptObservations,
@@ -209,6 +212,8 @@ export type CodexStdioBridgeOptions = {
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
+  sqliteReader?: CodexSqliteTranscriptReader;
+  readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
   transcriptShadowLog?: OrchestratorTranscriptShadowLog;
 };
 
@@ -941,6 +946,8 @@ export default class CodexStdioBridge {
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
+  private readonly sqliteReader?: CodexSqliteTranscriptReader;
+  private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
   private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
   private generation = new AbortController();
@@ -981,7 +988,9 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
+    this.sqliteReader = sqliteReader;
+    this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
@@ -1440,11 +1449,13 @@ export default class CodexStdioBridge {
     const turns = await loader.recoverThread(thread, async ({ turn, previousCursor }) => {
       signal?.throwIfAborted();
       await this.captureTranscript(`sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
-        const normalized = (await this.persistTranscript(() => store.externalizeInlineImages(nativeThreadId, turn))).value;
+        const normalized = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(turn, { storageRoot: this.storageRoot, threadId: nativeThreadId }))).value;
         await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
           observations: [
             createCodexTranscriptProviderThreadObservation(nativeThreadId, context),
             createCodexTranscriptProviderTurnScopeObservation({ context, threadId: nativeThreadId, turn: normalized }),
+            { kind: "providerCursor", threadId: NativeThreadIdSchema.parse(nativeThreadId),
+              turnId: NativeTurnIdSchema.parse(turn.id), previousCursor },
           ],
           recordLegacy: () => store.recordProviderTurnPage(thread, turn, previousCursor),
         }));
@@ -1872,9 +1883,9 @@ export default class CodexStdioBridge {
         const store = this.ensureTranscriptStore();
         await this.persistTranscript(() => store.recordUpstreamResponse(pending.upstreamRequest, response, turnId));
         if (error || patch) return;
-        const accepted = (await this.persistTranscript(() => store.externalizeInlineImages(threadId, {
+        const accepted = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages({
           ...item, workbenchInjectionAcceptedAt: acceptedAt,
-        }))).value;
+        }, { storageRoot: this.storageRoot, threadId }))).value;
         await this.persistTranscript(() => this.transcriptRecording.recordWorkbenchMutation({
           observations: [createCodexTranscriptProviderItemObservation({
             threadId, turnId, item: accepted, lifecycle: "completed", observedAt: acceptedAt,
@@ -2243,7 +2254,7 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
           ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
         const normalisedMessage = threadId
-          ? (await this.persistTranscript(() => transcriptStore.externalizeInlineImages(threadId, message))).value
+          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { storageRoot: this.storageRoot, threadId }))).value
           : message;
         const providerObservations = await this.createSqliteProviderResponseObservations(
           pending.upstreamRequest,
@@ -2469,7 +2480,7 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(message.params)?.threadId)
           ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
         const normalisedMessage = threadId
-          ? (await this.persistTranscript(() => transcriptStore.externalizeInlineImages(threadId, message))).value
+          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { storageRoot: this.storageRoot, threadId }))).value
           : message;
         const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage, settingsTurnId);
         if (syntheticFileChangeNotification) {
@@ -2867,7 +2878,9 @@ export default class CodexStdioBridge {
     }
 
     return {
-      data: await this.ensureTranscriptStore().listQuestionnaireHistory(threadId),
+      data: this.sqliteReader
+        ? (await this.sqliteReader.history(threadId)).questionnaireEntries
+        : await this.ensureTranscriptStore().listQuestionnaireHistory(threadId),
     };
   }
 
@@ -2930,7 +2943,9 @@ export default class CodexStdioBridge {
     }
 
     return {
-      data: await this.ensureTranscriptStore().listSteerHistory(threadId),
+      data: this.sqliteReader
+        ? (await this.sqliteReader.history(threadId)).steerEntries
+        : await this.ensureTranscriptStore().listSteerHistory(threadId),
     };
   }
 
@@ -2942,7 +2957,9 @@ export default class CodexStdioBridge {
     }
 
     return {
-      data: await this.ensureTranscriptStore().listBrowseResultEntries(threadId),
+      data: this.sqliteReader
+        ? (await this.sqliteReader.history(threadId)).browseResultEntries
+        : await this.ensureTranscriptStore().listBrowseResultEntries(threadId),
     };
   }
 
@@ -2980,7 +2997,7 @@ export default class CodexStdioBridge {
     }
     const readParams = {
       ...upstreamParams,
-      includeTurns: isSubagentBackgroundRead ? false : record?.includeTurns ?? true,
+      includeTurns: this.sqliteReader || isSubagentBackgroundRead ? false : record?.includeTurns ?? true,
       threadId,
     };
     const readRequest: JsonRpcRequest = {
@@ -2997,6 +3014,16 @@ export default class CodexStdioBridge {
     if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
     const upstreamReadResponse = await dispatch.response;
     signal.throwIfAborted();
+    if (this.sqliteReader) {
+      if (upstreamReadResponse.error) throw new Error(upstreamReadResponse.error.message);
+      const metadata = asRecord(upstreamReadResponse.result)?.thread as Thread | undefined;
+      if (!metadata?.id) throw new Error("Codex metadata read returned no thread.");
+      const context = await this.readSqliteThreadContext(metadata, hydration, signal, isSubagentBackgroundRead);
+      if (isSubagentBackgroundRead || (requestsHydratedTurnContextEntries(message) && hydration?.mode !== "legacyFull")) return context;
+      const { questionnaireEntries, steerEntries, browseResultEntries } = await this.sqliteReader.history(metadata.id);
+      signal.throwIfAborted();
+      return { thread: context.thread, questionnaireEntries, steerEntries, browseResultEntries };
+    }
     const transcriptStore = this.ensureTranscriptStore();
     let readResponse = isSubagentBackgroundRead || (readParams.includeTurns === false && hydration !== null)
       ? await this.persistTranscript(() => transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
@@ -3037,7 +3064,7 @@ export default class CodexStdioBridge {
             touchThread: false,
           }), signal);
         } finally {
-          if (!signal.aborted) threadWindowStore.recordProviderWindow(providerWindow.recording);
+          if (!signal.aborted) void threadWindowStore.recordProviderWindow(providerWindow.recording);
         }
         signal.throwIfAborted();
       }
@@ -3095,6 +3122,78 @@ export default class CodexStdioBridge {
     };
   }
 
+  private async readSqliteThreadContext(
+    metadata: Thread,
+    hydration: WorkbenchThreadHydrationRequest | null,
+    signal: AbortSignal,
+    background: boolean,
+  ): Promise<WorkbenchThreadContextReadResponse> {
+    const reader = this.sqliteReader!;
+    const identityContext = await this.resolveTranscriptThreadContext(metadata, true, signal);
+    await this.transcriptQueue;
+    signal.throwIfAborted();
+    const canonicalMetadata = this.identities
+      ? mapProviderThread(this.identities, { harness: "codex", nativeLocation: identityContext.nativeLocation }, metadata)
+      : metadata;
+    let catalog = await reader.catalog(metadata.id);
+    let context = await reader.read(canonicalMetadata, hydration);
+    if (background && !context && catalog) context = reader.project(canonicalMetadata, catalog);
+    const before = hydration?.mode === "previous"
+      ? catalog?.turns.find(turn => turn.id === hydration.beforeTurnId || turn.native_turn_id === hydration.beforeTurnId)
+      : null;
+    const eligible = before ? catalog?.turns.filter(turn => turn.turn_index < before.turn_index) : catalog?.turns;
+    const wanted = hydration === null || hydration.mode === "legacyFull" ? eligible : eligible?.slice(-1);
+    if (!context && wanted?.length) {
+      const nativeIds = wanted.flatMap(turn => turn.native_turn_id ? [turn.native_turn_id] : []);
+      if (nativeIds.length) {
+        const store = this.ensureTranscriptStore();
+        await this.captureTranscript("sqlite-context-compatibility", async () => {
+          const materialized = new Set(await this.readSqliteTranscriptMaterializedTurnIds(metadata.id, nativeIds));
+          const missing = nativeIds.filter(id => !materialized.has(id));
+          if (!missing.length) return;
+          const legacy = await store.readStoredThreadWindow(metadata.id, missing);
+          if (legacy?.turns.length) await this.importSqliteCompatibilityWindow(legacy, store);
+        }, { requireSqlite: true, propagateFailure: true });
+        context = await reader.read(canonicalMetadata, hydration);
+        catalog = await reader.catalog(metadata.id);
+      }
+    }
+    if (hydration && hydration.mode !== "legacyFull") {
+      const nativeId = (id: string) => catalog?.turns.find(turn => turn.id === id)?.native_turn_id ?? id;
+      const projected = catalog ? reader.project(canonicalMetadata, catalog) : null;
+      const history = (projected?.thread as (Thread & { workbenchTurnHistory?: WorkbenchThreadTurnHistoryEntry[] }) | undefined)?.workbenchTurnHistory ?? [];
+      const hydrated = Object.assign({
+        ...metadata,
+        turns: context?.thread.turns.map(turn => ({ ...turn, id: nativeId(turn.id) })) ?? [],
+      }, { workbenchTurnHistory: history.map(entry => ({ ...entry, turnId: nativeId(entry.turnId) })) });
+      const store = this.createThreadWindowStore(this.ensureTranscriptStore());
+      const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
+        ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
+      }, signal));
+      const window = await loader.ensureWindow(store, metadata, hydrated,
+        hydration.mode === "previous" ? { ...hydration, beforeTurnId: nativeId(hydration.beforeTurnId) } : hydration,
+        { recoveryOnly: background });
+      signal.throwIfAborted();
+      if (window) {
+        await store.recordProviderWindow(window.recording);
+        context = await reader.read(canonicalMetadata, hydration);
+      }
+    } else if (!context) {
+      await this.readSqliteThreadContext(metadata, { mode: "latest" }, signal, background);
+      const completeCatalog = await reader.catalog(metadata.id);
+      const turns = completeCatalog?.turns ?? [];
+      const materialized = new Set(await this.readSqliteTranscriptMaterializedTurnIds(metadata.id, turns.map(turn => turn.id)));
+      for (let index = turns.length - 2; index >= 0; index--) {
+        if (materialized.has(turns[index]!.id)) continue;
+        await this.readSqliteThreadContext(metadata, { mode: "previous", beforeTurnId: turns[index + 1]!.id }, signal, background);
+      }
+      context = await reader.read(canonicalMetadata, hydration);
+    }
+    signal.throwIfAborted();
+    if (!context) throw new Error("The requested SQL transcript window is not available.");
+    return background ? { thread: context.thread, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] } : context;
+  }
+
   private async materializeThreadRecallTurn(params: unknown) {
     const record = asRecord(params);
     const threadId = asString(record?.threadId)?.trim() ?? "";
@@ -3132,6 +3231,33 @@ export default class CodexStdioBridge {
     const missingTurnIds = requestedTurnIds?.filter((turnId) => !materializedTurnIds.has(turnId)) ?? null;
     if (missingTurnIds?.length === 0) {
       return { materializedTurnIds: requestedTurnIds ?? [], threadId };
+    }
+    if (this.sqliteReader) {
+      const signal = this.generation.signal;
+      let catalog = await this.sqliteReader.catalog(threadId);
+      if (requestedTurnIds === null && catalog) return { materializedTurnIds: [], threadId };
+      const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
+      const nativeThreadId = identity?.bindings.find(binding => binding.harness === "codex")?.nativeThreadId ?? threadId;
+      const response = await this.dispatchManagedProviderRequest({
+        method: "thread/read", params: { threadId: nativeThreadId, includeTurns: false },
+        [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
+      }, signal);
+      if (response.error) throw new Error(response.error.message);
+      const metadata = asRecord(response.result)?.thread as Thread | undefined;
+      if (!metadata?.id) throw new Error("Codex metadata read returned no thread.");
+      if (!catalog || missingTurnIds?.some(id => !catalog!.turns.some(turn => turn.id === id || turn.native_turn_id === id))) {
+        await this.readSqliteThreadContext(metadata, { mode: "latest" }, signal, false);
+        catalog = await this.sqliteReader.catalog(threadId);
+      }
+      for (const turnId of missingTurnIds ?? []) {
+        const index = catalog?.turns.findIndex(turn => turn.id === turnId || turn.native_turn_id === turnId) ?? -1;
+        const next = index >= 0 ? catalog?.turns[index + 1] : undefined;
+        await this.readSqliteThreadContext(metadata, next
+          ? { mode: "previous", beforeTurnId: next.id }
+          : { mode: "latest" }, signal, false);
+      }
+      return { materializedTurnIds: requestedTurnIds
+        ? await this.readSqliteTranscriptMaterializedTurnIds(threadId, requestedTurnIds) : [], threadId };
     }
     const transcriptStore = this.ensureTranscriptStore();
     const thread = missingTurnIds
@@ -3181,7 +3307,7 @@ export default class CodexStdioBridge {
     }, signal);
     signal.throwIfAborted();
     const usage = params.cursor === null && params.readScope !== "subagentBackground"
-      ? await this.readThreadContextUsage(context.thread.id, signal)
+      ? await this.readThreadContextUsage(params.threadId, signal)
       : undefined;
     signal.throwIfAborted();
 
@@ -3521,19 +3647,28 @@ export default class CodexStdioBridge {
   private createThreadWindowStore(transcriptStore: CodexTranscriptStoreInstance): CodexThreadWindowStore {
     return {
       readProviderPreviousCursor: (threadId, beforeTurnId) => (
-        transcriptStore.readProviderPreviousCursor(threadId, beforeTurnId)
+        this.readSqliteProviderCursor
+          ? this.readSqliteProviderCursor(threadId, beforeTurnId)
+          : transcriptStore.readProviderPreviousCursor(threadId, beforeTurnId)
       ),
       recordProviderWindow: (recording) => {
         let context: CodexTranscriptThreadContext | undefined;
         const labelTurnId = recording.page?.turn.id
           ?? recording.catalog?.turns.at(-1)?.id
           ?? "empty";
-        void this.captureTranscript(`provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
-          const providerThread = {
+        return this.captureTranscript(`provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
+          const providerThread = (await externalizeCodexTranscriptInlineImages({
             ...recording.thread,
             turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
-          };
+          }, { storageRoot: this.storageRoot, threadId: recording.thread.id })).value;
           const observations = this.createSqliteProviderWindowObservations(providerThread, context);
+          const boundary = recording.page
+            ? { turnId: recording.page.turn.id, cursor: recording.page.previousCursor }
+            : recording.catalog?.boundary;
+          if (boundary) observations.push({
+            kind: "providerCursor", threadId: NativeThreadIdSchema.parse(recording.thread.id),
+            turnId: NativeTurnIdSchema.parse(boundary.turnId), previousCursor: boundary.cursor,
+          });
           await this.persistTranscript(() => this.transcriptRecording.recordProviderFact({
             observations,
             recordLegacy: async () => {
@@ -3554,6 +3689,7 @@ export default class CodexStdioBridge {
             },
           }));
         }, {
+          propagateFailure: this.sqliteReader !== undefined,
           prepare: this.sqliteTranscriptEnabled
             ? async signal => { context = await this.resolveTranscriptThreadContext(recording.thread, true, signal); }
             : undefined,

@@ -1,7 +1,6 @@
 /*
- * Keywords: transcript persistence, runtime version, native images, turn ownership.
  * Exports:
- * - CodexTranscriptStore: persist, de-bloat, hydrate, and expose retained turn usage from Codex compatibility transcripts. Keywords: codex, transcript, questionnaire, pruning, usage, image assets.
+ * - default CodexTranscriptStore: record and hydrate retained Codex compatibility transcripts.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -710,7 +709,7 @@ export default class CodexTranscriptStore {
   private readonly threadsDirectoryPath: string;
 
   constructor(
-    projectRoot: string,
+    private readonly projectRoot: string,
     getProtectedThreadIds: () => Iterable<string> = () => [],
     transcriptShadowLog?: OrchestratorTranscriptShadowLog,
     private readonly getRuntimeUserAgent: () => string | null = () => null,
@@ -1666,8 +1665,8 @@ export default class CodexTranscriptStore {
 
   externalizeInlineImages<TValue>(threadId: string, value: TValue) {
     return externalizeCodexTranscriptInlineImages(value, {
-      encodedThreadId: encodeTranscriptPathSegment(threadId),
-      threadDirectoryPath: this.threadDirectoryPath(threadId),
+      storageRoot: this.projectRoot,
+      threadId,
     });
   }
 

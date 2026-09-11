@@ -23,6 +23,7 @@ import type {
 } from "workbench-shared/database/workbench-database-statements";
 import type {
   WorkbenchTranscriptObservation,
+  WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
@@ -120,6 +121,8 @@ export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentit
   WorkbenchThreadStateStoreDatabase {
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
+  readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
+  readTranscriptContext?(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
   assertReady(): void;
   close(): Promise<void>;
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;

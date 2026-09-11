@@ -129,6 +129,9 @@ export function mapNativeTranscriptObservation(
   const mapAtomic = (input: NativeTranscriptAtomicObservation) => mappings[input.kind](input as never);
   const mapCatalog = (input: CatalogObservation) => mappings[input.kind](input as never);
   const mappings: ObservationMappers = {
+    providerCursor: (input) => ({
+      ...input, threadId: threadId(input.threadId), turnId: turnId(input.threadId, input.turnId),
+    }),
     threadContextUsage: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     thread: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     turn: (input) => {

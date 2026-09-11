@@ -1,10 +1,9 @@
 /*
- * Keywords: Codex, provider pagination, recovery, bounded history.
  * Exports:
- * - CodexThreadWindowLoad: fetched provider projection plus its ordered recording input. Keywords: codex, thread, window, load.
- * - CodexThreadWindowRecord: one fetched provider catalog and materialized page admitted for ordered recording. Keywords: codex, thread, window, record.
- * - CodexThreadWindowStore: provider-window recording port used by bounded loading and recovery. Keywords: codex, thread, window, store.
- * - default CodexThreadWindowLoader: fetch one requested provider turn window and admit it for recording. Keywords: codex, thread, pagination, window.
+ * - CodexThreadWindowLoad: fetched provider projection and recording input.
+ * - CodexThreadWindowRecord: fetched catalog and materialised page.
+ * - CodexThreadWindowStore: cursor and ordered recording port.
+ * - default CodexThreadWindowLoader: bounded provider paging and recovery.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadTurnsListParams } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListParams";
@@ -31,7 +30,7 @@ export interface CodexThreadWindowLoad {
 
 export interface CodexThreadWindowStore {
   readProviderPreviousCursor: (threadId: string, beforeTurnId: string) => Promise<string | null | undefined>;
-  recordProviderWindow: (record: CodexThreadWindowRecord) => void;
+  recordProviderWindow: (record: CodexThreadWindowRecord) => void | Promise<void>;
 }
 
 type ThreadWithHistory = Thread & {
@@ -187,7 +186,10 @@ export default class CodexThreadWindowLoader {
       return false;
     }
 
-    const cursor = await store.readProviderPreviousCursor(metadataThread.id, hydration.beforeTurnId);
+    const storedCursor = await store.readProviderPreviousCursor(metadataThread.id, hydration.beforeTurnId);
+    const cursor = storedCursor === undefined
+      ? await this.discoverPreviousCursor(store, metadataThread, hydration.beforeTurnId)
+      : storedCursor;
     if (cursor === undefined) {
       throw new Error(`No Codex previous-turn cursor exists for ${hydration.beforeTurnId}.`);
     }
@@ -209,6 +211,42 @@ export default class CodexThreadWindowLoader {
       page: { previousCursor: page.nextCursor, turn },
       thread: metadataThread,
     });
+  }
+
+  private async discoverPreviousCursor(store: CodexThreadWindowStore, thread: Thread, turnId: string) {
+    let cursor: string | null = null;
+    const visited = new Set<string>();
+    do {
+      const page = await this.requestTurns({
+        threadId: thread.id, itemsView: "notLoaded", limit: 100, sortDirection: "desc",
+        ...(cursor === null ? {} : { cursor }),
+      });
+      if (page.data.some(turn => turn.id === turnId)) {
+        // Opaque cursors address page boundaries, so replay only the matching metadata page.
+        do {
+          const single = await this.requestTurns({
+            threadId: thread.id, itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+            ...(cursor === null ? {} : { cursor }),
+          });
+          const turn = single.data[0];
+          if (turn?.id === turnId) {
+            await store.recordProviderWindow({
+              thread, catalog: { turns: [turn], boundary: { turnId, cursor: single.nextCursor } },
+            });
+            return single.nextCursor;
+          }
+          cursor = single.nextCursor;
+          if (cursor === null || visited.has(cursor)) break;
+          visited.add(cursor);
+        } while (true);
+        break;
+      }
+      cursor = page.nextCursor;
+      if (cursor === null || visited.has(cursor)) break;
+      visited.add(cursor);
+    } while (true);
+    console.warn("[workbench-transcript] Provider metadata did not recover the requested paging boundary.");
+    return undefined;
   }
 
   private async ensureLatestWindow(

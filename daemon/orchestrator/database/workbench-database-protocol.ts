@@ -31,6 +31,7 @@ import type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSettlement,
   WorkbenchTranscriptSnapshot,
+  WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptItemIdentity,
   WorkbenchTranscriptItemIdentityAdmission,
   WorkbenchTranscriptItemIdentityLookup,
@@ -111,6 +112,8 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "removeSubagent"; parentThreadId: WorkbenchThreadId; identifier: string }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
+  | { type: "readTranscriptProviderCursor"; threadId: string; turnId: string }
+  | { type: "readTranscriptContext"; threadId: string }
   | { type: "queryTranscript"; request: TranscriptQuery }
   | { type: "readThreadContextUsage"; threadId: string }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
@@ -163,6 +166,8 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "subagentReservation"; record: WorkbenchSubagentReservation }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
+  | { id: number; type: "transcriptContext"; snapshot: WorkbenchTranscriptContextSnapshot | null }
+  | { id: number; type: "transcriptProviderCursor"; cursor: string | null | undefined }
   | { id: number; type: "transcriptQueryResult"; result: { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } }
   | { id: number; type: "threadContextUsage"; snapshot: ThreadContextUsageSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }

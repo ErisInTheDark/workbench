@@ -10,6 +10,7 @@
  * - WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions.
  * - WorkbenchTranscriptReadRequest: bounded relational read request.
  * - WorkbenchTranscriptSnapshot: hydrated transcript result.
+ * - WorkbenchTranscriptContextSnapshot: interaction bodies with full item-order metadata.
  * - WorkbenchTranscriptSnapshotRows: typed canonical rows.
  * - WorkbenchTranscriptItemSource: provider-scoped item identity evidence.
  * - WorkbenchTranscriptItemLegacyAlias: turn-scoped reference retained from an older projection.
@@ -36,6 +37,10 @@ export type {
   WorkbenchTranscriptSnapshot,
   WorkbenchTranscriptSnapshotRows,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+
+export type WorkbenchTranscriptContextSnapshot = WorkbenchTranscriptSnapshot & {
+  contextItemOrder?: { turnId: string; itemIds: string[] }[];
+};
 
 import type {
   ItemReference, NativeItemId, NativeThreadId, NativeTurnId, ProjectId,
@@ -86,6 +91,12 @@ type TranscriptEntry<Entry, ThreadId extends string, TurnId extends string> = Om
 };
 
 export type WorkbenchTranscriptAtomicObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> =
+  | {
+    kind: "providerCursor";
+    threadId: ThreadId;
+    turnId: TurnId;
+    previousCursor: string | null;
+  }
   | {
     kind: "thread";
     threadId: ThreadId;

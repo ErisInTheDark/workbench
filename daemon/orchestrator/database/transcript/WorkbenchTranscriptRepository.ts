@@ -13,6 +13,7 @@ import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentity
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository.ts";
 import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
 import { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
+import { codexTranscriptTables } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
@@ -69,6 +70,7 @@ import {
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptCaptureGapObservation,
+  WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSettlement,
@@ -186,7 +188,26 @@ export default class WorkbenchTranscriptRepository {
     }
   }
 
-  read(request: WorkbenchTranscriptReadRequest): WorkbenchTranscriptSnapshot | null {
+  readProviderPreviousCursor(threadId: string, turnId: string): string | null | undefined {
+    const storedThread = this.#one(selectRows(coreTables.workbenchThreads, { where: { id: threadId } }));
+    const owner = storedThread?.id ?? this.#identity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) })?.threadId;
+    if (!owner) return undefined;
+    const storedTurn = this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId, thread_id: owner } }));
+    const boundary = storedTurn?.id ?? this.#identity.resolveTurn({
+      threadId: WorkbenchThreadIdSchema.parse(owner), turnId: TurnReferenceSchema.parse(turnId),
+    })?.turnId;
+    if (!boundary) return undefined;
+    return this.#one(selectRows(codexTranscriptTables.turnCursors, { where: { turn_id: boundary } }))?.previous_cursor;
+  }
+
+  readContext(threadId: string): WorkbenchTranscriptContextSnapshot | null {
+    const catalog = this.read({ threadId, turnIds: [], turnLimit: 1 });
+    if (!catalog) return null;
+    const materialized = this.readMaterializedTurnIds(threadId, catalog.turns.map(turn => turn.id));
+    return this.read({ threadId, turnIds: materialized, turnLimit: 1 }, true);
+  }
+
+  read(request: WorkbenchTranscriptReadRequest, contextOnly = false): WorkbenchTranscriptContextSnapshot | null {
     if (!Number.isInteger(request.turnLimit) || request.turnLimit <= 0) {
       throw new Error("Transcript turnLimit must be a positive integer");
     }
@@ -243,12 +264,26 @@ export default class WorkbenchTranscriptRepository {
         loadedTurnIds = loadedTurns.map(({ id }) => id);
       }
       const firstLoadedTurnIndex = loadedTurns[0]?.turn_index;
-      const threadItems = this.#all(selectRows(itemTables.threadItems, {
+      let threadItems = this.#all(selectRows(itemTables.threadItems, {
         whereIn: { turn_id: loadedTurnIds },
         orderBy: [{ column: "item_position" }],
       }));
       this.#promoteLegacyToolOutputs(threadItems);
       if (thread.identity_origin === "workbench") this.#admitRetainedItems(threadItems, loadedTurns);
+      let contextItemOrder: WorkbenchTranscriptContextSnapshot["contextItemOrder"];
+      if (contextOnly) {
+        const order = new Map(loadedTurnIds.map(turnId => [turnId, [] as string[]]));
+        for (const item of threadItems) order.get(item.turn_id)!.push(item.public_id ?? item.source_id);
+        contextItemOrder = [...order].map(([turnId, itemIds]) => ({ turnId, itemIds }));
+        const browseItems = new Set(this.#rowsByItemIds(
+          evidenceTables.threadBrowseEntries, threadItems.map(item => item.id),
+        ).map(entry => entry.item_id));
+        const retainedSteers = new Set(this.#rowsByItemIds(itemTables.threadItemUnknown,
+          threadItems.filter(item => item.type === "unknown").map(item => item.id))
+          .filter(row => row.native_type === "workbenchSteer").map(row => row.item_id));
+        threadItems = threadItems.filter(item => item.type === "questionnaire" || item.type === "approval"
+          || item.type === "userMessage" || browseItems.has(item.id) || retainedSteers.has(item.id));
+      }
       const rows = this.#readRows(threadId, threadItems);
       return {
         thread,
@@ -257,6 +292,7 @@ export default class WorkbenchTranscriptRepository {
         hasPreviousTurns: firstLoadedTurnIndex !== undefined
           && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex),
         rows,
+        ...(contextItemOrder ? { contextItemOrder } : {}),
       };
     })();
   }
@@ -952,6 +988,16 @@ export default class WorkbenchTranscriptRepository {
     insideCanonicalWindow = false,
     canonicalIndex?: CanonicalSettlementIndex,
   ) {
+    if (observation.kind === "providerCursor") {
+      const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: observation.turnId } }));
+      if (!turn || turn.thread_id !== observation.threadId || turn.harness_id !== "codex") {
+        throw new Error("Codex pagination boundary requires its owning Codex turn.");
+      }
+      this.#run(upsertRow(codexTranscriptTables.turnCursors, {
+        turn_id: turn.id, previous_cursor: observation.previousCursor,
+      }, { conflictColumns: ["turn_id"], updateColumns: ["previous_cursor"] }));
+      return null;
+    }
     if (observation.kind === "threadContextUsage") {
       this.#contextUsage.write(observation.threadId, observation.snapshot, observation.initialise);
       return observation.threadId;

@@ -175,6 +175,28 @@ function providerTurnScope(
   };
 }
 
+test("provider cursors distinguish an unknown boundary from exhausted history and roll back with the turn", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    assert.equal(repository.readProviderPreviousCursor("thread", "turn"), undefined);
+    const cursor = {
+      kind: "providerCursor" as const, threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId.turn, previousCursor: "opaque-provider-cursor",
+    };
+    repository.settle([cursor]);
+    assert.equal(repository.readProviderPreviousCursor("thread", "turn"), cursor.previousCursor);
+    assert.throws(() => repository.settle([
+      { ...cursor, previousCursor: null },
+      { ...turnObservation("turn", 0), threadId: fixtureIdentityValues.WorkbenchThreadId.other },
+    ]));
+    assert.equal(repository.readProviderPreviousCursor("thread", "turn"), cursor.previousCursor);
+    repository.settle([{ ...cursor, previousCursor: null }]);
+    assert.equal(repository.readProviderPreviousCursor("thread", "turn"), null);
+    assert.equal(repository.readProviderPreviousCursor("other", "turn"), undefined);
+  } finally { database.close(); }
+});
+
 test("settlement publishes only affected bodies, including augmentation replacement", () => {
   const { database, repository } = createRepository();
   const item = (id: string, text: string): WorkbenchTranscriptAtomicObservation => ({

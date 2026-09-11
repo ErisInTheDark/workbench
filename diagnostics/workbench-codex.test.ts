@@ -1,9 +1,9 @@
 /*
- * Keywords: paid Codex, luna low, startup, profile, instructions, transcript, managed identity, cleanup.
  * No exports. Explicitly selected live test; ordinary discovery never spends provider usage.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -15,6 +15,10 @@ import type { Turn } from "../shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchTranscriptSnapshot } from "../shared/workbench/database/transcript/workbench-transcript-contract";
 import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } from "../shared/workbench/thread/workbench-thread-page";
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
+import { toThreadPayload } from "../shared/codex/thread-adapter";
+import { WorkbenchThreadIdSchema } from "../shared/workbench/identity";
+import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../app/workbench/transcript/ThreadTranscriptProjectionController";
+import type { WorkbenchTranscriptProjection } from "../shared/workbench/transcript/workbench-transcript-projection";
 
 test("current Workbench admits luna.low, preserves managed identity and records a real turn", {
   skip: process.env.WORKBENCH_CODEX_TEST_FILE !== "diagnostics/workbench-codex.test.ts",
@@ -31,7 +35,32 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   console.log("isolated live fixture", runtime.root);
   let threadId: string | null = null;
   let nativeThreadId: string | null = null;
+  let controller: ThreadTranscriptProjectionController | null = null;
+  const release = path.join(runtime.project, ".workbench", "release-transcript-gate");
+  const forbiddenReads = path.join(runtime.root, "forbidden-transcript-reads.log");
   try {
+    // Only the copied recorder is fault-injected. Its writer remains unchanged.
+    await fs.appendFile(path.join(runtime.project, "daemon/orchestrator/CodexTranscriptStore.ts"), `
+for (const method of ["readStoredTurnSnapshot", "readStoredThreadSnapshot", "readStoredThreadWindow", "readThreadContextEntries", "readProviderPreviousCursor"] as const) {
+  CodexTranscriptStore.prototype[method] = async () => {
+    await fs.appendFile(${JSON.stringify(forbiddenReads)}, method + "\\n");
+    throw new Error("Live diagnostic forbids legacy transcript reads: " + method);
+  };
+}
+`);
+    const gateProof = `gate-${randomUUID()}`;
+    await fs.writeFile(path.join(runtime.project, ".workbench/transcript-gate.mjs"), `
+import { watch, existsSync } from "node:fs";
+const release = new URL("./release-transcript-gate", import.meta.url);
+await new Promise((resolve, reject) => {
+  const watcher = watch(new URL(".", import.meta.url), () => {
+    if (existsSync(release)) { watcher.close(); resolve(); }
+  });
+  watcher.on("error", reject);
+  console.log(${JSON.stringify(gateProof)});
+  if (existsSync(release)) { watcher.close(); resolve(); }
+});
+`);
     await runtime.start({ version: profiles.version, profiles: { [profile.id]: profile } }, prefixProof);
     console.log("isolated daemon initialised");
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
@@ -45,7 +74,10 @@ test("current Workbench admits luna.low, preserves managed identity and records 
     const started = await runtime.request<{ thread: Thread }>("thread/start", {
       cwd: runtime.project, model: profile.model, ephemeral: false,
       approvalPolicy: "never", sandbox: "workspace-write",
-    }, { workbenchPromptContext: context });
+    }, {
+      workbenchPromptContext: context,
+      workbenchCreationProfile: { kind: "target", slot: { kind: "new-thread", projectId: project.id } },
+    });
     threadId = started.thread.id;
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
     assert.equal(path.resolve(started.thread.cwd), runtime.project);
@@ -62,31 +94,102 @@ test("current Workbench admits luna.low, preserves managed identity and records 
       path.join(runtime.project, "daemon/node_modules/.bin/wb"), "thread", "title", "get",
     ], runtime.project, { ...process.env, WORKBENCH_THREAD_ID: threadId, CODEX_THREAD_ID: nativeThreadId }, t.signal);
     assert.ok(cli.includes(title), "CLI must resolve its managed WB caller identity");
-    const snapshots: WorkbenchTranscriptSnapshot[] = [];
-    const subscriptionId = randomUUID();
-    await runtime.transcripts.subscribe({ subscriptionId, threadId, turnLimit: 10 }, (snapshot) => {
-      if (snapshot) snapshots.push(snapshot);
+    const errors: Error[] = [];
+    const subscriptions = new EventEmitter();
+    const observed = { state: { status: "idle" } as ThreadTranscriptProjectionState, resets: 0, texts: 0 };
+    const current = (): WorkbenchTranscriptProjection | null => (
+      observed.state.status === "ready" ? observed.state.projection : null
+    );
+    let transcriptSelection = {
+      browseResultEntries: [],
+      thread: toThreadPayload({ ...started.thread, id: WorkbenchThreadIdSchema.parse(threadId) }),
+    };
+    controller = new ThreadTranscriptProjectionController({
+      available: true, turnLimit: 10,
+      onError: error => errors.push(error),
+      onStateChange: state => { observed.state = state; },
+      onText: () => { observed.texts++; },
+      transcripts: {
+        reportParity: params => runtime.transcripts.reportParity(params),
+        unsubscribe: params => runtime.transcripts.unsubscribe(params),
+        subscribe: async (params, _legacy, stream) => {
+          try {
+            await runtime.transcripts.subscribe(params, () => {
+              errors.push(new Error("Live diagnostic received a legacy transcript snapshot"));
+            }, update => {
+              if (update.kind === "structure" && update.reset) observed.resets++;
+              stream?.(update);
+            });
+          } finally {
+            subscriptions.emit("settled");
+          }
+        },
+      },
     });
-    const prompt = "This is an authorised Workbench diagnostic. Use the Workbench MCP thread_title_get tool to read this thread's title. Then run `wb thread title get` through Codex's native exec_command shell tool, not the Workbench MCP shell tool. Do not edit files, spawn agents, ask questions, or create plans. Report the title and the prefix proof required by project instructions in commentary. After both title checks succeed, call the Workbench thread_status tool with status completed for this diagnostic thread, then finish with an empty final response. That status change is authorised and required so Workbench does not automatically resume unfinished work.";
+    const initialSubscription = once(subscriptions, "settled", { signal: t.signal });
+    controller.select(transcriptSelection);
+    await initialSubscription;
+    const healthy = () => { assert.deepEqual(errors, [], "Projection errors must fail the diagnostic"); };
+    const prompt = "This is an authorised Workbench diagnostic. First report the prefix proof required by project instructions in commentary. Use the Workbench MCP thread_title_get tool to read this thread's title. Then run `wb thread title get && node .workbench/transcript-gate.mjs` through Codex's native exec_command shell tool, not the Workbench MCP shell tool. The diagnostic releases that command after checking live transcript resubscription. Wait for it to finish, without changing or bypassing the gate. Do not edit files, spawn agents, ask questions, or create plans. Report the title and prefix proof in commentary again after the command completes. After both title checks succeed, call the Workbench thread_status tool with status completed for this diagnostic thread, then finish with an empty final response. That status change is authorised and required so Workbench does not automatically resume unfinished work.";
     console.log("starting paid luna.low turn");
     const response = await runtime.request<{ turn: Turn }>("turn/start", {
       threadId, cwd: runtime.project, input: [{ type: "text", text: prompt, text_elements: [] }],
       model: "stale-client-model", effort: "high",
     }, { workbenchPromptContext: { ...context, threadId } });
     const turnId = response.turn.id;
+    // Match the app's admitted turn selection; an empty exact window excludes this turn.
+    transcriptSelection = { ...transcriptSelection, thread: toThreadPayload({
+      ...started.thread, id: WorkbenchThreadIdSchema.parse(threadId), turns: [response.turn],
+    }) };
+    controller.select(transcriptSelection);
+    await runtime.until(() => {
+      healthy();
+      return Boolean(current()?.turns.flatMap(turn => turn.items).some(item => (
+        item.type === "commandExecution" && item.aggregatedOutput?.includes(gateProof)
+      )));
+    });
+    const beforeSwitch = current()!.turns.flatMap(turn => turn.items)
+      .filter(item => item.type === "agentMessage").map(item => ({ id: item.id, text: item.text }));
+    assert.ok(beforeSwitch.some(item => item.text.includes(prefixProof)), "Commentary must arrive before the held command");
+    assert.ok(observed.texts > 0, "Incremental text must reach the real projection owner");
+    assert.ok(!runtime.events.some(event => event.method === "turn/completed"
+      && (event.params?.turn as Turn | undefined)?.id === turnId), "Resubscribe must occur during the live turn");
+    const previousResets = observed.resets;
+    // Subscribe acknowledgement follows both structural baseline and live-field replay.
+    const replacementSubscription = once(subscriptions, "settled", { signal: t.signal });
+    controller.select(null);
+    controller.select(transcriptSelection);
+    await replacementSubscription;
+    await runtime.until(() => {
+      healthy();
+      return observed.resets > previousResets && current() !== null;
+    });
+    const restored = current()!.turns.flatMap(turn => turn.items);
+    for (const earlier of beforeSwitch) {
+      const item = restored.find(item => item.id === earlier.id);
+      assert.deepEqual(item?.type === "agentMessage" ? { id: item.id, text: item.text } : null,
+        earlier, "Resubscription must restore complete earlier commentary");
+    }
+    await fs.writeFile(release, "");
     await runtime.until(() => runtime.events.some((event) => event.method === "turn/completed"
       && (event.params?.turn as Turn | undefined)?.id === turnId));
     const completed = runtime.events.find((event) => event.method === "turn/completed"
       && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn;
     assert.equal(completed.status, "completed", completed.error?.message ?? "Paid turn must complete");
     assert.ok(runtime.events.some((event) => event.method === "item/agentMessage/delta"), "Live text deltas must reach the client");
-    await runtime.until(() => snapshots.some((snapshot) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "completed")));
-    const snapshot = snapshots.findLast((snapshot) => snapshot.turns.some((turn) => turn.id === turnId && turn.state === "completed"));
+    await runtime.until(() => {
+      healthy();
+      return Boolean(current()?.turns.some(turn => turn.id === turnId && turn.status === "completed"));
+    });
+    const snapshot: WorkbenchTranscriptSnapshot | null = await runtime.transcripts.read({ threadId, turnLimit: 10 });
     assert.ok(snapshot, "Completed thread must have a durable transcript before any historical page read");
     assert.equal(snapshot.thread.id, threadId);
     assert.ok(snapshot.turns.some((turn) => turn.id === turnId && turn.state === "completed"));
     const projection = projectWorkbenchTranscript(snapshot);
     assert.ok(projection.success, "The app's SQLite projector must accept the recorded transcript");
+    assert.deepEqual(current()!.turns.map(turn => ({ id: turn.id, items: turn.items })),
+      projection.data.turns.map(turn => ({ id: turn.id, items: turn.items })),
+      "Live client item identities, order and content must match durable SQL before historical reads");
     assert.ok(projection.data.turns.flatMap((turn) => turn.items).some((item) => (
       item.type === "agentMessage" && item.text.includes(prefixProof) && item.text.includes(title)
     )), "SQLite must independently preserve the agent's instruction and identity proof");
@@ -101,7 +204,8 @@ test("current Workbench admits luna.low, preserves managed identity and records 
     assert.ok(items.some((item) => item.type === "mcpToolCall" && item.status === "completed"), "A real MCP call must complete");
     assert.ok(items.some((item) => item.type === "mcpToolCall" && item.tool === "thread_status" && item.status === "completed"), "The agent must finish through Workbench's managed completion gate");
     assert.ok(items.some((item) => item.type === "commandExecution" && item.exitCode === 0), "A real agent CLI command must complete");
-    await runtime.transcripts.unsubscribe({ subscriptionId });
+    await controller.dispose();
+    controller = null;
     await runtime.stop();
     await runtime.start({ version: profiles.version, profiles: { [profile.id]: profile } }, prefixProof);
     const reopened = await runtime.transcripts.read({ threadId, turnLimit: 10 });
@@ -110,12 +214,16 @@ test("current Workbench admits luna.low, preserves managed identity and records 
     const reopenedProjection = projectWorkbenchTranscript(reopened);
     assert.ok(reopenedProjection.success);
     assert.deepEqual(reopenedProjection.data.turns, projection.data.turns, "Cold reopening must preserve all visible turn items");
+    healthy();
+    await assert.rejects(fs.access(forbiddenReads), { code: "ENOENT" }, "Legacy read attempts must fail even when caught by production code");
     console.log("live admission, CLI/MCP and transcript checks passed");
   } catch (error) {
     console.error("live diagnostic failed", error);
     throw error;
   } finally {
     try {
+      await fs.writeFile(release, "");
+      await controller?.dispose();
       if (threadId && nativeThreadId) {
         // Separate cleanup budget survives the paid-turn deadline. Only the exact
         // response-created thread is eligible; no search, inferred ID or user input.

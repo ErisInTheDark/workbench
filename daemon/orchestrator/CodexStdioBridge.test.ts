@@ -26,6 +26,8 @@ import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-typ
 import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
@@ -1151,7 +1153,7 @@ test("background thread pages repair inactive provider turns directly into both 
       "thread/turns/list",
     ]);
     assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [
-      ["providerTurnScope"],
+      ["providerTurnScope", "providerCursor"],
       ["item"],
     ]);
     const recoveredScope = sqliteBatches[0]?.[0];
@@ -1235,7 +1237,7 @@ test("provider catalog identities and the materialized page record as one dual-r
     });
     await bridge.waitForIdle();
 
-    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [["providerTurnScope"]]);
+    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [["providerTurnScope", "providerCursor"]]);
     const providerScope = sqliteBatches[0]?.[0];
     assert.equal(providerScope?.kind, "providerTurnScope");
     assert.deepEqual(
@@ -2057,6 +2059,120 @@ async function recordingIdentities(options: { database?: InstanceType<typeof Dat
   });
   return { threads, items };
 }
+
+test("SQL context pages settle provider bodies and then read without legacy storage", async () => {
+  const database = new Database(":memory:");
+  const identities = await recordingIdentities({ database });
+  const repository = new WorkbenchTranscriptRepository(database);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-sql-context-"));
+  const requests: JsonRpcRequest[] = [];
+  const reader = new CodexSqliteTranscriptReader(async request => repository.read(request), async id => repository.readContext(id));
+  const item: ThreadItem = { id: "reply", type: "agentMessage", text: "complete retained reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
+  const fullTurn = { ...bridgeThread([item]).turns[0]!, status: "completed" as const };
+  let providerTurns = [fullTurn];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    identities, sqliteReader: reader,
+    readSqliteProviderCursor: async (threadId, turnId) => repository.readProviderPreviousCursor(threadId, turnId),
+    readSqliteTranscriptMaterializedTurnIds: async (threadId, turnIds) => repository.readMaterializedTurnIds(threadId, turnIds),
+    recordSqliteTranscript: async observations => { repository.settle(observations); },
+    appServer: { send(request: JsonRpcRequest) {
+      requests.push(request);
+      const params = request.params as { includeTurns?: boolean; itemsView?: string; cursor?: string; limit?: number };
+      if (request.method === "thread/read") assert.equal(params.includeTurns, false);
+      const offset = Number(params.cursor ?? 0);
+      const data = providerTurns.slice().reverse().slice(offset, offset + (params.limit ?? 100));
+      const result = request.method === "thread/read"
+        ? { thread: { ...bridgeThread(), turns: [] } }
+        : { data: data.map(turn => params.itemsView === "full" ? turn : { ...turn, items: [], itemsView: "notLoaded" }),
+          nextCursor: offset + data.length < providerTurns.length ? String(offset + data.length) : null };
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
+    } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, sendToClient() {}, storageRoot: root,
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+  });
+  try {
+    const store = (bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore }).ensureTranscriptStore();
+    const readLegacyWindow = store.readStoredThreadWindow.bind(store);
+    const readLegacyContext = store.readThreadContextEntries.bind(store);
+    store.readStoredThreadWindow = async () => { throw new Error("legacy body read"); };
+    store.readThreadContextEntries = async () => { throw new Error("legacy context read"); };
+    for (let pass = 0; pass < 2; pass++) {
+      const response = await bridge.handleBridgeRequest({
+        id: pass, method: "workbench/thread/page/read", params: { threadId: "thread", cursor: null },
+      });
+      assert.equal(response?.error, undefined);
+      const result = response?.result as WorkbenchThreadPageResponse;
+      assert.notEqual(result.thread.id, "thread");
+      assert.equal(result.thread.turns[0]?.items[0]?.type, "agentMessage");
+      const reply = result.thread.turns[0]?.items[0];
+      assert.equal(reply?.type === "agentMessage" && reply.text, item.text);
+      const context = await reader.history(result.thread.id);
+      assert.deepEqual(context.questionnaireEntries, []);
+      assert.equal(await repository.readProviderPreviousCursor(result.thread.id, result.thread.turns[0]!.id), null);
+    }
+    assert.equal(requests.filter(request => (request.params as { itemsView?: string }).itemsView === "full").length, 1);
+    const oldTurn = { ...fullTurn, id: "older", startedAt: 2,
+      items: [{ ...item, id: "old-reply", text: "historical reply" }] };
+    const afterTurn = { ...fullTurn, id: "after", startedAt: 3,
+      items: [{ ...item, id: "after-reply", text: "latest reply" }] };
+    providerTurns = [fullTurn, oldTurn, afterTurn];
+    const windows = (bridge as unknown as {
+      createThreadWindowStore(store: CodexTranscriptStore): CodexThreadWindowStore;
+    }).createThreadWindowStore(store);
+    await windows.recordProviderWindow({
+      thread: { ...bridgeThread(), turns: [] },
+      catalog: { turns: providerTurns
+        .map(turn => ({ ...turn, items: [], itemsView: "notLoaded" })) },
+    });
+    await store.recordHydratedThreadSnapshot({ id: "historical-fixture",
+      result: { thread: { ...bridgeThread(), turns: [oldTurn] } } });
+    assert.equal((await readLegacyWindow("thread", ["older"]))?.turns[0]?.items[0]?.type, "agentMessage");
+    assert.deepEqual(repository.readMaterializedTurnIds("thread", ["older"]), []);
+    const reads: string[][] = [];
+    store.readStoredThreadWindow = async (id, turnIds) => {
+      reads.push([...turnIds]);
+      return readLegacyWindow(id, turnIds);
+    };
+    store.readThreadContextEntries = readLegacyContext;
+    const catalog = await reader.catalog("thread");
+    assert.deepEqual(catalog?.turns.map(turn => turn.native_turn_id), ["turn", "older", "after"]);
+    const boundary = catalog?.turns.find(turn => turn.native_turn_id === "after")?.id;
+    assert.ok(boundary);
+    for (let pass = 0; pass < 2; pass++) {
+      const response = await bridge.handleBridgeRequest({
+        id: `historical-${pass}`, method: "workbench/thread/page/read",
+        params: { threadId: "thread", cursor: boundary },
+      });
+      assert.equal(response?.error, undefined);
+      const reply = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]?.items[0];
+      assert.equal(reply?.type, "agentMessage");
+      assert.equal(reply?.type === "agentMessage" && reply.text, "historical reply");
+      store.readStoredThreadWindow = async () => { throw new Error("repeated legacy body read"); };
+      store.readThreadContextEntries = async () => { throw new Error("repeated legacy context read"); };
+    }
+    assert.deepEqual(reads, [["older"]]);
+    assert.equal(requests.filter(request => (request.params as { itemsView?: string }).itemsView === "full").length, 1);
+    store.readStoredThreadWindow = readLegacyWindow;
+    store.readThreadContextEntries = readLegacyContext;
+    const complete = await bridge.handleBridgeRequest({
+      id: "complete", method: "thread/context/read", params: { threadId: "thread", includeTurns: true },
+    });
+    assert.equal(complete?.error, undefined);
+    const completeThread = (complete?.result as { thread: Thread }).thread;
+    assert.deepEqual(completeThread.turns.flatMap(turn => turn.items.filter(item => item.type === "agentMessage").map(item => item.text)),
+      ["complete retained reply", "historical reply", "latest reply"]);
+    assert.equal(requests.filter(request => (request.params as { itemsView?: string }).itemsView === "full").length, 2);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("SQLite recording cannot bypass canonical admission when the identity owner is absent", async () => {
   let writes = 0;

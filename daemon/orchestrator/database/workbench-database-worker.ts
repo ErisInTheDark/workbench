@@ -213,6 +213,19 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "readTranscriptProviderCursor") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id, type: "transcriptProviderCursor",
+      cursor: transcriptRepository.readProviderPreviousCursor(request.threadId, request.turnId),
+    });
+    return;
+  }
+  if (request.type === "readTranscriptContext") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({ id: request.id, type: "transcriptContext", snapshot: transcriptRepository.readContext(request.threadId) });
+    return;
+  }
   if (request.type === "readThreadContextUsage") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({ id: request.id, type: "threadContextUsage", snapshot: transcriptRepository.readContextUsage(request.threadId) });

@@ -46,6 +46,7 @@ import type { CurrentTableDefinition } from "workbench-shared/database/schema/sc
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { codexTranscriptSchemaHistory } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
 
 export { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
 export type { CodexSandboxNetworkSchemaRows } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -75,6 +76,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
     subsystems: [
       composerProfileSchemaHistory,
       codexSandboxNetworkSchemaHistory,
+      codexTranscriptSchemaHistory,
       defineThreadDomainCoreSchema(schemaVersion).history,
       transcriptIdentitySchemaHistory,
       itemSchemaHistory,

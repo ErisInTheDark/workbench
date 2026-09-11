@@ -336,6 +336,24 @@ export default class WorkbenchDatabaseController {
     return response.snapshot;
   }
 
+  async readTranscriptProviderCursor(threadId: string, turnId: string) {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptProviderCursor", threadId, turnId });
+    if (response.type !== "transcriptProviderCursor") {
+      throw new WorkbenchDatabaseFailure(`Unexpected transcript cursor response: ${response.type}`);
+    }
+    return response.cursor;
+  }
+
+  async readTranscriptContext(threadId: string) {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptContext", threadId });
+    if (response.type !== "transcriptContext") {
+      throw new WorkbenchDatabaseFailure(`Unexpected transcript context response: ${response.type}`);
+    }
+    return response.snapshot;
+  }
+
   async readThreadStateProject(projectId: ProjectId) {
     await this.start();
     const response = await this.#request({ type: "readThreadStateProject", projectId });

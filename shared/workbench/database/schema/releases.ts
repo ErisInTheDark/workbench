@@ -33,6 +33,7 @@ const databaseReleases = Object.freeze({
   relationalThreadState: release(23, "b42b22c4cfc5b4d4dc491931c1fcd37a003c4dd6c23bc4f3cae756f3ac9355f4"),
   profileContextWindows: release(24, "183bc7545fd7b9ea47c17decb5f4bb8c204fb767634f5d7d4888ba69cc187953"),
   threadOwnedLifecycle: release(25, "5489b60ed8e25419cc967cd3fa3543deb52cb65bd1f2a6b78aaa166bd121f2fd"),
+  codexTranscriptCursors: release(26, "71a4c1e1180cc8ce17764e20a5d3d13b6bd7397abd8ba3739d72e8d30d12d5c9"),
 });
 
 export default databaseReleases;

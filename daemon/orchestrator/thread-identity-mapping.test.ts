@@ -98,6 +98,26 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   return { database, owners: { threads, items }, native, parent, child, turn, admissions: () => admissions };
 }
 
+test("SQL context responses remain canonical across the provider response boundary", async () => {
+  const { database, owners, native, parent, turn } = await setup();
+  try {
+    for (const method of ["thread/context/read", "workbench/thread/page/read"]) {
+      const response = { id: 1, result: {
+        thread: { id: parent.threadId, turns: [{ id: turn.turnId, items: [] }] },
+        questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+        entryScope: { mode: "turns", turnIds: [turn.turnId] },
+      } };
+      assert.deepEqual(await mapNativeProviderResponse(owners, "codex", {
+        method, params: { threadId: native.nativeThreadId },
+      }, response), response);
+    }
+  } finally {
+    owners.items.dispose();
+    owners.threads.dispose();
+    database.close();
+  }
+});
+
 test("accepted-intent ingress resolves canonical ownership before publishing lifecycle evidence", async () => {
   const { database, owners, native, parent, child, turn } = await setup();
   const emitted: Array<{ id?: number; error?: { message: string }; result?: { accepted: boolean } }> = [];

@@ -48,6 +48,39 @@ const fixtureIdentityValues = {
   },
 };
 
+test("provider cursor absence and values survive the worker boundary and cold reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "transcript-cursor-worker-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const initial = new WorkbenchDatabaseController({ databasePath });
+  await initial.start();
+  await initial.close();
+  const database = new Database(databasePath);
+  new WorkbenchTranscriptRepository(database).settle([{
+    kind: "thread", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "/repo",
+    title: "", createdAt: 1, updatedAt: 1, activityAt: 1,
+  }, {
+    kind: "turn", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+    harnessId: "codex", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+    nativeTurnId: fixtureIdentityValues.NativeTurnId.turn, state: "completed", createdAt: 1,
+    startedAt: 1, endedAt: 2, durationMs: 1,
+  }, {
+    kind: "providerCursor", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn, previousCursor: "opaque",
+  }]);
+  database.close();
+  try {
+    for (let pass = 0; pass < 2; pass++) {
+      const controller = new WorkbenchDatabaseController({ databasePath });
+      try {
+        assert.equal(await controller.readTranscriptProviderCursor("thread", "turn"), "opaque");
+        assert.equal(await controller.readTranscriptProviderCursor("thread", "missing"), undefined);
+        assert.equal((await controller.readTranscriptContext("thread"))?.rows.threadItems.length, 0);
+      } finally { await controller.close(); }
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("stored transcript queries cross the worker boundary and preserve invalid-id failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "transcript-query-worker-"));
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });

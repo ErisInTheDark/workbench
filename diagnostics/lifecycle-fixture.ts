@@ -1,13 +1,62 @@
 /*
- * Keywords: copied source, lifecycle faults, real schema migration.
  * Exports:
  * - installLifecycleProbe: instrument only a private copy's node lifecycle callbacks.
  * - writeLifecycleFault: select held drain or failed activation for the next transition.
  * - appendLifecycleMigration: append a synthetic release without changing sealed production history.
+ * - seedLifecycleTranscript: admit an isolated durable transcript and image without JSON recording.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import Database from "better-sqlite3";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "../shared/workbench/identity";
+import WorkbenchThreadIdentityRepository from "../daemon/orchestrator/database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchTranscriptIdentityRepository from "../daemon/orchestrator/database/transcript/WorkbenchTranscriptIdentityRepository";
+import WorkbenchTranscriptRepository from "../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository";
+import externalizeCodexTranscriptInlineImages from "../daemon/orchestrator/codex-transcript-image-assets";
+
+export async function seedLifecycleTranscript(project: string) {
+  const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });
+  database.pragma("foreign_keys = ON");
+  try {
+    const threads = new WorkbenchThreadIdentityRepository(database);
+    const nativeThreadId = NativeThreadIdSchema.parse("lifecycle-transcript");
+    const thread = threads.observe({
+      native: { harness: "codex", nativeLocation: project, nativeThreadId },
+      projectId: ProjectIdSchema.parse("lifecycle"), projectRoot: project,
+      title: "isolated transcript", createdAt: 1, updatedAt: 2, activityAt: 2,
+    });
+    const turn = threads.observeTurn({
+      kind: "turn", turnId: NativeTurnIdSchema.parse("lifecycle-turn"),
+      threadId: thread.threadId, harnessId: "codex", nativeLocation: project,
+      nativeThreadId, nativeTurnId: NativeTurnIdSchema.parse("lifecycle-turn"),
+      state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+    });
+    const item = new WorkbenchTranscriptIdentityRepository(database).admit({
+      threadId: thread.threadId, sources: [{ turnId: turn.turnId, sourceId: "image", kind: "stable" }], legacyAliases: [],
+    });
+    const bytes = Buffer.from("isolated transcript image");
+    const image = await externalizeCodexTranscriptInlineImages({
+      type: "image" as const, url: `data:image/png;base64,${bytes.toString("base64")}`,
+    }, { storageRoot: project, threadId: nativeThreadId });
+    new WorkbenchTranscriptRepository(database).settle([{
+      kind: "providerTurnScope", threadId: thread.threadId, completeTurnIds: [turn.turnId],
+      observations: [{
+        kind: "turn", threadId: thread.threadId, turnId: turn.turnId, turnIndex: turn.turnIndex,
+        harnessId: "codex", nativeLocation: project, nativeThreadId,
+        nativeTurnId: NativeTurnIdSchema.parse("lifecycle-turn"),
+        state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+      }, {
+        kind: "item", threadId: thread.threadId, turnId: turn.turnId, publicItemId: item.itemId,
+        lifecycle: "completed", observedAt: 2,
+        item: { id: "image", type: "userMessage", clientId: null, content: [image.value] },
+      }],
+    }, {
+      kind: "providerCursor", threadId: thread.threadId, turnId: turn.turnId, previousCursor: null,
+    }]);
+    return { threadId: thread.threadId, turnId: turn.turnId, itemId: item.itemId, bytes };
+  } finally { database.close(); }
+}
 
 async function replaceOnce(file: string, before: string, after: string) {
   const source = await fs.readFile(file, "utf8");

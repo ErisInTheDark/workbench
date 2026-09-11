@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import IsolatedWorkbench from "./IsolatedWorkbench";
-import { appendLifecycleMigration, installLifecycleProbe, writeLifecycleFault } from "./lifecycle-fixture";
+import { appendLifecycleMigration, installLifecycleProbe, seedLifecycleTranscript, writeLifecycleFault } from "./lifecycle-fixture";
 import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, installThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import {
   WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
@@ -15,6 +15,8 @@ import {
 } from "../shared/workbench/orchestrator-reload";
 import type { WorkbenchReloadDirtSnapshot } from "../shared/reload/workbench-reload";
 import type { WorkbenchProjectsPayload } from "../shared/types";
+import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
+import type { TranscriptStreamUpdate } from "../shared/workbench/transcript/thread-transcript-stream";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -100,10 +102,44 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const captured = await captureThreadStateMigrationSource(path.resolve(process.cwd(), ".."), runtime.root);
     await verifyThreadStateMigrationSource(captured);
     const capturedCounts = await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
+    let subscriptionIndex = 0;
+    const verifyTranscript = async () => {
+      const request = { threadId: transcript.threadId, turnLimit: 1 };
+      const snapshot = await runtime.transcripts.read(request);
+      assert.ok(snapshot);
+      assert.deepEqual(snapshot.loadedTurnIds, [transcript.turnId]);
+      const projection = projectWorkbenchTranscript(snapshot);
+      assert.ok(projection.success);
+      const item = projection.data.turns[0]?.items[0];
+      assert.equal(item?.id, transcript.itemId);
+      assert.ok(item?.type === "userMessage");
+      const image = item.content[0];
+      assert.ok(image?.type === "image");
+      const response = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/orchestrator/transcript-assets/"), runtime.origin), { signal: t.signal });
+      assert.equal(response.status, 200);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), transcript.bytes);
+      const updates: TranscriptStreamUpdate[] = [];
+      const subscriptionId = `lifecycle-${++subscriptionIndex}`;
+      await runtime.transcripts.subscribe({ ...request, subscriptionId }, () => {
+        assert.fail("The real socket must deliver the incremental protocol, not a legacy snapshot.");
+      }, update => { updates.push(update); });
+      try {
+        await runtime.until(() => updates.some(update => update.kind === "structure"));
+        const baseline = updates.find(update => update.kind === "structure");
+        assert.ok(baseline?.kind === "structure" && baseline.reset);
+        assert.deepEqual(baseline.snapshot.loadedTurnIds, [transcript.turnId]);
+        const database = new Database(serverDatabase, { readonly: true });
+        try {
+          assert.equal(database.prepare("SELECT previous_cursor FROM codex_transcript_turn_cursors WHERE turn_id = ?").pluck().get(transcript.turnId), null);
+        } finally { database.close(); }
+      } finally { await runtime.transcripts.unsubscribe({ subscriptionId }); }
+    };
     await installLifecycleProbe(runtime.project);
     await runtime.start();
+    const transcript = await seedLifecycleTranscript(runtime.project);
     await runtime.startApp();
     await assets();
+    await verifyTranscript();
     const ids = runtime.processIds;
     assert.ok(ids.app && ids.orchestrator);
     const registration = await appState();
@@ -116,6 +152,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await reloadApp(["client:database"]);
     await reloadServer(["server:core", "server:topology", "server:commands", "server:websocket"], false, true);
     assert.deepEqual(runtime.processIds, ids);
+    await verifyTranscript();
     console.log("database reload and reload-all passed without process dirt");
 
     for (const owner of ["orchestrator", "app"] as const) {
@@ -143,6 +180,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);
       await runtime.request("project/catalog/read");
       await assets();
+      await verifyTranscript();
       assert.deepEqual(runtime.processIds, ids, "Rollback must not require process restart");
 
       // Keep the held drain on retry: an old generation must expire fresh work again.
@@ -160,6 +198,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await runtime.start();
     await runtime.startApp();
     await assets();
+    await verifyTranscript();
     assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);
     await runtime.request("project/catalog/read");
     clean(await appDirt());

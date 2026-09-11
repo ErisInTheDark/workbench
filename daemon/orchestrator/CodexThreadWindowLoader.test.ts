@@ -1,7 +1,5 @@
 /*
- * Keywords: Codex, pagination, recovery, chronology, incomplete history.
- * Exports:
- * - No production exports; Node tests protect bounded Codex catalog import and exact previous-turn paging. Keywords: codex, thread, pagination, window, test.
+ * No production exports. Protect bounded provider recovery and exact previous-turn paging.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -83,6 +81,33 @@ function withHistory(turns: Turn[], entries: WorkbenchThreadTurnHistoryEntry[]) 
 function response(result: unknown): JsonRpcResponse {
   return { id: 1, result };
 }
+
+test("previous paging discovers an absent cursor using metadata and settles it before fetching the body", async () => {
+  let settled = false;
+  const loader = new CodexThreadWindowLoader(async request => {
+    const params = request.params as { cursor?: string; itemsView: string; limit: number };
+    if (params.itemsView === "full") {
+      assert.ok(settled);
+      assert.equal(params.cursor, "before-old");
+      return response({ data: [turn("old", ["body"])], nextCursor: null });
+    }
+    if (params.limit === 100) return response({ data: [turn("new"), turn("boundary"), turn("old")], nextCursor: null });
+    return response(params.cursor
+      ? { data: [turn("boundary")], nextCursor: "before-old" }
+      : { data: [turn("new")], nextCursor: "before-boundary" });
+  });
+  const result = await loader.ensureWindow({
+    readProviderPreviousCursor: async () => undefined,
+    recordProviderWindow: async record => {
+      assert.deepEqual(record.catalog?.boundary, { turnId: "boundary", cursor: "before-old" });
+      settled = true;
+    },
+  }, thread(), withHistory([], [history("old", "unloaded"), history("boundary", "unloaded")]), {
+    mode: "previous", beforeTurnId: "boundary",
+  });
+  assert.ok(result);
+  assert.equal(result.recording.page?.turn.id, "old");
+});
 
 test("recovery settles each full page before fetching another and retains only chronological metadata", async () => {
   const requests: JsonRpcRequest[] = [];

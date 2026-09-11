@@ -4,6 +4,7 @@
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
+import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
@@ -233,6 +234,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       prepareTurnStart,
       questionnaires,
+      sqliteReader: new CodexSqliteTranscriptReader(
+        request => transcript.read(request),
+        threadId => build.get("database").readTranscriptContext!(threadId),
+      ),
+      readSqliteProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(
           build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)),

@@ -305,6 +305,10 @@ export async function mapNativeProviderResponse(
     if (typeof params.threadId !== "string") throw new Error("Provider response requires its originating thread.");
     return owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(params.threadId));
   };
+  if ((request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD)
+    && result.thread && (result.thread as Thread).id === owners.threads.workbenchIdForNative(native())) {
+    return response;
+  }
   let mapped = { ...result };
   if (typeof result.threadId === "string") {
     mapped.threadId = owners.threads.workbenchIdForNative(owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(result.threadId)));
