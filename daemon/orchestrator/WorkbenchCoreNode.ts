@@ -47,6 +47,7 @@ import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
 import { WorkbenchStatsHydrationResultSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
@@ -204,6 +205,14 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   stats = new WorkbenchStatsController({
+    renames: new WorkbenchClaimRenameController({
+      listRoots: async (projectId) => {
+        const catalog = await projectCatalog.readCatalog();
+        return catalog.data.filter((project) => projectId === null || project.id === projectId).flatMap((project) => (
+          project.roots.map((root) => ({ projectId: project.id, rootId: root.id, workspaceRoot: root.rootPath }))
+        ));
+      },
+    }),
     claims: {
       reconcile: async (signal) => {
         for (const project of projectCatalog.getCurrentSnapshot().data) {

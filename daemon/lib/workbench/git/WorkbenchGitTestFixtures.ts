@@ -885,6 +885,9 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["GitClaimRenameReader.test.ts", { fixtures: [
+    demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 3 : 4),
+  ], nested: false }],
   ["GitClaimHistoryReader.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 1),
   ], nested: false }],

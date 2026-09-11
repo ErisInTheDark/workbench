@@ -12,9 +12,16 @@ import {
   type WorkbenchClaimStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
+import type { WorkbenchGitClaimRename } from "../../stats/git-claim-observation.ts";
 
 const CLAIM_IDENTITIES = `
-  WITH native AS (
+  WITH renames AS MATERIALIZED (
+    SELECT json_extract(value, '$.projectId') project_id,
+      json_extract(value, '$.rootId') root_id,
+      json_extract(value, '$.from') source_path,
+      json_extract(value, '$.to') target_path
+    FROM json_each(@renames)
+  ), native AS (
     SELECT t.harness_id, t.native_thread_id, w.project_id, MIN(t.thread_id) thread_id
     FROM (
       SELECT thread_id, harness_id, native_thread_id FROM thread_turns
@@ -23,9 +30,11 @@ const CLAIM_IDENTITIES = `
     GROUP BY t.harness_id, t.native_thread_id, w.project_id
     HAVING COUNT(DISTINCT t.thread_id) = 1
   ), resolved AS (
-    SELECT c.*,
+    SELECT c.project_id, c.root_id, c.harness_id, c.thread_id, c.claimed_day,
+      COALESCE(r.target_path, c.claimed_path) claimed_path,
       COALESCE(w.id, a.thread_id, n.thread_id) managed_id
     FROM git_claim_thread_file_days c
+    LEFT JOIN renames r ON r.project_id = c.project_id AND r.root_id = c.root_id AND r.source_path = c.claimed_path
     LEFT JOIN workbench_thread_legacy_aliases a
       ON a.alias = c.thread_id AND EXISTS (SELECT 1 FROM workbench_threads owner WHERE owner.id = a.thread_id AND owner.project_id = c.project_id)
     LEFT JOIN workbench_threads w ON w.id = c.thread_id AND w.project_id = c.project_id
@@ -46,12 +55,12 @@ export default class WorkbenchClaimStatsRepository {
     this.identities = new WorkbenchThreadIdentityRepository(database);
   }
 
-  hotspots(projectId: string | null, startedAt: number, now: number) {
+  hotspots(projectId: string | null, startedAt: number, now: number, renames: readonly WorkbenchGitClaimRename[] = []) {
     const rows = this.database.prepare(`${CLAIM_IDENTITIES}
       SELECT project_id, root_id, claimed_path, COUNT(DISTINCT claimant_key) thread_count
       FROM claims GROUP BY project_id, root_id, claimed_path
       ORDER BY thread_count DESC, claimed_path, project_id, root_id LIMIT 20
-    `).all({ projectId, startedAt, endedAt: Math.floor(now / 86_400_000) * 86_400_000 }) as Array<{
+    `).all({ projectId, startedAt, endedAt: Math.floor(now / 86_400_000) * 86_400_000, renames: JSON.stringify(renames) }) as Array<{
       project_id: string; root_id: string; claimed_path: string; thread_count: number;
     }>;
     return rows.map((row) => ({
@@ -59,16 +68,19 @@ export default class WorkbenchClaimStatsRepository {
     }));
   }
 
-  read(request: WorkbenchClaimStatsRequest, now = Date.now()): WorkbenchClaimStatsResponse {
+  read(request: WorkbenchClaimStatsRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchClaimStatsResponse {
     const params = {
       projectId: request.projectId,
       startedAt: request.range === "all" ? 0 : statsRangeShape(request.range, now).startedAt,
       endedAt: Math.floor(now / 86_400_000) * 86_400_000,
+      renames: JSON.stringify(renames),
     };
     const pageSize = WORKBENCH_CLAIM_STATS_PAGE_SIZE;
     const page = request.page;
-    if (request.file) {
-      const scoped = { ...params, rootId: request.file.rootId, path: request.file.path };
+    const file = request.file;
+    if (file) {
+      const target = renames.find((rename) => rename.projectId === request.projectId && rename.rootId === file.rootId && rename.from === file.path)?.to;
+      const scoped = { ...params, rootId: file.rootId, path: target ?? file.path };
       const query = `${CLAIM_IDENTITIES}, selected AS (
         SELECT project_id, MIN(harness_id) harness_id, identity_id, MAX(managed_id) managed_id, MAX(claimed_day) last_day
         FROM claims WHERE root_id = @rootId AND claimed_path = @path

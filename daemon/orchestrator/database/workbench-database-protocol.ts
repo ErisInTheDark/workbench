@@ -53,7 +53,7 @@ import type {
 } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository.ts";
 import type { TranscriptQuery, TranscriptQueryPage } from "./transcript/transcript-query-contract";
-import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation.ts";
+import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation.ts";
 import type {
   WorkbenchGitClaimImportCandidate,
   WorkbenchGitClaimImportDiscovery,
@@ -119,9 +119,9 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "search"; request: WorkbenchSearchRequest }
   | { type: "recordStatsClaimSnapshot"; snapshot: WorkbenchGitClaimSnapshot }
   | { type: "recordStatsRateLimits"; observation: WorkbenchRateLimitObservation }
-  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number }
-  | { type: "readStatsDetailed"; request: WorkbenchStatsDetailedReadRequest; now?: number }
-  | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number }
+  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
+  | { type: "readStatsDetailed"; request: WorkbenchStatsDetailedReadRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
+  | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
   | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
   | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
   | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }

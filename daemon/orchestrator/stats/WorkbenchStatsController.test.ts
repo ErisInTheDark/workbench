@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect background import startup, ordered capture, partial rate refresh, bounded failures, and disposal. Keywords: stats, controller, lifecycle, test.
+ * No exports. Protect import startup, ordered capture, rename-aware reads, partial refresh, failures, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -10,6 +10,7 @@ import type {
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
 import type { WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 const importProgress: WorkbenchStatsImportProgress = {
   claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
@@ -58,6 +59,7 @@ function emptyStats(): WorkbenchStatsResponse {
 
 function importPorts() {
   return {
+    readClaimStats: async () => ({ kind: "files" as const, page: 1, pages: 1, rows: [] }),
     addStatsClaimDiscoveries: async () => importProgress,
     beginStatsImport: async () => importProgress,
     claimStatsClaimImport: async () => null,
@@ -73,6 +75,55 @@ const claims = {
   discover: async () => ({ candidates: [], unsupported: 0 }),
   hydrate: async () => [],
 };
+
+test("all stats routes receive rename projections and only UI reads can recover from unavailable history", async () => {
+  const projectId = ProjectIdSchema.parse("project");
+  const renames = [{ projectId, rootId: "root", from: "old", to: "current" }];
+  let fail = false;
+  let disposed = false;
+  const seen: Array<readonly object[] | undefined> = [];
+  const controller = new WorkbenchStatsController({
+    claims,
+    renames: {
+      read: async () => fail
+        ? { renames: [], failures: [{ projectId, rootId: "root", message: "History unavailable." }] }
+        : { renames, failures: [] },
+      dispose: async () => { disposed = true; },
+    },
+    database: {
+      ...importPorts(),
+      readStats: async (_request, _now, aliases) => { seen.push(aliases); return emptyStats(); },
+      readStatsDetailed: async (_request, _now, aliases) => {
+        seen.push(aliases);
+        const base = emptyStats();
+        return { ...base, cost: { ...base.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
+      },
+      readClaimStats: async (_request, _now, aliases) => { seen.push(aliases); return { kind: "files", page: 1, pages: 1, rows: [] }; },
+      recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
+    },
+    harnesses: {
+      hydrateUsage: async () => ({ state: "unavailable" }), listHarnesses: () => [],
+      listUsageHydrationHarnesses: () => [], request: async () => ({ id: "unused", result: null }),
+    },
+  });
+  const request = { projectId, range: "7d" as const };
+  const fileRequest = { ...request, file: null, page: 1 };
+  try {
+    await controller.read(request);
+    await controller.readDetailed(request);
+    await controller.readClaims(fileRequest);
+    assert.deepEqual(seen, [renames, renames, renames]);
+    fail = true;
+    assert.equal((await controller.read(request)).failures.length, 1);
+    assert.equal((await controller.readDetailed(request)).failures.length, 1);
+    const before = seen.length;
+    await assert.rejects(controller.readClaims(fileRequest));
+    assert.equal(seen.length, before);
+    fail = false;
+    assert.equal((await controller.read(request)).failures.length, 0);
+  } finally { await controller.dispose(); }
+  assert.equal(disposed, true);
+});
 
 test("controller startup begins the resumable import in the background", async () => {
   let starts = 0;

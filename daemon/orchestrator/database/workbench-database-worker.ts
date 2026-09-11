@@ -339,17 +339,17 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   }
   if (request.type === "readStats") {
     if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now) });
+    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now, request.renames) });
     return;
   }
   if (request.type === "readStatsDetailed") {
     if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsDetailedResult", result: statsRepository.readDetailed(request.request, request.now) });
+    post({ id: request.id, type: "statsDetailedResult", result: statsRepository.readDetailed(request.request, request.now, request.renames) });
     return;
   }
   if (request.type === "readClaimStats") {
     if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "claimStatsResult", result: new WorkbenchClaimStatsRepository(database).read(request.request, request.now) });
+    post({ id: request.id, type: "claimStatsResult", result: new WorkbenchClaimStatsRepository(database).read(request.request, request.now, request.renames) });
     return;
   }
   if (request.type === "beginStatsImport") {

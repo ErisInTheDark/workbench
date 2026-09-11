@@ -1,17 +1,20 @@
 /*
  * Exports:
- * - WorkbenchStatsControllerOptions: database, harness, and warning ports for the reloadable stats owner. Keywords: stats, controller, lifecycle.
- * - default WorkbenchStatsController: own background import startup, ordered capture, rate refresh, bounded failures, reads, and disposal. Keywords: stats, tokens, claims, rate limits.
- * Local helpers: parse provider-owned rate snapshots at the bridge boundary. Keywords: rate limits, provider, parser.
+ * - WorkbenchStatsControllerOptions: database, harness, rename, and warning ports.
+ * - default WorkbenchStatsController: own imports, capture, rename-aware reads, refresh, failures, and disposal.
  */
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "../bridge-types.ts";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchRateLimitObservation } from "../database/stats/WorkbenchStatsRepository.ts";
-import type { WorkbenchGitClaimSnapshot } from "./git-claim-observation.ts";
+import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "./git-claim-observation.ts";
 import WorkbenchStatsImportController, { type WorkbenchStatsImportControllerOptions } from "./WorkbenchStatsImportController.ts";
+import type WorkbenchClaimRenameController from "./WorkbenchClaimRenameController.ts";
+import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.ts";
+import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 
 export interface WorkbenchStatsControllerOptions {
+  renames?: Pick<WorkbenchClaimRenameController, "read" | "dispose">;
   claims: WorkbenchStatsImportControllerOptions["claims"];
   database: {
     addStatsClaimDiscoveries: WorkbenchStatsImportControllerOptions["database"]["addStatsClaimDiscoveries"];
@@ -19,8 +22,9 @@ export interface WorkbenchStatsControllerOptions {
     claimStatsClaimImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsClaimImport"];
     claimStatsUsageImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsUsageImport"];
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
-    readStats(request: WorkbenchStatsReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>;
-    readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
+    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>;
+    readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
+    readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
     recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
     recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
     repairStatsAttributions: WorkbenchStatsImportControllerOptions["database"]["repairStatsAttributions"];
@@ -145,16 +149,40 @@ export default class WorkbenchStatsController {
 
   async read(request: WorkbenchStatsReadRequest) {
     await this.queue;
-    const result = await this.options.database.readStats(request);
-    return await this.withStatus(result);
+    const history = await this.readRenames(request.projectId);
+    const result = await this.options.database.readStats(request, undefined, history.renames);
+    return await this.withStatus(result, history);
+  }
+
+  async readClaims(request: WorkbenchClaimStatsRequest) {
+    await this.queue;
+    const history = await this.readRenames(request.projectId);
+    if (history.failures.length) throw new Error("Committed rename history is unavailable for this claim report.");
+    return await this.options.database.readClaimStats(request, undefined, history.renames);
   }
 
   async readDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest) {
     await this.queue;
-    return await this.withStatus(await this.options.database.readStatsDetailed(request));
+    const history = await this.readRenames(request.projectId);
+    return await this.withStatus(await this.options.database.readStatsDetailed(request, undefined, history.renames), history);
   }
 
-  private async withStatus<T extends import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>(result: T) {
+  private async readRenames(projectId: string | null): Promise<WorkbenchClaimRenameRead> {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    let history: WorkbenchClaimRenameRead;
+    try {
+      history = await this.options.renames?.read(projectId) ?? { renames: [], failures: [] };
+    } catch (error) {
+      if (!this.active) throw error;
+      history = { renames: [], failures: [{ projectId: projectId ?? "", rootId: "", message: "Committed rename history discovery is unavailable." }] };
+    }
+    for (const failure of history.failures) {
+      this.options.log?.(`Workbench claim rename failure: ${failure.message.replace(/[\r\n]/gu, " ").slice(0, 500)}`);
+    }
+    return history;
+  }
+
+  private async withStatus<T extends import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>(result: T, history: WorkbenchClaimRenameRead) {
     const currentProgress = this.importer.getProgress();
     const historyImport = await this.options.database.readStatsImportProgress(
       currentProgress.state,
@@ -163,14 +191,18 @@ export default class WorkbenchStatsController {
     );
     return {
       ...result,
-      failures: [...result.failures, ...this.failures].slice(-20),
+      failures: [
+        ...result.failures,
+        ...this.failures,
+        ...history.failures.map(({ message }) => ({ harness: null, message, source: "capture" as const })),
+      ].slice(-20),
       historyImport,
     };
   }
 
   async dispose() {
     this.active = false;
-    await this.importer.dispose();
+    await Promise.all([this.importer.dispose(), this.options.renames?.dispose()]);
     await this.queue;
   }
 

@@ -24,6 +24,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const harnesses = build.get("harnesses");
     const projectCatalog = build.get("projectCatalog");
     const database = build.get("database");
+    const stats = build.get("stats");
     const threadIdentity = build.get("threadIdentity");
     const transcriptIdentity = build.get("transcriptIdentity");
     const nativeTarget = async (threadId: string, cwd: string, harness?: string) => {
@@ -34,7 +35,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     };
     const claimStats = new WorkbenchClaimStatsController({
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
-      read: async (request) => await database.readClaimStats(request),
+      read: async (request) => await stats.readClaims(request),
     });
     const transcriptCommands = new WorkbenchTranscriptCommandController({
       projectRoot: context.legacyMigrationProjectRoot,
@@ -144,7 +145,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
   sources: [

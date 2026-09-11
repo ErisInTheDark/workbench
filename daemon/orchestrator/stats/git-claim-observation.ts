@@ -1,8 +1,16 @@
 /*
  * Exports:
- * - WorkbenchGitClaimSnapshot: one atomic post-mutation snapshot of exact live claim paths grouped by workspace root. Keywords: git, claims, stats, snapshot.
+ * - WorkbenchGitClaimSnapshot: atomic live claim paths grouped by workspace root.
+ * - WorkbenchGitClaimRename: read-time alias within one project and workspace root.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+
+export interface WorkbenchGitClaimRename {
+  projectId: string;
+  rootId: string;
+  from: string;
+  to: string;
+}
 
 export interface WorkbenchGitClaimSnapshot {
   harness: WorkbenchHarness;

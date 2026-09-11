@@ -48,7 +48,7 @@ import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/st
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
-import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
+import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type {
   WorkbenchGitClaimImportCandidate,
   WorkbenchGitClaimImportDiscovery,
@@ -522,9 +522,9 @@ export default class WorkbenchDatabaseController {
     await this.#statsMutation({ type: "recordStatsRateLimits", observation });
   }
 
-  async readStats(request: WorkbenchStatsReadRequest, now?: number) {
+  async readStats(request: WorkbenchStatsReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
     await this.start();
-    const response = await this.#request({ type: "readStats", request, ...(now === undefined ? {} : { now }) });
+    const response = await this.#request({ type: "readStats", request, renames, ...(now === undefined ? {} : { now }) });
     if (response.type !== "statsResult") {
       throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${response.type}`);
     }
@@ -538,16 +538,16 @@ export default class WorkbenchDatabaseController {
     return response.progress;
   }
 
-  async readStatsDetailed(request: WorkbenchStatsDetailedReadRequest, now?: number) {
+  async readStatsDetailed(request: WorkbenchStatsDetailedReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
     await this.start();
-    const response = await this.#request({ type: "readStatsDetailed", request, ...(now === undefined ? {} : { now }) });
+    const response = await this.#request({ type: "readStatsDetailed", request, renames, ...(now === undefined ? {} : { now }) });
     if (response.type !== "statsDetailedResult") throw new WorkbenchDatabaseFailure(`Unexpected detailed stats response: ${response.type}`);
     return response.result;
   }
 
-  async readClaimStats(request: WorkbenchClaimStatsRequest, now?: number) {
+  async readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
     await this.start();
-    const response = await this.#request({ type: "readClaimStats", request, ...(now === undefined ? {} : { now }) });
+    const response = await this.#request({ type: "readClaimStats", request, renames, ...(now === undefined ? {} : { now }) });
     if (response.type !== "claimStatsResult") throw new WorkbenchDatabaseFailure(`Unexpected claim stats response: ${response.type}`);
     return response.result;
   }

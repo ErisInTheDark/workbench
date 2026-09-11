@@ -321,6 +321,13 @@ test("database worker records claim snapshots and returns bounded stats", async 
     }, now);
     assert.equal(claims.kind, "threads");
     if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
+    const renames = [{ projectId: "project", rootId: "root", from: "src", to: "renamed" }];
+    assert.equal((await controller.readStats({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
+    assert.equal((await controller.readStatsDetailed({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
+    const renamed = await controller.readClaimStats({
+      projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", file: { rootId: "root", path: "renamed" }, page: 1,
+    }, now, renames);
+    assert.equal(renamed.rows.length, 1);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

@@ -24,6 +24,46 @@ const fixtureIdentityValues = {
 const now = Date.UTC(2026, 8, 4, 12);
 const day = 86_400_000;
 
+test("rename projection merges before counting and pagination without rewriting claim evidence", () => {
+  const db = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(db);
+    const writer = new WorkbenchStatsRepository(db);
+    const repository = new WorkbenchClaimStatsRepository(db);
+    const projectId = fixtureIdentityValues.ProjectId["project"];
+    const renames = [{ projectId, rootId: "root", from: "old", to: "current" }];
+    for (const [threadId, paths, observedAt, rootId, project] of [
+      ["one", ["old", "current"], now, "root", projectId],
+      ["two", ["old"], now, "root", projectId],
+      ["expired", ["old"], now - 8 * day, "root", projectId],
+      ["other-root", ["old"], now, "other", projectId],
+      ["other-project", ["old"], now, "root", "other"],
+    ] as const) writer.recordClaimSnapshot({
+      projectId: project, threadId, harness: "codex", observedAt, roots: [{ rootId, paths: [...paths] }],
+    });
+    for (let index = 0; index < 48; index += 1) writer.recordClaimSnapshot({
+      projectId, threadId: "one", harness: "codex", observedAt: now, roots: [{ rootId: "root", paths: [`independent-${index}`] }],
+    });
+    const request = { projectId, range: "7d" as const, page: 1, file: null };
+    const files = repository.read(request, now, renames);
+    assert.equal(files.pages, 1);
+    assert.equal(files.rows.length, 50);
+    assert.deepEqual(files.rows[0], { rootId: "root", path: "current", threadCount: 2 });
+    for (const name of ["old", "current"]) {
+      const threads = repository.read({ ...request, file: { rootId: "root", path: name } }, now, renames);
+      assert.equal(threads.kind, "threads");
+      if (threads.kind === "threads") assert.deepEqual(threads.rows.map(({ threadId }) => threadId).sort(), ["one", "two"]);
+    }
+    assert.deepEqual(repository.hotspots(projectId, now - 7 * day, now, renames)[0], {
+      projectId, rootId: "root", path: "current", threadCount: 2,
+    });
+    assert.equal(repository.hotspots("other", now - 7 * day, now, renames)[0]?.path, "old");
+    assert.equal(repository.hotspots(null, now - 7 * day, now, renames)[0]?.threadCount, 2);
+    assert.equal(repository.read({ ...request, range: "all", file: { rootId: "root", path: "current" } }, now, renames).rows.length, 3);
+    assert.equal(repository.read(request, now).pages, 2);
+  } finally { db.close(); }
+});
+
 test("one Workbench claimant counts once across native providers and pending metadata", () => {
   const db = new Database(":memory:");
   try {

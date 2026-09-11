@@ -1,8 +1,7 @@
 /*
  * Exports:
- * - WorkbenchRateLimitObservation: typed durable rate-limit input. Keywords: stats, rate limits.
- * - default WorkbenchStatsRepository: own live claim/rate writes and bounded SQLite aggregates. Keywords: database, stats, claims, aggregation.
- * Local helpers: bound percentages and compare quota windows. Keywords: stats, rate limits.
+ * - WorkbenchRateLimitObservation: typed durable rate-limit input.
+ * - default WorkbenchStatsRepository: own live claim/rate writes and bounded SQLite aggregates.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -16,7 +15,7 @@ import {
   type WorkbenchStatsDetailedResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { API_PRICING_CATALOG_DATE } from "../../stats/api-pricing.ts";
-import type { WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
+import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
 import WorkbenchUsageStatsRepository from "./WorkbenchUsageStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./WorkbenchClaimStatsRepository.ts";
 
@@ -111,13 +110,13 @@ export default class WorkbenchStatsRepository {
     })();
   }
 
-  read(request: WorkbenchStatsDetailedReadRequest, now = Date.now()): WorkbenchStatsResponse {
-    return legacyStatsResponse(this.readDetailed(request, now));
+  read(request: WorkbenchStatsDetailedReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsResponse {
+    return legacyStatsResponse(this.readDetailed(request, now, renames));
   }
 
-  readDetailed(request: WorkbenchStatsDetailedReadRequest, now = Date.now()): WorkbenchStatsDetailedResponse {
+  readDetailed(request: WorkbenchStatsDetailedReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsDetailedResponse {
     const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
-    const claimHotspots = new WorkbenchClaimStatsRepository(this.database).hotspots(request.projectId, usage.startedAt, now);
+    const claimHotspots = new WorkbenchClaimStatsRepository(this.database).hotspots(request.projectId, usage.startedAt, now, renames);
 
     const rateRows = this.database.prepare(`
       WITH selected AS (
