@@ -295,6 +295,22 @@ test("provider catalogs remain unloaded until one exact turn page materializes",
   assert.equal(await store.readProviderPreviousCursor("thread", "older"), null);
 }));
 
+test("partial provider catalogs preserve omitted stored turns and their content", async () => withStore(async (store) => {
+  const stored = transcriptTurn("stored", ["stored-item"]);
+  const latest = transcriptTurn("new", ["new-item"]);
+  await store.recordHydratedThreadSnapshot({ id: 1, result: { thread: snapshot([stored]) } });
+  await store.recordProviderTurnCatalog(snapshot([]), [latest], { turnId: latest.id, cursor: null });
+  await store.recordProviderTurnPage(snapshot([]), latest, null);
+  const hydrated = await store.hydrateThreadResponse(
+    { id: 2, method: "thread/read", params: { threadId: "thread" } },
+    { id: 2, result: { thread: snapshot([]) } },
+    { hydration: { mode: "legacyFull" } },
+  );
+  assert.deepEqual((hydrated.result as { thread: Thread }).thread.turns.map(({ id, items }) => ({
+    id, items: items.map(item => item.id),
+  })), [{ id: "stored", items: ["stored-item"] }, { id: "new", items: ["new-item"] }]);
+}));
+
 test("live turn lifecycle snapshots create and update one durable turn index entry", async () => withStore(async (store, root) => {
   await store.recordHydratedThreadSnapshot({ id: 93, result: { thread: snapshot([]) } });
   const startedTurn = {

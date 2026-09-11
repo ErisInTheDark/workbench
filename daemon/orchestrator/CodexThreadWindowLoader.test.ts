@@ -382,6 +382,50 @@ test("stale latest windows import only the missing suffix and materialize the pr
   });
 });
 
+for (const overlap of [false, true]) {
+  test(`latest loading tolerates an omitted stored turn with earlier overlap ${overlap}`, async (context) => {
+    const warnings: object[] = [];
+    context.mock.method(console, "warn", (...args: object[]) => { warnings.push(args); });
+    const latest = turn("new", ["new-item"]);
+    const results = [
+      response({ data: [turn("new")], nextCursor: "older" }),
+      response({ data: [latest], nextCursor: "older" }),
+      response({ data: [turn(overlap ? "known" : "unseen")], nextCursor: overlap ? "do-not-fetch" : null }),
+    ];
+    let reads = 0;
+    const loader = new CodexThreadWindowLoader(async () => {
+      reads++;
+      assert.ok(results.length, "must stop at existing history");
+      return results.shift()!;
+    });
+    const hydrated = withHistory([turn("stored", ["stored-item"])], [
+      history("known", "unloaded"), history("stored", "loaded"),
+    ]);
+    const loaded = await loader.ensureWindow(fakeStore().store, thread(), hydrated, { mode: "latest" });
+    assert.ok(loaded);
+    assert.deepEqual(loaded.recording.page?.turn, latest);
+    assert.deepEqual(loaded.recording.catalog?.turns.map(({ id }) => id), overlap ? ["new"] : ["unseen", "new"]);
+    assert.equal(reads, 3);
+    assert.equal(warnings.length, 1);
+  });
+}
+
+for (const emptyStage of ["metadata", "body"] as const) {
+  test(`an empty latest ${emptyStage} page retains available stored content`, async (context) => {
+    const warnings: object[] = [];
+    context.mock.method(console, "warn", (...args: object[]) => { warnings.push(args); });
+    let reads = 0;
+    const loader = new CodexThreadWindowLoader(async () => {
+      reads++;
+      return response({ data: emptyStage === "body" && reads === 1 ? [turn("new")] : [], nextCursor: null });
+    });
+    const hydrated = withHistory([turn("stored", ["stored-item"])], [history("stored", "loaded")]);
+    assert.equal(await loader.ensureWindow(fakeStore().store, thread(), hydrated, { mode: "latest" }), false);
+    assert.equal(reads, emptyStage === "metadata" ? 1 : 2);
+    assert.equal(warnings.length, 1);
+  });
+}
+
 test("wrong provider predecessors fail without materializing a turn", async () => {
   const loader = new CodexThreadWindowLoader(async () => response({
     data: [turn("wrong", ["wrong-item"])],

@@ -218,6 +218,8 @@ export default class CodexThreadWindowLoader {
   ) {
     const history = readHistory(hydratedThread);
     const storedLatestTurnId = history.at(-1)?.turnId ?? null;
+    const storedTurnIds = new Set(history.map(({ turnId }) => turnId));
+    const hydratedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
     let metadataPage: TurnPage;
     try {
       metadataPage = await this.requestTurns({
@@ -238,6 +240,10 @@ export default class CodexThreadWindowLoader {
 
     const metadataLatestTurn = metadataPage.data[0] ?? null;
     if (!metadataLatestTurn) {
+      if (hydratedLatestTurn) {
+        console.warn("[workbench-transcript] Empty Codex latest catalog; retaining stored content.");
+        return false;
+      }
       if (storedLatestTurnId !== null) {
         throw new Error(`Codex returned no latest turn for stored turn ${storedLatestTurnId}.`);
       }
@@ -246,7 +252,6 @@ export default class CodexThreadWindowLoader {
         thread,
       });
     }
-    const hydratedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
     if (
       metadataLatestTurn.id === storedLatestTurnId
       && hydratedLatestTurn
@@ -263,9 +268,16 @@ export default class CodexThreadWindowLoader {
     });
     const latestTurn = firstPage.data[0] ?? null;
     if (!latestTurn) {
+      if (hydratedLatestTurn) {
+        console.warn("[workbench-transcript] Empty Codex latest body page; retaining stored content.");
+        return false;
+      }
       throw new Error(`Codex did not materialize latest turn ${metadataLatestTurn.id}.`);
     }
-    if (latestTurn.id === storedLatestTurnId) {
+    if (storedTurnIds.has(latestTurn.id)) {
+      if (latestTurn.id !== storedLatestTurnId) {
+        console.warn("[workbench-transcript] Codex latest page overlaps earlier stored history; retaining omitted turns.");
+      }
       return createProviderWindowLoad({
         page: { previousCursor: firstPage.nextCursor, turn: latestTurn },
         thread,
@@ -275,9 +287,9 @@ export default class CodexThreadWindowLoader {
     const descendingTurns = [latestTurn];
     const turnIds = new Set([latestTurn.id]);
     const seenCursors = new Set<string>();
-    let reachedStoredLatestTurn = false;
+    let reachedStoredTurnId: string | null = null;
     let cursor = firstPage.nextCursor;
-    while (cursor !== null && (storedLatestTurnId === null || !reachedStoredLatestTurn)) {
+    while (cursor !== null && reachedStoredTurnId === null) {
       if (seenCursors.has(cursor)) throw new Error("Codex repeated a thread turn cursor.");
       seenCursors.add(cursor);
       const page = await this.requestTurns({
@@ -287,8 +299,8 @@ export default class CodexThreadWindowLoader {
         threadId: thread.id,
       });
       for (const turn of page.data) {
-        if (turn.id === storedLatestTurnId) {
-          reachedStoredLatestTurn = true;
+        if (storedTurnIds.has(turn.id)) {
+          reachedStoredTurnId = turn.id;
           break;
         }
         if (turnIds.has(turn.id)) throw new Error(`Codex repeated turn ${turn.id} in its turn catalog.`);
@@ -297,8 +309,9 @@ export default class CodexThreadWindowLoader {
       }
       cursor = page.nextCursor;
     }
-    if (storedLatestTurnId !== null && !reachedStoredLatestTurn) {
-      throw new Error(`Codex turn catalog did not contain stored latest turn ${storedLatestTurnId}.`);
+    if (storedLatestTurnId !== null && reachedStoredTurnId !== storedLatestTurnId) {
+      // The provider catalog is not a deletion authority for independently recorded history.
+      console.warn("[workbench-transcript] Codex catalog omitted the stored latest turn; merging available history without removing stored turns.");
     }
 
     const turns = descendingTurns.slice().reverse();
