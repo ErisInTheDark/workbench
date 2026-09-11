@@ -38,6 +38,7 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       }
       return;
     }
+    if (count < 5) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let retired = false;
     const measure = () => {

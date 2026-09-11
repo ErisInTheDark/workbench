@@ -1,7 +1,6 @@
 /*
- * Keywords: transcript, SQLite, projection, canonical, initial message.
  * Exports:
- * - default ThreadTranscriptProjection: render one canonical SQLite transcript projection through the established item UI. Keywords: transcript, SQLite, projection, canonical.
+ * - default ThreadTranscriptProjection: render canonical SQLite transcript items through the established UI.
  */
 "use client";
 
@@ -37,7 +36,6 @@ function mergeAdjacentTurnSegments(
     if (previous?.turnId === segment.turnId) {
       result[result.length - 1] = {
         ...previous,
-        id: `${previous.id}:${segment.id}`,
         items: [...previous.items, ...segment.items],
       };
     } else {

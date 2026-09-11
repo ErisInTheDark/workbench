@@ -1,14 +1,12 @@
 /*
- * Keywords: transcript rendering, grouping, generic item matching, incoming agent, native output, hidden skill transport.
  * Exports:
- * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
+ * - ThreadTranscriptItemDetails: render one provider or relational transcript item.
  * - ThreadTranscriptItemsDetails: render shared item groups with optional SQL-only off-screen worked runs.
- * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
- * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
- * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
- * - ThreadTurnLoadFailure: render an explicit retry surface for a failed lazy-history read. Keywords: workbench, thread, lazy history, retry.
- * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
- * - Refresh boundary: keep runtime exports component-only; reusable hooks and helpers belong in focused modules. Keywords: React Refresh, HMR, boundary.
+ * - ThreadTurnDetails: render one turn with grouped commands and typed item sections.
+ * - ThreadThreadContent: render all turns without composer chrome.
+ * - ThreadTurnLoadingSkeleton: render a placeholder for unloaded history turns.
+ * - ThreadTurnLoadFailure: render retry controls for a failed history read.
+ * Keep runtime exports component-only for React Refresh.
  */
 "use client";
 
@@ -2402,7 +2400,9 @@ export function ThreadTranscriptItemsDetails ({
         <ThreadGenericItem key={`generic:${entry.item.id}`} item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
       ) : (
         <ThreadRenderableBlockView
-          key={`${getRenderableBlockKey(entry.block)}:${index}`}
+          key={initialInactiveItemIds
+            ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
+            : `${getRenderableBlockKey(entry.block)}:${index}`}
           block={entry.block}
           browseResultEntries={browseResultEntries}
           finalAgentMessageId={finalAgentMessageId}
@@ -2432,7 +2432,7 @@ export function ThreadTranscriptItemsDetails ({
     const start = offset;
     offset += group.length;
     const children = group.map((entry, index) => renderEntry(entry, start + index));
-    if (!group[0]?.eligible || group.length < 5) return children;
+    if (!group[0]?.eligible) return children;
     const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
     const activity = ids.map(id => {
       const timeline = findWorkbenchThreadItemTimelineEntry(id, renderItemTimeline);
@@ -2440,7 +2440,7 @@ export function ThreadTranscriptItemsDetails ({
       return times.length ? Math.max(...times) : null;
     });
     return <ThreadWorkedRun
-      key={ids.join(":")}
+      key={ids[0]}
       count={group.length}
       durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
       initialInactive={ids.every(id => initialInactiveItemIds.has(id))}
