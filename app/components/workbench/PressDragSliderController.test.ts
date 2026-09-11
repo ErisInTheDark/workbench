@@ -3,6 +3,57 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import PressDragSliderController from "./PressDragSliderController";
 
+function touchFixture() {
+  let now = 0;
+  const tasks: Array<{ at: number; run: () => void; cancelled: boolean }> = [];
+  const slider = new PressDragSliderController((run, delay) => {
+    const task = { at: now + delay, run, cancelled: false };
+    tasks.push(task);
+    return () => { task.cancelled = true; };
+  });
+  return {
+    slider,
+    advance(time: number) {
+      now += time;
+      for (const task of tasks.splice(0)) {
+        if (task.at > now) tasks.push(task);
+        else if (!task.cancelled) task.run();
+      }
+    },
+  };
+}
+
+test("touch holds tolerate jitter and activate only after half a second", () => {
+  const { slider, advance } = touchFixture();
+  slider.holdTouch(20, 200, y => slider.begin({ value: 50, min: 0, max: 100, step: 1 }, y, 100));
+  slider.moveTouch(23, 202);
+  slider.cancelTouchHoldAfterMovement(3);
+  advance(499);
+  assert.equal(slider.isActive, false);
+  advance(1);
+  assert.equal(slider.isActive, true);
+  assert.equal(slider.moveTouch(23, 192), 60);
+  assert.equal(slider.commit(), 60);
+});
+
+test("scroll intent, release and cancellation cannot activate a stale touch hold", () => {
+  for (const abort of [
+    (slider: PressDragSliderController) => slider.moveTouch(29, 200),
+    (slider: PressDragSliderController) => slider.cancelTouchHoldAfterMovement(9),
+    (slider: PressDragSliderController) => slider.commit(),
+    (slider: PressDragSliderController) => slider.cancel(),
+  ]) {
+    const { slider, advance } = touchFixture();
+    let activations = 0;
+    slider.holdTouch(20, 200, () => { activations++; });
+    slider.cancelTouchHoldAfterMovement(3);
+    abort(slider);
+    advance(500);
+    assert.equal(activations, 0);
+    assert.equal(slider.commit(), null);
+  }
+});
+
 test("drag previews without committing and releases exactly once", () => {
   const slider = new PressDragSliderController();
   slider.begin({ value: 50, min: 0, max: 100, step: 10 }, 200, 100);

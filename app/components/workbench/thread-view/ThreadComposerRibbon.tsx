@@ -56,7 +56,7 @@ export default function ThreadComposerRibbon({
 }) {
   const ribbon = useRef<HTMLDivElement>(null);
   return (
-    <div ref={ribbon} className="inline-flex min-w-0 max-w-full items-center text-[0.78em] font-medium text-text [&>span[aria-hidden]]:h-4 [&>span[aria-hidden]]:shrink-0">
+    <div ref={ribbon} className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
       {showsProfileControl ? <><button
         type="button"
         aria-label={`Composer profile: ${profileLabel}`}

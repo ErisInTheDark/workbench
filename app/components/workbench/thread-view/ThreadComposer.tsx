@@ -627,11 +627,11 @@ export default function ThreadComposer ({
                 </div>
               ) : null}
               {showComposerControlRow ? (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
+                <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
+                  <div className="flex shrink-0 items-center gap-2">
                     {questionnaireToggleButton}
                   </div>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
                     {showsThreadControls ? (
                     !hasEffectiveProfile && profileSlot && !composerProfileController.hasSelection(profileSlot) && !composerProfileSnapshot.error ? (
                       <div
@@ -671,6 +671,7 @@ export default function ThreadComposer ({
                       onContextChange={(contextWindowTokens) => applyDirectSettingsChange({ ...currentComposerSettings, contextWindowTokens }, () => {})}
                     />
                     ) : null}
+                    <div className="flex shrink-0 items-center gap-2">
                     {leadingActions}
                     <PrimaryButton
                       type="submit"
@@ -683,6 +684,7 @@ export default function ThreadComposer ({
                     {trailingActions}
                     {resumeButton}
                     {stopButton}
+                    </div>
                   </div>
                 </div>
               ) : null}

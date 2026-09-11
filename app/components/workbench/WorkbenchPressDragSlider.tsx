@@ -25,6 +25,7 @@ export default function WorkbenchPressDragSlider ({
   const [controller] = useState(() => new PressDragSliderController());
   const control = useRef<HTMLButtonElement | HTMLInputElement>(null);
   const pointer = useRef<number | null>(null);
+  const touch = useRef<{ id: number; left: number; top: number } | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [position, setPosition] = useState<ReturnType<typeof positionWorkbenchPopover> | null>(null);
   const range = { value, min, max, step };
@@ -41,6 +42,7 @@ export default function WorkbenchPressDragSlider ({
 
   function cancel () {
     controller.cancel();
+    touch.current = null;
     setPreview(null);
     const id = pointer.current;
     pointer.current = null;
@@ -53,28 +55,56 @@ export default function WorkbenchPressDragSlider ({
   }, [controller, value, min, max, step, disabled, presentation]);
 
   useEffect(() => {
-    if (preview === null) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || (pointer.current === null && touch.current === null)) return;
       event.preventDefault();
       event.stopPropagation();
+      cancel();
+    };
+    const onScroll = () => {
+      if (touch.current && !controller.isActive) {
+        const box = control.current?.getBoundingClientRect();
+        if (box) controller.cancelTouchHoldAfterMovement(Math.hypot(box.left - touch.current.left, box.top - touch.current.top));
+        return;
+      }
       cancel();
     };
     document.addEventListener("keydown", onKey, true);
     window.addEventListener("blur", cancel);
     window.addEventListener("resize", cancel);
-    window.addEventListener("scroll", cancel, true);
+    window.addEventListener("scroll", onScroll, true);
     window.visualViewport?.addEventListener("resize", cancel);
-    window.visualViewport?.addEventListener("scroll", cancel);
+    window.visualViewport?.addEventListener("scroll", onScroll);
     return () => {
       document.removeEventListener("keydown", onKey, true);
       window.removeEventListener("blur", cancel);
       window.removeEventListener("resize", cancel);
-      window.removeEventListener("scroll", cancel, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.visualViewport?.removeEventListener("resize", cancel);
-      window.visualViewport?.removeEventListener("scroll", cancel);
+      window.visualViewport?.removeEventListener("scroll", onScroll);
     };
-  }, [preview !== null, controller]);
+  }, [controller]);
+
+  useEffect(() => {
+    if (presentation !== "popover") return;
+    const element = control.current;
+    // touch-action is decided before the hold completes. Cancel native scrolling
+    // only after activation, using a non-passive listener rather than React's passive one.
+    const preventActiveScroll = (event: Event) => {
+      if (touch.current && controller.isActive && event.cancelable) event.preventDefault();
+    };
+    element?.addEventListener("touchmove", preventActiveScroll, { passive: false });
+    return () => element?.removeEventListener("touchmove", preventActiveScroll);
+  }, [controller, presentation]);
+
+  function beginPopover(element: HTMLElement, y: number) {
+    element.focus({ preventScroll: true });
+    const viewport = window.visualViewport;
+    const box = positionWorkbenchPopover(element.getBoundingClientRect(), { width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight, left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0 }, { width: 72, height: 216 });
+    setPosition(box);
+    controller.begin(range, y, Math.max(1, box.height - 48));
+    setPreview(value);
+  }
 
   if (presentation === "inline") return <div
     className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
@@ -134,19 +164,37 @@ export default function WorkbenchPressDragSlider ({
       aria-valuetext={shownText}
       aria-orientation="vertical"
       disabled={disabled}
-      className="relative isolate shrink-0 touch-none select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"
+      className="relative isolate shrink-0 touch-auto select-none whitespace-nowrap bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40"
       onPointerDown={(event) => {
-        if (event.button !== 0 || pointer.current !== null) return;
+        if (event.pointerType === "touch" || event.button !== 0 || pointer.current !== null) return;
         event.preventDefault();
-        event.currentTarget.focus();
-        const viewport = window.visualViewport;
-        const box = positionWorkbenchPopover(event.currentTarget.getBoundingClientRect(), { width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight, left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0 }, { width: 72, height: 216 });
-        setPosition(box);
-        controller.begin(range, event.clientY, Math.max(1, box.height - 48));
+        beginPopover(event.currentTarget, event.clientY);
         pointer.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
-        setPreview(value);
       }}
+      onTouchStart={(event) => {
+        if (disabled || event.touches.length !== 1 || pointer.current !== null) { cancel(); return; }
+        const contact = event.touches[0];
+        const element = event.currentTarget;
+        const box = element.getBoundingClientRect();
+        touch.current = { id: contact.identifier, left: box.left, top: box.top };
+        controller.holdTouch(contact.clientX, contact.clientY, y => beginPopover(element, y));
+      }}
+      onTouchMove={(event) => {
+        if (event.touches.length !== 1) { cancel(); return; }
+        const contact = Array.from(event.touches).find(entry => entry.identifier === touch.current?.id);
+        if (contact) setPreview(controller.moveTouch(contact.clientX, contact.clientY));
+      }}
+      onTouchEnd={(event) => {
+        const contact = Array.from(event.changedTouches).find(entry => entry.identifier === touch.current?.id);
+        if (!contact) return;
+        controller.moveTouch(contact.clientX, contact.clientY);
+        const next = controller.commit();
+        cancel();
+        if (next !== null && next !== value) onChange(next);
+      }}
+      onTouchCancel={cancel}
+      onContextMenu={(event) => { if (touch.current) event.preventDefault(); }}
       onPointerMove={(event) => {
         if (pointer.current === event.pointerId) setPreview(controller.move(event.clientY));
       }}
@@ -157,10 +205,11 @@ export default function WorkbenchPressDragSlider ({
         cancel();
         if (next !== null && next !== value) onChange(next);
       }}
-      onPointerCancel={cancel}
-      onLostPointerCapture={cancel}
+      onPointerCancel={(event) => { if (event.pointerType !== "touch") cancel(); }}
+      onLostPointerCapture={(event) => { if (event.pointerType !== "touch") cancel(); }}
+      onBlur={cancel}
       onKeyDown={(event) => {
-        if (pointer.current !== null) return;
+        if (pointer.current !== null || touch.current !== null) return;
         const next = controller.keyboard(range, event.key);
         if (next === null) return;
         event.preventDefault();
