@@ -1,22 +1,18 @@
 /*
  * Exports:
- * - default ThreadProfilePicker: select, create, rename, configure, scope, and remove inline composer profiles. Keywords: thread, composer, profile, picker, scope.
- * - Local helpers: edit profile names/descriptions and render inline profile groups. Keywords: profile, name, description, model, group.
+ * - default ThreadProfilePicker: profile cards containing selection, editing, scope and deletion.
  */
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import { FileDeleteIcon, SparkleIcon } from "../workbench-icons";
+import { BinIcon, SparkleIcon } from "../workbench-icons";
+import WorkbenchIconButton from "../WorkbenchIconButton";
 import PlaintextEditable from "./PlaintextEditable";
-import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
-import ThreadComposerRibbon from "./ThreadComposerRibbon";
-import ThreadHarnessControl from "./ThreadHarnessControl";
+import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
-
-const iconButtonClassName = "inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 
 function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
   const editableRef = useRef<HTMLSpanElement>(null);
@@ -59,7 +55,7 @@ function ProfileDescriptionEditable({ description = "", onCommit }: { descriptio
     if (normalized !== description) onCommit(normalized || undefined);
   };
 
-  return <div className="mt-2">
+  return <div>
     <PlaintextEditable
       ariaLabel="Profile description"
       className="min-h-[1.45rem] whitespace-pre-wrap break-words text-[0.78em] leading-[1.6] text-muted outline-none before:pointer-events-none before:text-muted/60 data-[empty=true]:before:content-[attr(data-placeholder)]"
@@ -72,15 +68,15 @@ function ProfileDescriptionEditable({ description = "", onCommit }: { descriptio
   </div>;
 }
 
-export default function ThreadProfilePicker({ agents, canToggleHarness, currentSettings, models, onAgentOpen, onClose, onHarnessToggle, onModelOpen, projectId, slot }: {
-  agents: WorkbenchAgentOption[]; canToggleHarness: boolean; currentSettings: WorkbenchComposerSettings;
-  models: WorkbenchModelOption[]; onAgentOpen: (profileId: string) => void; onClose: () => void; onHarnessToggle?: () => void; onModelOpen: (profileId: string, harness: WorkbenchComposerSettings["harness"]) => void;
+export default function ThreadProfilePicker({ agents, currentSettings, models, projectId, slot }: {
+  agents: WorkbenchAgentOption[]; currentSettings: WorkbenchComposerSettings;
+  models: WorkbenchModelOption[];
   projectId: string; slot: WorkbenchComposerProfileSlot;
 }) {
   const { controller, snapshot } = useWorkbenchComposerProfiles();
   const selection = controller.getSelection(slot);
   const selectedProfile = selection.kind === "profile" ? controller.getProfile(selection.profileId) : null;
-  const visible = controller.getVisibleProfiles(projectId, slot.kind === "thread" ? slot.harness : null);
+  const visible = controller.getVisibleProfiles(projectId, slot.kind !== "new-thread" ? slot.harness : null);
   const profiles = selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible;
   const globals = profiles.filter(({ scope }) => scope.kind === "global");
   const projects = profiles.filter(({ scope }) => scope.kind === "project");
@@ -91,39 +87,35 @@ export default function ThreadProfilePicker({ agents, canToggleHarness, currentS
     const agent = agents.find(({ path }) => path === profile.agentPath) ?? null;
     const label = getComposerProfileDisplayLabel(profile, agent?.name, model?.displayName);
     const active = selection.kind === "profile" && selection.profileId === profile.id;
-    const cycleEffort = (direction: 1 | -1) => { const efforts = model?.supportedReasoningEfforts ?? []; if (!efforts.length) return; const index = efforts.indexOf(profile.reasoningEffort ?? ""); void controller.updateProfile(profile.id, { reasoningEffort: efforts[((index < 0 ? 0 : index) + direction + efforts.length) % efforts.length] ?? null }); };
-    const selectFromRow = (event: MouseEvent<HTMLElement>) => { if (!(event.target instanceof HTMLElement) || event.target.closest("button,[contenteditable='plaintext-only']")) return; controller.selectProfile(slot, profile.id); };
-    return <article key={profile.id} role="radio" aria-checked={active} tabIndex={0} className={`rounded-[1rem] border px-4 py-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft ${active ? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_98%,transparent)]"}`} onClick={selectFromRow} onKeyDown={(event) => { if (event.key === " " && event.target === event.currentTarget) { event.preventDefault(); controller.selectProfile(slot, profile.id); } }}>
-      <div className="flex flex-wrap items-center gap-2">
-        <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} />
-        <div className="ml-auto flex items-center gap-2">
+    return <WorkbenchOptionCard
+      key={profile.id}
+      density="tight"
+      isChecked={active}
+      label={label}
+      onClick={() => controller.selectProfile(slot, profile.id)}
+      labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
+      actions={<>
           <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} />
-          <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className={`${iconButtonClassName} hover:!text-danger`} onClick={(event) => { event.stopPropagation(); void controller.deleteProfile(profile.id); }}><FileDeleteIcon /></button>
-        </div>
-      </div>
-      <ProfileDescriptionEditable description={profile.description} onCommit={(description) => { void controller.updateProfile(profile.id, { description }); }} />
-      <div className="mt-1.5 flex flex-wrap items-center gap-3 text-muted">
-        <span className="text-[0.78em]"><ThreadHarnessControl harness={profile.harness} /></span>
-        <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => onAgentOpen(profile.id)} onFastModeToggle={() => { void controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" }); }} onModelOpen={() => onModelOpen(profile.id, profile.harness)} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />
-      </div>
-    </article>;
+          <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon className="size-4" /></WorkbenchIconButton>
+      </>}
+      description={!active ? profile.description : undefined}
+    >
+      {active ? <ProfileDescriptionEditable description={profile.description} onCommit={(description) => { void controller.updateProfile(profile.id, { description }); }} /> : null}
+    </WorkbenchOptionCard>;
   };
 
   return <section aria-label="Composer profiles">
-    <ThreadComposerPickerHeader onClose={onClose} title="Choose a profile" />
-    {snapshot.error ? <p role="alert" className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-[0.78em] text-danger">{snapshot.error}</p> : null}
-    <div role="radiogroup" aria-label="Composer profiles" className="mt-3 grid gap-3">
-      <button type="button" role="radio" aria-checked={selection.kind === "custom"} className={`rounded-[1rem] border px-4 py-3 text-left transition ${selection.kind === "custom" ? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}`} onClick={() => controller.selectCustom(slot, currentSettings)}><span className="block font-semibold text-text">Custom</span><span className="mt-1 block text-[0.78em] leading-[1.6] text-muted">Use independent ribbon settings for this composer.</span></button>
+    <div role="group" aria-label="Composer profiles" className="mt-1 grid gap-2">
+      <WorkbenchOptionCard density="tight" isChecked={selection.kind === "custom"} label="Custom" onClick={() => { void controller.selectCustom(slot, currentSettings); }} />
       <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-muted">Global</p>{globals.map(renderProfile)}
       <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-muted">Project</p>{projects.map(renderProfile)}
     </div>
     <div className="mt-4 flex items-center justify-end gap-2 text-[0.78em] text-muted">
-      <ThreadHarnessControl canToggle={canToggleHarness} harness={currentSettings.harness} onToggle={onHarnessToggle} />
-      <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className={`${iconButtonClassName} size-9 disabled:cursor-not-allowed disabled:opacity-40`} onClick={() => {
+      <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className="inline-flex items-center gap-2 rounded-md px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] disabled:cursor-not-allowed disabled:opacity-40" onClick={() => {
         void controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }).then((profile) => {
           if (profile) controller.selectProfile(slot, profile.id);
         });
-      }}><SparkleIcon /></button>
+      }}><SparkleIcon /><span>New</span></button>
     </div>
   </section>;
 }

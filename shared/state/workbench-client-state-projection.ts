@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchClientStateProjectionChange: one domain upsert or deletion projected from relational app-state rows. Keywords: app, state, projection, revision.
- * - projectWorkbenchClientStateRows: project schema-conformed relational rows into browser domain changes. Keywords: app, state, SQLite, browser.
- * - workbenchClientStateRecordIdentity: derive the stable identity of one projected domain record. Keywords: app, state, identity.
+ * - WorkbenchClientStateProjectionChange: one domain upsert or deletion projected from relational app-state rows.
+ * - projectWorkbenchClientStateRows: project schema-conformed relational rows into browser domain changes.
+ * - workbenchClientStateRecordIdentity: derive the stable identity of one projected domain record.
  */
 import type {
   WorkbenchClientStateIdentity,
@@ -32,6 +32,7 @@ export function workbenchClientStateRecordIdentity(
   record: WorkbenchClientStateRecord,
 ): WorkbenchClientStateIdentity {
   switch (record.kind) {
+    case "modelPreference": return { kind: record.kind, harness: record.harness, modelId: record.modelId };
     case "globalPreference": return { key: record.preference.key, kind: record.kind };
     case "projectPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
@@ -62,6 +63,11 @@ export function projectWorkbenchClientStateRows(
     changes.push({ change: "delete", identity, revision });
   };
 
+  for (const row of rows.modelPreferences) {
+    add(row.revision, row.deleted, {
+      kind: "modelPreference", harness: row.harness, modelId: row.model_id, favourite: row.favourite === 1,
+    });
+  }
   for (const row of rows.globalPreferences) {
     const identity = { key: row.key, kind: "globalPreference" as const };
     if (row.deleted) remove(row.revision, identity);

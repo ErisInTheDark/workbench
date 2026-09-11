@@ -167,6 +167,10 @@
   background-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
 }
 
+@theme {
+  --color-button-hover: color-mix(in srgb, white 20%, var(--shell-fade-bg) 80%);
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-bg-soft: var(--bg-soft);

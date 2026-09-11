@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { DraftIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -732,37 +733,67 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  prepareComposerProfileTarget(slot: Extract<WorkbenchComposerProfileSlot, { kind: "thread" }>) {
+  prepareComposerProfileTarget(slot: WorkbenchComposerProfileSlot) {
     const key = `${slot.projectId}:profiles`;
     const pending = this.operationQueues.get(key);
     return this.enqueue(key, async () => {
       await pending;
       const state = await this.getProject(slot.projectId);
-      const selection = await this.resolveComposerProfileTarget(state, slot);
+      const selection = await this.resolveComposerProfileTarget(state, slot, true);
       if (!selection) throw new Error("The thread has no available daemon composer profile.");
-      if (!await this.persistComposerProfileTarget(state, slot, selection)) throw new Error("The composer profile target no longer exists.");
-      const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
+      const entry = slot.kind === "thread" ? state.entries.get(`${slot.harness}:${slot.threadId}`) : null;
       return { selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null };
     });
   }
 
-  private async resolveComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+  withComposerProfileAdmission<Result>(
+    slot: Extract<WorkbenchComposerProfileSlot, { kind: "thread" }>,
+    admit: (profile: { selection: WorkbenchComposerProfileTargetSelection; subagentName: string | null }) => Promise<{ accepted: boolean; result: Result }>,
+    signal: AbortSignal,
+    refresh = true,
+  ): Promise<{ accepted: boolean; result: Result; profilePersistenceError: string | null }> {
+    const key = `${slot.projectId}:profiles`;
+    const pending = this.operationQueues.get(key);
+    return this.enqueue(key, async () => {
+      await pending;
+      signal.throwIfAborted();
+      const state = await this.getProject(slot.projectId);
+      const selection = await this.resolveComposerProfileTarget(state, slot, refresh);
+      if (!selection) throw new Error("The thread has no available daemon composer profile.");
+      const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
+      const outcome = await admit({ selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null });
+      if (!outcome.accepted) return { ...outcome, profilePersistenceError: null };
+      // Native acceptance is irreversible. A failed snapshot write must never turn it into an unsent message.
+      try {
+        if (!await this.persistComposerProfileTarget(state, slot, selection)) {
+          throw new Error("The accepted turn's composer profile target no longer exists.");
+        }
+        return { ...outcome, profilePersistenceError: null };
+      } catch (error) {
+        const profilePersistenceError = `Turn accepted, but its profile could not be saved: ${sanitizeError(error)}`;
+        this.options.log?.(profilePersistenceError);
+        state.error = profilePersistenceError;
+        this.publish(slot.projectId, state);
+        return { ...outcome, profilePersistenceError };
+      }
+    });
+  }
+
+  private async resolveComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot, refresh = false): Promise<WorkbenchComposerProfileTargetSelection | null> {
     const entry = slot.kind === "thread" ? state.entries.get(`${slot.harness}:${slot.threadId}`) : null;
     const draft = slot.kind === "draft" ? state.drafts.get(slot.draftId) : null;
     if (slot.kind === "thread" && (!entry || entry.entryKind === "draft")) return null;
     if (slot.kind === "draft" && (!draft || draft.composerSettings.harness !== slot.harness)) return null;
     let selection = slot.kind === "new-thread" ? state.newThreadProfile
       : draft ? this.profileFromDraft(draft)
-        : entry && entry.entryKind !== "draft" ? entry.profile ?? (entry.entryKind === "thread" ? state.newThreadProfile : null)
+        : entry && entry.entryKind !== "draft" ? entry.profile
           : null;
-    const profileId = selection?.kind === "profile" ? selection.profileId
-      : !selection && entry?.entryKind === "subagent" ? entry.profileId : null;
-    if (profileId) {
+    const profileId = selection?.kind === "profile" ? selection.profileId : null;
+    if (refresh && profileId) {
       if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
       const profile = (await this.options.readComposerProfiles()).profiles.find((candidate) => candidate.id === profileId);
       if (profile) {
-        const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } = profile;
-        selection = { kind: "profile", profileId, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } };
+        selection = { kind: "profile", profileId, settings: copyComposerSettings(profile) };
       } else if (selection) {
         selection = { kind: "custom", settings: selection.settings };
       }
@@ -779,7 +810,7 @@ export default class WorkbenchThreadStateController {
       state.newThreadProfile = selection;
     } else if (slot.kind === "draft") {
       const draft = state.drafts.get(slot.draftId);
-      if (!draft || draft.composerSettings.harness !== slot.harness || selection.settings.harness !== slot.harness) return false;
+      if (!draft || draft.composerSettings.harness !== slot.harness || (selection.kind === "profile" && selection.settings.harness !== slot.harness)) return false;
       const next = {
         ...draft, composerSettings: selection.settings,
         profileId: selection.kind === "profile" ? selection.profileId : null,
@@ -787,7 +818,6 @@ export default class WorkbenchThreadStateController {
       state.drafts.set(slot.draftId, next);
       const entry = state.entries.get(`draft:${slot.draftId}`);
       state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, entry?.entryKind === "draft" ? entry.metadata : undefined));
-      state.newThreadProfile = selection;
     } else {
       const key = `${slot.harness}:${slot.threadId}`;
       const entry = state.entries.get(key);
@@ -805,7 +835,7 @@ export default class WorkbenchThreadStateController {
       await this.writeSelectedState(slot.projectId, staged,
         slot.kind === "thread" ? [`${slot.harness}:${slot.threadId}`]
           : slot.kind === "draft" ? [getThreadDisplayDraftKey(slot.draftId)] : [],
-        { profile: slot.kind !== "thread" });
+        { profile: slot.kind === "new-thread" });
       this.installComposerProfileTarget(state, slot, selection);
       this.publish(slot.projectId, state);
       return true;
@@ -867,7 +897,7 @@ export default class WorkbenchThreadStateController {
           ...existing,
           activityAt,
           lifecycle,
-          ...(event.kind === "acceptedIntent" && !existing.profile ? { profile: profile ?? (existing.entryKind === "thread" ? state.newThreadProfile : null) } : {}),
+          ...(event.kind === "acceptedIntent" && !existing.profile ? { profile: profile ?? null } : {}),
           metadata: existing.metadata.archived
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
@@ -2135,7 +2165,6 @@ export default class WorkbenchThreadStateController {
       const timestamp = this.now();
       const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
       state.drafts.set(accepted.draftId, accepted);
-      state.newThreadProfile = this.profileFromDraft(accepted);
       const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
       const metadata = existingEntry?.entryKind === "draft"
         ? existingEntry.metadata
@@ -2153,7 +2182,7 @@ export default class WorkbenchThreadStateController {
         }
         state.displayOrder = displayOrder;
       }
-      await this.persist(projectId, state, [entryKey(entry)], { profile: true, layout: Boolean(targetFolder) });
+      await this.persist(projectId, state, [entryKey(entry)], { layout: Boolean(targetFolder) });
       this.publish(projectId, state, entry);
       return { accepted: true, revision: state.revision };
     });

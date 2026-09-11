@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - normalizeComposerProfile/normalizeComposerProfileMutation: daemon profile boundary normalization. Keywords: composer, profile, normalize, validation.
- * - applyComposerProfileMutation: deterministic daemon profile mutation semantics. Keywords: composer, profile, mutation.
+ * - normalizeComposerProfile/normalizeComposerProfileMutation: daemon profile boundary normalization.
+ * - applyComposerProfileMutation: deterministic daemon profile mutation semantics.
  */
 import type {
   WorkbenchComposerProfile,
@@ -13,6 +13,7 @@ import { z } from "zod";
 import { normalizeWorkbenchAgentPath } from "../agent-paths.ts";
 
 const ProfileChangesSchema = z.object({
+  contextWindowTokens: z.number().int().positive().nullable(),
   agentPath: z.string().nullable(),
   agentSource: z.enum(["library", "project"]).nullable(),
   description: z.string(),
@@ -46,7 +47,10 @@ function normalizeSettings(value: unknown): WorkbenchComposerSettings | null {
   const model = typeof value.model === "string" ? value.model.trim() : "";
   if (!harness || !model) return null;
   const agentPath = normalizeWorkbenchAgentPath(typeof value.agentPath === "string" ? value.agentPath : null);
+  const context = ProfileChangesSchema.shape.contextWindowTokens.safeParse(value.contextWindowTokens);
+  if (!context.success) return null;
   return {
+    ...(context.data !== undefined ? { contextWindowTokens: context.data } : {}),
     agentPath,
     agentSource: agentPath && (value.agentSource === "library" || value.agentSource === "project") ? value.agentSource : null,
     harness,

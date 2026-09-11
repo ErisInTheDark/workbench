@@ -23,6 +23,28 @@ async function temporaryDatabase(context: TestContext) {
   return path.join(directory, "state.sqlite3");
 }
 
+test("model preferences upgrade v6 without losing existing preferences or the backup", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 6 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.deepEqual(repository.query(selectRows(appStateTables.modelPreferences)), []);
+    assert.equal(repository.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "winter");
+    const backups = path.join(path.dirname(databasePath), "backups", path.basename(databasePath));
+    const files = await fs.readdir(backups);
+    assert.equal(files.length, 1);
+    const backup = new Database(path.join(backups, files[0]!), { readonly: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 6);
+      assert.deepEqual(backup.prepare("SELECT text_value FROM global_preferences WHERE key='theme'").get(), { text_value: "winter" });
+    } finally { backup.close(); }
+  } finally { await repository.close(); }
+});
+
 test("app startup preserves its pre-upgrade database even when closed during opening", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

@@ -1,14 +1,13 @@
 /*
  * Exports:
- * - default ThreadComposerPickerHeader: render the shared composer-picker title, actions, and return-to-message control. Keywords: thread, composer, picker, header, actions.
+ * - default ThreadComposerPickerHeader: shared composer-picker title, actions and close control.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
 import { PanelCloseIcon } from "../workbench-icons";
-
-const pickerIconButtonClassName = "inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[color-mix(in_srgb,var(--text)_10%,transparent)] disabled:hover:bg-transparent disabled:hover:text-muted";
+import WorkbenchIconButton from "../WorkbenchIconButton";
 
 interface ThreadComposerPickerHeaderAction {
   disabled?: boolean;
@@ -41,28 +40,22 @@ export default function ThreadComposerPickerHeader({
       </div>
       <div className="flex shrink-0 items-center gap-2 self-start">
         {actions.map((action) => (
-          <button
+          <WorkbenchIconButton
             key={action.label}
-            type="button"
-            aria-label={action.label}
+            label={action.label}
             aria-pressed={action.isActive}
-            title={action.label}
-            className={pickerIconButtonClassName}
             disabled={action.disabled}
             onClick={action.onClick}
           >
             {action.icon}
-          </button>
+          </WorkbenchIconButton>
         ))}
-        <button
-          type="button"
-          aria-label={closeLabel}
-          title={closeLabel}
-          className={pickerIconButtonClassName}
+        <WorkbenchIconButton
+          label={closeLabel}
           onClick={onClose}
         >
           <PanelCloseIcon />
-        </button>
+        </WorkbenchIconButton>
       </div>
     </div>
   );

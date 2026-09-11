@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own delayed exclusive portal tooltip lifecycle. Keywords: tooltip, portal, hover, coordinator.
+ * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own delayed exclusive portal tooltip lifecycle.
  */
 "use client";
 
@@ -253,7 +253,10 @@ export default function WorkbenchTooltip({
       ref={tooltipRef}
       role={interactive ? "dialog" : "tooltip"}
       aria-modal={interactive ? false : undefined}
-      className={`fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl ${interactive ? "pointer-events-auto" : "pointer-events-none"}`}
+      className={`
+        fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
+        ${interactive ? "pointer-events-auto" : "pointer-events-none"}
+      `}
       style={tooltipStyle}
     >
       {content}

@@ -1,11 +1,10 @@
 /*
- * Keywords: app state, preferences, drafts, database, history.
  * Exports:
- * - appStateClientTables: current app-state tables admitted to the browser wire boundary. Keywords: app, browser, SQLite, state.
- * - appStateTables: complete typed table inventory for app-owned preferences and recoverable drafts. Keywords: app, SQLite, state, schema.
- * - appStateTableInventory: current tables keyed by SQLite name for checked statement compilation. Keywords: app, SQLite, statements.
- * - appStateSchema: versioned app-state schema installed by the repository. Keywords: app, SQLite, schema, history.
- * - AppStateRows: inferred selected row types for app-state tables. Keywords: app, SQLite, rows, types.
+ * - appStateClientTables: current app-state tables admitted to the browser wire boundary.
+ * - appStateTables: complete typed table inventory for app-owned preferences and recoverable drafts.
+ * - appStateTableInventory: current tables keyed by SQLite name for checked statement compilation.
+ * - appStateSchema: versioned app-state schema installed by the repository.
+ * - AppStateRows: inferred selected row types for app-state tables.
  */
 import appStateReleases from "./workbench-app-state-releases.ts";
 import {
@@ -582,7 +581,26 @@ const questionnaireDraftAttachmentsHistory = initialHistory(defineTable("questio
   ],
 })));
 
+const modelPreferences = defineTable("model_preferences", {
+  harness: enumText("codex", "copilot", "opencode").notNull(),
+  model_id: text().notNull(),
+  favourite: booleanInteger().notNull(),
+  ...revisionColumns(),
+}, table => ({
+  constraints: [primaryKey([table.harness, table.model_id])],
+}));
+
+const modelPreferencesHistory = defineTableHistory({
+  current: modelPreferences,
+  versions: [tableVersion({
+    migration: createTable(modelPreferences),
+    schemaVersion: appStateReleases.modelPreferences.version,
+    table: modelPreferences,
+  })],
+});
+
 const histories = [
+  modelPreferencesHistory,
   appStateMetadataHistory,
   daemonRegistrationsHistory,
   lastLaunchTargetHistory,
@@ -601,6 +619,7 @@ const histories = [
 ] as const;
 
 export const appStateClientTables = Object.freeze({
+  modelPreferences: modelPreferencesHistory.current,
   composerDraftAttachments: composerDraftAttachmentsHistory.current,
   composerDrafts: composerDraftsHistory.current,
   fileDrafts: fileDraftsHistory.current,

@@ -1,7 +1,6 @@
 /*
- * Keywords: daemon, rpc, validation, stats, sanitised diagnostics, tests.
  * Exports:
- * - No production exports; tests protect daemon transport failure and domain result boundaries. Keywords: daemon, rpc, failure, test.
+ * - No production exports; protect daemon transport failure and validated domain results.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,6 +8,14 @@ import { test } from "node:test";
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
+
+test("model capabilities reject invalid bounds at the daemon response boundary", async () => {
+  const valid = { data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] };
+  const client = new WorkbenchDaemonClient({ request: async <TResponse>() => valid as TResponse });
+  assert.deepEqual(await client.request("models/context/read", {}), valid);
+  const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ data: [{ model: "model", defaultTokens: 1000000, maximumTokens: 128000 }] }) as TResponse });
+  await assert.rejects(malformed.request("models/context/read", {}), /response was invalid/);
+});
 
 test("transport failures never fall back to app HTTP", async () => {
   const originalFetch = globalThis.fetch;

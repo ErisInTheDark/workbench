@@ -210,5 +210,8 @@ export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntr
   if (entry.entryKind === "draft") return entry;
   if (!entry.providerObserved && !(entry.entryKind === "thread" && (entry.lifecycle.settled || entry.metadata.archived))) return null;
   const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
-  return WorkbenchThreadSidebarEntrySchema.parse({ ...projected, previousTitles: previousThreadTitles(titleHistory ?? [], entry.title) });
+  return WorkbenchThreadSidebarEntrySchema.parse({
+    ...projected, ...(entry.profile ? { profile: entry.profile } : {}),
+    previousTitles: previousThreadTitles(titleHistory ?? [], entry.title),
+  });
 }

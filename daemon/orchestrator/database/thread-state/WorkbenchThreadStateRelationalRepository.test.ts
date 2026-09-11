@@ -45,7 +45,7 @@ test("relational batches roll back invalid references and preserve valid draft p
     const draft: WorkbenchThreadDraft = {
       draftId: fixtureIdentityValues.DraftId["f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"], projectId: fixtureIdentityValues.ProjectId["project"],
       prompt: "retain this draft", profileId: null,
-      composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
+      composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null, contextWindowTokens: 500_000 },
       clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
       attachments: [{ id: "second", url: "image:second" }, { id: "first", url: "image:first" }],
     };
@@ -69,7 +69,8 @@ test("relational batches roll back invalid references and preserve valid draft p
     const record: WorkbenchThreadStateRecord = {
       entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title: "promoted", activityAt: 1,
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-      metadata: { archived: false, pinned: true, snoozed: false }, profile: null,
+      metadata: { archived: false, pinned: true, snoozed: false },
+      profile: { kind: "custom", settings: draft.composerSettings },
       providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
     };
     assert.throws(() => repository.commit({
@@ -96,6 +97,9 @@ test("relational batches roll back invalid references and preserve valid draft p
     assert.deepEqual(repository.readDrafts(fixtureIdentityValues.ProjectId["project"]), []);
     assert.deepEqual(repository.readLayout(pinnedOwner), { revision: 2, displayOrder: nextPinned });
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.title, "promoted");
+    assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.profile, record.profile);
+    repository.commit({ projectProfiles: [{ projectId: draft.projectId, profile: record.profile }] });
+    assert.deepEqual(repository.readProjectProfile(draft.projectId), record.profile);
     assert.deepEqual(repository.readPinnedImports(), ["project"]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }

@@ -94,6 +94,7 @@ function profileRow(profile: WorkbenchComposerProfileSelectionState) {
     model: profile.settings.model,
     reasoning_effort: profile.settings.reasoningEffort,
     service_tier: profile.settings.serviceTier,
+    context_window_tokens: profile.settings.contextWindowTokens ?? null,
   } satisfies SqlRow;
 }
 
@@ -318,6 +319,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       settings: {
         harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
         model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
+        ...(profile.context_window_tokens !== null ? { contextWindowTokens: profile.context_window_tokens as number } : {}),
       },
     }) : null;
   }
@@ -339,6 +341,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           composerSettings: {
             harness: row.harness_id, agentPath: row.agent_path, agentSource: row.agent_source,
             model: row.model, reasoningEffort: row.reasoning_effort, serviceTier: row.service_tier,
+            ...(row.context_window_tokens !== null ? { contextWindowTokens: row.context_window_tokens as number } : {}),
           },
           clientUpdatedAt: row.client_updated_at, createdAt: row.created_at, updatedAt: row.updated_at,
           attachments: attachments.map((attachment, index) => {
@@ -363,6 +366,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           prompt: draft.prompt, profile_id: draft.profileId, agent_path: draft.composerSettings.agentPath,
           agent_source: draft.composerSettings.agentSource, model: draft.composerSettings.model,
           reasoning_effort: draft.composerSettings.reasoningEffort, service_tier: draft.composerSettings.serviceTier,
+          context_window_tokens: draft.composerSettings.contextWindowTokens ?? null,
           pinned: Number(stored.pinned), snoozed: Number(stored.snoozed), client_updated_at: draft.clientUpdatedAt,
           created_at: draft.createdAt, updated_at: draft.updatedAt,
         });
@@ -610,7 +614,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     const profile = this.database.prepare("SELECT * FROM workbench_thread_profiles WHERE thread_id = ?").get(row.thread_id) as {
       selection_kind: "custom" | "profile"; profile_id: string | null;
       agent_path: string | null; agent_source: "library" | "project" | null; harness_id: "codex" | "copilot" | "opencode";
-      model: string; reasoning_effort: string | null; service_tier: "fast" | null;
+      model: string; reasoning_effort: string | null; service_tier: "fast" | null; context_window_tokens: number | null;
     } | undefined;
     const questionnaires = this.questionnaires.read(row.thread_id);
     const titles = this.database.prepare(`
@@ -632,6 +636,7 @@ export default class WorkbenchThreadStateRelationalRepository {
         settings: {
           harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
           model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
+          ...(profile.context_window_tokens !== null ? { contextWindowTokens: profile.context_window_tokens } : {}),
         },
       }) : null,
       snoozedUntil: dependency ? {

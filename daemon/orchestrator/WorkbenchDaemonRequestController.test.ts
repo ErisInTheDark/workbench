@@ -18,10 +18,33 @@ import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
+test("context capability bounds reject invalid target mutations without writing", async () => {
+  const { controller, targetWrites } = createController({
+    models: { read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] },
+  });
+  const settings = { agentPath: null, agentSource: null, harness: "codex", model: "model", reasoningEffort: null, serviceTier: null };
+  for (const contextWindowTokens of [127000, 1001000, 128500]) {
+    const response = await controller.handle({ id: 1, method: "profiles/target/set", params: {
+      slot: { kind: "new-thread", projectId: "project" }, selection: { kind: "custom", settings: { ...settings, contextWindowTokens } },
+    } });
+    assert.equal(response.error?.code, -32602);
+  }
+  assert.equal(targetWrites.length, 0);
+  const response = await controller.handle({ id: 2, method: "profiles/target/set", params: {
+    slot: { kind: "new-thread", projectId: "project" }, selection: { kind: "custom", settings: { ...settings, contextWindowTokens: 600000 } },
+  } });
+  assert.equal(response.error, undefined);
+  assert.equal(targetWrites.length, 1);
+  assert.deepEqual((await controller.handle({ id: 3, method: "models/context/read", params: {} })).result, {
+    data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
+  });
+});
+
 function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
+  models?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["models"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
   profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
@@ -37,6 +60,7 @@ function createController(options: {
   const statsRequests: object[] = [];
   let statsRefreshes = 0;
   const controller = new WorkbenchDaemonRequestController({
+    models: options.models,
     threadIdentity: options.threadIdentity ?? { resolve: async () => null },
     agents: {
       listAgents: async () => ({ data: [] }),

@@ -36,6 +36,7 @@ import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore"
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { ThreadReferenceSchema, type ProjectId, type ThreadReference, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -405,6 +406,9 @@ export default class WorkbenchSubagentController {
       try {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
           method: "thread/start",
+          workbenchCreationProfile: {
+            kind: "snapshot", selection: { kind: "profile", profileId: profile.id, settings: copyComposerSettings(profile) },
+          },
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, null, name, workbenchOrigin),
           params: { cwd: caller.cwd, effort: profile.reasoningEffort, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
         });
@@ -655,15 +659,16 @@ export default class WorkbenchSubagentController {
       });
       return {};
     }
-    const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === record.profileId);
-    if (!profile) throw new Error("The subagent profile no longer exists.");
     await this.requestHarness(client, record.harness, {
       method: "turn/start",
-      [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined),
+      [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
+        cwd: caller.cwd, harness: record.harness, projectId: caller.project.id,
+        subagentName: record.name, threadId: record.threadId, workflowIds: ["subagent"],
+        workbenchOrigin: typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : null,
+      },
       params: {
-        ...(record.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
-        cwd: record.cwd, effort: profile.reasoningEffort, ...messageParams, model: profile.model,
-        serviceTier: profile.serviceTier, summary: "detailed", threadId: record.threadId,
+        ...(record.harness === "codex" ? { collaborationMode: { mode: "plan", settings: { developer_instructions: "" } } } : {}),
+        cwd: record.cwd, ...messageParams, summary: "detailed", threadId: record.threadId,
       },
     });
     return {};

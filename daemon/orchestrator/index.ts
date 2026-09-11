@@ -105,6 +105,11 @@ const featureHost = new ReloadableNodeHost<OrchestratorProcessContext, Orchestra
 );
 
 const copilotBridge = new CopilotBridge({
+  profiles: {
+    captureCreationProfile: (harness, cwd, source) => featureHost.run("threadState", owner => owner.captureCreationProfile(harness, cwd, source), "Copilot profile creation"),
+    installCreatedProfile: (harness, thread, selection) => featureHost.run("threadState", owner => owner.installCreatedProfile(harness, thread, selection), "Copilot profile installation"),
+    withProviderProfileAdmission: (harness, thread, admit, signal, refresh) => featureHost.run("threadState", owner => owner.withProviderProfileAdmission(harness, thread, admit, signal, refresh), "Copilot profile admission"),
+  },
   getReloadableModules: () => featureHost.get("modules"),
   admitThreads: (threads) => featureHost.run("harnesses", (owner) => owner.admitThreads("copilot", threads), "Copilot thread identity"),
   admitNotifications: (threadId, notifications) => featureHost.run("harnesses", (owner) => owner.admitNotifications("copilot", NativeThreadIdSchema.parse(threadId), notifications), "Copilot event identity"),

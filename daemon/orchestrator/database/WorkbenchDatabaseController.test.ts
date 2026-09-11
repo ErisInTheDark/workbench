@@ -2,6 +2,7 @@
  * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints.
  */
 import assert from "node:assert/strict";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,7 +61,7 @@ test("stored transcript queries cross the worker boundary and preserve invalid-i
 test("worker migration waits for its owner to retain the rollback checkpoint", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
   const databasePath = join(directory, "workbench.sqlite3");
-  const version = WORKBENCH_DATABASE_SCHEMA_VERSION - 1;
+  const version = databaseReleases.nativeIdentityLookupIndexes.version;
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: version });
   old.close();
@@ -83,7 +84,7 @@ test("worker migration waits for its owner to retain the rollback checkpoint", a
 test("worker startup retains its old-schema backup even when closed during opening", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
   const databasePath = join(directory, "workbench.sqlite3");
-  const version = WORKBENCH_DATABASE_SCHEMA_VERSION - 1;
+  const version = databaseReleases.nativeIdentityLookupIndexes.version;
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: version });
   old.exec("CREATE TABLE preserved_extension(value TEXT); INSERT INTO preserved_extension VALUES ('retained')");
@@ -107,6 +108,45 @@ test("worker startup retains its old-schema backup even when closed during openi
     } finally {
       backup.close();
     }
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a completed relational database upgrades without losing its saved profile", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-profile-upgrade-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const old = new Database(databasePath);
+  installWorkbenchDatabaseSchema(old, { targetVersion: databaseReleases.relationalThreadState.version });
+  old.prepare("INSERT INTO workbench_thread_state_import(id, completed_at) VALUES (1, ?)").run(1);
+  old.exec(`
+    INSERT INTO workbench_harnesses(id) VALUES ('codex');
+    INSERT INTO workbench_project_thread_profiles
+      (project_id, selection_kind, profile_id, harness_id, model, reasoning_effort, service_tier, agent_path, agent_source)
+    VALUES ('project', 'profile', 'saved-profile', 'codex', 'retained-model', 'high', 'fast', NULL, NULL)
+  `);
+  const before = old.prepare("SELECT * FROM workbench_project_thread_profiles").get();
+  old.close();
+  const controller = new WorkbenchDatabaseController({ databasePath });
+  try {
+    const inventory = await controller.start();
+    assert.equal(inventory.schemaVersion, databaseReleases.profileContextWindows.version);
+    await controller.close();
+    const upgraded = new Database(databasePath);
+    try {
+      assert.deepEqual(upgraded.prepare("SELECT * FROM workbench_project_thread_profiles").get(), {
+        ...before as Record<string, string | null>,
+        context_window_tokens: null,
+      });
+      upgraded.prepare("UPDATE workbench_project_thread_profiles SET context_window_tokens = ?").run(500_000);
+      assert.deepEqual(upgraded.prepare("SELECT context_window_tokens FROM workbench_project_thread_profiles").get(), {
+        context_window_tokens: 500_000,
+      });
+      assert.deepEqual(upgraded.prepare("SELECT completed_at FROM workbench_thread_state_import WHERE id = 1").get(), {
+        completed_at: 1,
+      });
+    } finally { upgraded.close(); }
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

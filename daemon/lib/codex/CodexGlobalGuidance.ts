@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - CodexGlobalGuidanceSnapshot: resolved Codex global guidance content. Keywords: codex, AGENTS, guidance, dedupe.
- * - readCodexGlobalGuidance: read Codex home guidance using Codex global precedence. Keywords: CODEX_HOME, AGENTS.override.md, AGENTS.md.
- * - containsExactGuidanceText: test whether a guidance file already contains a generated Workbench section. Keywords: exact match, dedupe.
+ * - CodexGlobalGuidanceSnapshot: resolved Codex global guidance content.
+ * - readCodexGlobalGuidance: read Codex home guidance using global precedence.
+ * - containsExactGuidanceText: test whether guidance already contains a generated section.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolveCodexHome } from "./codex-home";
 
 export interface CodexGlobalGuidanceSnapshot {
   readonly content: string;
@@ -15,11 +15,6 @@ export interface CodexGlobalGuidanceSnapshot {
 
 function normalizeLineEndings(value: string) {
   return value.replace(/\r\n?/g, "\n");
-}
-
-function resolveCodexHome(env: NodeJS.ProcessEnv) {
-  const configuredHome = env.CODEX_HOME?.trim();
-  return path.resolve(configuredHome || path.join(os.homedir(), ".codex"));
 }
 
 async function readNonEmptyFile(filePath: string) {

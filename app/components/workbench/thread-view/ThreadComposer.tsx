@@ -4,14 +4,13 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "workbench-shared/codex/thread-state";
 import type {
   ThreadPayload,
-  WorkbenchAgentOption,
   WorkbenchComposerProfileSlot,
   WorkbenchComposerSettings,
   WorkbenchListModelsOptions,
@@ -43,13 +42,12 @@ import { PlayIcon, SnoozedThreadIcon, StopIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
-import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import ThreadLightboxImage from "./ThreadLightboxImage";
-import ThreadModelPicker from "./ThreadModelPicker";
-import ThreadProfilePicker from "./ThreadProfilePicker";
+import ThreadProfileEditor from "./ThreadProfileEditor";
+import ThreadProfileEditorController, { type ProfileEditorSection } from "./ThreadProfileEditorController";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
@@ -58,27 +56,8 @@ import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-inp
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
-const PICKER_REFRESH_COOLDOWN_MS = 1500;
-const PICKER_REFRESH_MIN_SPIN_MS = 500;
-
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-async function waitForMinimumDuration (work: Promise<void>, durationMs: number): Promise<void> {
-  let thrownError: unknown = null;
-  await Promise.all([
-    work.catch((error: unknown) => {
-      thrownError = error;
-    }),
-    new Promise<void>((resolve) => {
-      window.setTimeout(resolve, durationMs);
-    }),
-  ]);
-
-  if (thrownError) {
-    throw thrownError;
-  }
 }
 
 export default function ThreadComposer ({
@@ -90,6 +69,7 @@ export default function ThreadComposer ({
   layout = "thread",
   onListModels,
   onHarnessToggle,
+  onHarnessSelect,
   onSendMessage,
   onStopThread,
   onThreadComposerDraftChange,
@@ -124,6 +104,7 @@ export default function ThreadComposer ({
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onHarnessToggle?: () => void;
+  onHarnessSelect?: (harness: ThreadPayload["harness"]) => void;
   onSendMessage: (
     threadId: string,
     input: UserInput[],
@@ -177,26 +158,14 @@ export default function ThreadComposer ({
     empty: () => emptyDraft,
     save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, composerTarget, options.detached),
   });
-  const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
-  const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
-  const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
-    codex: [],
-    copilot: [],
-    opencode: [],
-  });
-  const [activePicker, setActivePicker] = useState<"agent" | "model" | "profile" | null>(null);
-  const [profilePickerTargetId, setProfilePickerTargetId] = useState<string | null>(null);
+  const [profileEditor] = useState(() => new ThreadProfileEditorController());
+  const editorState = useSyncExternalStore(profileEditor.subscribe, profileEditor.getSnapshot, profileEditor.getSnapshot);
+  const [editorAnchor, setEditorAnchor] = useState<{ trigger: HTMLElement; ribbon: HTMLElement } | null>(null);
+  const availableModels = editorState.models;
+  const availableAgents = editorState.agents;
   const [localError, setError] = useState("");
-  const error = localError || editing.error;
+  const error = localError || editing.error || composerProfileSnapshot.error;
   const [isComposing, setIsComposing] = useState(false);
-  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [isAgentRefreshPending, setIsAgentRefreshPending] = useState(false);
-  const [isAgentRefreshCoolingDown, setIsAgentRefreshCoolingDown] = useState(false);
-  const [isModelRefreshPending, setIsModelRefreshPending] = useState(false);
-  const [isModelRefreshCoolingDown, setIsModelRefreshCoolingDown] = useState(false);
-  const [agentsError, setAgentsError] = useState("");
-  const [modelsError, setModelsError] = useState("");
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
   const isSending = editing.isSubmitting;
   const value = isSending ? "" : editing.draft.text;
@@ -204,11 +173,6 @@ export default function ThreadComposer ({
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
-  const agentLoadGenerationRef = useRef(0);
-  const modelLoadGenerationRef = useRef(0);
-  const agentRefreshCooldownTimeoutRef = useRef<number | null>(null);
-  const modelRefreshCooldownTimeoutRef = useRef<number | null>(null);
-  const isComposerMountedRef = useRef(true);
   const isCommentMode = controlsMode === "comment";
   const trimmedValue = value.trim();
   const isAttaching = editing.isAttaching;
@@ -256,7 +220,7 @@ export default function ThreadComposer ({
   const selectedModel = thread.model;
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
-  const modelOptionForControls = selectedModelOption ?? defaultModelOption;
+  const modelOptionForControls = selectedModel ? selectedModelOption : defaultModelOption;
   const modelButtonLabel = selectedModelOption?.displayName
     ?? selectedModel
     ?? "Default model";
@@ -266,10 +230,7 @@ export default function ThreadComposer ({
   const showsReasoningEffortControl = showsThreadControls && Boolean(modelOptionForControls?.supportsReasoningEffort);
   const showsFastModeControl = showsThreadControls && thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
   const isFastModeEnabled = thread.serviceTier === "fast";
-  const isAgentPickerOpen = showsThreadControls && activePicker === "agent";
-  const isModelPickerOpen = showsThreadControls && activePicker === "model";
-  const isProfilePickerOpen = showsThreadControls && activePicker === "profile";
-  const isPickerOpen = activePicker !== null;
+  const isProfilePickerOpen = showsThreadControls && editorState.open;
   const composerPlaceholder = isCommentMode
     ? "Write a comment..."
     : isThreadStateBroken
@@ -292,241 +253,55 @@ export default function ThreadComposer ({
   const selectedProfile = profileSelection.kind === "profile"
     ? composerProfileController.getProfile(profileSelection.profileId)
     : null;
-  const profilePickerTarget = profilePickerTargetId
-    ? composerProfileController.getProfile(profilePickerTargetId)
-    : null;
-  const pickerHarness = profilePickerTarget?.harness ?? thread.harness;
-  const pickerSelectedModelId = profilePickerTarget?.model ?? selectedModel;
-  const pickerSelectedAgentPath = profilePickerTarget?.agentPath ?? thread.agentPath;
   const profileButtonLabel = selectedProfile
     ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel)
     : "Custom";
-  const currentComposerSettings: WorkbenchComposerSettings = {
+  const currentComposerSettings: WorkbenchComposerSettings = (profileSlot ? composerProfileController.resolveSettings(profileSlot) : null) ?? {
     agentPath: thread.agentPath,
     agentSource: selectedAgent?.source ?? null,
     harness: thread.harness,
     model: selectedModel ?? modelOptionForControls?.id ?? "",
     reasoningEffort: currentReasoningEffort,
     serviceTier: isFastModeEnabled ? "fast" : null,
+    contextWindowTokens: thread.contextWindowTokens,
   };
   void composerProfileSnapshot;
-  const deprioritizedModelIds = deprioritizedModelIdsByHarness[pickerHarness] ?? [];
-
-  useEffect(() => {
-    if (!profilePickerTargetId || profilePickerTarget) {
-      return;
-    }
-    setProfilePickerTargetId(null);
-    setActivePicker(null);
-  }, [profilePickerTarget, profilePickerTargetId]);
-
-  const finishConfigurationPicker = () => {
-    const shouldReturnToProfiles = profilePickerTarget !== null;
-    setProfilePickerTargetId(null);
-    setActivePicker(shouldReturnToProfiles ? "profile" : null);
+  const openProfileEditor = (section: ProfileEditorSection, trigger: HTMLElement, ribbon: HTMLElement) => {
+    setEditorAnchor({ trigger, ribbon });
+    profileEditor.toggle(section);
   };
-  const loadAvailableAgents = useCallback((options: { clearBeforeLoad?: boolean } = {}): Promise<void> => {
-    const generation = agentLoadGenerationRef.current + 1;
-    agentLoadGenerationRef.current = generation;
-
-    if (isCommentMode) {
-      setAvailableAgents([]);
-      setAgentsError("");
-      setIsLoadingAgents(false);
-      return Promise.resolve();
-    }
-
-    if (options.clearBeforeLoad) {
-      setAvailableAgents([]);
-    }
-    setAgentsError("");
-    setIsLoadingAgents(true);
-
-    return daemon.request("agents/list", { projectId }).then((payload) => {
-      if (agentLoadGenerationRef.current !== generation) {
-        return;
-      }
-
-      setAvailableAgents(payload.data ?? []);
-      setAgentsError("");
-    }).catch((agentsLoadError) => {
-      if (agentLoadGenerationRef.current !== generation) {
-        return;
-      }
-
-      setAgentsError(agentsLoadError instanceof Error ? agentsLoadError.message : "Unable to load agents.");
-    }).finally(() => {
-      if (agentLoadGenerationRef.current === generation) {
-        setIsLoadingAgents(false);
-      }
-    });
-  }, [daemon, isCommentMode, projectId]);
-  const loadAvailableModels = useCallback((options: { clearBeforeLoad?: boolean; forceRefresh?: boolean; harness?: ThreadPayload["harness"]; showErrors?: boolean; showLoading?: boolean } = {}): Promise<void> => {
-    const {
-      clearBeforeLoad = false,
-      forceRefresh = false,
-      harness = thread.harness,
-      showErrors = true,
-      showLoading = true,
-    } = options;
-    const generation = modelLoadGenerationRef.current + 1;
-    modelLoadGenerationRef.current = generation;
-
-    if (isCommentMode) {
-      setAvailableModels([]);
-      setModelsError("");
-      setIsLoadingModels(false);
-      return Promise.resolve();
-    }
-
-    if (clearBeforeLoad) {
-      setAvailableModels([]);
-    }
-    if (showErrors) {
-      setModelsError("");
-    }
-    if (showLoading) {
-      setIsLoadingModels(true);
-    }
-
-    return onListModels(harness, { forceRefresh }).then((models) => {
-      if (modelLoadGenerationRef.current !== generation) {
-        return;
-      }
-
-      setAvailableModels(models);
-      if (showErrors) {
-        setModelsError("");
-      }
-    }).catch((modelsLoadError) => {
-      if (modelLoadGenerationRef.current !== generation) {
-        return;
-      }
-
-      if (showErrors) {
-        setModelsError(modelsLoadError instanceof Error ? modelsLoadError.message : "Unable to load models.");
-      }
-    }).finally(() => {
-      if (modelLoadGenerationRef.current === generation && showLoading) {
-        setIsLoadingModels(false);
-      }
-    });
-  }, [isCommentMode, onListModels, thread.harness]);
-  const refreshAvailableAgents = useCallback(() => {
-    if (isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown) {
-      return;
-    }
-
-    if (agentRefreshCooldownTimeoutRef.current !== null) {
-      window.clearTimeout(agentRefreshCooldownTimeoutRef.current);
-      agentRefreshCooldownTimeoutRef.current = null;
-    }
-
-    setIsAgentRefreshPending(true);
-    setIsAgentRefreshCoolingDown(true);
-    void waitForMinimumDuration(loadAvailableAgents(), PICKER_REFRESH_MIN_SPIN_MS).finally(() => {
-      if (!isComposerMountedRef.current) {
-        return;
-      }
-
-      setIsAgentRefreshPending(false);
-      agentRefreshCooldownTimeoutRef.current = window.setTimeout(() => {
-        agentRefreshCooldownTimeoutRef.current = null;
-        setIsAgentRefreshCoolingDown(false);
-      }, PICKER_REFRESH_COOLDOWN_MS);
-    });
-  }, [isAgentRefreshCoolingDown, isAgentRefreshPending, isLoadingAgents, loadAvailableAgents]);
-  const refreshAvailableModels = useCallback(() => {
-    if (isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown) {
-      return;
-    }
-
-    if (modelRefreshCooldownTimeoutRef.current !== null) {
-      window.clearTimeout(modelRefreshCooldownTimeoutRef.current);
-      modelRefreshCooldownTimeoutRef.current = null;
-    }
-
-    setIsModelRefreshPending(true);
-    setIsModelRefreshCoolingDown(true);
-    void waitForMinimumDuration(loadAvailableModels({
-      forceRefresh: true,
-      harness: pickerHarness,
-      showErrors: true,
-      showLoading: true,
-    }), PICKER_REFRESH_MIN_SPIN_MS).finally(() => {
-      if (!isComposerMountedRef.current) {
-        return;
-      }
-
-      setIsModelRefreshPending(false);
-      modelRefreshCooldownTimeoutRef.current = window.setTimeout(() => {
-        modelRefreshCooldownTimeoutRef.current = null;
-        setIsModelRefreshCoolingDown(false);
-      }, PICKER_REFRESH_COOLDOWN_MS);
-    });
-  }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels, pickerHarness]);
+  const loadAvailableAgents = useCallback(() => profileEditor.loadAgents(async () => {
+    const payload = await daemon.request("agents/list", { projectId });
+    return payload.data ?? [];
+  }), [daemon, profileEditor, projectId]);
+  const loadAvailableModels = useCallback((forceRefresh = false) => profileEditor.loadModels(
+    () => onListModels(thread.harness, { forceRefresh }),
+  ), [onListModels, profileEditor, thread.harness]);
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
 
   useEffect(() => {
-    isComposerMountedRef.current = true;
-
-    return () => {
-      isComposerMountedRef.current = false;
-      if (agentRefreshCooldownTimeoutRef.current !== null) {
-        window.clearTimeout(agentRefreshCooldownTimeoutRef.current);
-      }
-      if (modelRefreshCooldownTimeoutRef.current !== null) {
-        window.clearTimeout(modelRefreshCooldownTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    setActivePicker(null);
-    setAgentsError("");
-    setModelsError("");
     setIsQuestionnaireVisible(Boolean(visiblePendingUserInputRequest));
   }, [thread.id, visiblePendingUserInputRequest?.request.id]);
 
   useEffect(() => {
-    void loadAvailableAgents({ clearBeforeLoad: true });
-
-    return () => {
-      agentLoadGenerationRef.current += 1;
-    };
-  }, [loadAvailableAgents]);
-
+    profileEditor.close();
+    setEditorAnchor(null);
+  }, [thread.id, projectId, profileEditor]);
   useEffect(() => {
-    void loadAvailableModels({
-      clearBeforeLoad: true,
-      showErrors: false,
-      showLoading: false,
-    });
-
-    return () => {
-      modelLoadGenerationRef.current += 1;
-    };
-  }, [loadAvailableModels]);
-
+    profileEditor.resetAgents();
+    if (!isCommentMode) void loadAvailableAgents();
+    return () => profileEditor.resetAgents();
+  }, [isCommentMode, profileEditor, loadAvailableAgents]);
   useEffect(() => {
-    if (isCommentMode || !isModelPickerOpen) {
-      return;
-    }
-
-    void loadAvailableModels({
-      showErrors: true,
-      showLoading: true,
-    });
-
-    return () => {
-      modelLoadGenerationRef.current += 1;
-    };
-  }, [isCommentMode, isModelPickerOpen, loadAvailableModels]);
+    profileEditor.resetModels();
+    if (!isCommentMode) void loadAvailableModels();
+    return () => profileEditor.resetModels();
+  }, [isCommentMode, profileEditor, loadAvailableModels]);
 
   const submit = async () => {
-    if ((!trimmedValue && !attachments.length) || isSendDisabled || isPickerOpen) {
+    if ((!trimmedValue && !attachments.length) || isSendDisabled) {
       return;
     }
 
@@ -562,7 +337,7 @@ export default function ThreadComposer ({
   };
 
   const stop = async () => {
-    if (isStopDisabled || isPickerOpen) {
+    if (isStopDisabled) {
       return;
     }
 
@@ -582,7 +357,7 @@ export default function ThreadComposer ({
   };
 
   const recoverInterruptedTurn = async () => {
-    if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || isPickerOpen || !hasEffectiveProfile) {
+    if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || !hasEffectiveProfile) {
       return;
     }
 
@@ -639,15 +414,7 @@ export default function ThreadComposer ({
     applyCustomChange();
   };
 
-  const cycleReasoningEffort = (direction: 1 | -1) => {
-    if (!supportedReasoningEfforts.length) {
-      return;
-    }
-
-    const currentIndex = currentReasoningEffort ? supportedReasoningEfforts.indexOf(currentReasoningEffort) : -1;
-    const baseIndex = currentIndex >= 0 ? currentIndex : direction === 1 ? -1 : 0;
-    const nextIndex = (baseIndex + direction + supportedReasoningEfforts.length) % supportedReasoningEfforts.length;
-    const nextEffort = supportedReasoningEfforts[nextIndex] ?? null;
+  const changeReasoningEffort = (nextEffort: string) => {
     applyDirectSettingsChange(
       { ...currentComposerSettings, reasoningEffort: nextEffort },
       () => onThreadReasoningEffortChange(thread.id, nextEffort),
@@ -720,22 +487,11 @@ export default function ThreadComposer ({
   const collapsedAttachmentPreviews = attachments.slice(0, 3);
   const hiddenAttachmentCount = Math.max(0, attachments.length - collapsedAttachmentPreviews.length);
   const effectiveSurface = stickyMode ? "bare" : surface;
-  const showComposerControlRow = !showQuestionnairePanel && !isModelPickerOpen && !isAgentPickerOpen && !isProfilePickerOpen;
+  const showComposerControlRow = !showQuestionnairePanel;
   const hasNormalComposerSupplementalContent = attachments.length > 0 || Boolean(helperText);
-  const activeComposerMode = showQuestionnairePanel
-    ? "questionnaire"
-    : isModelPickerOpen
-      ? "model"
-      : isAgentPickerOpen
-        ? "agent"
-        : isProfilePickerOpen
-          ? "profile"
-        : "composer";
+  const activeComposerMode = showQuestionnairePanel ? "questionnaire" : "composer";
   const isComposerPanelActive = activeComposerMode === "composer";
   const isQuestionnairePanelActive = activeComposerMode === "questionnaire";
-  const isModelPickerPanelActive = activeComposerMode === "model";
-  const isAgentPickerPanelActive = activeComposerMode === "agent";
-  const isProfilePickerPanelActive = activeComposerMode === "profile";
   const composerForm = (
       <form
         className={joinClasses(
@@ -885,6 +641,8 @@ export default function ThreadComposer ({
                       />
                     ) :
                     <ThreadComposerRibbon
+                      key={`${projectId}:${thread.id}`}
+                      modelId={thread.model}
                       agentLabel={agentButtonLabel}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
@@ -894,10 +652,7 @@ export default function ThreadComposer ({
                       selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
-                      onAgentOpen={() => {
-                        setProfilePickerTargetId(null);
-                        setActivePicker("agent");
-                      }}
+                      onAgentOpen={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
                       onFastModeToggle={() => {
                         const serviceTier = isFastModeEnabled ? null : "fast";
                         applyDirectSettingsChange(
@@ -905,15 +660,15 @@ export default function ThreadComposer ({
                           () => onThreadServiceTierChange(thread.id, serviceTier),
                         );
                       }}
-                      onModelOpen={() => {
-                        setProfilePickerTargetId(null);
-                        setActivePicker("model");
-                      }}
-                      onProfileOpen={() => {
-                        setProfilePickerTargetId(null);
-                        setActivePicker((current) => current === "profile" ? null : "profile");
-                      }}
-                      onReasoningEffortCycle={cycleReasoningEffort}
+                      onModelOpen={(trigger, ribbon) => openProfileEditor("model", trigger, ribbon)}
+                      onProfileOpen={(trigger, ribbon) => openProfileEditor("profile", trigger, ribbon)}
+                      onReasoningEffortChange={changeReasoningEffort}
+                      supportedReasoningEfforts={supportedReasoningEfforts}
+                      context={thread.harness === "codex" && modelOptionForControls?.contextWindow ? {
+                        ...modelOptionForControls.contextWindow,
+                        value: currentComposerSettings.contextWindowTokens ?? modelOptionForControls.contextWindow.defaultTokens,
+                      } : null}
+                      onContextChange={(contextWindowTokens) => applyDirectSettingsChange({ ...currentComposerSettings, contextWindowTokens }, () => {})}
                     />
                     ) : null}
                     {leadingActions}
@@ -932,139 +687,6 @@ export default function ThreadComposer ({
                 </div>
               ) : null}
             </div>
-            {showsThreadControls ? (
-              <>
-                <div
-                  aria-hidden={!isModelPickerPanelActive}
-                  className="thread-composer-mode-panel"
-                  data-active={isModelPickerPanelActive ? "true" : "false"}
-                  inert={!isModelPickerPanelActive}
-                >
-                  {isModelPickerPanelActive ? (
-                    <ThreadModelPicker
-                      appliesOnNextTurnOnly={!profilePickerTarget && thread.harness === "codex" && isActiveThread}
-                      deprioritizedModelIds={deprioritizedModelIds}
-                      error={modelsError}
-                      harness={pickerHarness}
-                      isLoading={isLoadingModels}
-                      isRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
-                      isRefreshing={isModelRefreshPending}
-                      models={availableModels}
-                      selectedModelId={pickerSelectedModelId}
-                      onClose={finishConfigurationPicker}
-                      onRefresh={refreshAvailableModels}
-                      onSelectModel={(model) => {
-                        if (profilePickerTarget) {
-                          void composerProfileController.updateProfile(profilePickerTarget.id, {
-                            model: model.id,
-                            reasoningEffort: model.supportsReasoningEffort
-                              ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
-                              : null,
-                            serviceTier: model.supportsFastMode ? profilePickerTarget.serviceTier : null,
-                          });
-                          setModelsError("");
-                          finishConfigurationPicker();
-                          return;
-                        }
-                        const nextSettings: WorkbenchComposerSettings = {
-                          ...currentComposerSettings,
-                          model: model.id,
-                          reasoningEffort: model.supportsReasoningEffort
-                            ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
-                            : null,
-                          serviceTier: model.supportsFastMode ? currentComposerSettings.serviceTier : null,
-                        };
-                        applyDirectSettingsChange(nextSettings, () => {
-                          onThreadModelChange(thread.id, model.id);
-                          if (!model.supportsFastMode && isFastModeEnabled) {
-                            onThreadServiceTierChange(thread.id, null);
-                          }
-                        });
-                        setModelsError("");
-                        finishConfigurationPicker();
-                      }}
-                      onToggleModelPriority={(modelId) => {
-                        setDeprioritizedModelIdsByHarness((current) => {
-                          const currentIds = current[pickerHarness] ?? [];
-                          const nextIds = currentIds.includes(modelId)
-                            ? currentIds.filter((id) => id !== modelId)
-                            : [...currentIds, modelId];
-
-                          return {
-                            ...current,
-                            [pickerHarness]: nextIds,
-                          };
-                        });
-                      }}
-                    />
-                  ) : null}
-                </div>
-                <div
-                  aria-hidden={!isAgentPickerPanelActive}
-                  className="thread-composer-mode-panel"
-                  data-active={isAgentPickerPanelActive ? "true" : "false"}
-                  inert={!isAgentPickerPanelActive}
-                >
-                  <ThreadAgentPicker
-                    agents={availableAgents}
-                    error={agentsError}
-                    isLoading={isLoadingAgents}
-                    isRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
-                    isRefreshing={isAgentRefreshPending}
-                    selectedAgentPath={pickerSelectedAgentPath}
-                    onClose={finishConfigurationPicker}
-                    onRefresh={refreshAvailableAgents}
-                    onSelectAgent={(agentPath) => {
-                      const agent = availableAgents.find((candidate) => areWorkbenchAgentPathsEqual(candidate.path, agentPath)) ?? null;
-                      if (profilePickerTarget) {
-                        void composerProfileController.updateProfile(profilePickerTarget.id, {
-                          agentPath,
-                          agentSource: agent?.source ?? null,
-                        });
-                        finishConfigurationPicker();
-                        return;
-                      }
-                      applyDirectSettingsChange(
-                        { ...currentComposerSettings, agentPath, agentSource: agent?.source ?? null },
-                        () => onThreadAgentChange(thread.id, agentPath),
-                      );
-                      finishConfigurationPicker();
-                    }}
-                  />
-                </div>
-                <div
-                  aria-hidden={!isProfilePickerPanelActive}
-                  className="thread-composer-mode-panel"
-                  data-active={isProfilePickerPanelActive ? "true" : "false"}
-                  inert={!isProfilePickerPanelActive}
-                >
-                  {profileSlot ? (
-                    <ThreadProfilePicker
-                      agents={availableAgents}
-                      canToggleHarness={canToggleHarness}
-                      currentSettings={currentComposerSettings}
-                      models={availableModels}
-                      projectId={projectId}
-                      slot={profileSlot}
-                      onAgentOpen={(profileId) => {
-                        setProfilePickerTargetId(profileId);
-                        setActivePicker("agent");
-                      }}
-                      onClose={() => {
-                        setProfilePickerTargetId(null);
-                        setActivePicker(null);
-                      }}
-                      onHarnessToggle={onHarnessToggle}
-                      onModelOpen={(profileId, harness) => {
-                        setProfilePickerTargetId(profileId);
-                        setActivePicker("model");
-                        void loadAvailableModels({ clearBeforeLoad: true, harness, showErrors: true, showLoading: true });
-                      }}
-                    />
-                  ) : null}
-                </div>
-              </>
-            ) : null}
           </div>
         </div>
         {error ? (
@@ -1115,6 +737,25 @@ export default function ThreadComposer ({
   return (
     <>
       {composerContent}
+      {showsThreadControls && editorState.open && editorAnchor && profileSlot ? <ThreadProfileEditor
+        key={`${projectId}:${thread.id}`}
+        anchor={editorAnchor.ribbon}
+        trigger={editorAnchor.trigger}
+        controller={profileEditor}
+        slot={profileSlot}
+        fallbackSettings={currentComposerSettings}
+        onCustomChange={(settings) => applyDirectSettingsChange(settings, () => {
+          onThreadModelChange(thread.id, settings.model);
+          onThreadReasoningEffortChange(thread.id, settings.reasoningEffort);
+          onThreadServiceTierChange(thread.id, settings.serviceTier);
+          onThreadAgentChange(thread.id, settings.agentPath);
+        })}
+        onRefreshModels={() => { void loadAvailableModels(true); }}
+        onRefreshAgents={() => { void loadAvailableAgents(); }}
+        canToggleHarness={canToggleHarness}
+        onHarnessToggle={onHarnessToggle}
+        onHarnessSelect={onHarnessSelect}
+      /> : null}
       {typeof children === "function" ? children({ isProfilePickerOpen }) : children}
     </>
   );

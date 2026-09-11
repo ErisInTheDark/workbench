@@ -3,18 +3,33 @@
  * - defineThreadDomainSchema: declare canonical thread facts and their installation history.
  */
 import {
-  booleanInteger, check, defineTable, enumText, foreignKey, index, integer, literal,
+  booleanInteger, check, defineTable, enumText, evolveTable, foreignKey, index, integer, literal,
   primaryKey, sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
 export function defineThreadDomainSchema(schemaVersion: number) {
   function install<Table extends TableDefinition>(table: Table) {
     return defineTableHistory({
       current: table,
       versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
+    });
+  }
+
+  function installProfile<Table extends TableDefinition>(table: Table) {
+    const current = evolveTable(table, { add: { context_window_tokens: integer().nonNegative() } });
+    return defineTableHistory({
+      current,
+      versions: [
+        tableVersion({ schemaVersion, table, migration: createTable(table) }),
+        tableVersion({
+          schemaVersion: databaseReleases.profileContextWindows.version, table: current,
+          migration: addColumns({ from: table, to: current, columns: ["context_window_tokens"] }),
+        }),
+      ],
     });
   }
 
@@ -92,7 +107,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     indexes: [index("workbench_thread_snooze_dependencies_target_idx", [table.target_thread_id])],
   })));
 
-  const profiles = install(defineTable("workbench_thread_profiles", {
+  const profiles = installProfile(defineTable("workbench_thread_profiles", {
     thread_id: text().primaryKey().references("workbench_thread_states", "thread_id", { onDelete: "CASCADE" }),
     selection_kind: enumText("custom", "profile").notNull(),
     profile_id: text(),
@@ -106,7 +121,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     constraints: [check(sql`(${table.selection_kind} = ${literal("custom")} AND ${table.profile_id} IS NULL) OR (${table.selection_kind} = ${literal("profile")} AND ${table.profile_id} IS NOT NULL)`)],
   })));
 
-  const projectProfiles = install(defineTable("workbench_project_thread_profiles", {
+  const projectProfiles = installProfile(defineTable("workbench_project_thread_profiles", {
     project_id: text().primaryKey(),
     selection_kind: enumText("custom", "profile").notNull(),
     profile_id: text(),
@@ -120,7 +135,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     constraints: [check(sql`(${table.selection_kind} = ${literal("custom")} AND ${table.profile_id} IS NULL) OR (${table.selection_kind} = ${literal("profile")} AND ${table.profile_id} IS NOT NULL)`)],
   })));
 
-  const drafts = install(defineTable("workbench_thread_drafts", {
+  const drafts = installProfile(defineTable("workbench_thread_drafts", {
     id: text().primaryKey(),
     draft_id: text().notNull(),
     project_id: text().notNull(),

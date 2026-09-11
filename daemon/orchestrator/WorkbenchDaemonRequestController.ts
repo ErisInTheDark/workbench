@@ -8,6 +8,7 @@ import type {
     ResolveExternalFileLinkRootsRequest,
     RevealProjectEntryRequest,
     WorkbenchComposerProfileSlot,
+    WorkbenchComposerSettings,
 } from "workbench-shared/types";
 import {
     WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
@@ -42,6 +43,7 @@ import type WorkbenchProjectFileController from "./WorkbenchProjectFileControlle
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type CodexModelCatalog from "./CodexModelCatalog";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
@@ -49,6 +51,7 @@ export interface WorkbenchBrowseSessionPort {
 }
 
 const METHODS = new Set([
+  "models/context/read",
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "codex-sandbox-network/read", "codex-sandbox-network/update",
@@ -131,6 +134,7 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
 
   constructor(private readonly owners: {
+    models?: Pick<CodexModelCatalog, "read">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     codexSandboxNetwork: Pick<WorkbenchCodexSandboxNetworkController, "read" | "setGlobal" | "setProjectOverride">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
@@ -164,6 +168,11 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "models/context/read": {
+          if (!this.owners.models) throw new Error("Model context capabilities are unavailable.");
+          result = { data: await this.owners.models.read() };
+          break;
+        }
         case "thread/identity/resolve": {
           const parsed = WorkbenchThreadIdentityResolveRequestSchema.safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid thread identity lookup.");
@@ -298,8 +307,11 @@ export default class WorkbenchDaemonRequestController {
           const selection = WorkbenchComposerProfileSelectionSchema.safeParse(params.selection);
           if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
           if (!selection.success) throw new InvalidParamsError("selection must contain exact composer settings.");
+          const target = await this.resolveProfileSlot(slot.data);
+          const previous = selection.data.settings.contextWindowTokens == null ? null : await this.owners.profileTargets.readComposerProfileTarget(target);
+          await this.validateContextWindow(selection.data.settings, previous?.settings ?? null);
           const ok = await this.owners.profileTargets.setComposerProfileTarget(
-            await this.resolveProfileSlot(slot.data),
+            target,
             selection.data,
           );
           if (!ok) throw new InvalidParamsError("The composer profile target does not exist or rejects these settings.");
@@ -314,7 +326,7 @@ export default class WorkbenchDaemonRequestController {
           kind: "upsert",
           profile: record(params.profile),
           ...(params.changes !== undefined ? { changes: record(params.changes) } : {}),
-        }); break;
+        }, (profile, previous) => this.validateContextWindow(profile, previous)); break;
         case "browse/sessions/read":
           if (!this.browse) throw new Error("Browse session management is reloading.");
           result = await this.browse.listSessions(params);
@@ -339,6 +351,18 @@ export default class WorkbenchDaemonRequestController {
           message: error instanceof Error ? error.message : "Daemon request failed.",
         },
       };
+    }
+  }
+
+  private async validateContextWindow(settings: WorkbenchComposerSettings, previous: WorkbenchComposerSettings | null) {
+    const cap = settings.contextWindowTokens;
+    if (cap == null || (previous?.harness === settings.harness && previous.model === settings.model && previous.contextWindowTokens === cap)) return;
+    if (settings.harness !== "codex") throw new InvalidParamsError("This provider does not support a configurable context window.");
+    if (!this.owners.models) throw new Error("Model context capabilities are unavailable.");
+    const capability = (await this.owners.models.read()).find((entry) => entry.model === settings.model);
+    if (!capability) throw new InvalidParamsError("This model has no configurable context capability.");
+    if (cap < capability.defaultTokens || cap > capability.maximumTokens || (cap - capability.defaultTokens) % 1000 !== 0) {
+      throw new InvalidParamsError("Context window must be within the model bounds in 1K steps.");
     }
   }
 

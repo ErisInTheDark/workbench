@@ -21,6 +21,31 @@ const BROWSER_B = "20000000-0000-4000-8000-000000000002";
 const BROWSER_C = "30000000-0000-4000-8000-000000000003";
 const BROWSER_D = "40000000-0000-4000-8000-000000000004";
 
+test("model favourites remain browser-local, provider-specific and durable", async (context) => {
+  const { directory, registry, shared } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  await registry.readBrowser(BROWSER_B);
+  const preference = { kind: "modelPreference" as const, harness: "codex" as const, modelId: "same-model", favourite: false };
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: preference });
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: { ...preference, harness: "copilot", favourite: true } });
+  const readModels = async (owner: WorkbenchBrowserStateRegistry, browser: string) =>
+    records(await owner.readBrowser(browser)).filter(record => record.kind === "modelPreference");
+  assert.deepEqual(await readModels(registry, BROWSER_B), []);
+  assert.deepEqual(await readModels(registry, BROWSER_A), [preference, { ...preference, harness: "copilot", favourite: true }]);
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
+  reopened.start();
+  try {
+    assert.deepEqual(await readModels(reopened, BROWSER_A), [preference, { ...preference, harness: "copilot", favourite: true }]);
+    await reopened.mutateBrowser(BROWSER_A, { action: "put", record: { ...preference, favourite: true } });
+    assert.equal((await readModels(reopened, BROWSER_A))[0]?.favourite, true);
+    await reopened.mutateBrowser(BROWSER_A, { action: "delete", identity: { kind: "modelPreference", harness: "codex", modelId: "same-model" } });
+    assert.deepEqual(await readModels(reopened, BROWSER_A), [{ ...preference, harness: "copilot", favourite: true }]);
+  } finally {
+    await reopened.close();
+  }
+});
+
 function records(response: Awaited<ReturnType<WorkbenchBrowserStateRegistry["readBrowser"]>>) {
   return projectWorkbenchClientStateRows(response.rows).flatMap((change) => (
     change.change === "upsert" ? [change.record] : []

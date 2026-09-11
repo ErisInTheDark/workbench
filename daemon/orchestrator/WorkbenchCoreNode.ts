@@ -35,6 +35,7 @@ import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
+import CodexModelCatalog from "./CodexModelCatalog";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
@@ -242,6 +243,7 @@ function createWorkbenchCoreFeature(
     },
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
+    models: new CodexModelCatalog(),
     agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
     codexSandboxNetwork,
     files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
@@ -472,6 +474,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   scope: "server:core",
   sources: [
     "daemon/orchestrator/WorkbenchCoreNode.ts",
+    "daemon/orchestrator/CodexModelCatalog.ts",
+    "daemon/lib/codex/codex-home.ts",
+    "shared/workbench/thread/thread-profile.ts",
     "shared/workbench/thread/workbench-thread-identity.ts",
     "daemon/orchestrator/WorkbenchCoreFeature.ts",
     "daemon/orchestrator/WorkbenchBridgeRequestController.ts",

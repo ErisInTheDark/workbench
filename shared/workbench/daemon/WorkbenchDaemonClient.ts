@@ -1,10 +1,9 @@
 /*
- * Keywords: daemon, websocket, validation, rpc, stats.
  * Exports:
- * - WorkbenchDaemonTransport: existing socket request port used by the daemon client. Keywords: daemon, websocket, transport.
- * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data. Keywords: daemon, rpc, error.
- * - WorkbenchDaemonClient: typed semantic daemon request client. Keywords: daemon, rpc.
- * - default WorkbenchDaemonClient: create the browser daemon client. Keywords: daemon, client.
+ * - WorkbenchDaemonTransport: existing socket request port.
+ * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data.
+ * - WorkbenchDaemonClient: typed semantic daemon request client.
+ * - default WorkbenchDaemonClient: create the browser daemon client.
  */
 import type {
   WorkbenchDaemonGitArcMethod,
@@ -26,6 +25,7 @@ import {
 import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
+import { WorkbenchModelContextCapabilitySchema } from "../thread/thread-profile.ts";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
 import { WorkbenchStatsDetailedResponseSchema } from "../stats/workbench-stats-detail-contract.ts";
@@ -57,6 +57,7 @@ const fileWriteSchema = z.union([
 
 function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   switch (method) {
+    case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
     case "codex-sandbox-network/read":
     case "codex-sandbox-network/update": return z.object({
       codexSandboxNetwork: z.object({

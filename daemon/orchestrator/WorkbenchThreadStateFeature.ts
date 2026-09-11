@@ -10,7 +10,7 @@ import type { ServerNotification } from "workbench-shared/codex/generated/app-se
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
@@ -524,17 +524,63 @@ export default class WorkbenchThreadStateFeature {
 
   async dispose() { await this.controller.dispose(); }
 
-  async prepareCodexProfile(thread: ThreadReadResponse["thread"]) {
-    if (!thread.id || !thread.cwd) throw new Error("Codex profile preparation requires a provider thread and cwd.");
-    const resolved = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex profile preparation" });
-    const canonical = await this.admitThread("codex", thread);
-    const entry = normalizeProviderSidebarEntry("codex", canonical, this.context.identities.threads);
-    if (!entry || entry.entryKind === "draft") throw new Error("The managed Codex thread could not be normalized.");
+  private async providerProfileTarget(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"]) {
+    if (!thread.id || !thread.cwd) throw new Error("Profile preparation requires a provider thread and cwd.");
+    const resolved = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Thread profile preparation" });
+    const canonical = await this.admitThread(harness, thread);
+    const entry = normalizeProviderSidebarEntry(harness, canonical, this.context.identities.threads);
+    if (!entry || entry.entryKind === "draft") throw new Error("The managed thread could not be normalized.");
     await this.controller.ensureProviderEntry(resolved.project.id, entry);
-    const profile = await this.controller.prepareComposerProfileTarget({
-      kind: "thread", harness: "codex", projectId: resolved.project.id, threadId: canonical.id,
-    });
-    return { ...profile, cwd: resolved.cwd, projectId: resolved.project.id };
+    return {
+      cwd: resolved.cwd, projectId: resolved.project.id,
+      slot: { kind: "thread" as const, harness, projectId: resolved.project.id, threadId: canonical.id },
+    };
+  }
+
+  async prepareCodexProfile(thread: ThreadReadResponse["thread"]) {
+    const target = await this.providerProfileTarget("codex", thread);
+    const profile = await this.controller.prepareComposerProfileTarget(target.slot);
+    return { ...profile, cwd: target.cwd, projectId: target.projectId };
+  }
+
+  async readProviderProfile(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"]) {
+    const target = await this.providerProfileTarget(harness, thread);
+    const selection = await this.controller.readComposerProfileTarget(target.slot);
+    if (!selection) throw new Error("The thread has no available daemon composer profile.");
+    const entry = await this.controller.getThreadEntry(target.projectId, harness, target.slot.threadId);
+    return { selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null, cwd: target.cwd, projectId: target.projectId };
+  }
+
+  async captureCreationProfile(harness: WorkbenchHarness, cwd: string, source: WorkbenchThreadCreationProfile) {
+    const resolved = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Thread profile creation" });
+    if (source.kind === "target" && source.slot.projectId !== resolved.project.id) {
+      throw new Error("The creation profile target belongs to another project.");
+    }
+    const selection = source.kind === "snapshot" ? source.selection
+      : (await this.controller.prepareComposerProfileTarget(source.slot)).selection;
+    if (selection.settings.harness !== harness) throw new Error("The creation profile harness does not match the thread.");
+    return { selection, cwd: resolved.cwd, projectId: resolved.project.id };
+  }
+
+  async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"], selection: WorkbenchComposerProfileTargetSelection) {
+    const target = await this.providerProfileTarget(harness, thread);
+    if (!await this.controller.setComposerProfileTarget(target.slot, selection)) {
+      throw new Error("The created thread's exact profile could not be installed.");
+    }
+  }
+
+  async withProviderProfileAdmission<Result>(
+    harness: WorkbenchHarness,
+    thread: ThreadReadResponse["thread"],
+    admit: (profile: { selection: WorkbenchComposerProfileTargetSelection; subagentName: string | null; cwd: string; projectId: ProjectId }) => Promise<{ accepted: boolean; result: Result }>,
+    signal: AbortSignal,
+    refresh = true,
+  ) {
+    const target = await this.providerProfileTarget(harness, thread);
+    signal.throwIfAborted();
+    return this.controller.withComposerProfileAdmission(target.slot, (profile) => admit({
+      ...profile, cwd: target.cwd, projectId: target.projectId,
+    }), signal, refresh);
   }
 
   async getCodexMcpState(

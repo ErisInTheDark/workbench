@@ -1,5 +1,4 @@
 /*
- * Keywords: managed profile, request configuration, Codex reload handoff.
  * Exports:
  * - recoverCodexSqliteTranscripts: repair marked recovery and active baselines independently of harness availability.
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
@@ -12,6 +11,9 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import ReloadableNode from "./ReloadableNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -167,13 +169,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         networkAccess,
       );
     };
-    bridge = new CodexStdioBridge({
-      ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
-      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
-      onInitialized: build.mode === "initial" ? startRecovery : undefined,
-      instructions: codexInstructions,
-      prepareThreadConfiguration: async (thread, requests, signal) => {
-        const profile = await threadState.prepareCodexProfile(thread);
+    const configureProfileRequests = async <T extends { resumeRequest: JsonRpcRequest; startRequest?: JsonRpcRequest }>(
+      requests: T,
+      profile: Awaited<ReturnType<typeof threadState.readProviderProfile>>,
+      threadId: string | null,
+      signal: AbortSignal,
+    ): Promise<T> => {
         signal.throwIfAborted();
         const project = await projectCatalog.resolveProjectById(profile.projectId);
         signal.throwIfAborted();
@@ -184,9 +185,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
             relativePath: root.relativePath ?? ".", rootPath: root.rootPath,
           })),
           settings: profile.selection.settings, subagentName: profile.subagentName,
-          threadId: build.get("threadIdentity").workbenchIdForNative(
-            build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(thread.id)),
-          ),
+          threadId: threadId ? build.get("threadIdentity").workbenchIdForNative(
+            build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)),
+          ) : null,
         };
         const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
         turnRecovery.observeRequest("codex", resumeRequest);
@@ -194,6 +195,37 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
         turnRecovery.observeRequest("codex", startRequest);
         return { ...requests, resumeRequest, startRequest };
+    };
+    bridge = new CodexStdioBridge({
+      ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
+      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      onInitialized: build.mode === "initial" ? startRecovery : undefined,
+      instructions: codexInstructions,
+      createThread: async (request, create, signal) => {
+        const { workbenchCreationProfile, ...nativeRequest } = request;
+        if (workbenchCreationProfile === undefined) return create(nativeRequest);
+        const source = WorkbenchThreadCreationProfileSchema.parse(workbenchCreationProfile);
+        const cwd = record(request.params)?.cwd;
+        if (typeof cwd !== "string") throw new Error("Thread creation requires a project cwd.");
+        const captured = await threadState.captureCreationProfile("codex", cwd, source);
+        const configured = await configureProfileRequests({ resumeRequest: nativeRequest }, {
+          ...captured, subagentName: readWorkbenchPromptContext(request)?.subagentName ?? null,
+        }, null, signal);
+        const response = await create(configured.resumeRequest);
+        if (response.error) return response;
+        const thread = record(response.result)?.thread as ThreadReadResponse["thread"] | undefined;
+        if (!thread) throw new Error("Codex creation returned no thread to store its profile.");
+        await threadState.installCreatedProfile("codex", thread, captured.selection);
+        return response;
+      },
+      prepareThreadConfiguration: async (thread, requests, signal) => configureProfileRequests(
+        requests, await threadState.readProviderProfile("codex", thread), thread.id, signal,
+      ),
+      withThreadAdmission: async (thread, requests, admit, signal, fresh) => {
+        const outcome = await threadState.withProviderProfileAdmission("codex", thread, async (profile) => (
+          admit(await configureProfileRequests(requests, profile, thread.id, signal))
+        ), signal, !fresh);
+        return outcome.result;
       },
       prepareTurnStart,
       questionnaires,

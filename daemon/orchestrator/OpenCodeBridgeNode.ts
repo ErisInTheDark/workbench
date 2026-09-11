@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default OpenCodeBridgeNode: own reloadable OpenCode bridge code while preserving the parent app-server process. Keywords: opencode, bridge, handoff.
+ * - default OpenCodeBridgeNode: own reloadable OpenCode bridge code while preserving its app-server process.
  */
 import { OpenCodeBridge, type OpenCodeBridgeState } from "./opencode-bridge";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
@@ -17,6 +17,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const bridge = new OpenCodeBridge({
       ...context.openCodeBridgeOptions,
       appServer: build.get("openCodeAppServer"),
+      profiles: build.get("threadState"),
       getReloadableModules: () => modules,
       initialState: build.handoffState as OpenCodeBridgeState | undefined,
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
@@ -63,7 +64,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload OpenCode bridge code without restarting the OpenCode app-server.",
   lifecycle: "handoff",
   provides: ["openCodeBridge"],
-  requires: ["harnesses", "modules", "openCodeAppServer", "threadIdentity", "transcriptIdentity", "projectCatalog"],
+  requires: ["harnesses", "modules", "openCodeAppServer", "threadIdentity", "transcriptIdentity", "projectCatalog", "threadState"],
   safeAll: true,
   scope: "server:opencode",
   sources: [

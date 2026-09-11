@@ -482,6 +482,61 @@ test("provider activity mapping observes meaningful cross-provider work without 
   assert.equal(mapProviderActivityNotification({ method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn" } }), null);
 });
 
+test("creation installs captured settings before first admission and refreshes only on continuation", async () => {
+  for (const harness of ["codex", "copilot", "opencode"] as const) {
+    const projectId = fixtureIdentityValues.ProjectId.project;
+    const settings = { harness, model: "captured-model", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null };
+    let model = "later-definition";
+    let catalogueReads = 0;
+    const feature = createFeature({
+      database: createThreadStateDatabase(),
+      getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
+      gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+      harnesses: createHarnesses(async () => ({ id: 0, result: { data: [], nextCursor: null } })),
+      listSubagents: async () => ({ subagents: [] }),
+      projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
+      publish: () => {},
+      readComposerProfiles: async () => {
+        catalogueReads++;
+        return { profiles: [{ ...settings, model, id: "profile", name: "Profile", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] };
+      },
+      resolveProjectById: async () => ({ id: projectId, rootPath: "C:/workspace" }),
+      resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/workspace" } }),
+      transitions: { run: async (_key, operation) => operation() },
+    });
+    try {
+      const captured = await feature.captureCreationProfile(harness, "C:/workspace", {
+        kind: "snapshot", selection: { kind: "profile", profileId: "profile", settings },
+      });
+      const native = providerThread("C:/workspace", "created");
+      await feature.installCreatedProfile(harness, native, captured.selection);
+      assert.equal(catalogueReads, 0);
+      assert.deepEqual((await feature.readProviderProfile(harness, native)).selection, captured.selection);
+      const signal = new AbortController().signal;
+      const first = await feature.withProviderProfileAdmission(harness, native, async profile => {
+        assert.equal(profile.selection.settings.model, "captured-model");
+        return { accepted: true, result: "first" };
+      }, signal, false);
+      assert.equal(first.result, "first");
+      assert.equal(catalogueReads, 0);
+      await feature.withProviderProfileAdmission(harness, native, async profile => {
+        assert.equal(profile.selection.settings.model, "later-definition");
+        return { accepted: true, result: "continued" };
+      }, signal);
+      assert.equal(catalogueReads, 1);
+      assert.equal((await feature.readProviderProfile(harness, native)).selection.settings.model, "later-definition");
+      model = "rejected-definition";
+      await assert.rejects(feature.withProviderProfileAdmission(harness, native, async () => {
+        throw new Error("Native admission failed");
+      }, signal), /Native admission failed/);
+      assert.equal((await feature.readProviderProfile(harness, native)).selection.settings.model, "later-definition");
+      await assert.rejects(feature.captureCreationProfile(harness, "C:/workspace", {
+        kind: "target", slot: { kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project-b"] },
+      }), /another project/);
+    } finally { await feature.dispose(); }
+  }
+});
+
 test("Codex MCP admission reads thread metadata without hydrating transcript turns", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
   const requests: JsonRpcRequest[] = [];
@@ -538,7 +593,9 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
       model: "daemon-model", reasoningEffort: null, serviceTier: null,
     },
   };
-  await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project"] }, selection);
+  const savedEntry = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find(entry => entry.entryKind === "thread");
+  assert.ok(savedEntry?.entryKind === "thread");
+  await feature.controller.setComposerProfileTarget({ kind: "thread", projectId: fixtureIdentityValues.ProjectId["project"], ...savedEntry.identity }, selection);
   const provider: ThreadReadResponse["thread"] = {
     cwd: storageRoot, id: "thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("untrusted-provider-project"), status: { type: "notLoaded" }, turns: [], updatedAt: 1,
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "", createdAt: 1,
@@ -604,6 +661,12 @@ for (const foreignPage of ["first", "last"] as const) {
       await feature.controller.open("observer", projectId);
       releaseListing.resolve();
       await reconciled.promise;
+      await feature.getCodexMcpState(fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id));
+      const localIdentity = await database.identities.threads.resolve({
+        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id), harness: "codex",
+      });
+      assert.ok(localIdentity);
+      await feature.controller.setComposerProfileTarget({ kind: "thread", projectId, harness: "codex", threadId: localIdentity.threadId }, selection);
       const neighbourIdentity = await database.identities.threads.resolve({
         threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(neighbour.id), harness: "copilot",
       });

@@ -1,10 +1,9 @@
 /*
- * Keywords: daemon, websocket, rpc, contracts, stats.
  * Exports:
- * - WorkbenchDaemonMethod/WorkbenchDaemonRequestMap: typed semantic browser-to-daemon request contract. Keywords: daemon, websocket, rpc, contract.
- * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse: agent and skill catalog result contracts. Keywords: agent, skill, catalog.
- * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations. Keywords: git, arc, acknowledgement.
- * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map semantic browser methods to existing Git actions. Keywords: git, arc, method, registry.
+ * - WorkbenchDaemonMethod/WorkbenchDaemonRequestMap: typed browser-to-daemon request contract.
+ * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse: agent and skill catalogue results.
+ * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations.
+ * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map browser methods to existing Git actions.
  * - WorkbenchInstructionPack: emitted instruction pack metadata and content.
  * - WorkbenchFileWriteResult: successful save or optimistic-write conflict.
  * - WorkbenchDaemonParams/WorkbenchDaemonResult: method-indexed request and response types.
@@ -35,6 +34,7 @@ import type {
   WorkbenchLocalCapabilitySettingsResponse,
   WorkbenchLocalCapabilitySettingsUpdateRequest,
   WorkbenchProjectsPayload,
+  WorkbenchModelContextCapability,
   WorkbenchSkillSummary,
 } from "../../types.ts";
 import type {
@@ -97,6 +97,7 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
 
 export interface WorkbenchDaemonRequestMap {
+  "models/context/read": { params: object; result: { data: WorkbenchModelContextCapability[] } };
   "agents/list": { params: { projectId: string }; result: { data: WorkbenchAgentOption[] } };
   "agents/read": { params: { agentPath: string; projectId: string }; result: WorkbenchAgentDefinitionResponse };
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };

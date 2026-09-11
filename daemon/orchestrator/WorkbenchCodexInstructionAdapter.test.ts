@@ -38,6 +38,23 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
+test("context settings configure thread admission without leaking unsupported config into turns", () => {
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd());
+  const configuration = {
+    cwd: process.cwd(), projectId: "project", roots: [], subagentName: null, threadId: "thread",
+    settings: { agentPath: null, agentSource: null, harness: "codex" as const, model: "model", reasoningEffort: null, serviceTier: null, contextWindowTokens: 600_000 },
+  };
+  for (const method of ["thread/start", "thread/resume"]) {
+    const configured = adapter.withThreadConfiguration({ method, params: { config: { unrelated: true } } }, configuration);
+    const config = (configured.params as { config: Record<string, number | boolean> }).config;
+    assert.equal(config.model_context_window, 600_000);
+    assert.equal(config.model_auto_compact_token_limit, 540_000);
+    assert.equal(config.unrelated, true);
+  }
+  const turn = adapter.withThreadConfiguration({ method: "turn/start", params: { input: [] } }, configuration);
+  assert.equal("config" in (turn.params as object), false);
+});
+
 test("daemon thread configuration replaces stale caller settings while preserving message intent", () => {
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd());
   const input = [{ type: "text", text: "answer", text_elements: [] }];

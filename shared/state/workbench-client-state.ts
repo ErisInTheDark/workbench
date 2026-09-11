@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue/WorkbenchTranscriptModeValue: preference value contracts. Keywords: app, settings, transcript, value.
- * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records. Keywords: app, settings, state.
- * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values. Keywords: app, draft, state.
- * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations. Keywords: app, state, contract.
- * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows, schema capability, and revision responses. Keywords: app, state, schema, revision, HTTP.
- * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary. Keywords: browser, state, UUID, HTTP.
- * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry. Keywords: app, state, HTTP, route.
+ * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue/WorkbenchTranscriptModeValue: preference value contracts.
+ * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records.
+ * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values.
+ * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations.
+ * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows, schema capability, and revision responses.
+ * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary.
+ * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -96,6 +96,7 @@ export interface WorkbenchQuestionnaireDraftValue {
 }
 
 export type WorkbenchClientStateRecord =
+  | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string; favourite: boolean }
   | { kind: "globalPreference"; preference: WorkbenchGlobalPreference }
   | (ProjectScoped & { kind: "projectPreference"; preference: WorkbenchProjectPreference })
   | (ProjectScoped & { kind: "sidebarPreference"; preference: WorkbenchSidebarPreference })
@@ -107,6 +108,7 @@ export type WorkbenchClientStateRecord =
   | (DaemonScoped & { kind: "lastLaunchTarget"; projectId: string });
 
 export type WorkbenchClientStateIdentity =
+  | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string }
   | { kind: "globalPreference"; key: WorkbenchGlobalPreference["key"] }
   | (ProjectScoped & { key: WorkbenchProjectPreference["key"]; kind: "projectPreference" })
   | (ProjectScoped & { key: WorkbenchSidebarPreference["key"]; kind: "sidebarPreference" })
@@ -144,6 +146,7 @@ export function isWorkbenchBrowserStateId(value: string): boolean {
 }
 
 const mutationPathByKind = {
+  modelPreference: "/api/workbench-client-state/model-preference",
   composerDraft: "/api/workbench-client-state/composer-draft",
   expandedDirectory: "/api/workbench-client-state/expanded-directory",
   fileDraft: "/api/workbench-client-state/file-draft",

@@ -171,7 +171,7 @@ test("thread mutations do not replace their project document", async () => {
     const neighbour = normalizeProviderSidebarEntry("copilot", { id: "neighbour", name: "untouched", updatedAt: 1 });
     assert.ok(neighbour && neighbour.entryKind === "thread");
     await controller.ensureProviderEntry(fixtureProjectIds["project"], neighbour);
-    await controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, {
+    await controller.setComposerProfileTarget({ kind: "thread", projectId: fixtureProjectIds["project"], ...provider.identity }, {
       kind: "custom", settings: { ...EMPTY_CODEX_SETTINGS, model: "isolated-model" },
     });
     await controller.refresh(fixtureProjectIds["project"]);
@@ -1829,6 +1829,35 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   await fs.rm(root, { force: true, recursive: true });
 });
 
+test("Custom draft provider changes retain isolation and reject writes addressed to the old provider", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-provider-"));
+  const projectId = fixtureProjectIds.project;
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
+  const settings = { harness: "codex" as const, model: "codex-model", agentPath: null, agentSource: null, reasoningEffort: null, serviceTier: null };
+  const selection = { kind: "custom" as const, settings };
+  await seedProjectState(root, "project", {
+    drafts: [{ draftId, projectId, profileId: null, composerSettings: settings, prompt: "Keep this", attachments: [], clientUpdatedAt: 1, createdAt: 1, updatedAt: 1 }],
+    records: [], version: 3, newThreadProfile: selection,
+  });
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish() {},
+    reconcileProject: async () => [], storageRoot: root,
+  });
+  try {
+    const oldSlot = { kind: "draft" as const, projectId, draftId, harness: "codex" as const };
+    const next = { kind: "custom" as const, settings: { ...settings, harness: "copilot" as const, model: "copilot-model" } };
+    assert.equal(await controller.setComposerProfileTarget(oldSlot, next), true);
+    assert.deepEqual(await controller.readComposerProfileTarget({ ...oldSlot, harness: "copilot" }), next);
+    assert.equal(await controller.setComposerProfileTarget(oldSlot, selection), false);
+    assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId }), selection);
+    const entry = (await controller.getSnapshot(projectId)).entries.find(entry => entry.entryKind === "draft");
+    assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Keep this");
+  } finally {
+    await controller.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("daemon thread state owns profile migration, draft defaults, materialization, and reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-profiles-"));
   const profiles: WorkbenchComposerProfile[] = [];
@@ -1896,7 +1925,15 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
     await controller.setComposerProfileTarget({ draftId, harness: "codex", kind: "draft", projectId: fixtureProjectIds["project"] }, selected),
     true,
   );
-  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }), selected);
+  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }), migrated);
+
+  const savedDraft = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "draft");
+  assert.ok(savedDraft?.entryKind === "draft");
+  await controller.handleRequest("observer", {
+    method: "workbench/thread-state/draft/upsert", projectId: fixtureProjectIds["project"],
+    draft: { ...savedDraft.draft, clientUpdatedAt: 3, prompt: "Autosaved draft" },
+  });
+  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }), migrated);
 
   await controller.acceptIntent("observer", {
     draftId,
@@ -1926,7 +1963,7 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
   }>(root, "project");
   assert.equal(stored.version, 4);
   assert.deepEqual(stored.drafts, []);
-  assert.deepEqual(stored.newThreadProfile, selected);
+  assert.deepEqual(stored.newThreadProfile, migrated);
   assert.deepEqual(stored.records.find((record) => record.identity.threadId === "materialized")?.profile, selected);
   await controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, migrated);
   await controller.acceptIntent("observer", {
@@ -3296,7 +3333,7 @@ test("thread folders persist across restart and reconcile members that leave the
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("profile-less threads display the daemon default and reads cannot overtake a failed profile save", async (context) => {
+test("profile-less threads never borrow defaults and reads cannot overtake a failed profile save", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-profile-admission-"));
   let failWrite = false;
   let release!: () => void;
@@ -3323,7 +3360,7 @@ test("profile-less threads display the daemon default and reads cannot overtake 
   const original = { kind: "custom" as const, settings: { ...EMPTY_CODEX_SETTINGS, model: "saved-model" } };
   await controller.ensureProviderEntry(fixtureProjectIds["project"], pinnedRecord("existing", "Existing"));
   await controller.setComposerProfileTarget(defaultSlot, original);
-  assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), original);
+  assert.equal(await controller.readComposerProfileTarget(threadSlot), null);
   failWrite = true;
   const saving = controller.setComposerProfileTarget(defaultSlot, { kind: "custom", settings: { ...original.settings, model: "unsaved-model" } });
   const rejectedSave = assert.rejects(saving, /Profile disk failure/u);
@@ -3358,9 +3395,11 @@ test("restarted admission refreshes linked profiles, retains deleted snapshots a
   const restarted = create();
   context.after(async () => { await restarted.dispose(); await fs.rm(root, { recursive: true, force: true }); });
   const effective = await restarted.readComposerProfileTarget(slot);
-  assert.equal(effective?.settings.agentPath, "library:agents/lily.md");
-  assert.equal(effective?.settings.model, "latest");
-  assert.deepEqual((await restarted.prepareComposerProfileTarget(slot)).selection, effective);
+  assert.deepEqual(effective, selection);
+  const candidate = (await restarted.prepareComposerProfileTarget(slot)).selection;
+  assert.equal(candidate.settings.agentPath, "library:agents/lily.md");
+  assert.equal(candidate.settings.model, "latest");
+  assert.deepEqual(await restarted.readComposerProfileTarget(slot), selection);
   profiles = [];
   assert.deepEqual((await restarted.prepareComposerProfileTarget(slot)).selection, { kind: "custom", settings: effective!.settings });
   await restarted.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, selection);
@@ -3375,11 +3414,83 @@ test("restarted admission refreshes linked profiles, retains deleted snapshots a
   const childSlot = { ...slot, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") };
   await assert.rejects(restarted.prepareComposerProfileTarget(childSlot), /no available daemon composer profile/u);
   profiles = [{ ...selection.settings, id: "missing", name: "Child", createdAt: 1, updatedAt: 1, scope: { kind: "global" } }];
+  await assert.rejects(restarted.prepareComposerProfileTarget(childSlot), /no available daemon composer profile/u);
+  await restarted.setComposerProfileTarget(childSlot, { ...selection, profileId: "missing" });
   assert.equal((await restarted.prepareComposerProfileTarget(childSlot)).selection.kind, "profile");
   await restarted.ensureProviderEntry(fixtureProjectIds["project"], pinnedRecord("child", "Provider child"));
   assert.equal((await restarted.prepareComposerProfileTarget(childSlot)).subagentName, "child");
   profiles = [{ ...profiles[0]!, harness: "copilot" }];
   await assert.rejects(restarted.prepareComposerProfileTarget(childSlot), /harness does not match/u);
+});
+
+test("profile admission publishes only accepted candidates and orders later edits without blocking lifecycle writes", async (context) => {
+  const persistence = new MemoryThreadStatePersistence();
+  const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
+  const latest = { ...original.settings, model: "new" };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "profile-admission", threadStateStore: persistence,
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [],
+    readComposerProfiles: async () => ({ profiles: [{ ...latest, id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] }),
+  });
+  context.after(() => controller.dispose());
+  const slot = { kind: "thread" as const, projectId: fixtureProjectIds["project"], harness: "codex" as const, threadId: fixtureThreadIds["existing"] };
+  await controller.ensureProviderEntry(slot.projectId, pinnedRecord("existing", "Existing"));
+  await controller.setComposerProfileTarget(slot, original);
+  const signal = new AbortController().signal;
+  const rejected = await controller.withComposerProfileAdmission(slot, async ({ selection }) => {
+    assert.equal(selection.settings.model, latest.model);
+    return { accepted: false, result: "not sent" };
+  }, signal);
+  assert.equal(rejected.accepted, false);
+  assert.deepEqual(await controller.readComposerProfileTarget(slot), original);
+  await assert.rejects(controller.withComposerProfileAdmission(slot, async () => {
+    throw new Error("Native start failed");
+  }, signal), /Native start failed/);
+  assert.deepEqual(await controller.readComposerProfileTarget(slot), original);
+  const accepted = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "sent" }), signal);
+  assert.equal(accepted.profilePersistenceError, null);
+  assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
+
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  context.after(() => release());
+  const admission = controller.withComposerProfileAdmission(slot, async () => {
+    enter();
+    await gate;
+    return { accepted: true, result: "sent again" };
+  }, signal);
+  await entered;
+  const edited = { kind: "custom" as const, settings: { ...latest, model: "user-edit" } };
+  const edit = controller.setComposerProfileTarget(slot, edited);
+  await controller.setTitle(slot.projectId, slot.harness, slot.threadId, "Event update");
+  release();
+  await Promise.all([admission, edit]);
+  assert.deepEqual(await controller.readComposerProfileTarget(slot), edited);
+});
+
+test("profile persistence failure after native acceptance retains success and exposes the failed snapshot write", async (context) => {
+  const persistence = new MemoryThreadStatePersistence();
+  const logs: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "profile-failed-commit", threadStateStore: persistence,
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [], log: (message) => logs.push(message),
+  });
+  context.after(() => controller.dispose());
+  const slot = { kind: "thread" as const, projectId: fixtureProjectIds["project"], harness: "codex" as const, threadId: fixtureThreadIds["existing"] };
+  await controller.ensureProviderEntry(slot.projectId, pinnedRecord("existing", "Existing"));
+  const original = { kind: "custom" as const, settings: { ...EMPTY_CODEX_SETTINGS, model: "saved" } };
+  await controller.setComposerProfileTarget(slot, original);
+  persistence.writeChanges = async () => { throw new Error("Disk unavailable"); };
+  const accepted = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "native-turn" }), new AbortController().signal);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.result, "native-turn");
+  assert.ok(accepted.profilePersistenceError);
+  assert.ok(logs.length);
+  assert.deepEqual(await controller.readComposerProfileTarget(slot), original);
 });
 
 test("drag priority and folder drops update one project-owned state atomically", async () => {

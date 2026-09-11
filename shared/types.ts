@@ -82,6 +82,7 @@
  * - WorkbenchProjectRoot: project-root contract.
  * - WorkbenchProjectsPayload: project-list payload.
  * - WorkbenchModelOption: selectable model option.
+ * - WorkbenchModelContextCapability: supported model context bounds.
  * - WorkbenchComposerSettings: composer settings contract.
  * - WorkbenchComposerProfileScope: composer profile scope.
  * - WorkbenchComposerProfile: stored composer profile.
@@ -93,6 +94,7 @@
  * - WorkbenchSubagentPage: paginated subagent response.
  * - WorkbenchComposerProfileSlot: composer profile slot identity.
  * - WorkbenchComposerProfileSelection/WorkbenchComposerProfileTargetSelection: unloaded browser selection and exact durable target selection.
+ * - WorkbenchThreadCreationProfile: target or captured snapshot used to create a thread.
  * - WorkbenchListModelsOptions: model-list options.
  * - ChangeSummary: file-change summary.
  * - ThreadSummary: thread-list summary.
@@ -751,18 +753,26 @@ export interface WorkbenchModelOption {
   supportsFastMode: boolean;
   inputModalities: string[];
   maxContextWindowTokens: number | null;
+  contextWindow?: { defaultTokens: number; maximumTokens: number } | null;
   additionalSpeedTiers: string[];
   policyState: string | null;
   billingMultiplier: number | null;
 }
 
 export interface WorkbenchComposerSettings {
+  contextWindowTokens?: number | null;
   agentPath: string | null;
   agentSource: "library" | "project" | null;
   harness: WorkbenchHarness;
   model: string;
   reasoningEffort: string | null;
   serviceTier: "fast" | null;
+}
+
+export interface WorkbenchModelContextCapability {
+  model: string;
+  defaultTokens: number;
+  maximumTokens: number;
 }
 
 export type WorkbenchComposerProfileScope =
@@ -828,6 +838,10 @@ export type WorkbenchComposerProfileTargetSelection =
   | { kind: "custom"; settings: WorkbenchComposerSettings }
   | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings };
 
+export type WorkbenchThreadCreationProfile =
+  | { kind: "target"; slot: WorkbenchComposerProfileSlot }
+  | { kind: "snapshot"; selection: WorkbenchComposerProfileTargetSelection };
+
 export interface WorkbenchListModelsOptions {
   forceRefresh?: boolean;
 }
@@ -858,6 +872,7 @@ export type ThreadPayload<Id extends string = WorkbenchThreadId | DraftId> =
 
 export interface ThreadPayloadData<Id extends string> extends ThreadSummary<Id> {
   browseResultEntries?: WorkbenchBrowseResultEntry[];
+  contextWindowTokens?: number | null;
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;

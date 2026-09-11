@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CopilotBridge: translate Codex-shaped bridge messages into Copilot SDK sessions and emit Codex-shaped notifications back out. Keywords: copilot sdk, codex adapter, thread bridge.
+ * - CopilotBridge: translate bridge requests into configured Copilot sessions and publish provider notifications.
  */
 import { randomUUID } from "node:crypto";
 
@@ -36,11 +36,14 @@ import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
+import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
+import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 
 type CopilotAccountGetQuotaResult = Awaited<ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>>;
 type CopilotAccountQuotaSnapshot = NonNullable<CopilotAccountGetQuotaResult["quotaSnapshots"]>[string];
 
 type CopilotBridgeOptions = {
+  profiles?: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "installCreatedProfile" | "withProviderProfileAdmission">;
   getReloadableModules: () => OrchestratorReloadableModules;
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
@@ -321,6 +324,8 @@ function previewForLog(value: string | null | undefined, maxLength = 120) {
 }
 
 export class CopilotBridge {
+  private readonly profiles: CopilotBridgeOptions["profiles"];
+  private readonly lifetime = new AbortController();
   private readonly getReloadableModules: CopilotBridgeOptions["getReloadableModules"];
   private readonly onNotification: CopilotBridgeOptions["onNotification"];
   private readonly projectRoot: string;
@@ -335,7 +340,8 @@ export class CopilotBridge {
   private readonly unsubscribers = new Map<string, { unsubscribe: () => void; drain: () => Promise<void> }>();
   private readonly pendingQuestionnaires = new Map<string, PendingQuestionnaireRequest>();
 
-  constructor({ getReloadableModules, onNotification, projectRoot, admitThreads, admitNotifications }: CopilotBridgeOptions) {
+  constructor({ getReloadableModules, onNotification, projectRoot, admitThreads, admitNotifications, profiles }: CopilotBridgeOptions) {
+    this.profiles = profiles;
     this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
@@ -352,6 +358,7 @@ export class CopilotBridge {
   }
 
   async stop() {
+    this.lifetime.abort(new Error("Copilot bridge stopped."));
     for (const pending of this.pendingQuestionnaires.values()) {
       pending.reject(new Error("Copilot bridge stopped before the questionnaire was answered."));
     }
@@ -434,15 +441,22 @@ export class CopilotBridge {
           };
         }
         case "thread/start": {
+          const source = message.workbenchCreationProfile === undefined ? null
+            : WorkbenchThreadCreationProfileSchema.parse(message.workbenchCreationProfile);
+          const captured = source && this.profiles ? await this.profiles.captureCreationProfile(
+            "copilot", this.readCwd(message.params) ?? this.projectRoot, source,
+          ) : null;
+          const settings = captured?.selection.settings;
           const thread = await this.startThread(
-            this.readModel(message.params),
-            this.readReasoningEffort(message.params),
-            this.readAgentPath(message.params),
+            settings?.model ?? this.readModel(message.params),
+            settings ? settings.reasoningEffort : this.readReasoningEffort(message.params),
+            settings ? settings.agentPath : this.readAgentPath(message.params),
             this.readWorkbenchOrigin(message.params),
-            this.readProjectId(message.params),
-            this.readCwd(message.params),
-            promptContext,
+            captured?.projectId ?? this.readProjectId(message.params),
+            captured?.cwd ?? this.readCwd(message.params),
+            captured ? { ...promptContext, cwd: captured.cwd, projectId: captured.projectId, agentPath: settings!.agentPath } : promptContext,
           );
+          if (captured) await this.profiles!.installCreatedProfile("copilot", thread.thread, captured.selection);
           this.onNotification({
             method: "thread/started",
             params: { thread: this.getReloadableModules().copilotThreadState.cloneThread(thread.thread) },
@@ -950,7 +964,7 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     projectId: string | null,
     promptContext: WorkbenchPromptContext | null,
   ) {
-    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, null, promptContext);
+    const { session, state } = await this.ensureThreadState(threadId);
     const { cloneThread } = this.getReloadableModules().copilotThreadState;
     const thread = cloneThread(state.thread);
     await this.admitThreads([thread]);
@@ -971,21 +985,16 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     projectId: string | null = null,
     cwd: string | null = null,
     promptContext: WorkbenchPromptContext | null = null,
+    configure = false,
   ) {
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
-    const selectedAgent = await this.resolveAgentSelection(agentPath, projectId);
     const existingState = this.threadStates.get(threadId);
     const existingSession = this.sessions.get(threadId);
     if (existingState && existingSession) {
-      if (selectedAgent) {
-        await existingSession.rpc.agent.select({ name: selectedAgent.name });
-      }
-      if (model) {
-        await existingSession.setModel(model, normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : undefined);
-      }
       return { session: existingSession, state: existingState };
     }
 
+    const selectedAgent = configure ? await this.resolveAgentSelection(agentPath, projectId) : null;
     const client = await this.ensureClient();
     const metadata = await client.getSessionMetadata(threadId);
     const { applyCopilotEvent, createThreadState, metadataToThread } = this.getReloadableModules().copilotThreadState;
@@ -998,11 +1007,11 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     const session = await client.resumeSession(threadId, {
       ...(selectedAgent ? { agent: selectedAgent.name, customAgents: [selectedAgent] } : {}),
       includeSubAgentStreamingEvents: true,
-      ...(model ? { model } : {}),
-      ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
+      ...(configure && model ? { model } : {}),
+      ...(configure && normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       streaming: true,
-      systemMessage: await this.createSessionSystemMessage(threadId, workbenchOrigin, promptContext),
+      ...(configure ? { systemMessage: await this.createSessionSystemMessage(threadId, workbenchOrigin, promptContext) } : {}),
       tools: this.createSessionTools(threadId),
       workingDirectory: selectedCwd,
     });
@@ -1080,14 +1089,47 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     cwd: string | null,
     promptContext: WorkbenchPromptContext | null,
   ) {
-    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, cwd, promptContext);
-
     const prompt = this.getReloadableModules().copilotThreadState.formatPromptFromInput(input);
     if (!prompt) {
       throw new Error("Message input cannot be empty.");
     }
 
-    await session.send({ mode, prompt });
+    const { session, state } = await this.ensureThreadState(threadId);
+    this.lifetime.signal.throwIfAborted();
+    if (state.thread.status.type === "active") {
+      await session.send({ mode, prompt });
+      return;
+    }
+    const admit = async (configuration: { model: string | null; reasoningEffort: string | null; agentPath: string | null; projectId: string | null; cwd: string | null; subagentName: string | null }) => {
+      if (state.thread.status.type === "active") {
+        await session.send({ mode, prompt });
+        return { accepted: false, result: null };
+      }
+      // A new system/agent prefix belongs to a resumed session, not an in-place model mutation.
+      const subscription = this.unsubscribers.get(threadId);
+      subscription?.unsubscribe();
+      await subscription?.drain();
+      await session.disconnect();
+      this.sessions.delete(threadId);
+      this.unsubscribers.delete(threadId);
+      this.lifetime.signal.throwIfAborted();
+      const configured = await this.ensureThreadState(
+        threadId, configuration.model, configuration.reasoningEffort, configuration.agentPath,
+        workbenchOrigin, configuration.projectId, configuration.cwd,
+        { ...promptContext, cwd: configuration.cwd, projectId: configuration.projectId, agentPath: configuration.agentPath, subagentName: configuration.subagentName },
+        true,
+      );
+      this.lifetime.signal.throwIfAborted();
+      await configured.session.send({ mode, prompt });
+      return { accepted: true, result: null };
+    };
+    if (!this.profiles) {
+      await admit({ model, reasoningEffort, agentPath, projectId, cwd, subagentName: promptContext?.subagentName ?? null });
+      return;
+    }
+    await this.profiles.withProviderProfileAdmission("copilot", state.thread, (profile) => admit({
+      ...profile.selection.settings, projectId: profile.projectId, cwd: profile.cwd, subagentName: profile.subagentName,
+    }), this.lifetime.signal, state.thread.turns.length > 0);
   }
 
   private async abortTurn(threadId: string, turnId: string | null) {

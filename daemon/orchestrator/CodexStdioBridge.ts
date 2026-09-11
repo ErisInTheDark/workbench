@@ -1,5 +1,4 @@
 /*
- * Keywords: Codex lifecycle, compaction, instruction prefix, reload cancellation.
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
@@ -176,11 +175,19 @@ export type CodexStdioBridgeOptions = {
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   onInitialized?: () => void;
+  createThread?: (request: JsonRpcRequest, create: (request: JsonRpcRequest) => Promise<JsonRpcResponse>, signal: AbortSignal) => Promise<JsonRpcResponse>;
   prepareThreadConfiguration?: <T extends { resumeRequest: JsonRpcRequest; startRequest?: JsonRpcRequest }>(
     thread: Thread,
     requests: T,
     signal: AbortSignal,
   ) => Promise<T>;
+  withThreadAdmission?: (
+    thread: Thread,
+    requests: { resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest },
+    admit: (requests: { resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest }) => Promise<{ accepted: boolean; result: JsonRpcResponse }>,
+    signal: AbortSignal,
+    fresh: boolean,
+  ) => Promise<JsonRpcResponse>;
   prepareTurnStart?: (
     message: JsonRpcRequest,
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -918,6 +925,8 @@ export default class CodexStdioBridge {
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
   private readonly prepareThreadConfiguration: CodexStdioBridgeOptions["prepareThreadConfiguration"];
+  private readonly withThreadAdmission: CodexStdioBridgeOptions["withThreadAdmission"];
+  private readonly createThread: CodexStdioBridgeOptions["createThread"];
   private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
@@ -961,7 +970,7 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, prepareThreadConfiguration, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
@@ -969,6 +978,8 @@ export default class CodexStdioBridge {
     this.onInitialized = onInitialized;
     this.prepareTurnStart = prepareTurnStart;
     this.prepareThreadConfiguration = prepareThreadConfiguration;
+    this.withThreadAdmission = withThreadAdmission;
+    this.createThread = createThread;
     this.questionnaires = questionnaires;
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
     this.readSqliteTranscriptMaterializedTurnIds = readSqliteTranscriptMaterializedTurnIds;
@@ -1216,6 +1227,13 @@ export default class CodexStdioBridge {
   }
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
+    if (message.method === "thread/start" && this.createThread) {
+      const response = await this.enqueueCommand(() => this.createThread!(
+        message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
+      ));
+      this.sendToClient(client, { ...response, id: clientRequestId });
+      return;
+    }
     if (message.method === "thread/compact/start") {
       const response = await this.enqueueCommand(() => this.compactThread(message));
       this.sendToClient(client, { ...response, id: clientRequestId });
@@ -1254,6 +1272,11 @@ export default class CodexStdioBridge {
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    if (message.method === "thread/start" && this.createThread) {
+      return this.enqueueCommand(() => this.createThread!(
+        message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
+      ));
+    }
     if (message.method === WORKBENCH_TOOL_CONTEXT_METHOD) {
       this.assertAcceptingWork();
       const params = asRecord(message.params);
@@ -3591,14 +3614,35 @@ export default class CodexStdioBridge {
       return { id: requestId, error: { code: -32000, message: `The Codex thread is ${readThread.status.type}, not inactive.` } };
     }
 
+    if (this.withThreadAdmission) {
+      return this.withThreadAdmission(readThread, { resumeRequest, startRequest }, (requests) => (
+        this.admitInactiveCodexTurn(requestId, threadId, requests.resumeRequest, requests.startRequest, steerRequest, signal)
+      ), signal, this.unmaterializedThreadIds.has(threadId));
+    }
     if (this.prepareThreadConfiguration) {
       ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }, signal));
       signal.throwIfAborted();
       this.assertAcceptingWork();
     }
+    return (await this.admitInactiveCodexTurn(requestId, threadId, resumeRequest, startRequest, steerRequest, signal)).result;
+  }
+
+  private async admitInactiveCodexTurn(
+    requestId: number | string | null,
+    threadId: string,
+    resumeRequest: JsonRpcRequest,
+    startRequest: JsonRpcRequest,
+    steerRequest: JsonRpcRequest | null,
+    signal: AbortSignal,
+  ): Promise<{ accepted: boolean; result: JsonRpcResponse }> {
+    signal.throwIfAborted();
+    const start = async () => {
+      const result = await this.dispatchPreparedTurnStart(requestId, startRequest);
+      return { accepted: !result.error && Boolean(asRecord(result.result)?.turn), result };
+    };
     // Fresh threads still need stored configuration, but have no rollout to resume.
     if (this.unmaterializedThreadIds.has(threadId)) {
-      return await this.dispatchPreparedTurnStart(requestId, startRequest);
+      return start();
     }
     const unsubscribeResponse = await this.dispatchManagedProviderRequest({
       id: `workbench:admission-unsubscribe:${String(requestId ?? Date.now())}`,
@@ -3606,7 +3650,7 @@ export default class CodexStdioBridge {
       params: { threadId },
     });
     signal.throwIfAborted();
-    if (unsubscribeResponse.error) return { id: requestId, error: unsubscribeResponse.error };
+    if (unsubscribeResponse.error) return { accepted: false, result: { id: requestId, error: unsubscribeResponse.error } };
 
     const resumeResponse = await this.dispatchManagedProviderRequest({
       ...resumeRequest,
@@ -3614,27 +3658,27 @@ export default class CodexStdioBridge {
     });
     signal.throwIfAborted();
     if (resumeResponse.error) {
-      return { id: requestId, error: resumeResponse.error };
+      return { accepted: false, result: { id: requestId, error: resumeResponse.error } };
     } else {
       const resumeResult = asRecord(resumeResponse.result) as ThreadResumeResponse | null;
       const resumedThread = resumeResult?.thread;
       if (!resumedThread) {
-        return { id: requestId, error: { code: -32000, message: "Codex admission received no resumed thread." } };
+        return { accepted: false, result: { id: requestId, error: { code: -32000, message: "Codex admission received no resumed thread." } } };
       }
       const resumedTurns = resumeResult.initialTurnsPage?.data ?? resumedThread.turns;
       const resumedActiveTurn = this.readManagedActiveTurn(resumedThread, resumedTurns);
       if (resumedActiveTurn) {
         if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
-          return await this.dispatchAdmittedTurnStart(requestId, startRequest);
+          return { accepted: false, result: await this.dispatchAdmittedTurnStart(requestId, startRequest) };
         }
-        return await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest);
+        return { accepted: false, result: await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest) };
       }
       if (resumedThread.status.type !== "idle" && resumedThread.status.type !== "systemError") {
-        return { id: requestId, error: { code: -32000, message: `The resumed Codex thread is ${resumedThread.status.type}, not inactive.` } };
+        return { accepted: false, result: { id: requestId, error: { code: -32000, message: `The resumed Codex thread is ${resumedThread.status.type}, not inactive.` } } };
       }
     }
 
-    return await this.dispatchPreparedTurnStart(requestId, startRequest);
+    return start();
   }
 
   private async admitNativeCodexTurn({

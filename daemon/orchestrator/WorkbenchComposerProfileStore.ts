@@ -1,5 +1,4 @@
 /*
- * Keywords: composer, profile, sqlite, catalogue, import, queue, lifecycle.
  * Exports:
  * - WorkbenchComposerProfileDatabase: shared database worker port.
  * - default WorkbenchComposerProfileStore: own durable named profiles, import and ordered mutations.
@@ -22,6 +21,7 @@ function row(profile: WorkbenchComposerProfile): SelectRow<typeof composerProfil
     id: profile.id, name: profile.name, description: profile.description ?? null,
     agent_path: profile.agentPath, agent_source: profile.agentSource, harness: profile.harness,
     model: profile.model, reasoning_effort: profile.reasoningEffort, service_tier: profile.serviceTier,
+    context_window_tokens: profile.contextWindowTokens ?? null,
     scope_kind: profile.scope.kind, scope_project_id: profile.scope.kind === "project" ? profile.scope.projectId : null,
     created_at: profile.createdAt, updated_at: profile.updatedAt,
   };
@@ -32,6 +32,7 @@ function fromRow(value: SelectRow<typeof composerProfiles>): WorkbenchComposerPr
     id: value.id, name: value.name, description: value.description,
     agentPath: value.agent_path, agentSource: value.agent_source, harness: value.harness,
     model: value.model, reasoningEffort: value.reasoning_effort, serviceTier: value.service_tier,
+    ...(value.context_window_tokens !== null ? { contextWindowTokens: value.context_window_tokens } : {}),
     scope: value.scope_kind === "global" ? { kind: "global" } : { kind: "project", projectId: value.scope_project_id },
     createdAt: value.created_at, updatedAt: value.updated_at,
   });
@@ -63,7 +64,7 @@ export default class WorkbenchComposerProfileStore {
     return Promise.all([ready, result]).then(([, payload]) => payload);
   }
 
-  mutate(value: unknown) {
+  mutate(value: unknown, validate?: (profile: WorkbenchComposerProfile, previous: WorkbenchComposerProfile | null) => Promise<void>) {
     const ready = this.start();
     const result = this.enqueue(async () => {
       await ready;
@@ -76,12 +77,13 @@ export default class WorkbenchComposerProfileStore {
         return stored ? { ...profile, createdAt: stored.createdAt } : profile;
       }).sort((left, right) => left.createdAt - right.createdAt || Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
       const profile = mutation.kind === "upsert" ? profiles.find((entry) => entry.id === mutation.profile.id) : null;
+      if (profile && validate) await validate(profile, previous.find((entry) => entry.id === profile.id) ?? null);
       await this.write([
         mutation.kind === "delete"
           ? deleteRows(composerProfiles, { id: mutation.profileId })
           : upsertRow(composerProfiles, row(profile!), {
             conflictColumns: ["id"],
-            updateColumns: ["name", "description", "agent_path", "agent_source", "harness", "model", "reasoning_effort", "service_tier", "scope_kind", "scope_project_id", "created_at", "updated_at"],
+            updateColumns: ["name", "description", "agent_path", "agent_source", "harness", "model", "reasoning_effort", "service_tier", "context_window_tokens", "scope_kind", "scope_project_id", "created_at", "updated_at"],
           }),
       ]);
       return { profiles };

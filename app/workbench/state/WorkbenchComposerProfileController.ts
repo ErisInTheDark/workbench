@@ -11,10 +11,14 @@ import type {
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerSettings,
   WorkbenchHarness,
+  WorkbenchModelOption,
   ThreadPayload,
 } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
-import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import { copyComposerSettings as cloneSettings } from "workbench-shared/workbench/thread/thread-profile";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   normalizeComposerProfile,
 } from "workbench-shared/workbench/state/composer-profile-state";
@@ -39,17 +43,6 @@ function getSlotKey(slot: WorkbenchComposerProfileSlot) {
   return `${slot.kind}:${slot.projectId}`;
 }
 
-function cloneSettings(settings: WorkbenchComposerSettings): WorkbenchComposerSettings {
-  return {
-    agentPath: settings.agentPath,
-    agentSource: settings.agentSource,
-    harness: settings.harness,
-    model: settings.model,
-    reasoningEffort: settings.reasoningEffort,
-    serviceTier: settings.serviceTier,
-  };
-}
-
 export default class WorkbenchComposerProfileController {
   private error = "";
   private readonly listeners = new Set<() => void>();
@@ -64,6 +57,8 @@ export default class WorkbenchComposerProfileController {
   private selections: Record<string, WorkbenchComposerProfileSelection> = {};
   private snapshot: WorkbenchComposerProfileSnapshot;
   private targetPersistence: ComposerProfileTargetPersistence | null = null;
+  private readonly selectionWrites = new Map<string, Promise<boolean>>();
+  private readonly profileWrites = new Map<string, Promise<boolean>>();
 
   constructor() {
     this.snapshot = this.createSnapshot();
@@ -128,8 +123,9 @@ export default class WorkbenchComposerProfileController {
       model: settings.model,
       reasoningEffort: settings.reasoningEffort,
       serviceTier: settings.serviceTier,
+      contextWindowTokens: settings.contextWindowTokens ?? null,
       source: thread.isDraft ? settings.harness : thread.source,
-    } : { ...thread, agentPath: null, model: null, reasoningEffort: null, serviceTier: null };
+    } : { ...thread, agentPath: null, model: null, reasoningEffort: null, serviceTier: null, contextWindowTokens: null };
   }
 
   async createProfile(input: Omit<WorkbenchComposerProfile, "createdAt" | "id" | "updatedAt">) {
@@ -162,11 +158,59 @@ export default class WorkbenchComposerProfileController {
   selectCustom(slot: WorkbenchComposerProfileSlot, settings: WorkbenchComposerSettings) {
     return this.persistSelection(slot, { kind: "custom", settings: cloneSettings(settings) });
   }
+  selectHarness(slot: WorkbenchComposerProfileSlot, harness: WorkbenchHarness, loadModels: () => Promise<WorkbenchModelOption[]>) {
+    if (slot.kind === "thread" || this.getSelection(slot).kind === "profile") return Promise.resolve(false);
+    const key = getSlotKey(slot);
+    const previous = this.selectionWrites.get(key);
+    const generation = this.selectionGenerations.get(key) ?? 0;
+    const persistence = this.targetPersistence;
+    const pending = (async () => {
+      if (previous) await previous;
+      try {
+        const models = (await loadModels()).filter((model) => model.policyState !== "disabled");
+        if (this.targetPersistence !== persistence || (this.selectionGenerations.get(key) ?? 0) !== generation) return false;
+        const model = models.find((entry) => entry.isDefault) ?? models[0];
+        if (!model) throw new Error("No models are available for that provider.");
+        return await this.writeSelection(slot, { kind: "custom", settings: {
+          agentPath: null, agentSource: null, harness, model: model.id,
+          reasoningEffort: model.supportsReasoningEffort ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
+          serviceTier: null,
+          contextWindowTokens: harness === "codex" ? model.contextWindow?.defaultTokens ?? null : null,
+        } });
+      } catch (error) {
+        this.fail(error instanceof Error ? error.message : "Unable to change provider.");
+        return false;
+      }
+    })();
+    this.selectionWrites.set(key, pending);
+    return pending.finally(() => { if (this.selectionWrites.get(key) === pending) this.selectionWrites.delete(key); });
+  }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
     if (!profile || ((slot.kind === "thread" || slot.kind === "draft") && profile.harness !== slot.harness)) return false;
     void this.persistSelection(slot, { kind: "profile", profileId, settings: cloneSettings(profile) });
     return true;
+  }
+
+  observeSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection | null) {
+    if (this.selectionWrites.has(getSlotKey(slot))) return;
+    if (areDeeplyEqual(this.getSelection(slot), selection ?? EMPTY_CUSTOM_SELECTION)) return;
+    if (selection) this.installStableSelection(slot, selection);
+    else {
+      this.stableSelections.delete(getSlotKey(slot));
+      this.installSelection(slot, EMPTY_CUSTOM_SELECTION);
+    }
+  }
+
+  async waitForSelection(slot: WorkbenchComposerProfileSlot) {
+    const key = getSlotKey(slot);
+    while (true) {
+      const selection = this.getSelection(slot);
+      const pending = this.selectionWrites.get(key)
+        ?? (selection.kind === "profile" ? this.profileWrites.get(selection.profileId) : null);
+      if (!pending) return;
+      if (!await pending) throw new Error(this.error || "The profile settings could not be saved.");
+    }
   }
   materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: WorkbenchThreadId, harness: WorkbenchHarness) {
     const selection = this.getSelection(sourceSlot);
@@ -178,19 +222,19 @@ export default class WorkbenchComposerProfileController {
       : { kind: "custom", settings });
   }
 
-  materializeDraftSelection(sourceSlot: WorkbenchComposerProfileSlot, draftId: DraftId, harness: WorkbenchHarness, projectId: ProjectId) {
-    const selection = this.getSelection(sourceSlot);
-    const settings = selection.settings;
-    if (settings?.harness !== harness) return;
-    const slot = { draftId, harness, kind: "draft" as const, projectId };
-    this.installStableSelection(slot, selection.kind === "profile"
-      ? { kind: "profile", profileId: selection.profileId, settings }
+  materializeDraftSelection(draft: Pick<WorkbenchThreadDraft, "draftId" | "projectId" | "profileId" | "composerSettings">) {
+    const settings = draft.composerSettings;
+    const slot = { draftId: draft.draftId, harness: settings.harness, kind: "draft" as const, projectId: draft.projectId };
+    this.installStableSelection(slot, draft.profileId
+      ? { kind: "profile", profileId: draft.profileId, settings }
       : { kind: "custom", settings });
   }
 
   async loadSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     this.slots.set(key, slot);
+    const pending = this.selectionWrites.get(key);
+    if (pending) await pending;
     const persistence = this.targetPersistence;
     if (!persistence) return;
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
@@ -215,7 +259,14 @@ export default class WorkbenchComposerProfileController {
     }
   }
 
-  private async persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection): Promise<boolean> {
+  private persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection): Promise<boolean> {
+    const key = getSlotKey(slot);
+    const pending = this.writeSelection(slot, selection, this.selectionWrites.get(key));
+    this.selectionWrites.set(key, pending);
+    return pending.finally(() => { if (this.selectionWrites.get(key) === pending) this.selectionWrites.delete(key); });
+  }
+
+  private async writeSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection, previous?: Promise<boolean>): Promise<boolean> {
     const key = getSlotKey(slot);
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
     this.selectionGenerations.set(key, generation);
@@ -223,13 +274,18 @@ export default class WorkbenchComposerProfileController {
     this.publish();
     try {
       const persistence = this.requireTargetPersistence();
+      await previous;
+      if (this.targetPersistence !== persistence) throw new Error("Composer profile connection changed before the settings could be saved.");
       await persistence.write(slot, selection);
-      const acknowledged = await persistence.read(slot);
+      const destination = slot.kind === "draft" ? { ...slot, harness: selection.settings.harness } : slot;
+      const acknowledged = await persistence.read(destination);
+      if (this.targetPersistence !== persistence) return false;
       if (!acknowledged) throw new Error("The daemon composer profile target is unavailable.");
       if (generation >= (this.stableSelections.get(key)?.generation ?? 0)) {
         this.stableSelections.set(key, { generation, selection: this.cloneTargetSelection(acknowledged) });
       }
       if (this.selectionGenerations.get(key) !== generation) return true;
+      if (getSlotKey(destination) !== key) this.installStableSelection(destination, acknowledged, false);
       this.installSelection(slot, acknowledged, false);
       this.error = "";
       this.publish();
@@ -284,7 +340,14 @@ export default class WorkbenchComposerProfileController {
     return this.targetPersistence;
   }
 
-  private async persistProfileMutation(mutation: WorkbenchComposerProfileMutation, optimistic: WorkbenchComposerProfile[]) {
+  private persistProfileMutation(mutation: WorkbenchComposerProfileMutation, optimistic: WorkbenchComposerProfile[]) {
+    const id = mutation.kind === "delete" ? mutation.profileId : mutation.profile.id;
+    const pending = this.writeProfileMutation(mutation, optimistic);
+    this.profileWrites.set(id, pending);
+    return pending.finally(() => { if (this.profileWrites.get(id) === pending) this.profileWrites.delete(id); });
+  }
+
+  private async writeProfileMutation(mutation: WorkbenchComposerProfileMutation, optimistic: WorkbenchComposerProfile[]) {
     const generation = ++this.profileGeneration;
     this.profiles = optimistic;
     this.publish();
@@ -298,7 +361,6 @@ export default class WorkbenchComposerProfileController {
       this.profiles = [...payload.profiles];
       this.error = "";
       this.publish();
-      await Promise.all([...this.slots.values()].map((slot) => this.loadSelection(slot)));
       return true;
     } catch (error) {
       if (generation === this.profileGeneration) {

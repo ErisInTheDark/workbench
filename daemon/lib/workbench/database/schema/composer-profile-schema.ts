@@ -1,13 +1,12 @@
 /*
- * Keywords: composer, profile, sqlite, catalogue, import, constraints.
  * Exports:
  * - composerProfiles: named profiles with typed settings and scope.
  * - composerProfileImports: durable legacy-import completion.
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
-import { check, defineTable, enumText, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
+import { check, defineTable, enumText, evolveTable, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
+import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
 
 const profiles = defineTable("workbench_composer_profiles", {
   id: text().primaryKey(),
@@ -34,9 +33,16 @@ const profiles = defineTable("workbench_composer_profiles", {
 const imports = defineTable("workbench_composer_profile_imports", {
   id: enumText("legacy-json").primaryKey(),
 });
+const contextProfiles = evolveTable(profiles, { add: { context_window_tokens: integer().nonNegative() } });
 const profileHistory = defineTableHistory({
-  current: profiles,
-  versions: [tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: profiles, migration: createTable(profiles) })],
+  current: contextProfiles,
+  versions: [
+    tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: profiles, migration: createTable(profiles) }),
+    tableVersion({
+      schemaVersion: databaseReleases.profileContextWindows.version, table: contextProfiles,
+      migration: addColumns({ from: profiles, to: contextProfiles, columns: ["context_window_tokens"] }),
+    }),
+  ],
 });
 const importHistory = defineTableHistory({
   current: imports,

@@ -1,39 +1,64 @@
 /*
  * Exports:
- * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot, opencode.
- * - SaveIcon: render the save control icon with its disabled slash overlay. Keywords: workbench, icon, save.
- * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle and composer-draft glyphs. Keywords: thread, status, sidebar, draft, commit.
- * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: render shared sidebar action and snooze glyphs. Keywords: draft, settle, restore, snooze.
- * - BinIcon: render the discard-draft bin icon. Keywords: workbench, icon, reset.
- * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
- * - ZoomInIcon: render the increase text size icon. Keywords: workbench, icon, zoom.
- * - BackArrowIcon: render the mobile back-navigation icon. Keywords: workbench, icon, navigation.
- * - SidebarCollapseIcon/SidebarExpandIcon: render desktop sidebar visibility controls. Keywords: workbench, icon, sidebar.
- * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
- * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
- * - HomeIcon/StatsIcon/GearIcon: render home, statistics, and settings navigation icons. Keywords: workbench, icon, navigation, stats, settings.
- * - ProjectIcon: render the Projects sidebar section glyph. Keywords: workbench, icon, project, sidebar.
- * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
- * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
- * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
- * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: render shared thread turn, command-status, and alert icons. Keywords: workbench, icon, thread, stop, pause, play, progress, alert.
- * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: render pinned, folder, and subagent ownership controls. Keywords: workbench, icon, thread, pin, folder, lock.
- * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
- * - OpenThreadIcon/ArchiveIcon: render thread navigation and archive context-menu icons. Keywords: workbench, icon, thread, open, archive.
- * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
- * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
- * - CopyIcon/MoreVerticalIcon: render thread copy and overflow action icons. Keywords: workbench, icon, thread, copy, menu.
- * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
- * - AsteriskIcon/PlusIcon: render amend and fresh-commit choice icons. Keywords: workbench, icon, amend, commit.
- * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
- * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
- * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: render input, cache, and output glyphs. Keywords: workbench, icon, tokens, stats.
+ * - ZapIcon: fast mode outlined lightning glyph.
+ * - StarIcon/StarOffIcon: emphasise and de-emphasise model choices.
+ * - BotIcon: composer profile glyph.
+ * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: harness identity glyphs.
+ * - SaveIcon: save glyph with disabled slash.
+ * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: lifecycle and draft glyphs.
+ * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
+ * - BinIcon: discard glyph.
+ * - ZoomOutIcon/ZoomInIcon: text-size controls.
+ * - BackArrowIcon: mobile back navigation.
+ * - SidebarCollapseIcon/SidebarExpandIcon: sidebar visibility controls.
+ * - PanelMinimizeIcon/PanelExpandIcon/PanelCloseIcon: mosaic panel controls.
+ * - HomeIcon/StatsIcon/GearIcon: main navigation glyphs.
+ * - ProjectIcon: project section glyph.
+ * - BlocksIcon: grouped blocks glyph.
+ * - BrowserSessionIcon: browser session glyph.
+ * - ReloadIcon: runtime reload glyph.
+ * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: execution status and alert glyphs.
+ * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: folder and ownership glyphs.
+ * - FlagIcon: goal glyph.
+ * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
+ * - WrapTextIcon/PreviewIcon: code display controls.
+ * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
+ * - AsteriskIcon/PlusIcon: amend and fresh-commit choices.
+ * - SparkleIcon/ReplyArrowIcon: creation and reply glyphs.
+ * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: file-change glyphs.
+ * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: token input, cache and output glyphs.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 
 type IconProps = {
   className?: string;
 };
+
+export function BotIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+  </svg>;
+}
+
+export function StarIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" />
+  </svg>;
+}
+
+export function StarOffIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="m10.344 4.688 1.181-2.393a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.237 3.152" />
+    <path d="m17.945 17.945.43 2.505a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a8 8 0 0 0 .4-.099" />
+    <path d="m2 2 20 20" />
+  </svg>;
+}
+
+export function ZapIcon({ className = "size-4" }: IconProps) {
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z" />
+  </svg>;
+}
 
 export function SquareArrowRightEnterIcon({ className = "size-4" }: IconProps) {
   return (
@@ -140,13 +165,10 @@ export function SaveIcon () {
   );
 }
 
-export function BinIcon () {
+export function BinIcon ({ className = "size-5" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M3.5 6.5H16.5" strokeLinecap="round" />
-      <path d="M8.5 3.5H11.5C11.78 3.5 12 3.72 12 4V6.5H8V4C8 3.72 8.22 3.5 8.5 3.5Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.5 6.5L6.5 16C6.56 16.56 7.04 17 7.6 17H12.4C12.96 17 13.44 16.56 13.5 16L14.5 6.5H5.5Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8.5 9V14M11.5 9V14" strokeLinecap="round" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </svg>
   );
 }

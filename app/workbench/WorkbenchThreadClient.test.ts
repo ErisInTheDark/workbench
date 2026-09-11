@@ -2384,6 +2384,30 @@ test("project changes during draft materialization prevent stale general dispatc
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));
 
+test("navigation during creation profile acknowledgement cannot select or send the old draft", async () => withClient(async (client, socket) => {
+  const draft = { ...activeThread("copilot", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
+  client.selectThreadPayload(draft);
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "thread/start") {
+      queueMicrotask(() => target.respond(request.id, { thread: wireThread("created") }));
+      return true;
+    }
+    return request.method === "profiles/target/read";
+  };
+  const created: string[] = [];
+  const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
+    composerProfileSlot: { kind: "new-thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
+    onThreadCreated: thread => created.push(thread.id),
+  });
+  const profileRead = await waitForRequest(socket, "profiles/target/read");
+  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
+  socket.respond(profileRead.id, { selection: null });
+  await assert.rejects(send, ThreadMessageNotSentError);
+  assert.deepEqual(created, []);
+  assert.notEqual(client.getSnapshot().currentThread?.id, "created");
+  assert.equal(socket.requests.some(request => request.method === "turn/start" || request.method === "turn/steer"), false);
+}));
+
 test("project changes after draft turn dispatch preserve durable acceptance without stale materialization", async () => {
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   await withClient(async (client, socket) => {

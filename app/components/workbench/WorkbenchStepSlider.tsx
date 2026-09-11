@@ -1,9 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchStepSlider: reusable stepped range slider with tick marks and responsive labels. Keywords: settings, slider, steps, mobile.
+ * - default WorkbenchStepSlider: stepped range slider with tick marks and responsive labels.
  */
 
 "use client";
+
+import WorkbenchRangeInput from "./WorkbenchRangeInput";
 
 type WorkbenchStepSliderProps<T extends number> = {
   ariaLabel: string;
@@ -50,43 +52,9 @@ export default function WorkbenchStepSlider<T extends number> ({
             />
           ))}
         </div>
-        <input
-          type="range"
+        <WorkbenchRangeInput
           aria-label={ariaLabel}
-          className={`
-            relative z-10 h-20 -mt-6 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none disabled:cursor-not-allowed
-            [&::-webkit-slider-runnable-track]:h-[0.28rem]
-            [&::-webkit-slider-runnable-track]:rounded-full
-            [&::-webkit-slider-runnable-track]:bg-[var(--slider-step-color)]
-            [&::-webkit-slider-thumb]:mt-[-0.36rem]
-            [&::-webkit-slider-thumb]:h-4
-            [&::-webkit-slider-thumb]:w-4
-            [&::-webkit-slider-thumb]:appearance-none
-            [&::-webkit-slider-thumb]:rounded-full
-            [&::-webkit-slider-thumb]:border
-            [&::-webkit-slider-thumb]:border-[color-mix(in_srgb,var(--text)_28%,transparent)]
-            [&::-webkit-slider-thumb]:bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]
-            [&::-webkit-slider-thumb]:transition
-            hover:[&::-webkit-slider-thumb]:scale-110
-            focus-visible:[&::-webkit-slider-thumb]:scale-110
-            focus-visible:[&::-webkit-slider-thumb]:ring-2
-            focus-visible:[&::-webkit-slider-thumb]:ring-accent-soft
-            [&::-moz-range-track]:h-[0.28rem]
-            [&::-moz-range-track]:rounded-full
-            [&::-moz-range-track]:border-0
-            [&::-moz-range-track]:bg-[var(--slider-step-color)]
-            [&::-moz-range-thumb]:h-4
-            [&::-moz-range-thumb]:w-4
-            [&::-moz-range-thumb]:rounded-full
-            [&::-moz-range-thumb]:border
-            [&::-moz-range-thumb]:border-[color-mix(in_srgb,var(--text)_28%,transparent)]
-            [&::-moz-range-thumb]:bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]
-            [&::-moz-range-thumb]:transition
-            hover:[&::-moz-range-thumb]:scale-110
-            focus-visible:[&::-moz-range-thumb]:scale-110
-            focus-visible:[&::-moz-range-thumb]:ring-2
-            focus-visible:[&::-moz-range-thumb]:ring-accent-soft
-          `}
+          className="h-20 -mt-6"
           disabled={disabled}
           max={maxIndex}
           min={0}

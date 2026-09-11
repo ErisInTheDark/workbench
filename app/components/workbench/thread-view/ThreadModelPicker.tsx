@@ -1,16 +1,15 @@
 /*
  * Exports:
- * - default ThreadModelPicker: render model selection, priority, refresh, and return-to-message controls for a thread composer. Keywords: thread, model, picker, refresh.
- * - Local helpers: format model context windows, feature pills, and model priority arrows. Keywords: model metadata, priority.
+ * - default ThreadModelPicker: model radio cards with favourite actions and an Other disclosure.
  */
 "use client";
 
-import { JSX, type KeyboardEvent } from "react";
+import { JSX } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
-import { ReloadIcon } from "../workbench-icons";
-import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
-import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
-import { formatHarnessLabel } from "./harness-label";
+import { StarIcon, StarOffIcon } from "../workbench-icons";
+import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import ThreadDisclosure from "./ThreadDisclosure";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -58,140 +57,82 @@ function buildFeatureList (model: WorkbenchModelOption) {
 		features.push("Personality");
 	}
 
-	// if (model.additionalSpeedTiers.length) {
-	// 	features.push(`Speed tiers: ${model.additionalSpeedTiers.join(", ")}`);
-	// }
-
 	return features;
 }
 
 export default function ThreadModelPicker ({
 	appliesOnNextTurnOnly,
-	deprioritizedModelIds,
+	unfavouritedModelIds,
 	error,
 	harness,
 	isLoading,
-	isRefreshDisabled,
-	isRefreshing,
 	models,
-	onClose,
-	onRefresh,
 	onSelectModel,
-	onToggleModelPriority,
+	onToggleFavourite,
 	selectedModelId,
-	showsPriorityControls = true,
+	favouritesDisabled = false,
 }: {
 	appliesOnNextTurnOnly: boolean;
-	deprioritizedModelIds: string[];
+	unfavouritedModelIds: string[];
 	error: string;
 	harness: WorkbenchHarness;
 	isLoading: boolean;
-	isRefreshDisabled: boolean;
-	isRefreshing: boolean;
 	models: WorkbenchModelOption[];
-	onClose: () => void;
-	onRefresh: () => void;
 	onSelectModel: (model: WorkbenchModelOption) => void;
-	onToggleModelPriority: (modelId: string) => void;
+	onToggleFavourite: (modelId: string) => void;
 	selectedModelId: string | null;
-	showsPriorityControls?: boolean;
+	favouritesDisabled?: boolean;
 }) {
 	const visibleModels = models.filter((model) => model.policyState !== "disabled");
-	const topGroup = visibleModels.filter((model) => !deprioritizedModelIds.includes(model.id));
-	const bottomGroup = visibleModels.filter((model) => deprioritizedModelIds.includes(model.id));
-	const harnessLabel = formatHarnessLabel(harness);
+	const topGroup = visibleModels.filter((model) => !unfavouritedModelIds.includes(model.id));
+	const bottomGroup = visibleModels.filter((model) => unfavouritedModelIds.includes(model.id));
 
-	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, model: WorkbenchModelOption) => {
-		if (event.key !== "Enter" && event.key !== " ") {
-			return;
-		}
-
-		event.preventDefault();
-		onSelectModel(model);
-	};
-
-	const renderModelCard = (model: WorkbenchModelOption, deprioritized: boolean) => {
+	const renderModelCard = (model: WorkbenchModelOption, unfavourited: boolean) => {
 		const featureList = buildFeatureList(model);
 		const isSelected = selectedModelId === model.id;
 
 		return (
-			<div
-				key={model.id}
-				role="radio"
-				aria-checked={isSelected}
-				tabIndex={0}
-				className={[
-					"rounded-[1rem] border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-					isSelected
-						? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]"
-						: "border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_98%,transparent)] hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]",
-					deprioritized && "opacity-55",
-				].filter(Boolean).join(" ")}
-				onClick={() => {
-					onSelectModel(model);
-				}}
-				onKeyDown={(event) => {
-					handleCardKeyDown(event, model);
-				}}
-			>
-				<div className="flex flex-wrap items-start justify-between gap-3">
-					<div>
-						<p className="m-0 flex items-center gap-3 text-[0.96em] font-semibold text-text">
-							<span>{model.displayName}</span>
-							{featureList.length ? (
-								<span className="inline-flex flex-wrap gap-2 text-[0.76em] leading-[1.5] text-muted">
-									{featureList.map((feature, index) => (
-										<span
-											key={index}
-											className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-2.5 py-1"
-										>
-											{feature}
-										</span>
-									))}
-								</span>
-							) : null}
-						</p>
-						{model.description ? (
-							<p className="mt-1 mb-0 text-[0.7em] leading-[1.7] text-muted">{model.description}</p>
-						) : null}
-					</div>
-					{showsPriorityControls ? <div className="flex items-center gap-2">
-						<ThreadPickerGroupMoveButton direction={deprioritized ? "up" : "down"} label={deprioritized ? `Move ${model.displayName} back to the top group` : `Move ${model.displayName} to the bottom group`} onClick={() => onToggleModelPriority(model.id)} />
-					</div> : null}
-				</div>
-			</div>
+				<WorkbenchOptionCard
+					key={model.id}
+					density="tight"
+					className="min-w-0"
+					isChecked={isSelected}
+					onClick={() => onSelectModel(model)}
+					label={<span className="grid gap-1">
+						<span>{model.displayName}</span>
+						{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
+							{featureList.map((feature, index) => <span key={index} className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-2 py-0.5 text-xs font-medium text-muted">{feature}</span>)}
+						</span> : null}
+					</span>}
+					actions={<WorkbenchIconButton
+						size="small"
+						disabled={favouritesDisabled}
+						label={`${unfavourited ? "Favourite" : "Unfavourite"} ${model.displayName}`}
+						onClick={() => onToggleFavourite(model.id)}
+					>{unfavourited ? <StarIcon /> : <StarOffIcon />}</WorkbenchIconButton>}
+				/>
 		);
 	};
 
 	return (
 		<>
-			<ThreadComposerPickerHeader
-				actions={[{
-					disabled: isRefreshDisabled,
-					icon: <span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}><ReloadIcon /></span>,
-					label: isRefreshing ? "Refreshing models" : "Refresh models",
-					onClick: onRefresh,
-				}]}
-				onClose={onClose}
-				supportingText={appliesOnNextTurnOnly ? "Changes apply to the next new turn." : null}
-				title={`Choose a ${harnessLabel} model`}
-			/>
+			{appliesOnNextTurnOnly ? <p className="text-xs text-muted">Changes apply to the next new turn.</p> : null}
 			{error ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}
 			{isLoading ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-muted">Loading models...</p>
 			) : (
-				<div className="mt-3 space-y-4">
-					<div role="radiogroup" aria-label={`${harness} models`} className="grid gap-3">
+				<div className="mt-1 space-y-2">
+					<div role="group" aria-label={`${harness} models`} className="grid gap-2">
 						{topGroup.map((model) => renderModelCard(model, false))}
 					</div>
 					{bottomGroup.length ? (
-						<div className="space-y-3">
-							<div role="radiogroup" aria-label={`${harness} deprioritized models`} className="grid gap-3">
+						<ThreadDisclosure summary="Other" contentClassName="pt-1">
+							<div role="group" aria-label={`${harness} other models`} className="grid gap-2">
 								{bottomGroup.map((model) => renderModelCard(model, true))}
 							</div>
-						</div>
+						</ThreadDisclosure>
 					) : null}
 					{!visibleModels.length && !error ? (
 						<p className="m-0 text-[0.84em] leading-[1.6] text-muted">No models are available for this harness.</p>

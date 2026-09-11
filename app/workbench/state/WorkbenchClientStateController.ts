@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchClientStateControllerOptions: HTTP, polling, and visibility seams. Keywords: browser, state, controller, test.
- * - WorkbenchClientStateSnapshot: immutable browser projection, app-state schema capability, and visible failure. Keywords: browser, state, schema, snapshot.
- * - default WorkbenchClientStateController: own validated app-state bootstrap, memory, writes, and polling. Keywords: browser, state, lifecycle.
+ * - WorkbenchClientStateControllerOptions: HTTP, polling, and visibility seams.
+ * - WorkbenchClientStateSnapshot: immutable browser projection, app-state schema capability, and visible failure.
+ * - default WorkbenchClientStateController: own validated app-state bootstrap, memory, writes, and polling.
  */
 import type {
   WorkbenchClientStateIdentity,
@@ -44,6 +44,7 @@ export interface WorkbenchClientStateControllerOptions {
 
 function identityKey(identity: WorkbenchClientStateIdentity) {
   switch (identity.kind) {
+    case "modelPreference": return `model:${identity.harness}:${identity.modelId}`;
     case "globalPreference": return `global:${identity.key}`;
     case "projectPreference": return `project:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
     case "sidebarPreference": return `sidebar:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;

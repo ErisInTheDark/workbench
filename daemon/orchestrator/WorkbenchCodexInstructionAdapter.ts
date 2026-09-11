@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - WorkbenchCodexInstructionSource: explicit request-inherited or cwd-owned context for internal Codex resume configuration. Keywords: Codex, context, cwd, request.
- * - WorkbenchCodexInstructionPort: narrow Codex request-augmentation boundary consumed by the bridge. Keywords: Codex, instructions, MCP, adapter.
+ * - WorkbenchCodexInstructionSource: request-inherited or cwd-owned context for internal resume configuration.
+ * - WorkbenchCodexInstructionPort: request-augmentation boundary consumed by the bridge.
  * - WorkbenchCodexThreadConfiguration: daemon-resolved settings and validated thread ownership.
- * - default WorkbenchCodexInstructionAdapter: adapt stable thread instructions, disabled native project docs, activated skill input, and project-local MCP config into Codex requests. Keywords: Codex, project, instructions, skills, prompt, MCP.
+ * - default WorkbenchCodexInstructionAdapter: adapt thread instructions, skills, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
 import type { WorkbenchComposerSettings, WorkbenchProjectRoot } from "workbench-shared/types";
+import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-profile";
 
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
@@ -26,7 +27,7 @@ export interface WorkbenchCodexThreadConfiguration {
   roots: readonly WorkbenchProjectRoot[];
   settings: WorkbenchComposerSettings;
   subagentName: string | null;
-  threadId: string;
+  threadId: string | null;
 }
 
 export interface WorkbenchCodexInstructionPort {
@@ -129,7 +130,13 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
             },
           } : {}),
         } : {
-          config: { ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort },
+          config: {
+            ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort,
+            ...(settings.contextWindowTokens != null ? {
+              model_context_window: settings.contextWindowTokens,
+              model_auto_compact_token_limit: contextCompactionThreshold(settings.contextWindowTokens),
+            } : {}),
+          },
         }),
       },
     };

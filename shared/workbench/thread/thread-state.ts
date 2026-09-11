@@ -100,6 +100,7 @@ const ThreadIdentitySchema = z.object({
 }).strict();
 
 export const WorkbenchComposerSettingsSchema = z.object({
+  contextWindowTokens: z.number().int().positive().nullable().optional(),
   agentPath: z.string().nullable(),
   agentSource: z.enum(["library", "project"]).nullable(),
   harness: WorkbenchHarnessSchema,
@@ -364,6 +365,7 @@ const DraftEntrySchema = SidebarCommonSchema.extend({
   metadata: VisibleMetadataSchema,
 }).strict();
 const TopLevelEntrySchema = SidebarCommonSchema.extend({
+  profile: WorkbenchComposerProfileSelectionSchema.nullable().optional(),
   previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
@@ -377,6 +379,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   waitingFor: z.enum(["subagents", "other"]).optional(),
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
+  profile: WorkbenchComposerProfileSelectionSchema.nullable().optional(),
   previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   createdAt: z.number().int().nonnegative(),
   cwd: z.string().min(1),

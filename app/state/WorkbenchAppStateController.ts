@@ -1,7 +1,6 @@
 /*
- * Keywords: app state, schema capability, revisions, mutations, lifecycle.
  * Exports:
- * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations. Keywords: app, state, controller, schema, revision.
+ * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations.
  */
 import {
   type WorkbenchClientStateIdentity,
@@ -13,7 +12,7 @@ import {
   type WorkbenchProjectPreference,
   type WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
-import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
+import { projectWorkbenchClientStateRows, workbenchClientStateRecordIdentity as recordIdentity } from "workbench-shared/state/workbench-client-state-projection";
 import {
   deleteRows,
   insertRow,
@@ -38,20 +37,6 @@ function scalarColumns(preference: ScalarPreference) {
     integer_value: typeof preference.value === "number" ? preference.value : null,
     text_value: typeof preference.value === "string" ? preference.value : null,
   };
-}
-
-function recordIdentity(record: WorkbenchClientStateRecord): WorkbenchClientStateIdentity {
-  switch (record.kind) {
-    case "globalPreference": return { key: record.preference.key, kind: record.kind };
-    case "projectPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
-    case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
-    case "sidebarFolder": return { daemonRegistrationId: record.daemonRegistrationId, folderId: record.folderId, kind: record.kind, projectId: record.projectId, scope: record.scope };
-    case "expandedDirectory": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
-    case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
-    case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
-    case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
-    case "lastLaunchTarget": return { kind: record.kind };
-  }
 }
 
 export default class WorkbenchAppStateController {
@@ -124,6 +109,7 @@ export default class WorkbenchAppStateController {
       composerDrafts: changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts))),
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
+      modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
@@ -143,6 +129,10 @@ export default class WorkbenchAppStateController {
 
   #put(record: WorkbenchClientStateRecord, revision: number): WorkbenchDatabaseMutation[] {
     switch (record.kind) {
+      case "modelPreference":
+        return [upsertRow(appStateTables.modelPreferences, {
+          harness: record.harness, model_id: record.modelId, favourite: Number(record.favourite) as 0 | 1, deleted: 0, revision,
+        }, { conflictColumns: ["harness", "model_id"], updateColumns: ["favourite", "deleted", "revision"] })];
       case "globalPreference":
         return [upsertRow(appStateTables.globalPreferences, {
           ...scalarColumns(record.preference),
@@ -255,6 +245,10 @@ export default class WorkbenchAppStateController {
 
   #delete(identity: WorkbenchClientStateIdentity, revision: number): WorkbenchDatabaseMutation[] {
     switch (identity.kind) {
+      case "modelPreference":
+        return [updateRows(appStateTables.modelPreferences, { deleted: 1, revision }, {
+          harness: identity.harness, model_id: identity.modelId,
+        })];
       case "globalPreference":
         return [updateRows(appStateTables.globalPreferences, {
           boolean_value: null, deleted: 1, integer_value: null, revision, text_value: null,

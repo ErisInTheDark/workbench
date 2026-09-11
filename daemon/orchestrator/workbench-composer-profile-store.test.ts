@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover durable composer-profile mutation semantics. Keywords: composer, profile, durable, store, test.
+ * - No production exports; tests cover durable composer-profile mutation semantics.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -84,6 +84,38 @@ test("rejects malformed profile mutations", async (context) => {
     create().mutate({ kind: "upsert", profile: { id: "broken" } }),
     /valid composer profile mutation/u,
   );
+});
+
+test("context changes survive reopening without overwriting another profile field", async (context) => {
+  const { create } = await fixture(context);
+  const store = create();
+  const original = { ...profile("context", 1), contextWindowTokens: 500_000 };
+  await store.mutate({ kind: "upsert", profile: original });
+  assert.equal((await create().read()).profiles[0]?.contextWindowTokens, 500_000);
+  await store.mutate({ kind: "upsert", profile: original, changes: { contextWindowTokens: 600_000 } });
+  await store.mutate({ kind: "upsert", profile: original, changes: { name: "Renamed" } });
+  const [saved] = (await create().read()).profiles;
+  assert.equal(saved?.contextWindowTokens, 600_000);
+  assert.equal(saved?.name, "Renamed");
+});
+
+test("validation sees merged durable settings and rejection leaves the definition unchanged", async (context) => {
+  const { create } = await fixture(context);
+  const store = create();
+  const original = profile("validated", 1);
+  await store.mutate({ kind: "upsert", profile: original });
+  await store.mutate({ kind: "upsert", profile: original, changes: { model: "new-model" } });
+  await assert.rejects(store.mutate({
+    kind: "upsert", profile: original, changes: { contextWindowTokens: 500_000 },
+  }, async (candidate, previous) => {
+    assert.equal(candidate.model, "new-model");
+    assert.equal(candidate.contextWindowTokens, 500_000);
+    assert.equal(previous?.model, "new-model");
+    throw new Error("Model does not support this cap");
+  }), /does not support/);
+  const [saved] = (await create().read()).profiles;
+  assert.equal(saved?.model, "new-model");
+  assert.equal(saved?.contextWindowTokens, undefined);
 });
 
 test("concurrent field updates merge against durable settings rather than stale browser snapshots", async (context) => {

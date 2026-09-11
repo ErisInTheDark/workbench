@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - default PrimaryButton: render high-emphasis Workbench actions with optional pending halos and hold confirmation. Keywords: primary, button, action, halo, confirm, danger.
- * - Local helpers: class joining, confirmation-key matching, and shape/tone layout classes. Keywords: button, class names, shape, keyboard.
+ * - default PrimaryButton: high-emphasis actions with optional pending halos and hold confirmation.
  */
 "use client";
 
@@ -48,7 +47,7 @@ const shapeClassNames: Record<PrimaryButtonShape, string> = {
 };
 
 const toneClassNames: Record<PrimaryButtonTone, string> = {
-  default: "enabled:hover:[--primary-button-bg:color-mix(in_srgb,white_20%,var(--shell-fade-bg)_80%)]",
+  default: "enabled:hover:[--primary-button-bg:var(--color-button-hover)]",
   danger: [
     "enabled:hover:[--primary-button-bg:color-mix(in_srgb,var(--danger)_48%,var(--shell-fade-bg)_52%)]",
     "enabled:hover:[color:var(--text)]",

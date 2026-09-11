@@ -57,17 +57,11 @@ class MemoryPersistence implements ComposerProfilePersistence {
 }
 
 class MemoryTargetPersistence implements ComposerProfileTargetPersistence {
-  constructor(private readonly resolveProfile?: (id: string) => WorkbenchComposerProfile | null) {}
   failWrites = false;
   readonly selections = new Map<string, WorkbenchComposerProfileTargetSelection>();
   private key(slot: WorkbenchComposerProfileSlot) { return JSON.stringify(slot); }
   async read(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
-    const selection = this.selections.get(this.key(slot)) ?? null;
-    if (!selection || selection.kind !== "profile" || !this.resolveProfile) return selection;
-    const profile = this.resolveProfile(selection.profileId);
-    if (!profile) return { kind: "custom", settings: selection.settings };
-    const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } = profile;
-    return { ...selection, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } };
+    return this.selections.get(this.key(slot)) ?? null;
   }
   async write(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
     if (this.failWrites) throw new Error("Daemon rejected the target mutation.");
@@ -98,7 +92,7 @@ function profile(overrides: Partial<WorkbenchComposerProfile> = {}): WorkbenchCo
 
 async function createController(initialProfiles: WorkbenchComposerProfile[] = []) {
   const persistence = new MemoryPersistence(initialProfiles);
-  const targets = new MemoryTargetPersistence((id) => persistence.profiles.find((entry) => entry.id === id) ?? null);
+  const targets = new MemoryTargetPersistence();
   const controller = new WorkbenchComposerProfileController();
   controller.initializeTargetPersistence(targets);
   await controller.initializePersistence(persistence);
@@ -216,7 +210,7 @@ test("draft profile edits cannot overtake a queued draft save", async () => {
   assert.equal(writes, 1);
 });
 
-test("target edits reach daemon before preceding saves finish", async () => {
+test("target edits remain ordered and sending waits for their acknowledgement", async () => {
   const controller = new WorkbenchComposerProfileController();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -230,7 +224,14 @@ test("target edits reach daemon before preceding saves finish", async () => {
     controller.selectCustom(slot, CODEX_SETTINGS);
     controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "new-model" });
     await Promise.resolve();
+    assert.equal(writes.length, 1);
+    let ready = false;
+    const waiting = controller.waitForSelection(slot).then(() => { ready = true; });
+    assert.equal(ready, false);
+    release();
+    await waiting;
     assert.equal(writes.length, 2);
+    assert.equal(controller.resolveSettings(slot)?.model, "new-model");
   } finally {
     release();
     controller.dispose();
@@ -288,15 +289,16 @@ test("profile harness is immutable and project agents cannot be promoted globall
   controller.dispose();
 });
 
-test("deleting a linked profile preserves its last settings as a durable custom handoff", async () => {
+test("deleting a definition leaves the target snapshot intact until admission", async () => {
   const slot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
+  await controller.waitForSelection(slot);
 
   await controller.deleteProfile("profile-a");
   const selection = controller.getSelection(slot);
-  assert.equal(selection.kind, "custom");
-  assert.deepEqual(selection.kind === "custom" ? selection.settings : null, CODEX_SETTINGS);
+  assert.equal(controller.getSelectedProfile(slot), null);
+  assert.deepEqual(selection.settings, CODEX_SETTINGS);
   assert.deepEqual(await targets.read(slot), selection);
   controller.dispose();
 });
@@ -372,7 +374,7 @@ test("draft profile slots remain UUID-isolated and harness-bound", async () => {
   controller.dispose();
 });
 
-test("acknowledged tied profile edits refresh the daemon target projection", async () => {
+test("acknowledged definition edits preserve the target snapshot until admission", async () => {
   const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
@@ -384,16 +386,13 @@ test("acknowledged tied profile edits refresh the daemon target projection", asy
   });
 
   await controller.updateProfile("profile-a", { model: "gpt-5.5", reasoningEffort: "medium" });
-  assert.deepEqual(controller.resolveSettings(slot), {
-    ...CODEX_SETTINGS,
-    model: "gpt-5.5",
-    reasoningEffort: "medium",
-  });
+  assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
+  assert.equal(controller.getSelectedProfile(slot)?.model, "gpt-5.5");
   const synchronized = controller.getSelection(slot);
   assert.deepEqual(synchronized, {
     kind: "profile",
     profileId: "profile-a",
-    settings: { ...CODEX_SETTINGS, model: "gpt-5.5", reasoningEffort: "medium" },
+    settings: CODEX_SETTINGS,
   });
   assert.deepEqual(await targets.read(slot), synchronized);
   controller.dispose();
@@ -455,7 +454,8 @@ test("late reads cannot erase newer selections and missing daemon targets clear 
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"),
   };
   controller.selectProfile(slot, "profile-a");
-  controller.materializeDraftSelection(slot, draftSlot.draftId, draftSlot.harness, draftSlot.projectId);
+  controller.materializeDraftSelection({ ...draftSlot, composerSettings: CODEX_SETTINGS, profileId: null });
+  assert.deepEqual(controller.getSelection(draftSlot), { kind: "custom", settings: CODEX_SETTINGS });
   const emptyTargets = new MemoryTargetPersistence();
   controller.initializeTargetPersistence(emptyTargets);
   await controller.loadSelection(draftSlot);
@@ -471,5 +471,37 @@ test("target persistence failure restores acknowledged settings and exposes the 
   assert.equal(await controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "unsaved-model" }), false);
   assert.match(controller.getSnapshot().error, /daemon rejected the target mutation/i);
   assert.deepEqual(controller.getSelection(slot), { kind: "custom", settings: CODEX_SETTINGS });
+  controller.dispose();
+});
+
+test("provider changes await capability loading and install the destination draft snapshot", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  const slot = { kind: "draft" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "codex" as const };
+  let saved: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: CODEX_SETTINGS };
+  await controller.initializeTargetPersistence({
+    read: async (target) => target.kind === "draft" && target.harness === saved.settings.harness ? saved : null,
+    write: async (_target, selection) => { saved = selection; },
+  });
+  await controller.loadSelection(slot);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const changing = controller.selectHarness(slot, "opencode", async () => {
+    await gate;
+    return [{
+      id: "native/default", displayName: "Default", description: "", hidden: false, isDefault: true,
+      supportsPersonality: false, supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+      supportsVision: false, supportsFastMode: false, inputModalities: ["text"], maxContextWindowTokens: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+    }];
+  });
+  let ready = false;
+  const waiting = controller.waitForSelection(slot).then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(ready, false);
+  release();
+  assert.equal(await changing, true);
+  await waiting;
+  assert.deepEqual(controller.resolveSettings({ ...slot, harness: "opencode" }), {
+    harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null, contextWindowTokens: null,
+  });
   controller.dispose();
 });

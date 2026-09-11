@@ -143,16 +143,10 @@ export function parseProjectDocument(encoded: string, projectId: ProjectId): Pro
   });
   const drafts = Array.isArray(source.drafts) ? source.drafts.map((draft) => parseDraft(draft, projectId)) : [];
   const profile = WorkbenchComposerProfileSelectionSchema.safeParse(source.newThreadProfile);
-  const latestDraft = drafts.slice().sort((left, right) => right.updatedAt - left.updatedAt)[0];
-  const latestProfile = latestDraft
-    ? latestDraft.profileId
-      ? { kind: "profile" as const, profileId: latestDraft.profileId, settings: latestDraft.composerSettings }
-      : { kind: "custom" as const, settings: latestDraft.composerSettings }
-    : null;
   return {
     displayOrder: normalizeThreadDisplayLayout(source.displayOrder),
     drafts,
-    newThreadProfile: profile.success ? profile.data : latestProfile,
+    newThreadProfile: profile.success ? profile.data : null,
     records,
   };
 }

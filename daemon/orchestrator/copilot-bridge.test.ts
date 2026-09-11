@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect Copilot instruction filtering and harness-neutral thread-page translation. Keywords: copilot, instructions, filter, thread, page.
+ * - No production exports; protect Copilot admission, instruction filtering and thread-page translation.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -13,6 +13,44 @@ import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objec
 import type { JsonRpcNotification } from "./bridge-types";
 import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type { CopilotThreadState } from "./copilot-thread-state";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+
+test("Copilot commits inactive configuration only after send and leaves active input unchanged", async () => {
+  for (const [active, reject] of [[false, false], [true, false], [false, true]]) {
+    const calls: string[] = [];
+    const nativeThread = thread();
+    if (active) nativeThread.status = { type: "active", activeFlags: [] };
+    const bridge = new CopilotBridge({
+      projectRoot: "C:/repo", onNotification() {},
+      getReloadableModules: () => ({ copilotThreadState: { formatPromptFromInput: () => "hello" } }) as unknown as OrchestratorReloadableModules,
+      profiles: {
+        captureCreationProfile: async () => { throw new Error("Unexpected creation"); },
+        installCreatedProfile: async () => { throw new Error("Unexpected creation"); },
+        withProviderProfileAdmission: async (_harness, _thread, admit) => {
+          calls.push("candidate");
+          const outcome = await admit({
+            cwd: "C:/repo", projectId: ProjectIdSchema.parse("project"), subagentName: null,
+            selection: { kind: "custom", settings: { harness: "copilot", model: "fresh", agentPath: "agent", agentSource: "project", reasoningEffort: "high", serviceTier: null } },
+          });
+          if (outcome.accepted) calls.push("commit");
+          return { ...outcome, profilePersistenceError: null };
+        },
+      },
+    });
+    const owner = bridge as unknown as { ensureThreadState(threadId: string, model?: string | null): Promise<object> };
+    owner.ensureThreadState = async (_id, model) => {
+      if (model) { assert.equal(model, "fresh"); calls.push("configure"); }
+      return { state: { thread: nativeThread }, session: {
+        disconnect: async () => { calls.push("disconnect"); },
+        send: async () => { calls.push("send"); if (reject) throw new Error("Native send rejected"); },
+      } };
+    };
+    const response = await bridge.handleRequest({ id: 1, method: "turn/start", params: { threadId: "thread", model: "stale", input: [{ type: "text", text: "hello", text_elements: [] }] } });
+    if (reject) assert.match(response.error?.message ?? "", /Native send rejected/);
+    else assert.equal(response.error, undefined);
+    assert.deepEqual(calls, active ? ["send"] : ["candidate", "disconnect", "configure", "send", ...(!reject ? ["commit"] : [])]);
+  }
+});
 
 function thread(): Thread {
   return {

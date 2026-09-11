@@ -1,5 +1,4 @@
 /*
- * Keywords: shared reads, selection ownership, observations, live transcript.
  * Exports:
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
@@ -83,7 +82,7 @@ import type {
     WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import { normalizeWorkbenchAgentPath } from "workbench-shared/workbench/agent-paths";
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
 import { workbenchTranscriptOperations } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -812,6 +811,7 @@ function WorkbenchThreadClient(
     return response.result;
   }
 
+  const daemon = new WorkbenchDaemonClient({ request: requestWorkbench });
   const threadObservations = new ThreadObservationController({ request: requestWorkbench });
   lifecycle.addUnsubscribe(codexClient.onConnectionClose(() => threadObservations.disconnect()));
   lifecycle.addUnsubscribe(codexClient.onWorkbenchNotification(notification => {
@@ -2860,7 +2860,20 @@ function WorkbenchThreadClient(
       cursor = response.nextCursor;
     } while (cursor);
 
-      state.modelsByHarness.set(harness, models);
+    try {
+      const capabilities = await daemon.request("models/context/read", {});
+      for (const model of models) {
+        const context = capabilities.data.find(capability => capability.model === model.id);
+        if (context) {
+          model.contextWindow = context.maximumTokens > context.defaultTokens
+            ? { defaultTokens: context.defaultTokens, maximumTokens: context.maximumTokens } : null;
+          model.maxContextWindowTokens = context.maximumTokens;
+        }
+      }
+    } catch {
+      console.warn("Codex context capabilities are unavailable; model choices and saved settings are retained.");
+    }
+    state.modelsByHarness.set(harness, models);
     return models;
   }
 
@@ -4516,8 +4529,6 @@ function WorkbenchThreadClient(
       optimisticTurnId,
       resolvedThreadId,
       resumedThread,
-      selectedModel,
-      selectedServiceTier,
       sendOptions,
       shouldBypassCodexDraftBootstrap,
       workbenchOrigin,
@@ -4544,9 +4555,9 @@ function WorkbenchThreadClient(
         refreshedThread = toThreadPayload(
           response.thread,
           harness,
-          selectedModel ?? resumedThread.model,
+          resumedThread.model,
           resumedThread.reasoningEffort,
-          selectedServiceTier,
+          resumedThread.serviceTier,
           resumedThread.agentPath,
         );
       } else {
@@ -4567,6 +4578,10 @@ function WorkbenchThreadClient(
           resumedThread.serviceTier,
           resumedThread.agentPath,
         );
+      }
+
+      if (sendOptions.composerProfileSlot) {
+        refreshedThread = await readThreadProfileSnapshot(refreshedThread, sendOptions.composerProfileSlot.projectId);
       }
 
       if (isDraftThread && optimisticTurnId) {
@@ -4629,6 +4644,18 @@ function WorkbenchThreadClient(
         emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
       }
       return null;
+    }
+  }
+
+  async function readThreadProfileSnapshot<Thread extends ThreadPayload>(thread: Thread, projectId: ProjectId): Promise<Thread> {
+    if (thread.isDraft) return thread;
+    try {
+      const { selection } = await daemon.request("profiles/target/read", { slot: { kind: "thread", projectId, harness: thread.harness, threadId: thread.id } });
+      const settings = selection?.settings;
+      return { ...thread, model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null, serviceTier: settings?.serviceTier ?? null, agentPath: settings?.agentPath ?? null, contextWindowTokens: settings?.contextWindowTokens ?? null };
+    } catch (error) {
+      emitStatusMessage(`The thread was accepted, but its profile could not be read: ${error instanceof Error ? error.message : "Profile unavailable."}`);
+      return thread;
     }
   }
 
@@ -4805,6 +4832,17 @@ function WorkbenchThreadClient(
         admission.kind === "admitted"
         || admission.kind === "turnStarted"
       )) {
+        if (sendOptions.composerProfileSlot) {
+          const source = threadSources.get(threadKey);
+          if (source) {
+            const fence = captureThreadOperationFence("codex", thread.id, { selectionBound: true });
+            const configured = await readThreadProfileSnapshot(source, sendOptions.composerProfileSlot.projectId);
+            if (isThreadOperationFenceCurrent(fence)) updateThreadSourceFields(source, {
+              model: configured.model, reasoningEffort: configured.reasoningEffort, serviceTier: configured.serviceTier,
+              agentPath: configured.agentPath, contextWindowTokens: configured.contextWindowTokens,
+            });
+          }
+        }
         return null;
       }
       const source = threadSources.get(threadKey);
@@ -4855,6 +4893,7 @@ function WorkbenchThreadClient(
       });
       const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: threadStartRequest.method,
+        ...(sendOptions.composerProfileSlot ? { workbenchCreationProfile: { kind: "target", slot: sendOptions.composerProfileSlot } } : {}),
         ...(shouldSendWorkbenchPromptContext(harness, sendOptions)
           ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
           : {}),
@@ -4872,7 +4911,7 @@ function WorkbenchThreadClient(
         throw new ThreadMessageNotSentError();
       }
 
-      const startedPayload = toThreadPayload(
+      let startedPayload = toThreadPayload(
         startedThreadResponse.thread,
         harness,
         startedThreadResponse.model ?? selectedModel ?? null,
@@ -4880,6 +4919,10 @@ function WorkbenchThreadClient(
         harness === "codex" ? selectedServiceTier : startedThreadResponse.serviceTier ?? null,
         selectedAgentPath,
       );
+      if (sendOptions.composerProfileSlot) startedPayload = await readThreadProfileSnapshot(startedPayload, sendOptions.composerProfileSlot.projectId);
+      if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
+        throw new ThreadMessageNotSentError();
+      }
       bootstrapThread = startedPayload;
       resolvedThreadId = bootstrapThread.id;
       if (selectedThreadProjectContext?.rootThreadId === thread.id && selectedThreadProjectContext.harness === harness) {
@@ -5824,6 +5867,8 @@ function WorkbenchThreadClient(
     setCurrentThreadReasoningEffort(threadId, settings.reasoningEffort);
     setCurrentThreadAgent(threadId, settings.agentPath);
     setCurrentThreadServiceTier(threadId, settings.serviceTier);
+    const configuredThread = threadDocuments.getDocumentByThreadId(threadId);
+    if (configuredThread) updateThreadSourceFields(configuredThread, { contextWindowTokens: settings.contextWindowTokens ?? null });
   }
 
   function setDraftThreadHarness(harness: WorkbenchHarness, threadId = state.currentThreadId) {
@@ -5838,6 +5883,7 @@ function WorkbenchThreadClient(
       reasoningEffort: null,
       serviceTier: null,
       agentPath: null,
+      contextWindowTokens: null,
       source: harness,
     };
     const newKey = installAuthoritativeThreadSource(nextThread);

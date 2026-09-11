@@ -3452,7 +3452,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() { events.push("receive:notification"); },
-    prepareThreadConfiguration: async (thread, requests) => {
+    withThreadAdmission: async (thread, requests, admit) => {
       assert.equal(thread.id, "thread");
       events.push("prepare:profile");
       const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
@@ -3463,11 +3463,14 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
           model: "saved-model", reasoningEffort: null, serviceTier: null,
         },
       };
-      return {
+      const outcome = await admit({
         ...requests,
         resumeRequest: adapter.withThreadConfiguration(requests.resumeRequest, configuration),
         startRequest: adapter.withThreadConfiguration(requests.startRequest, configuration),
-      };
+      });
+      assert.equal(outcome.accepted, true);
+      events.push("commit:profile");
+      return outcome.result;
     },
     prepareTurnStart: async (_request, requestProvider) => {
       events.push("prepare:mcp");
@@ -3545,6 +3548,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       "receive:notification",
       "send:turn/start",
       "receive:notification",
+      "commit:profile",
     ]);
     assert.deepEqual(upstreamRequests[0]?.params, {
       includeTurns: false,

@@ -54,8 +54,11 @@ import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { NativeThreadIdSchema, NativeTurnIdSchema, NativeItemIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
+import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 
 export type OpenCodeBridgeOptions = {
+  profiles?: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "installCreatedProfile" | "withProviderProfileAdmission">;
   appServer: OpenCodeAppServer;
   getReloadableModules: () => OrchestratorReloadableModules;
   initialState?: OpenCodeBridgeState;
@@ -352,6 +355,7 @@ export function createOpenCodeRecoveryStartRequest(candidate: WorkbenchTurnRecov
 }
 
 export class OpenCodeBridge {
+  private readonly profiles: OpenCodeBridgeOptions["profiles"];
   private readonly appServer: OpenCodeAppServer;
   private readonly getReloadableModules: OpenCodeBridgeOptions["getReloadableModules"];
   private readonly onNotification: OpenCodeBridgeOptions["onNotification"];
@@ -372,7 +376,8 @@ export class OpenCodeBridge {
   private snapshotRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionStatuses = new Map<string, SessionStatus>();
 
-  constructor({ appServer, getReloadableModules, initialState, onNotification, projectRoot, identities, resolveProject }: OpenCodeBridgeOptions) {
+  constructor({ appServer, getReloadableModules, initialState, onNotification, projectRoot, identities, resolveProject, profiles }: OpenCodeBridgeOptions) {
+    this.profiles = profiles;
     this.appServer = appServer;
     this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
@@ -511,7 +516,7 @@ export class OpenCodeBridge {
           ));
         }
         case "thread/start":
-          return okResponse(requestId, await this.startThread(message.params));
+          return okResponse(requestId, await this.startThreadWithProfile(message));
         case "thread/name/set": {
           const threadId = requestThreadId(message.params);
           const name = requestName(message.params);
@@ -522,7 +527,7 @@ export class OpenCodeBridge {
         }
         case "turn/start":
         case "turn/steer":
-          return okResponse(requestId, await this.startTurn(message));
+          return okResponse(requestId, await this.admitTurn(message));
         case "turn/interrupt": {
           const threadId = requestThreadId(message.params);
           if (!threadId) {
@@ -564,7 +569,7 @@ export class OpenCodeBridge {
     signal.throwIfAborted();
     const disposition = getOpenCodeRecoveryDisposition(snapshot.thread, candidate);
     if (disposition !== "prompt") return disposition;
-    await this.startTurn(createOpenCodeRecoveryStartRequest(candidate));
+    await this.admitTurn(createOpenCodeRecoveryStartRequest(candidate));
     return "recovered" as const;
   }
 
@@ -924,7 +929,7 @@ export class OpenCodeBridge {
     return { data };
   }
 
-  private async readThread(threadId: string, directory: string, includeTurns = true): Promise<OpenCodeSessionResponse> {
+  private async readThread(threadId: string, directory: string, includeTurns = true, requireStatus = false): Promise<OpenCodeSessionResponse> {
     const signal = this.generation.signal;
     const client = await this.ensureClient(directory);
     signal.throwIfAborted();
@@ -934,6 +939,7 @@ export class OpenCodeBridge {
       client.session.status({ directory }).then(unwrapResponse).catch((error) => {
         signal.throwIfAborted();
         logError("opencode-bridge", `session status read failed: ${String(error instanceof Error ? error.message : error).slice(0, 1_000)}`);
+        if (requireStatus) throw error;
         return {} as Record<string, SessionStatus>;
       }),
     ]);
@@ -953,6 +959,19 @@ export class OpenCodeBridge {
       serviceTier: null,
       thread,
     };
+  }
+
+  private async startThreadWithProfile(message: JsonRpcRequest): Promise<OpenCodeSessionResponse> {
+    if (!this.profiles || message.workbenchCreationProfile === undefined) return this.startThread(message.params);
+    const captured = await this.profiles.captureCreationProfile(
+      "opencode", requestDirectory(message.params, this.projectRoot),
+      WorkbenchThreadCreationProfileSchema.parse(message.workbenchCreationProfile),
+    );
+    this.generation.signal.throwIfAborted();
+    const settings = captured.selection.settings;
+    const created = await this.startThread({ ...asRecord(message.params), cwd: captured.cwd, model: settings.model, effort: settings.reasoningEffort });
+    await this.profiles.installCreatedProfile("opencode", created.thread, captured.selection);
+    return created;
   }
 
   private async startThread(params: unknown): Promise<OpenCodeSessionResponse> {
@@ -1081,7 +1100,32 @@ export class OpenCodeBridge {
       : filtered;
   }
 
-  private async startTurn(message: JsonRpcRequest) {
+  private async admitTurn(message: JsonRpcRequest) {
+    if (!this.profiles) return this.startTurn(message);
+    const threadId = requestThreadId(message.params);
+    if (!threadId) throw new Error("Missing OpenCode thread.");
+    const directory = requestDirectory(message.params, this.projectRoot);
+    const { thread } = await this.readThread(threadId, directory, true, true);
+    this.generation.signal.throwIfAborted();
+    if (thread.status.type === "active") return this.startTurn(message, true);
+    const outcome = await this.profiles.withProviderProfileAdmission("opencode", thread, async (profile) => {
+      const active = this.sessionStatuses.get(threadId)?.type === "busy";
+      if (active) return { accepted: false, result: await this.startTurn(message, true) };
+      const settings = profile.selection.settings;
+      const configured = {
+        ...message,
+        workbenchPromptContext: {
+          ...readWorkbenchPromptContext(message), cwd: profile.cwd, projectId: profile.projectId,
+          agentPath: settings.agentPath, subagentName: profile.subagentName,
+        },
+        params: { ...asRecord(message.params), cwd: profile.cwd, model: settings.model, effort: settings.reasoningEffort },
+      };
+      return { accepted: true, result: await this.startTurn(configured) };
+    }, this.generation.signal, thread.turns.length > 0);
+    return outcome.result;
+  }
+
+  private async startTurn(message: JsonRpcRequest, preserveConfiguration = false) {
     const signal = this.generation.signal;
     const params = message.params;
     const threadId = requestThreadId(params);
@@ -1099,10 +1143,10 @@ export class OpenCodeBridge {
 
     const client = await this.ensureClient(directory);
     signal.throwIfAborted();
-    const model = modelParts(requestModel(params));
-    const reasoningConfig = createOpenCodeReasoningConfig(requestReasoningEffort(params));
-    const agent = requestAgent(params);
-    const system = await this.buildTurnSystemPrompt(message, threadId, params);
+    const model = preserveConfiguration ? null : modelParts(requestModel(params));
+    const reasoningConfig = preserveConfiguration ? {} : createOpenCodeReasoningConfig(requestReasoningEffort(params));
+    const agent = preserveConfiguration ? null : requestAgent(params);
+    const system = preserveConfiguration ? null : await this.buildTurnSystemPrompt(message, threadId, params);
     signal.throwIfAborted();
     await this.updateDefaultThreadTitleFromPrompt(client, threadId, directory, prompt);
     signal.throwIfAborted();
@@ -1117,7 +1161,7 @@ export class OpenCodeBridge {
     });
 
     try {
-      await client.session.promptAsync({
+      unwrapResponse(await client.session.promptAsync({
       ...(agent ? { agent } : {}),
       directory,
       ...(clientUserMessageId ? { messageID: clientUserMessageId } : {}),
@@ -1130,9 +1174,8 @@ export class OpenCodeBridge {
       }],
       sessionID: threadId,
       ...(system ? { system } : {}),
-      });
-      signal.throwIfAborted();
-      this.scheduleThreadSnapshotRefresh(threadId);
+      }));
+      if (!signal.aborted) this.scheduleThreadSnapshotRefresh(threadId);
     } catch (error) {
       if (signal.aborted) throw error;
       logError("opencode-bridge", error instanceof Error ? error.message : String(error));

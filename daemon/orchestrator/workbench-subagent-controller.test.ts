@@ -360,7 +360,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
   assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
 });
 
-test("starts an idle child with attributed parent-agent input", async (context) => {
+test("starts an idle child with attributed input after its stored definition is deleted", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
@@ -387,6 +387,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
     params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
   }), { id: 2, result: { threadId: childThreadId } });
 
+  await controller.mutateProfile({ kind: "delete", profileId: profile().id });
   assert.deepEqual(await controller.handleRequest({
     id: 3,
     method: "workbench/subagent/message",

@@ -1383,6 +1383,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       throw new ThreadMessageNotSentError();
     }
     const submittedRoute = currentRouteRef.current;
+    if (options?.composerProfileSlot) {
+      await composerProfileController.waitForSelection(options.composerProfileSlot);
+      if (options.selectThread !== false && currentRouteRef.current !== submittedRoute) {
+        throw new ThreadMessageNotSentError();
+      }
+      thread = composerProfileController.resolveThread(options.composerProfileSlot, thread);
+    }
     const createdThreadRef: { current: ThreadPayload | null } = { current: null };
     let didMaterialize = false;
 
@@ -1457,7 +1464,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         onThreadMaterialized: (materializedThread) => {
           didMaterialize = true;
           if (!materializedThread.isDraft && options?.composerProfileSlot) {
-            composerProfileController.materializeSelection(options.composerProfileSlot, materializedThread.id, materializedThread.harness);
+            void composerProfileController.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: materializedThread.harness, threadId: materializedThread.id });
           }
           options?.onThreadMaterialized?.(materializedThread);
           replaceCurrentDraftThreadRoute(materializedThread, true);
@@ -1477,7 +1484,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     if (payload) {
       if (thread.isDraft && !payload.isDraft && options?.composerProfileSlot) {
-        composerProfileController.materializeSelection(options.composerProfileSlot, payload.id, payload.harness);
+        await composerProfileController.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: payload.harness, threadId: payload.id });
       }
       if (thread.isDraft) {
         replaceCurrentDraftThreadRoute(payload, true);
@@ -1567,7 +1574,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
         materialize: (draft) => {
           if (currentRouteRef.current !== route) return;
-          composerProfileController.materializeDraftSelection({ kind: "new-thread", projectId: ownerProjectId }, draft.draftId, draft.composerSettings.harness, ownerProjectId);
+          composerProfileController.materializeDraftSelection(draft);
           navigateToRoute(!route.projectId
             ? createHomeThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" })
             : createThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" }), { replace: true });
@@ -1581,12 +1588,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     reason: "autosave" | "submission" = "autosave", target?: WorkbenchThreadTarget, detached = false,
   ) => {
     try {
-      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target), update, { reason, detached });
+      const draftTarget = getComposerDraftTarget(projectId, threadId, target);
+      if (draftTarget.kind === "sidebar" && draftTarget.isNew) await composerProfileController.waitForSelection({ kind: "new-thread", projectId: draftTarget.projectId });
+      return await saveComposerDraft(clientStateController, draftTarget, update, { reason, detached });
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
       throw error;
     }
-  }, [clientStateController, getComposerDraftTarget]);
+  }, [clientStateController, composerProfileController, getComposerDraftTarget]);
 
   const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => {
     try {

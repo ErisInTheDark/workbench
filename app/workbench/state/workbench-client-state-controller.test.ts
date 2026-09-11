@@ -19,6 +19,7 @@ function emptyRows(): WorkbenchClientStateRows {
     composerDrafts: [],
     fileDrafts: [],
     globalPreferences: [],
+    modelPreferences: [],
     lastLaunchTarget: [],
     projectExpandedDirectories: [],
     projectPreferences: [],
@@ -55,6 +56,32 @@ function deferred<Value>() {
   return { promise, reject, resolve };
 }
 
+test("model favourite changes remain independent and roll back failed saves", async () => {
+  const saved = deferred<Response>();
+  const controller = new WorkbenchClientStateController({
+    mode: "http",
+    fetcher: async (_input, init) => init?.method === "GET"
+      ? Response.json(response("snapshot", 0, emptyRows()))
+      : (await saved.promise).clone(),
+    schedule: () => 1,
+    cancelSchedule: () => {},
+  });
+  await controller.bootstrap();
+  try {
+    const codex = { kind: "modelPreference" as const, harness: "codex" as const, modelId: "same-model", favourite: false };
+    const copilot = { ...codex, harness: "copilot" as const };
+    const first = controller.put(codex);
+    const second = controller.put(copilot);
+    assert.deepEqual(controller.records("modelPreference"), [codex, copilot]);
+    const rejected = Promise.all([assert.rejects(first, /save failed/), assert.rejects(second, /save failed/)]);
+    saved.resolve(new Response("save failed", { status: 500 }));
+    await rejected;
+    assert.deepEqual(controller.records("modelPreference"), []);
+  } finally {
+    controller.dispose();
+  }
+});
+
 test("app-state conformance repairs compatible browser/server table skew", () => {
   const rows: Record<string, object[]> = {
     ...emptyRows(),
@@ -73,6 +100,7 @@ test("app-state conformance repairs compatible browser/server table skew", () =>
     }],
   };
   delete rows.projectPreferences;
+  delete rows.modelPreferences;
   const result = conformWorkbenchClientStateResponse({
     ...response("snapshot", 1, emptyRows()),
     futureRoot: true,
@@ -90,6 +118,7 @@ test("app-state conformance repairs compatible browser/server table skew", () =>
     text_value: null,
   }]);
   assert.deepEqual(result.data.rows.projectPreferences, []);
+  assert.deepEqual(result.data.rows.modelPreferences, []);
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "futureRoot"));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.futureTable"));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.globalPreferences.0.future_column"));
