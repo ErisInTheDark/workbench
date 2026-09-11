@@ -574,6 +574,7 @@ export default class WorkbenchGitArcFeature {
       return {
         action: request.action,
         code: "planDrift",
+        comparison: error.details.comparison,
         commits: error.details.commitChanges.slice(0, 8).map(({ changedPaths, commit, subject }) => ({
           commit,
           paths: changedPaths.slice(0, 20),

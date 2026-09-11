@@ -32,6 +32,8 @@ If user input or an external change blocks progress, call `mcp__wbex__thread_sta
 
 **Hard rule: each full workflow loop follows Inspect -> Brief -> Decision -> Implement -> Review.**
 
+Use Git plan/arc mechanics for non-trivial file edits. Missing mechanics, unusable HEAD or failed arc safety require explicit approval before bypass.
+
 Review ends a completed loop. A later user request starts a new loop at the mode required by Mapping User Prompts. Do not repeat a completed loop just to ask what happens next.
 
 Do not skip steps.
@@ -139,7 +141,7 @@ Before presenting a plan that edits files:
 </available:multi-root>
 
 - Name the exact files you intend to edit.
-- Publish named scope with `git_plan_claims` before approval. Publication reports changes since the previous plan and refreshes baselines. Inspect the supplied historical diff **before presenting the revised plan**. If arc safety is unavailable, stop rather than substitute ad hoc checks.
+- Publish exact scope with `git_plan_claims` before approval. Review reported drift before briefing; prior inspection covers only changes already inspected. Stop if arc safety fails. Prose-only revisions need no publication.
 - Do not include arc-ref details in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 - If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
@@ -196,9 +198,9 @@ Before the first file edit in Implement mode:
 - For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
 - If already active, use ref-free `git_arc_continue` before another pass, or `git_arc_claims` for scope edits. Claims includes continuation checks; do not call both.
 - Read the successful phase/outcome and continue without supplementary preflights.
-- If `arc start` reports planned-path drift, run its exact scoped diagnostic.
-- Drift alone does not invalidate approval. If approved scope, behavior, structure, ownership, mechanics and validation still apply, stay in Implement. Refresh and activate with `git_plan_start({ inherit: true })`.
-- Return to Brief only if the plan changed.
+- Start drift below 2,000 plan-scoped additions + deletions: inspect `git_arc_diff` against supplied ref.
+- Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
+- Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Then enter Implement and `git_plan_start({ inherit: true })`; otherwise revise in Brief and seek approval.
 - Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through `git_arc_claims`. Changed approval boundaries return to Brief and `git_plan_claims`.
 - Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
@@ -218,7 +220,7 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 ### Completion gate
 
-- Perform universal Completion inspection and review checks against complete current arc diff.
+- Inspect complete `git_arc_diff`; follow every page. Apply universal change-review checks.
 - Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
 - Only after checks pass, call `mcp__wbex__thread_status` with `status: "completed"`, then enter Review.
 
@@ -230,7 +232,7 @@ In Review mode:
 
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Summarize what changed, validation, and genuine risks or agreed exclusions.
-- Call `mcp__wbex__git_arc_propose` as required by the Workbench Git Plan and Arc instructions.
+- Use `git_arc_propose`, not commit-selection tools, for changed claims. Skip if unchanged; failure keeps Review open.
 - After the proposal succeeds, send an empty final channel message to end the turn.
 
 ## Mapping User Prompts Into The Workflow

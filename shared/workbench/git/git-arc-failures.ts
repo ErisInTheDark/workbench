@@ -1,12 +1,14 @@
 /*
- * Keywords: git, failures, text protocol, historical receipts, recovery.
  * Exports:
  * - createGitArcFailureFromError: preserve typed owner/schema rejections with bounded agent diagnostics.
- * - GitArcFailureAction/GitArcFailure/GitArcFailureEnvelope: describe typed Git arc rejection identity, structured facts, and HTTP transport. Keywords: git, arc, failure, contract, transport.
- * - GitArcFailureSchema/GitArcFailureEnvelopeSchema/parseGitArcFailureEnvelope: validate failure payloads at server, CLI, transcript, and browser boundaries. Keywords: git, arc, failure, Zod, boundary.
- * - GitArcFailureException/GitArcMissingClaimSetError/GitArcProposalAlreadyCommittedError/createGitArcOperationRejected: preserve typed operation failures and explicit generic fallback. Keywords: git, arc, error, exception, fallback.
- * - describeGitArcFailure/formatGitArcFailureText: share concise human and agent recovery wording from the typed failure. Keywords: git, arc, failure, presentation, recovery.
- * - formatGitArcFailureReceipt/parseGitArcFailureReceipt: encode and decode stable persisted failure metadata. Keywords: git, arc, failure, receipt, transcript.
+ * - GitArcFailureAction/GitArcFailure/GitArcFailureEnvelope: type rejection identity, facts and HTTP transport.
+ * - GitArcFailureSchema/GitArcFailureEnvelopeSchema/parseGitArcFailureEnvelope: validate failures across transport boundaries.
+ * - GitArcFailureException/GitArcMissingClaimSetError/GitArcProposalAlreadyCommittedError/createGitArcOperationRejected: preserve typed failures and generic fallback.
+ * - describeGitArcFailure/formatGitArcFailureText: share human presentation and agent recovery.
+ * - formatGitArcFailureReceipt/parseGitArcFailureReceipt: encode and decode persisted failure facts.
+ * - GitArcDriftComparison: complete plan-scoped file counts without patches.
+ * - formatGitArcDriftComparison: render comparison rows and cumulative additions/deletions.
+ * - describeGitArcDriftRecovery: suggest workflow-neutral drift inspection routes.
  */
 import { z } from "zod";
 import { escapeGitArcValue, readGitArcValue } from "./git-arc-receipts";
@@ -16,6 +18,16 @@ const FAILURE_RECEIPT_PREFIX = "Workbench arc failure: ";
 const nonEmptyString = z.string().trim().min(1);
 const boundedPath = nonEmptyString.max(2_000);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
+
+const GitArcDriftComparisonSchema = z.array(z.object({
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  binary: z.boolean(),
+  kind: z.enum(["add", "delete", "update"]),
+  path: nonEmptyString,
+}).strict());
+
+export type GitArcDriftComparison = z.infer<typeof GitArcDriftComparisonSchema>;
 
 const GitArcFailureActionSchema = z.enum([
   "planClaims", "arcClaims", "arcScope",
@@ -81,6 +93,7 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
   }).strict(),
   GitArcFailureBaseSchema.extend({
     code: z.literal("planDrift"),
+    comparison: GitArcDriftComparisonSchema.nullable().default(null),
     commits: z.array(z.object({
       commit: checkpointSha,
       paths: z.array(boundedPath).min(1).max(20),
@@ -121,9 +134,12 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
 ]);
 
 export const GitArcFailureEnvelopeSchema = z.object({
-  error: nonEmptyString.max(8_000),
+  error: nonEmptyString,
   gitArcFailure: GitArcFailureSchema,
-}).strict();
+}).strict().refine(({ error, gitArcFailure }) => gitArcFailure.code === "planDrift" || error.length <= 8_000, {
+  path: ["error"],
+  message: "Failure message exceeds 8,000 characters.",
+});
 
 export type GitArcFailureAction = z.infer<typeof GitArcFailureActionSchema>;
 export type GitArcFailure = z.infer<typeof GitArcFailureSchema>;
@@ -187,6 +203,22 @@ export function createGitArcFailureFromError(action: GitArcFailureAction, error:
     : createGitArcOperationRejected(action, diagnostic);
 }
 
+export function formatGitArcDriftComparison(comparison: GitArcDriftComparison) {
+  const additions = comparison.reduce((sum, change) => sum + change.additions, 0);
+  const deletions = comparison.reduce((sum, change) => sum + change.deletions, 0);
+  return [
+    `comparison ${comparison.length}`,
+    ...comparison.map(({ additions, deletions, binary, kind, path }) => (
+      `${kind.slice(0, 1).toUpperCase()}\t+${additions}\t-${deletions}\t${escapeGitArcValue(path)}${binary ? "\tbinary" : ""}`
+    )),
+    `total +${additions} -${deletions} (${additions + deletions} changed lines)`,
+  ];
+}
+
+export function describeGitArcDriftRecovery(ref: string) {
+  return `Inspect git_arc_diff against ${ref} or rebase planned work on current code.`;
+}
+
 export function describeGitArcFailure(failure: GitArcFailure) {
   switch (failure.code) {
     case "rejection":
@@ -234,7 +266,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
         };
       }
       return {
-        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, refresh and activate with git_plan_start using inherit: true.`,
+        agentRecovery: describeGitArcDriftRecovery(failure.planRef),
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };
@@ -304,6 +336,7 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
         paths.forEach((path) => lines.push(`  - ${path}`));
       });
     }
+    if (failure.comparison) lines.push("", ...formatGitArcDriftComparison(failure.comparison));
     if (failure.conflicts.length) {
       lines.push("", "Conflicting threads:");
       appendConflictLines(lines, failure);
@@ -361,6 +394,7 @@ export function formatGitArcFailureReceipt(failure: GitArcFailure) {
       row(commit.commit, commit.subject, String(commit.paths.length));
       commit.paths.forEach((path) => row(path));
     }
+    if (facts.comparison) lines.push(...formatGitArcDriftComparison(facts.comparison));
   }
   if (facts.code === "acceptedProposals") {
     list("claimed", facts.claimedPaths);
@@ -424,6 +458,21 @@ function parseTextFailure(output: string) {
         });
         return { owner: { checkpointCommit, harness, intentName, lifecycle, threadId, title }, overlaps };
       });
+    } else if (key === "comparison") {
+      const comparison = Array.from({ length: count(value) }, () => {
+        const [kind, additions, deletions, path, binary] = row(4, 5);
+        if (!/^\+\d+$/u.test(additions!) || !/^-\d+$/u.test(deletions!) || (binary !== undefined && binary !== "binary")) {
+          throw new Error("Invalid comparison row.");
+        }
+        return {
+          kind: kind === "A" ? "add" : kind === "D" ? "delete" : kind === "U" ? "update" : kind,
+          additions: Number(additions!.slice(1)), deletions: Number(deletions!.slice(1)),
+          binary: binary === "binary", path,
+        };
+      });
+      const parsed = GitArcDriftComparisonSchema.parse(comparison);
+      if (lines[index++] !== formatGitArcDriftComparison(parsed).at(-1)) throw new Error("Invalid comparison totals.");
+      result.comparison = parsed;
     } else if (key === "commits") {
       result.commits = Array.from({ length: count(value) }, () => {
         const [commit, subject, length] = row(3);

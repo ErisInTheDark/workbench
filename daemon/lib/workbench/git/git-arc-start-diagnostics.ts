@@ -1,9 +1,8 @@
 /*
- * Keywords: git, activation, drift, collision, recovery.
  * Exports:
- * - default createGitArcStartDiagnosticError: build a bounded causal arc-start failure from plan, Git, claim, and worktree truth. Keywords: git, arc, start, diagnostics, commits, claims, dirt.
- * - GitArcStartDiagnosticError/GitArcStartDiagnosticDetails: preserve structured plan drift facts for transport and integrated rendering. Keywords: git, arc, start, drift, error.
- * - GitArcCollisionPresentation/formatGitArcCollisionLines: share markdown-like collision presentation between controller preflight and orchestrator race failures. Keywords: git, arc, collision, markdown, diagnostics.
+ * - default createGitArcStartDiagnosticError: report causal drift, complete scoped counts, claims and dirt.
+ * - GitArcStartDiagnosticError/GitArcStartDiagnosticDetails: preserve structured drift facts for transport.
+ * - GitArcCollisionPresentation/formatGitArcCollisionLines: share collision presentation across preflight and race failures.
  */
 import {
   findGitArcCollisions,
@@ -13,6 +12,11 @@ import {
 } from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
+import {
+  describeGitArcDriftRecovery,
+  formatGitArcDriftComparison,
+  type GitArcDriftComparison,
+} from "workbench-shared/workbench/git/git-arc-failures";
 
 const MAX_COMMITS = 8;
 const MAX_PATHS = 20;
@@ -39,6 +43,7 @@ interface GitArcStartDiagnosticInput {
 }
 
 export interface GitArcStartDiagnosticDetails {
+  comparison: GitArcDriftComparison;
   commitChanges: Array<{ changedPaths: string[]; commit: string; subject: string }>;
   collisions: GitArcCollision[];
   dirtyUnclaimedPaths: string[];
@@ -111,6 +116,13 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     threadId,
   } = input;
   const collisions = findGitArcCollisions(registryEntries, { harness, threadId }, planPaths);
+  const comparison = (await repository.buildFileChanges(planCheckpointCommit, currentTree, planPaths)).map((change) => ({
+    additions: change.additions,
+    deletions: change.deletions,
+    binary: /^GIT binary patch$/mu.test(change.diff),
+    kind: change.kind.type,
+    path: change.path,
+  }));
   const movement = await repository.classifyHeadMovement(planBaseCommit, snapshotDrift, planCheckpointCommit, currentHead);
   const committedDrift = movement.kind === "fast-forward" ? movement.changedPaths : [];
   const commitChanges = movement.kind === "fast-forward"
@@ -140,7 +152,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     });
     if (commitChanges.length > MAX_COMMITS) lines.push(`- ... ${commitChanges.length - MAX_COMMITS} more affecting commits`);
   }
-  lines.push("", "Planned paths claimed by other arcs:");
+  lines.push("", ...formatGitArcDriftComparison(comparison), "", "Planned paths claimed by other arcs:");
   lines.push(...formatGitArcCollisionLines(collisions.map((collision) => ({ collision }))));
   lines.push("", "Dirty unclaimed planned files:");
   if (!dirtyUnclaimed.length) {
@@ -156,14 +168,14 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
   if (hasDrift && !collisions.length) lines.push(
     "",
     "Only intentional dirty unclaimed paths can be adopted. Committed paths remain ordinary scope.",
-    `Inspect git_arc_diff ${JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit })}.`,
-    "Keep approval if still applicable. Refresh and activate with git_plan_start using inherit: true.",
+    describeGitArcDriftRecovery(planCheckpointCommit),
   );
   if (collisions.length) lines.push("Call git_arc_wait. Do not republish while sibling claims intersect. Waiting rechecks the original baseline after claims clear.");
   if (!collisions.length && snapshotDrift.length > MAX_PATHS) {
-    lines.push(`${snapshotDrift.length - MAX_PATHS} more affected paths were omitted. Run the scoped diff again for those paths if needed.`);
+    lines.push(`${snapshotDrift.length - MAX_PATHS} more affected paths are included in the comparison.`);
   }
   return new GitArcStartDiagnosticError(lines.join("\n"), {
+    comparison,
     commitChanges,
     collisions,
     dirtyUnclaimedPaths: dirtyUnclaimed,

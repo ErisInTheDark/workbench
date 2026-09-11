@@ -133,6 +133,11 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
     };
   };
   let owner: string | null = null;
+  const comparison = Array.from({ length: 30 }, (_, index) => ({
+    additions: index + 1, deletions: index, binary: false,
+    kind: "update" as const,
+    path: `src/${"long-path/".repeat(30)}file-${index}.ts`,
+  }));
   let reportSecondBlocked!: () => void;
   const secondBlocked = new Promise<void>((resolve) => { reportSecondBlocked = resolve; });
   internal.controller.findPlanClaimCollisions = async ({ checkpointCommit, threadId }) => {
@@ -153,6 +158,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
   internal.controller.startArc = async ({ checkpointCommit, threadId }) => {
     if (driftAfterRelease && threadId === "thread-two") {
       throw new GitArcStartDiagnosticError("Plan changed after publication.", {
+        comparison,
         collisions: [], commitChanges: [], dirtyUnclaimedPaths: ["src/a.ts"], headMovement: "same",
         planCheckpointCommit: checkpointCommit!, snapshotDrift: ["src/a.ts"],
       });
@@ -200,6 +206,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
     if (result.gitArcFailure.code !== "planDrift") throw new Error("Expected drift after release.");
     assert.equal(result.gitArcFailure.planRef, "b".repeat(40));
     assert.deepEqual(result.gitArcFailure.snapshotPaths, ["src/a.ts"]);
+    assert.deepEqual(result.gitArcFailure.comparison, comparison);
     assert.equal(owner, null);
   } else {
     assert.equal(secondResponse.status, 200);

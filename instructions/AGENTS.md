@@ -113,85 +113,7 @@ Before non-trivial plans, deliberately check each aspect against source and user
 - Treat existing worktree changes as user-owned unless you know you made them.
 - Never revert user changes unless the user explicitly asks for that exact operation.
 
-### Git Plan and Arc Drift Protection
-
-Use these rules for non-trivial Workbench file edits.
-
-#### Core rule
-
-<!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
-Claim files before editing them; edit gitignored files without extra approval; adopt command-caused workspace dirt (ie `package-lock.json` via `npm install`) to include in proposed commits.
-
-Ordinary arc operations use the caller's registered lifecycle; omit refs. Explicit refs select historical inspection, restoration or deliberate baselines. Never guess "latest" or copy an unrelated ref.
-
-<!-- Failure: agents use raw Git when arc tools already cover the job. -->
-When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not preflight or supplement it with raw `git status`, raw `git diff`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Before using raw Git, state why no arc tool can do that job. Use `arc compare` or `arc diff` whenever arc-scoped inspection helps, including Review and plan, drift, or claim diagnostics.
-
-#### Plan and arc names
-
-* **Plan ref**: immutable full Git-visible worktree snapshot. The registry owns current scope, including empty plans and inherited revisions.
-* **Arc ref**: immutable snapshot for historical inspection or restoration. Ordinary operations resolve the caller's current registry, including narrowed or resolved acceptance outcomes.
-* **Arc**: the approved changeset whose registry phase is plan, active, or resolved. A missing phase reads as active without migration.
-
-#### Before asking for approval in Brief mode
-
-For any plan that would edit files:
-
-1. Identify the exact existing files you plan to edit.
-2. Confirm that Workbench Git plan/arc instructions are available.
-3. Publish with `git_plan_claims`, short `intentName` and exact `addPaths`. Use `inherit: true` with additions/removals/adoptions for revisions. Dirty owned paths remain ordinary scope; adoption is only intentional dirty unclaimed work.
-4. Publication refreshes baselines. **Inspect reported changes against the supplied previous ref before presenting the revised plan.** Repeated paths cannot hide this notice.
-5. Name planned files in the brief; omit ref details unless needed to explain a problem.
-
-If plan/arc instructions are missing, plan creation fails, or the repo has no usable HEAD, stop before presenting an implementation plan. Tell the user arc safety is degraded. Continue without arc protection only if the user explicitly approves degraded safety for this work.
-
-If the exact edit set is still unknown, do not present an implementation plan. Present an inspection or diagnostics plan instead.
-
-Unexpected omitted paths during Implement:
-
-- No material change: report path and reason; use `git_arc_claims` to add/adopt atomically; no separate continuation.
-- Material or uncertain change: keep work; revise inactive scope with `git_plan_claims` and `inherit: true`; return to Brief.
-- Never restore, release, unclaim, or discard only to change scope.
-- Exact user steer updates plan or arc; continue without restating.
-
-Keep inactive scope aligned through one `git_plan_claims` revision with `inherit: true`, `addPaths`, exact `removePaths` and explicit `adoptPaths`. Omit unused arrays. Prose-only revisions need no publication. Active edits require approval and Implement mode.
-
-#### Before the first edit in Implement mode
-
-After the user explicitly approves the current plan:
-
-1. Enter Implement mode.
-2. If this is the inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact `ref`. Record the returned active ref and its released/acquired claims.
-3. If already active, use `git_arc_continue` without a ref before another pass, or `git_arc_claims` when scope changes. Claims includes continuation and accepted-outcome checks; never call both for one edit.
-4. Treat the required arc command's result as authoritative before editing.
-
-Use this table:
-
-| Arc result | Action |
-| --- | --- |
-| Success | Read phase/outcome and proceed. No supplementary preflight. Resolved continuation acquires nothing; approved follow-up requires explicit additions/adoptions. |
-| Planned paths changed after approval | Inspect the historical diff. If approval still applies, refresh and activate with `git_plan_start({ inherit: true })`. Return to Brief only if the plan changed. |
-| Claim overlap | Wait on the inactive plan with `git_arc_wait`; do not republish it. If requested scope has no inactive plan, publish it first. |
-| Incompatible HEAD, unexplained dirt or another unsafe rejection | Stop and inspect. Never steal, clean, restore or overwrite work. Return to Brief if recovery changes the plan. |
-| Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
-
-A better or simpler implementation can proceed without re-briefing only when it stays inside the approved paths, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation. Otherwise, stop and return to Brief before making the agent-chosen change. Never hide scope inside an improvement.
-
-Plan creation permits dirt already owned by this thread's active arc only when the new plan covers every dirty claimed file. Publishing the plan releases clean previous claims immediately and retains only that covered dirt through approval. It rejects unexplained dirty unclaimed paths unless the plan explicitly adopts them. Do not clean or restore another agent's claimed paths to manufacture a plan.
-
-#### During implementation
-
-Preserve unrelated user or agent changes.
-
-Updates report phase, outcome, counts and net changes.
-
-Acceptance releases clean claims and narrows the live set. Read every returned accepted proposal ID and commit SHA. Resolved continuation succeeds without claims. Approved follow-up can use `git_arc_claims` with explicit additions/adoptions and inherited intent; changed approval boundaries return to Brief.
-
-When approved work moves paths, use `mcp__wbex__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
-
-Use `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })` for one atomic active edit. Omit unused arrays. It validates final scope, retained baselines and explicit dirty unclaimed adoption. Removals must match exact entries and preserve dirty coverage. Removing final clean scope resolves the lifecycle. Never mutate active scope in Brief or Decision.
-
-#### Completion inspection and review
+### Change review
 
 <!--
 The final diff is where promised behavior must be checked against what actually exists. Reviewing only changed paths, implementation tidiness or passing tests can bless an implementation that contradicts the user's request.
@@ -200,9 +122,7 @@ Tests can pass because they encode the agent's chosen shape rather than the user
 
 Check original intent as well as the approved plan: an implementation can faithfully implement a bad plan. Walk distinguishing cases through the actual code while reading the complete diff, rather than reciting a checklist afterward. These rules belong in universal instructions because other workflows review diffs too; workflows own the trigger, not the substance of this verification.
 -->
-**Hard rule: review complete claimed diff against intent, not just implementation.**
-
-Before summarizing or proposing, inspect complete current arc with `tools.mcp__wb__git_arc_diff`; follow every page. Active workflow determines review timing.
+**Hard rule: review complete changes against intent, not just implementation.**
 
 During diff inspection, deliberately verify each:
 - **Intent:** Does implementation satisfy every intent of original request, approved plan and later steers? Map each to code/evidence; only explicit user changes narrow obligations.
@@ -211,8 +131,6 @@ During diff inspection, deliberately verify each:
 - **Proof:** Would validation reject plausible wrong shape? Separate passing tests from verified outcomes and uncertainty.
 - **Claims:** Does completion report match evidence? Partial fix does not prove original symptom resolved.
 
-Omit refs for current inspection. Use previous refs only for deliberate historical comparisons, including planning-drift notices. If lifecycle ownership is unclear, inspect `git_arc_scope` rather than guessing refs.
-
 Review must cover:
 
 * what changed and why
@@ -220,8 +138,6 @@ Review must cover:
 * validation performed and what it proved
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
-
-Before Review ends, call `mcp__wbex__git_arc_propose` with required messages. It selects changed claims; `paths` narrows them. It opens proposal UI, not a commit. Do not use commit-selection tools. Skip with no changes. Failure keeps Review open.
 
 ## Project Quality
 

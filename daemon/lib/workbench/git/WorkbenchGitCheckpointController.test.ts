@@ -1,7 +1,5 @@
 /*
- * Keywords: git, arc, claims, planning, proposal acceptance, atomicity.
- * Exports:
- * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, recent unclaimed dirt, proposals, staged ignored deletion acceptance, and publish state. Keywords: git, arc, registry, mtime, proposal, ignored deletion, concurrency, test.
+ * Exports: none. Protect arc ownership, scoped drift, proposals and atomic publication with real repositories.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -460,6 +458,47 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
   const active = await new GitArcRegistry(repository).find({ harness: "opencode", threadId: "legacy-thread" });
   assert.equal(active?.checkpointCommit, state.legacyCommit);
   assert.deepEqual(active?.claimedPaths, ["two.txt"]);
+});
+
+isolatedControllerTest("arc start comparison covers complete planned drift without unrelated files or patches", async (context) => {
+  const { source } = await copyRepository(context, CONTROLLER_BASE_FIXTURE);
+  await fs.mkdir(path.join(source, "nested"));
+  await fs.writeFile(path.join(source, "nested/base.txt"), "base\n");
+  await fs.writeFile(path.join(source, "nested/data.bin"), Buffer.from([0, 1]));
+  await git(source, ["add", "nested"]);
+  await git(source, ["commit", "--quiet", "-m", "prepare nested plan"]);
+  const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: source, harness: "codex" as const, threadId: "comparison-thread" };
+  const plan = await controller.createPlan({
+    ...identity, intentName: "inspect scoped drift", paths: ["one.txt", "two.txt", "nested"],
+  });
+  await fs.writeFile(path.join(source, "one.txt"), "committed\npatch-only-secret\n");
+  await fs.writeFile(path.join(source, "unrelated.txt"), "unrelated\n".repeat(3_000));
+  await git(source, ["add", "one.txt", "unrelated.txt"]);
+  await git(source, ["commit", "--quiet", "-m", "planned and unrelated work"]);
+  await fs.appendFile(path.join(source, "one.txt"), "dirty\n");
+  await fs.unlink(path.join(source, "two.txt"));
+  await fs.writeFile(path.join(source, "nested/base.txt"), "changed\n");
+  await fs.writeFile(path.join(source, "nested/data.bin"), Buffer.from([0, 2]));
+  const addedPaths = Array.from({ length: 24 }, (_, index) => `nested/added-${index}.txt`);
+  await Promise.all(addedPaths.map((filePath) => fs.writeFile(path.join(source, filePath), "added\n")));
+
+  const compared = await controller.compare({ ...identity, ref: plan.checkpointCommit });
+  await assert.rejects(controller.startArc(identity), (error: unknown) => {
+    assert(error instanceof GitArcStartDiagnosticError);
+    assert.deepEqual(error.details.comparison, compared.changes.map(({ diff, ...change }) => ({
+      ...change, kind: change.kind.type, binary: change.path === "nested/data.bin",
+    })));
+    const additions = compared.changes.reduce((sum, change) => sum + change.additions, 0);
+    const deletions = compared.changes.reduce((sum, change) => sum + change.deletions, 0);
+    assert.equal(additions, 28);
+    assert.equal(deletions, 3);
+    assert.match(error.message, /total \+28 -3 \(31 changed lines\)/u);
+    for (const filePath of addedPaths) assert.ok(error.message.includes(filePath));
+    assert.doesNotMatch(error.message, /unrelated\.txt|patch-only-secret|GIT binary patch/u);
+    assert.match(error.message, /nested\/data\.bin[^\n]*binary/u);
+    return true;
+  });
 });
 
 isolatedControllerTest("arc start reports only causal commits, sibling claims, and adoptable workspace dirt", async (context) => {

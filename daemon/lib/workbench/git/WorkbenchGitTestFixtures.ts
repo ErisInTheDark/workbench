@@ -1,5 +1,4 @@
 /*
- * Keywords: git, fixtures, graph, lifecycle, test allocation, cleanup.
  * Exports:
  * - UNBORN_FIXTURE: repository before its first commit.
  * - THREAD_GIT_BASE_FIXTURE: basic thread repository.
@@ -26,8 +25,8 @@
  * - CONTROLLER_PARTIAL_READY_FIXTURE: partial acceptance scenario.
  * - CONTROLLER_REPLACEMENT_READY_FIXTURE: replacement scenario.
  * - CONTROLLER_PUSHED_AMEND_READY_FIXTURE: published amend scenario.
- * - partitionWorkbenchGitTestFiles: separate nested Git, ordinary Git, and non-Git suites while preserving stable group order. Keywords: test runner, scheduling, git, fixture.
- * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: create every selected disposable repository before tests and clean them after all pools finish. Keywords: test runner, setup, cleanup, manifest.
+ * - partitionWorkbenchGitTestFiles: group nested Git, ordinary Git and non-Git suites in stable order.
+ * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: prepare selected repository copies and clean them after all pools finish.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -926,7 +925,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(UNBORN_FIXTURE, 3),
   ], nested: true }],
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 3),
+    demand(CONTROLLER_BASE_FIXTURE, 4),
     demand(CONTROLLER_START_READY_FIXTURE, 1),
     demand(CONTROLLER_ADOPT_READY_FIXTURE, 3),
     demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),
