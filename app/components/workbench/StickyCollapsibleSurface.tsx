@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - default StickyCollapsibleSurface: move one composer surface between permanent inline and sticky slots while preserving its source footprint and releasing near bottom. Keywords: sticky, collapsible, portal, scrollport.
- * - Local helpers: classify interactive targets, move the stable portal host, and read the visible viewport boundary. Keywords: sticky, movement, viewport, interaction.
+ * - default StickyCollapsibleSurface: own composer placement across viewport and content resizing while preserving its DOM and inline footprint.
  */
 "use client";
 
@@ -150,8 +149,10 @@ export default function StickyCollapsibleSurface({
 
     const updatePlacement = () => {
       frameId = null;
+      const scrollElement = scrollTarget ?? document.scrollingElement ?? document.documentElement;
       const nextPlacement = resolveStickyCollapsiblePlacement({
         currentPlacement: placementRef.current,
+        hasScrollableOverflow: scrollElement.scrollHeight > scrollElement.clientHeight,
         inlineSlotTop: inlineSlot.getBoundingClientRect().top,
         isNearScrollBottom: isWithinScrollBottomDistance?.(STICKY_BOTTOM_RELEASE_TOLERANCE_PX) ?? false,
         scrollTargetBottom: scrollTarget?.getBoundingClientRect().bottom ?? null,
@@ -165,12 +166,16 @@ export default function StickyCollapsibleSurface({
     const requestPlacementUpdate = () => {
       if (frameId === null) frameId = window.requestAnimationFrame(updatePlacement);
     };
-    const resizeObserver = scrollTarget && typeof ResizeObserver !== "undefined"
+    const resizeObserver = typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(requestPlacementUpdate)
       : null;
 
-    updatePlacement();
+    // Parent viewport refs must be attached before asking for bottom distance.
+    requestPlacementUpdate();
     if (scrollTarget) resizeObserver?.observe(scrollTarget);
+    // The viewport can stay fixed while transcript growth or shrinkage changes overflow.
+    if (inlineSlot.parentElement) resizeObserver?.observe(inlineSlot.parentElement);
+    resizeObserver?.observe(portalHost);
     scrollEventTarget.addEventListener("scroll", requestPlacementUpdate, { passive: true });
     window.addEventListener("resize", requestPlacementUpdate);
     window.visualViewport?.addEventListener("resize", requestPlacementUpdate);

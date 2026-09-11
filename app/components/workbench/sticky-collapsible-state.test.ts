@@ -1,15 +1,55 @@
 /*
- * No production exports. Node tests protect the sticky composer's near-bottom release and separate geometric thresholds. Keywords: sticky, collapsible, hysteresis, viewport, test.
+ * No production exports. Tests protect composer overflow transitions, bottom release and geometric hysteresis.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { resolveStickyCollapsiblePlacement } from "./sticky-collapsible-state";
+import { resolveStickyCollapsiblePlacement, type StickyCollapsiblePlacement } from "./sticky-collapsible-state";
+
+for (const currentPlacement of ["inline", "sticky"] as const) {
+  test(`non-scrollable content resolves ${currentPlacement} placement inline despite arming geometry`, () => {
+    const measurement = {
+      currentPlacement,
+      hasScrollableOverflow: false,
+      inlineSlotTop: 900,
+      isNearScrollBottom: false,
+      scrollTargetBottom: 720,
+      stickyComposerTop: currentPlacement === "sticky" ? 500 : null,
+      viewportBottom: 720,
+    };
+    assert.equal(resolveStickyCollapsiblePlacement(measurement), "inline", currentPlacement);
+  });
+}
+
+test("growth and shrinkage preserve bottom following and allow sticky placement again", () => {
+  let currentPlacement: StickyCollapsiblePlacement = "inline";
+  for (const step of [
+    { hasScrollableOverflow: false, isNearScrollBottom: true, expected: "inline" },
+    { hasScrollableOverflow: true, isNearScrollBottom: true, expected: "inline" },
+    { hasScrollableOverflow: true, isNearScrollBottom: false, expected: "sticky" },
+    { hasScrollableOverflow: false, isNearScrollBottom: false, expected: "inline" },
+    { hasScrollableOverflow: true, isNearScrollBottom: false, expected: "sticky" },
+    { hasScrollableOverflow: true, isNearScrollBottom: true, expected: "inline" },
+  ] as const) {
+    const measurement = {
+      currentPlacement,
+      hasScrollableOverflow: step.hasScrollableOverflow,
+      inlineSlotTop: 900,
+      isNearScrollBottom: step.isNearScrollBottom,
+      scrollTargetBottom: 720,
+      stickyComposerTop: currentPlacement === "sticky" ? 500 : null,
+      viewportBottom: 720,
+    };
+    currentPlacement = resolveStickyCollapsiblePlacement(measurement);
+    assert.equal(currentPlacement, step.expected);
+  }
+});
 
 test("an inline composer stays inline while its source slot remains visible", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "inline",
+    hasScrollableOverflow: true,
     inlineSlotTop: 719,
     isNearScrollBottom: false,
     scrollTargetBottom: 720,
@@ -21,6 +61,7 @@ test("an inline composer stays inline while its source slot remains visible", ()
 test("an inline composer moves sticky once its source slot leaves the visible scrollport", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "inline",
+    hasScrollableOverflow: true,
     inlineSlotTop: 720,
     isNearScrollBottom: false,
     scrollTargetBottom: 720,
@@ -32,6 +73,7 @@ test("an inline composer moves sticky once its source slot leaves the visible sc
 test("the visual viewport can provide the inline entry boundary", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "inline",
+    hasScrollableOverflow: true,
     inlineSlotTop: 560,
     isNearScrollBottom: false,
     scrollTargetBottom: 844,
@@ -43,6 +85,7 @@ test("the visual viewport can provide the inline entry boundary", () => {
 test("a sticky composer stays sticky while its source slot remains below the composer top", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "sticky",
+    hasScrollableOverflow: true,
     inlineSlotTop: 500,
     isNearScrollBottom: false,
     scrollTargetBottom: 720,
@@ -54,6 +97,7 @@ test("a sticky composer stays sticky while its source slot remains below the com
 test("a sticky composer returns inline when its source slot crosses above the composer top", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "sticky",
+    hasScrollableOverflow: true,
     inlineSlotTop: 420,
     isNearScrollBottom: false,
     scrollTargetBottom: 720,
@@ -70,6 +114,7 @@ test("exit geometry does not also satisfy the inline entry threshold", () => {
 
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "sticky",
+    hasScrollableOverflow: true,
     inlineSlotTop,
     isNearScrollBottom: false,
     scrollTargetBottom,
@@ -78,6 +123,7 @@ test("exit geometry does not also satisfy the inline entry threshold", () => {
   }), "inline");
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "inline",
+    hasScrollableOverflow: true,
     inlineSlotTop,
     isNearScrollBottom: false,
     scrollTargetBottom,
@@ -89,6 +135,7 @@ test("exit geometry does not also satisfy the inline entry threshold", () => {
 test("near-bottom scroll returns a sticky composer inline before the geometric exit", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "sticky",
+    hasScrollableOverflow: true,
     inlineSlotTop: 500,
     isNearScrollBottom: true,
     scrollTargetBottom: 720,
@@ -100,6 +147,7 @@ test("near-bottom scroll returns a sticky composer inline before the geometric e
 test("near-bottom scroll keeps an inline composer from entering sticky placement", () => {
   assert.equal(resolveStickyCollapsiblePlacement({
     currentPlacement: "inline",
+    hasScrollableOverflow: true,
     inlineSlotTop: 720,
     isNearScrollBottom: true,
     scrollTargetBottom: 720,
