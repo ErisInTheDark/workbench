@@ -41,6 +41,29 @@ const EMPTY_CODEX_SETTINGS = {
   serviceTier: null,
 };
 
+test("thread status applies without a turn and remains until new work is accepted", () => {
+  for (const status of ["completed", "blocked"] as const) {
+    const state = reduceWorkbenchThreadLifecycle(null, { kind: "agentStatus", status });
+    assert.equal(state?.kind, status === "completed" ? "completed" : "needsAttention");
+    assert.equal(WorkbenchThreadLifecycleSchema.safeParse(state).success, true);
+    for (const outcome of ["completed", "interrupted", "failed"] as const) {
+      assert.deepEqual(reduceWorkbenchThreadLifecycle(state, {
+        kind: "turnCompleted", turnId: fixtureIdentityValues.WorkbenchTurnId.old, status: outcome,
+      }), state);
+    }
+    assert.equal(reduceWorkbenchThreadLifecycle(state, {
+      kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId.new,
+    }).kind, "working");
+  }
+});
+
+test("thread input is resolved by question identity rather than turn identity", () => {
+  const state = reduceWorkbenchThreadLifecycle(null, { kind: "pendingInput", requestKey: "question" });
+  assert.equal(WorkbenchThreadLifecycleSchema.safeParse(state).success, true);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(state, { kind: "inputResolved", requestKey: "other" }), state);
+  assert.equal(reduceWorkbenchThreadLifecycle(state, { kind: "inputResolved", requestKey: "question" }).kind, "working");
+});
+
 test("observations carry a complete entry without admitting a different thread family", () => {
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },

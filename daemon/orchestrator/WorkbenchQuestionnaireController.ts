@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchQuestionnaireControllerOptions: caller resolution, durable projection, and dismissal ports.
- * - WorkbenchNativeQuestionnaire: questionnaire addressed to a native execution.
+ * - WorkbenchNativeQuestionnaire: thread questionnaire with optional transcript placement.
  * - WorkbenchAnsweredQuestionnaire: consumed native questionnaire and response.
  * - default WorkbenchQuestionnaireController: own pending native questionnaire waits and correlation.
  */
@@ -26,7 +26,7 @@ export interface WorkbenchQuestionnaireControllerOptions {
   publishPending(threadId: NativeThreadId, questionnaire: WorkbenchNativeQuestionnaire): Promise<void>;
   resolveThread(cwd: string, threadId: NativeThreadId): Promise<{
     projectId: ProjectId;
-    turnId: NativeTurnId;
+    turnId: NativeTurnId | null;
     pendingQuestionnaire?: WorkbenchNativeQuestionnaire | null;
   }>;
   subscribePending(listener: (state: { projectId: ProjectId; requestKey: string | null; threadId: NativeThreadId }) => void): () => void;
@@ -166,7 +166,7 @@ export default class WorkbenchQuestionnaireController {
     try {
       await this.options.publishPending(input.callerThreadId, questionnaire);
       pending.projected = true;
-      if (this.pendingByThreadId.get(input.callerThreadId) === pending && pending.status === "waiting") {
+      if (this.pendingByThreadId.get(input.callerThreadId) === pending && pending.status === "waiting" && pending.releaseReason === null) {
         const onAbort = () => {
           const reason = signal.reason ?? new Error("The questionnaire caller cancelled.");
           if (isWorkbenchAgentMcpRuntimeReloadInterruption(reason)) {
@@ -242,13 +242,22 @@ export default class WorkbenchQuestionnaireController {
     if (this.disposed) throw new Error("The questionnaire controller was disposed.");
   }
 
-  async releaseForInterruption(threadId: NativeThreadId, requestKey: string) {
+  async interruptRetainingQuestionnaire(threadId: NativeThreadId, requestKey: string, interrupt: () => Promise<boolean>) {
     const pending = this.pendingByThreadId.get(threadId);
-    if (!pending || pending.questionnaire.requestKey !== requestKey) return;
-    this.releasePending(pending, new Error("The questionnaire wait ended because its turn is being interrupted."));
-    // An answer already being persisted wins. Failed persistence releases the wait
-    // through respond's failure path, leaving the durable question available.
-    await pending.completion;
+    if (!pending || pending.questionnaire.requestKey !== requestKey) return interrupt();
+    const reason = new Error("The questionnaire wait ended because its turn is being interrupted.");
+    pending.releaseReason ??= reason;
+    pending.stopAbort?.();
+    pending.stopAbort = null;
+    try {
+      // Let an answer already being saved win, without waking a waiting agent
+      // before the provider has processed the interruption.
+      if (pending.status === "responding") await pending.completion;
+      return await interrupt();
+    } finally {
+      this.releasePending(pending, reason);
+      await pending.completion;
+    }
   }
 
   private releasePending(pending: PendingQuestionnaire, error: unknown) {

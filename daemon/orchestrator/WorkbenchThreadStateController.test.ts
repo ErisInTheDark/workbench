@@ -867,7 +867,7 @@ test("failed retroactive archival preserves the visible thread and its settled f
 
 test("questionnaire snooze retains input through interruption, then stop dismisses and wakes it", async () => {
   const question = {
-    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: null,
     request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
       { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
     ] },

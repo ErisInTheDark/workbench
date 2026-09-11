@@ -246,37 +246,38 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
     pendingQuestionnaire: questionnaire,
   });
   let listener: Parameters<WorkbenchThreadStateController["subscribe"]>[0] | undefined;
-  const observed: Array<Parameters<WorkbenchThreadStateController["observeLifecycle"]>> = [];
+  const observed: Array<{ threadId: typeof parent.threadId; questionnaire: Parameters<WorkbenchThreadStateController["setPendingQuestionnaire"]>[2] | null }> = [];
   assert.ok(entry.entryKind === "thread");
-  new WorkbenchThreadStateRelationalRepository(database).writeRecords([{
-    ...entry, pendingQuestionnaire: null, providerObserved: true, mcpGeneration: null,
+  const storedEntry = {
+    ...entry, providerObserved: true, mcpGeneration: null,
     profile: null, settledAt: null, gitHistoryCleanedAt: null, snoozedUntil: null,
-  }]);
+  };
+  new WorkbenchThreadStateRelationalRepository(database).writeRecords([{ ...storedEntry, pendingQuestionnaire: null }]);
   const questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);
   const ports = createNativeQuestionnaireStatePorts(owners, {
-    getSnapshot: async projectId => ({ projectId, entries: [entry], revision: 1, error: null, freshness: "fresh" }),
-    observeLifecycle: async (...args) => {
-      const event = args[2];
-      questionnaires.replace(args[1], {
-        pending: event.kind === "pendingInput" ? event.questionnaire ?? null : null, history: [],
-      });
-      observed.push(args);
-      return null;
+    getCanonicalThreadEntry: async () => storedEntry,
+    setPendingQuestionnaire: async (_projectId, threadId, questionnaire) => {
+      questionnaires.replace(threadId, { pending: questionnaire, history: [] });
+      observed.push({ threadId, questionnaire });
+      return storedEntry;
+    },
+    clearPendingQuestionnaire: async (_projectId, threadId) => {
+      questionnaires.replace(threadId, { pending: null, history: [] });
+      observed.push({ threadId, questionnaire: null });
+      return storedEntry;
     },
     subscribe: callback => { listener = callback; return () => { listener = undefined; return true; }; },
   }, async () => parent.projectId);
   try {
     const resolved = await ports.resolveThread(native.nativeLocation, native.nativeThreadId);
-    assert.equal(resolved.turnId, native.nativeTurnId);
+    assert.equal(resolved.turnId, null);
     assert.equal(resolved.pendingQuestionnaire?.turnId, native.nativeTurnId);
     assert.equal(resolved.pendingQuestionnaire?.itemId, questionnaire.itemId);
     await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
-    assert.equal(observed[0]?.[1], parent.threadId);
-    const pending = observed[0]?.[2];
-    assert.equal(pending?.kind, "pendingInput");
-    if (pending?.kind !== "pendingInput") throw new Error("Expected pending input.");
+    assert.equal(observed[0]?.threadId, parent.threadId);
+    const pending = observed[0]?.questionnaire;
+    assert.ok(pending);
     assert.equal(pending.turnId, turn.turnId);
-    assert.equal(pending.questionnaire?.turnId, turn.turnId);
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
     await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
@@ -290,7 +291,7 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
     assert.equal(observed.length, published);
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
     await ports.clearPending(native.nativeThreadId, questionnaire.requestKey);
-    assert.equal(observed.at(-1)?.[1], parent.threadId);
+    assert.equal(observed.at(-1)?.threadId, parent.threadId);
     assert.equal(questionnaires.read(parent.threadId).pending, null);
     const notices: Array<{ threadId: string; requestKey: string | null }> = [];
     const stop = ports.subscribePending(notice => notices.push(notice));

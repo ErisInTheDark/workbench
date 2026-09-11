@@ -116,6 +116,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   const state = {
     turn: { id: "native:turn", status: "inProgress", items: [] },
     failInterrupt: false,
+    retainingQuestionnaire: false,
     beforeRelease: async () => {},
   };
   const options = {
@@ -125,9 +126,15 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     listSubagents: async () => ({ subagents: [] }),
     projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
     publish: () => {},
-    releaseQuestionnaire: async (_threadId: string, requestKey: string) => {
-      releases.push(requestKey);
+    interruptRetainingQuestionnaire: async (_threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => {
       await state.beforeRelease();
+      state.retainingQuestionnaire = true;
+      try {
+        return await interrupt();
+      } finally {
+        state.retainingQuestionnaire = false;
+        releases.push(requestKey);
+      }
     },
     harnesses: createHarnesses(async (_harness, request) => {
       requests.push(request);
@@ -140,6 +147,9 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
           id: "native:thread", cwd: "C:/workspace", createdAt: 1, name: "Task", status: { type: "active" },
           currentTurnId: state.turn.id, turns: [state.turn], updatedAt: 1,
         }], nextCursor: null } };
+      }
+      if (request.method === "turn/interrupt" && harness === "codex") {
+        assert.equal(state.retainingQuestionnaire, true);
       }
       if (request.method === "turn/interrupt" && state.failInterrupt) throw new Error("interrupt failed");
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
@@ -302,15 +312,17 @@ test("other provider questionnaires complete through their existing interrupt wi
   }
 });
 
-test("questionnaire completion does not interrupt ended turns or newer active turns", async () => {
+test("questionnaire completion interrupts current work rather than its historical turn", async () => {
   for (const newer of [false, true]) {
     const h = await questionnaireHarness();
     try {
       h.state.turn = newer ? { id: "native:new-turn", status: "inProgress", items: [] } : { id: "native:turn", status: "interrupted", items: [] };
       const response = await h.complete();
-      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, !newer);
-      assert.deepEqual(h.requests.map(request => request.method), ["thread/turns/list"]);
-      assert.deepEqual(h.releases, newer ? [] : [h.questionnaire.requestKey]);
+      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
+      assert.deepEqual(h.requests.map(request => request.method), newer
+        ? ["thread/turns/list", "thread/goal/clear", "turn/interrupt"] : ["thread/turns/list"]);
+      assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
+      if (newer) assert.equal((h.requests.at(-1)?.params as { turnId: string }).turnId, "native:new-turn");
     } finally { await h.feature.dispose(); }
   }
 });
@@ -535,6 +547,39 @@ test("creation installs captured settings before first admission and refreshes o
       }), /another project/);
     } finally { await feature.dispose(); }
   }
+});
+
+test("unchanged questionnaires can be snoozed while newer work is active", async () => {
+  const h = await questionnaireHarness();
+  try {
+    await h.feature.controller.observeLifecycle("codex", h.provider.identity.threadId, {
+      kind: "acceptedIntent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new-turn"),
+    });
+    h.state.turn = { id: "native:new-turn", status: "inProgress", items: [] };
+    const result = await h.feature.controller.handleRequest("observer", {
+      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
+      identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
+    });
+    assert.equal("result" in result && (result.result as { accepted: boolean }).accepted, true);
+    const entry = await h.read();
+    assert.ok(entry?.entryKind === "thread" && entry.metadata.snoozed);
+    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+  } finally { await h.feature.dispose(); }
+});
+
+test("agent status is a canonical thread mutation without provider reads", async () => {
+  const h = await questionnaireHarness();
+  try {
+    await h.feature.controller.observeLifecycle("codex", h.provider.identity.threadId, { kind: "recoveryFailed" });
+    h.requests.length = 0;
+    const result = await h.feature.handleManagedThreadRequest({
+      id: "status", method: "workbench/thread/status",
+      params: { callerThreadId: h.provider.identity.threadId, cwd: "C:/workspace", status: "completed" },
+    });
+    assert.equal(result.error, undefined);
+    assert.equal((await h.read())?.lifecycle.kind, "completed");
+    assert.deepEqual(h.requests, []);
+  } finally { await h.feature.dispose(); }
 });
 
 test("Codex MCP admission reads thread metadata without hydrating transcript turns", async () => {

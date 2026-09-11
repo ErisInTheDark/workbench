@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadDraft, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
@@ -37,6 +37,39 @@ function seedIdentities(database: Database.Database, projectId: string, ...nativ
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
   }).threadId);
 }
+
+test("lifecycle upgrade preserves existing facts and permits thread-owned turnless states", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    installWorkbenchDatabaseSchema(database, { targetVersion: 24 });
+    const [threadId] = seedIdentities(database, "project", "thread");
+    assert.ok(threadId);
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const record: WorkbenchThreadStateRecord = {
+      entryKind: "thread", identity: { harness: "codex", threadId }, title: "Keep this title", activityAt: 7,
+      lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working" }, settled: false },
+      metadata: { archived: false, pinned: true, snoozed: false },
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    };
+    repository.writeRecords([record]);
+    const before = database.prepare("SELECT * FROM workbench_thread_lifecycle").all();
+    const selection = { selection: "threads" as const, threadIds: [threadId] };
+    const saved = repository.readRecords(selection);
+    installWorkbenchDatabaseSchema(database);
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_lifecycle").all(), before);
+    assert.deepEqual(repository.readRecords(selection), saved);
+    for (const lifecycle of [
+      { kind: "completed", reason: "agentCompleted", agent: { agentStatus: "completed" }, settled: false },
+      { kind: "needsAttention", reason: "agentBlocked", agent: { agentStatus: "blocked" }, settled: false },
+      { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false },
+    ] satisfies WorkbenchThreadLifecycle[]) {
+      repository.writeRecords([{ ...record, lifecycle }]);
+      assert.deepEqual(repository.readRecords(selection)[0]?.lifecycle, lifecycle);
+    }
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
 
 test("relational batches roll back invalid references and preserve valid draft promotion", () => {
   const database = openDatabase();

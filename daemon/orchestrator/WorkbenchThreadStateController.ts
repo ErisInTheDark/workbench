@@ -12,6 +12,7 @@ import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-p
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { DraftIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
@@ -871,8 +872,9 @@ export default class WorkbenchThreadStateController {
         : event;
       const retainedQuestionnaire = existing.entryKind === "thread"
         && existing.lifecycle.kind === "needsAttention"
-        && existing.pendingQuestionnaire?.turnId === (event.kind === "turnCompleted" ? event.turnId : null)
-        && event.kind === "turnCompleted" && event.status === "interrupted";
+        && existing.pendingQuestionnaire
+        && !isWorkbenchApprovalRequest(existing.pendingQuestionnaire.request)
+        && event.kind === "turnCompleted";
       const lifecycle = retainedQuestionnaire ? existing.lifecycle : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
       const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && (
         event.kind === "acceptedIntent"
@@ -961,6 +963,37 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(projectId);
     return this.naturallyOrderedEntries(state).find(entry => entry.entryKind !== "draft"
       && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
+  }
+
+  async getCanonicalThreadEntry(projectId: ProjectId, threadId: WorkbenchThreadId) {
+    const state = await this.getProject(projectId);
+    return [...state.entries.values()].find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId) ?? null;
+  }
+
+  async setAgentStatus(projectId: ProjectId, threadId: WorkbenchThreadId, status: "completed" | "blocked") {
+    const entry = await this.getCanonicalThreadEntry(projectId, threadId);
+    if (!entry || entry.entryKind === "draft") throw new Error("The managed thread has no stored thread state.");
+    const next = await this.applyLifecycle(projectId, entry.identity.harness, threadId, { kind: "agentStatus", status });
+    if (!next || !("agent" in next.lifecycle) || next.lifecycle.agent?.agentStatus !== status) {
+      throw new Error("The thread status was not applied.");
+    }
+    return next;
+  }
+
+  async setPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) {
+    const entry = await this.getCanonicalThreadEntry(projectId, threadId);
+    if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
+    const next = await this.applyLifecycle(projectId, entry.identity.harness, threadId,
+      { kind: "pendingInput", requestKey: questionnaire.requestKey }, undefined, { kind: "set", questionnaire });
+    if (!next) throw new Error("The questionnaire could not be stored.");
+    return next;
+  }
+
+  async clearPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, requestKey: string) {
+    const entry = await this.getCanonicalThreadEntry(projectId, threadId);
+    if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
+    return this.applyLifecycle(projectId, entry.identity.harness, threadId,
+      { kind: "inputResolved", requestKey }, undefined, { kind: "clear", requestKey });
   }
 
   async getRevision(projectId: ProjectId) {
@@ -2575,7 +2608,7 @@ export default class WorkbenchThreadStateController {
     const candidate = state.entries.get(key);
     const snoozingQuestionnaire = request.method === "workbench/thread-state/questionnaire/snooze";
     const snoozeQuestionnaire = snoozingQuestionnaire && candidate?.entryKind === "thread"
-      && !candidate.metadata.archived && candidate.lifecycle.kind !== "working"
+      && !candidate.metadata.archived
       && candidate.pendingQuestionnaire?.requestKey === request.requestKey
       ? candidate.pendingQuestionnaire : null;
     if (snoozingQuestionnaire && !snoozeQuestionnaire) return { accepted: false, revision: state.revision };
@@ -2600,12 +2633,13 @@ export default class WorkbenchThreadStateController {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
       if (interruptedQuestionnaire && (
-        entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.kind === "working"
+        entry.entryKind !== "thread" || entry.metadata.archived
         || entry.pendingQuestionnaire?.requestKey !== interruptedQuestionnaire.requestKey
         || entry.pendingQuestionnaire.itemId !== interruptedQuestionnaire.itemId
-        || entry.pendingQuestionnaire.turnId !== interruptedQuestionnaire.turnId
-        || (getWorkbenchLifecycleTurnId(entry.lifecycle) !== null
-          && getWorkbenchLifecycleTurnId(entry.lifecycle) !== interruptedQuestionnaire.turnId)
+        || (entry.lifecycle.kind === "working"
+          && getWorkbenchLifecycleTurnId(entry.lifecycle) !== getWorkbenchLifecycleTurnId(
+            candidate && candidate.entryKind !== "draft" ? candidate.lifecycle : null,
+          ))
       )) return { accepted: false, revision: state.revision };
       if (request.method === "workbench/thread-state/status/set" && (
         entry.entryKind !== "thread"
@@ -2631,9 +2665,7 @@ export default class WorkbenchThreadStateController {
       if (snoozeQuestionnaire && entry.entryKind === "thread") {
         next = {
           ...entry,
-          lifecycle: snoozeQuestionnaire.turnId
-            ? { kind: "needsAttention", reason: "pendingInput", requestKey: snoozeQuestionnaire.requestKey, turnId: snoozeQuestionnaire.turnId, settled: false }
-            : { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+          lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: snoozeQuestionnaire.requestKey, settled: false },
           metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: true },
           snoozedUntil: null,
         };

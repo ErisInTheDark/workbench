@@ -2,7 +2,7 @@
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
- * - default CodexStdioBridge: translate requests, questionnaires, and messages around a stable app-server.
+ * - default CodexStdioBridge: own request translation, creation diagnostics, questionnaires, and passive patch context around a stable app-server.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -115,7 +115,7 @@ import CodexTranscriptRecordingController, {
   CodexTranscriptSqliteRecordingFailure,
 } from "./CodexTranscriptRecordingController";
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
-import { logError } from "./process-helpers";
+import { log, logError } from "./process-helpers";
 import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
 import {
@@ -1228,9 +1228,7 @@ export default class CodexStdioBridge {
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
     if (message.method === "thread/start" && this.createThread) {
-      const response = await this.enqueueCommand(() => this.createThread!(
-        message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
-      ));
+      const response = await this.createManagedThread(message);
       this.sendToClient(client, { ...response, id: clientRequestId });
       return;
     }
@@ -1273,9 +1271,7 @@ export default class CodexStdioBridge {
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
     if (message.method === "thread/start" && this.createThread) {
-      return this.enqueueCommand(() => this.createThread!(
-        message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
-      ));
+      return this.createManagedThread(message);
     }
     if (message.method === WORKBENCH_TOOL_CONTEXT_METHOD) {
       this.assertAcceptingWork();
@@ -1773,18 +1769,19 @@ export default class CodexStdioBridge {
       };
       await this.recordPatchFindings(threadId, turnId, findings.item);
     }
-    if (!isThreadStatusActive(thread.status)) throw new Error("Passive context requires an active originating turn; no turn was started.");
-    const turns = await this.dispatchManagedProviderRequest({
-      method: "thread/turns/list",
-      params: { threadId, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
-    }, signal);
-    signal.throwIfAborted();
-    if (turns.error) throw new Error(getJsonRpcErrorMessage(turns) ?? "Could not read the active turn.");
-    const data = asRecord(turns.result)?.data;
-    const active = Array.isArray(data) ? this.readManagedActiveTurn(thread, data as Turn[]) : null;
-    if (active?.id !== turnId) throw new Error("The originating turn is no longer active; passive context was not sent.");
+    if (!patch) {
+      if (!isThreadStatusActive(thread.status)) throw new Error("Passive context requires an active originating turn; no turn was started.");
+      const turns = await this.dispatchManagedProviderRequest({
+        method: "thread/turns/list",
+        params: { threadId, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
+      }, signal);
+      signal.throwIfAborted();
+      if (turns.error) throw new Error(getJsonRpcErrorMessage(turns) ?? "Could not read the active turn.");
+      const data = asRecord(turns.result)?.data;
+      const active = Array.isArray(data) ? this.readManagedActiveTurn(thread, data as Turn[]) : null;
+      if (active?.id !== turnId) throw new Error("The originating turn is no longer active; passive context was not sent.");
+    }
     if (this.pendingResponses.get(Number(pending.upstreamRequest.id)) !== pending) return;
-    if (patch && patch.approvalId === null) throw new Error("The patch approval resolved before recovery context could be queued.");
     this.assertAcceptingWork();
     const { id, name, namespace, output } = context.item;
     pending.upstreamRequest = {
@@ -1903,6 +1900,33 @@ export default class CodexStdioBridge {
     }
   }
 
+  traceThreadCreation(requestId: JsonRpcRequest["id"], phase: string, upstreamId?: JsonRpcRequest["id"]) {
+    const safeId = (value: JsonRpcRequest["id"]) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 120);
+    const fields = [
+      ...(requestId === undefined || requestId === null ? [] : [`request: ${safeId(requestId)}`]),
+      `phase: ${phase}`,
+      ...(upstreamId === undefined || upstreamId === null ? [] : [`upstream: ${safeId(upstreamId)}`]),
+    ];
+    log("orchestrator", `WS codex:thread/start phase (${fields.join(", ")})`);
+  }
+
+  private async createManagedThread(message: JsonRpcRequest) {
+    this.traceThreadCreation(message.id, "queued");
+    return this.enqueueCommand(async () => {
+      this.traceThreadCreation(message.id, "dispatch");
+      try {
+        const response = await this.createThread!(
+          message, request => this.dispatchManagedProviderRequest(request, this.generation.signal), this.generation.signal,
+        );
+        this.traceThreadCreation(message.id, response.error ? "failed" : "completed");
+        return response;
+      } catch (error) {
+        this.traceThreadCreation(message.id, "failed");
+        throw error;
+      }
+    });
+  }
+
   private async dispatchRequest(
     message: JsonRpcRequest,
     {
@@ -1919,6 +1943,7 @@ export default class CodexStdioBridge {
   ) {
     const signal = AbortSignal.any([this.generation.signal, ...(callerSignal ? [callerSignal] : [])]);
     signal.throwIfAborted();
+    const callerRequestId = message.id ?? null;
     const upstreamRequestId = this.nextUpstreamRequestId();
     const requestSource: WorkbenchRequestSource = internal
       ? message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh"
@@ -1927,6 +1952,7 @@ export default class CodexStdioBridge {
       : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
+    if (method === "thread/start") this.traceThreadCreation(message.id, "instruction-augmentation", upstreamRequestId);
     const upstreamMessage = createUpstreamRequest(await this.instructions.augment(message, method), upstreamRequestId);
     signal.throwIfAborted();
 
@@ -1940,7 +1966,7 @@ export default class CodexStdioBridge {
           method,
           reject,
           requestSource,
-          resolve,
+          resolve: response => resolve({ ...response, id: callerRequestId }),
           threadHydration,
           upstreamRequest: upstreamMessage,
         });
@@ -1961,6 +1987,7 @@ export default class CodexStdioBridge {
       }
       try {
         signal.throwIfAborted();
+        if (method === "thread/start") this.traceThreadCreation(message.id, "native-send", upstreamRequestId);
         this.send(upstreamMessage);
       } catch (error) {
         this.pendingResponses.delete(upstreamRequestId);
@@ -1995,6 +2022,7 @@ export default class CodexStdioBridge {
     }
     try {
       signal.throwIfAborted();
+      if (method === "thread/start") this.traceThreadCreation(message.id, "native-send", upstreamRequestId);
       this.send(upstreamMessage);
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
@@ -2100,8 +2128,10 @@ export default class CodexStdioBridge {
     }
 
     this.pendingResponses.delete(Number(message.id));
+    if (pending.method === "thread/start") this.traceThreadCreation(undefined, "native-response", message.id);
     try {
       await this.settleUpstreamResponse(pending, message);
+      if (pending.method === "thread/start") this.traceThreadCreation(undefined, "response-settled", message.id);
     } catch (error) {
       // Removing a pending response transfers settlement here. Identity failure
       // must reject that caller, never leave it waiting forever.

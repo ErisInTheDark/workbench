@@ -143,6 +143,66 @@ function bridgeThread(items: ThreadItem[] = []) {
   };
 }
 
+for (const route of ["managed-creation", "internal", "browser"] as const) {
+  for (const failed of [false, true]) {
+    test(`${route} preserves caller correlation for provider ${failed ? "errors" : "results"}`, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-correlation-"));
+      const sent: unknown[] = [];
+      const upstreamIds: JsonRpcRequest["id"][] = [];
+      const payload = failed
+        ? { error: { code: -32000, message: "Provider refused the request." } }
+        : { result: route === "managed-creation" ? { thread: { ...bridgeThread(), turns: [] } } : { data: [] } };
+      const bridge = new CodexStdioBridge({
+        appServer: { send(request: JsonRpcRequest) {
+          upstreamIds.push(request.id);
+          queueMicrotask(() => void bridge.handleUpstreamMessage({ ...payload, id: request.id ?? null }));
+        } } as unknown as CodexAppServer,
+        bridgeUrl: "ws://127.0.0.1:1",
+        createThread: (request, create) => create(request),
+        resolveProjectFromCwd: async () => ({
+          cwd: "C:/repo",
+          project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+          root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+        }),
+        handleWorkbenchRequest: rejectWorkbenchRequest,
+        instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+        onNotification() {},
+        sendToClient(_client, response) { sent.push(response); },
+        storageRoot: root,
+      });
+      try {
+        const request = {
+          id: "caller-request",
+          method: route === "managed-creation" ? "thread/start" : "model/list",
+          params: { cwd: "C:/repo" },
+        };
+        let response: unknown;
+        if (route === "browser") {
+          await bridge.forwardRequest(request, {} as BridgeClient, "browser-request");
+          await bridge.waitForIdle();
+          assert.equal(sent.length, 1);
+          response = sent[0];
+        } else {
+          response = route === "managed-creation"
+            ? await bridge.handleBridgeRequest(request)
+            : await bridge.handleServerRequest(request);
+        }
+        assert.equal(upstreamIds.length, 1);
+        assert.notEqual(upstreamIds[0], request.id);
+        assert.equal((response as JsonRpcResponse).id, route === "browser" ? "browser-request" : request.id);
+        if (failed || route !== "managed-creation") {
+          assert.deepEqual(response, { ...payload, id: route === "browser" ? "browser-request" : request.id });
+        } else {
+          assert.equal(((response as JsonRpcResponse).result as { thread: Thread }).thread.id, "thread");
+        }
+      } finally {
+        await bridge.dispose();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 test("bridge admits public identity before structural publication and records the same identity without blocking deltas on bodies", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-identity-"));
   const database = new Database(":memory:");
@@ -498,22 +558,32 @@ test("stats usage hydration reads Workbench journals without requesting provider
   }
 });
 
-for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload", "restart"] as const) {
+for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload", "restart", "ended-before-delivery"] as const) {
   test(`automatic patch recovery settles ${settlement} through the pending response owner`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
     await fs.writeFile(path.join(root, "target.txt"), "new\n");
     const upstreamMessages: JsonRpcRequest[] = [];
     const notifications: Array<{ method?: string; params?: unknown }> = [];
     const pendingUserInputRequests = new Map();
-    const metadata = { ...bridgeThread(), cwd: root, turns: [] };
+    const metadata = { ...bridgeThread(), cwd: root, turns: [],
+      status: bridgeThread().status as import("workbench-shared/codex/generated/app-server/v2/Thread").Thread["status"],
+    };
     const options: ConstructorParameters<typeof CodexStdioBridge>[0] = {
       appServer: { send(message: JsonRpcRequest) {
         upstreamMessages.push(message);
         if (message.method === "thread/read" || message.method === "thread/turns/list") {
-          queueMicrotask(() => void bridge.handleUpstreamMessage({
-            id: message.id,
-            result: message.method === "thread/read" ? { thread: metadata } : { data: bridgeThread().turns },
-          }));
+          queueMicrotask(() => void (async () => {
+            if (settlement === "ended-before-delivery" && message.method === "thread/read") {
+              metadata.status = { type: "idle" };
+              await bridge.handleUpstreamMessage({ method: "turn/completed", params: {
+                threadId: "thread", turn: { ...bridgeThread().turns[0], status: "completed", items: [] },
+              } });
+            }
+            await bridge.handleUpstreamMessage({
+              id: message.id,
+              result: message.method === "thread/read" ? { thread: metadata } : { data: bridgeThread().turns },
+            });
+          })());
         }
       } } as unknown as CodexAppServer,
       bridgeUrl: "ws://127.0.0.1:1",
@@ -574,7 +644,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
         : { id: injection.id, result: {} });
       await bridge.waitForIdle();
       const decisions = upstreamMessages.filter((message) => message.id === 10);
-      assert.equal(decisions.length, ["resolved", "cancelled", "restart"].includes(settlement) ? 0 : 1);
+      assert.equal(decisions.length, ["resolved", "cancelled", "restart", "ended-before-delivery"].includes(settlement) ? 0 : 1);
       if (decisions.length) assert.deepEqual(decisions[0], { id: 10, result: { decision: "decline" } });
       assert.equal(upstreamMessages.some((message) => message.method === "turn/steer" || message.method === "turn/start"), false);
       const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };

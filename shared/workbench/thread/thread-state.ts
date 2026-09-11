@@ -42,7 +42,7 @@
  * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
- * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection.
+ * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: thread-owned status, provider-event fencing, and direct-child status projection.
  * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent or approval authority.
  * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules.
  */
@@ -202,6 +202,7 @@ const AgentTurnSchema = z.object({
   agentStatus: z.enum(["working", "completed", "blocked"]),
   turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">(),
 }).strict();
+const AgentStatusSchema = AgentTurnSchema.partial({ turnId: true });
 
 const WorkingLifecycleSchema = z.object({
   agent: z.object({ agentStatus: z.literal("working"), turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
@@ -211,9 +212,9 @@ const WorkingLifecycleSchema = z.object({
 }).strict();
 
 const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
-  z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
+  z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("noActiveTurn"), settled: z.literal(false) }).strict(),
-  z.object({ agent: AgentTurnSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
+  z.object({ agent: AgentStatusSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
 ]);
 
 const LegacyNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
@@ -223,14 +224,14 @@ const LegacyNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
 ]);
 
 const CompletedLifecycleSchema = z.discriminatedUnion("reason", [
-  z.object({ agent: AgentTurnSchema.extend({ agentStatus: z.literal("completed") }), kind: z.literal("completed"), reason: z.literal("agentCompleted"), settled: z.boolean() }).strict(),
-  z.object({ agent: AgentTurnSchema.optional(), kind: z.literal("completed"), reason: z.literal("userCompleted"), settled: z.boolean() }).strict(),
+  z.object({ agent: AgentStatusSchema.extend({ agentStatus: z.literal("completed") }), kind: z.literal("completed"), reason: z.literal("agentCompleted"), settled: z.boolean() }).strict(),
+  z.object({ agent: AgentStatusSchema.optional(), kind: z.literal("completed"), reason: z.literal("userCompleted"), settled: z.boolean() }).strict(),
   z.object({ kind: z.literal("completed"), reason: z.literal("providerInactive"), settled: z.boolean() }).strict(),
 ]);
 
 const StoppedLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({ kind: z.literal("stopped"), reason: z.literal("providerInterrupted"), settled: z.boolean(), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
-  z.object({ agent: AgentTurnSchema.optional(), kind: z.literal("stopped"), reason: z.literal("userMarkedStopped"), settled: z.boolean() }).strict(),
+  z.object({ agent: AgentStatusSchema.optional(), kind: z.literal("stopped"), reason: z.literal("userMarkedStopped"), settled: z.boolean() }).strict(),
 ]);
 
 export const WorkbenchThreadLifecycleSchema = z.union([
@@ -910,9 +911,9 @@ export function createWorkbenchThreadPlanIntersectionSelector(identity: { harnes
 export type WorkbenchLifecycleEvent =
   | { kind: "acceptedIntent"; turnId: WorkbenchTurnId }
   | { kind: "userInputDelivered"; turnId: WorkbenchTurnId }
-  | { kind: "pendingInput"; requestKey: string; turnId: WorkbenchTurnId }
-  | { kind: "inputResolved"; requestKey: string; turnId: WorkbenchTurnId }
-  | { kind: "agentStatus"; status: "completed" | "blocked"; turnId: WorkbenchTurnId }
+  | { kind: "pendingInput"; requestKey: string; turnId?: WorkbenchTurnId }
+  | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId }
+  | { kind: "agentStatus"; status: "completed" | "blocked"; turnId?: WorkbenchTurnId }
   | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId }
   | { kind: "recoveryFailed" }
   | { kind: "providerSystemError" }
@@ -957,21 +958,25 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
     case "pendingInput":
-      if (currentTurnId && currentTurnId !== event.turnId) return current!;
-      return { kind: "needsAttention", reason: "pendingInput", requestKey: event.requestKey, settled: false, turnId: event.turnId };
+      if (event.turnId && currentTurnId && currentTurnId !== event.turnId) return current!;
+      return { kind: "needsAttention", reason: "pendingInput", requestKey: event.requestKey, settled: false, ...(event.turnId ? { turnId: event.turnId } : {}) };
     case "inputResolved":
-      if (current?.kind !== "needsAttention" || current.reason !== "pendingInput" || current.requestKey !== event.requestKey || current.turnId !== event.turnId) return current!;
-      return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
-    case "agentStatus":
-      if (currentTurnId !== event.turnId) return current!;
+      if (current?.kind !== "needsAttention" || current.reason !== "pendingInput" || current.requestKey !== event.requestKey
+        || (event.turnId && current.turnId !== event.turnId)) return current!;
+      return { agent: { agentStatus: "working", ...(currentTurnId ? { turnId: currentTurnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false };
+    case "agentStatus": {
+      if (event.turnId && currentTurnId !== event.turnId) return current!;
+      const turn = event.turnId ?? currentTurnId;
+      const placement = turn ? { turnId: turn } : {};
       return event.status === "completed"
-        ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
-        : { agent: { agentStatus: "blocked", turnId: event.turnId }, kind: "needsAttention", reason: "agentBlocked", settled: false };
+        ? { agent: { agentStatus: "completed", ...placement }, kind: "completed", reason: "agentCompleted", settled: false }
+        : { agent: { agentStatus: "blocked", ...placement }, kind: "needsAttention", reason: "agentBlocked", settled: false };
+    }
     case "turnCompleted": {
-      if (currentTurnId !== event.turnId) return current!;
-      if (event.status === "interrupted") return { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: event.turnId };
       if (current?.kind === "completed" && current.reason === "agentCompleted") return current;
       if (current?.kind === "needsAttention" && current.reason === "agentBlocked") return current;
+      if (currentTurnId !== event.turnId) return current!;
+      if (event.status === "interrupted") return { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: event.turnId };
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "recoveryFailed": return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
@@ -980,14 +985,14 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     case "userCompleted": {
-      const agent = current && "agent" in current && current.agent?.turnId
-        ? { agentStatus: current.agent.agentStatus, turnId: current.agent.turnId }
+      const agent = current && "agent" in current && current.agent
+        ? current.agent
         : undefined;
       return { ...(agent ? { agent } : {}), kind: "completed", reason: "userCompleted", settled: false };
     }
     case "userStopped": {
-      const agent = current && "agent" in current && current.agent?.turnId
-        ? { agentStatus: current.agent.agentStatus, turnId: current.agent.turnId }
+      const agent = current && "agent" in current && current.agent
+        ? current.agent
         : undefined;
       return { ...(agent ? { agent } : {}), kind: "stopped", reason: "userMarkedStopped", settled: false };
     }

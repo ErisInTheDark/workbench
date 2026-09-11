@@ -131,7 +131,7 @@ test("a completed relational database upgrades without losing its saved profile"
   const controller = new WorkbenchDatabaseController({ databasePath });
   try {
     const inventory = await controller.start();
-    assert.equal(inventory.schemaVersion, databaseReleases.profileContextWindows.version);
+    assert.equal(inventory.schemaVersion, WORKBENCH_DATABASE_SCHEMA_VERSION);
     await controller.close();
     const upgraded = new Database(databasePath);
     try {

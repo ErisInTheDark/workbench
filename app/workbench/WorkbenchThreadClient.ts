@@ -5520,9 +5520,6 @@ function WorkbenchThreadClient(
       }
       let thread = getPendingUserInputRequestThread(pendingRequest);
       const originalTurnId = options.turnId ?? pendingRequest.turnId ?? (thread ? getCurrentTurn(thread)?.id ?? null : null);
-      if (!originalTurnId) {
-        throw new Error("The saved questionnaire has no owning turn ID.");
-      }
       if (!thread) {
         const metadata = await sendBridgeRequest<ThreadReadResponse>(pendingRequest.harness, {
           method: "thread/read",
@@ -5541,7 +5538,7 @@ function WorkbenchThreadClient(
           metadata.thread, pendingRequest.harness, metadata.thread.model, metadata.thread.reasoningEffort,
         ));
       }
-      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
+      const historyFields: Omit<WorkbenchQuestionnaireHistoryEntryState, "turnId"> = {
         insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
         insertAfterItemIndex: options.insertAfterItemIndex ?? null,
         itemId: pendingRequest.itemId,
@@ -5554,7 +5551,6 @@ function WorkbenchThreadClient(
           ),
         },
         threadId: pendingRequest.threadId,
-        turnId: WorkbenchTurnIdSchema.parse(originalTurnId),
       };
       let admittedTurnId: string | null = null;
       await sendThreadMessage(
@@ -5572,6 +5568,10 @@ function WorkbenchThreadClient(
       if (!admittedTurnId) {
         throw new Error("The questionnaire response turn was not admitted.");
       }
+      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
+        ...historyFields,
+        turnId: WorkbenchTurnIdSchema.parse(originalTurnId ?? admittedTurnId),
+      };
       let transcriptWarning: string | null = null;
       if (pendingRequest.harness === "codex") {
         try {
@@ -5621,6 +5621,7 @@ function WorkbenchThreadClient(
       }
     }
 
+    const submissionTurnId = options.turnId ?? getPendingUserInputRequestTurnId(pendingRequest);
     const submitResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>(pendingRequest.harness, {
       method: "questionnaire/respond",
       params: {
@@ -5629,7 +5630,7 @@ function WorkbenchThreadClient(
         response,
         requestKey: pendingRequest.requestKey,
         threadId,
-        turnId: options.turnId ?? pendingRequest.turnId,
+        turnId: submissionTurnId,
       },
     });
     if (disposed || submissionProjectGeneration !== projectContextGeneration) {
@@ -5648,7 +5649,7 @@ function WorkbenchThreadClient(
       if (recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
         insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
         insertAfterItemIndex: options.insertAfterItemIndex ?? null,
-        turnId: options.turnId ?? pendingRequest.turnId,
+        turnId: submissionTurnId,
       })) {
         refreshFinalVisibleQuestionnaireHistory(threadId);
       }

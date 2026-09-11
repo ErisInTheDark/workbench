@@ -9,7 +9,7 @@
  * - coreTables: current core table inventory.
  * - CoreSchemaRows: selected row types for current core tables.
  * - coreSchemaHistory: private core table histories.
- * - defineThreadDomainCoreSchema: indexed project identity and constrained lifecycle for relational thread-state cutover.
+ * - defineThreadDomainCoreSchema: indexed project identity and versioned thread-owned lifecycle constraints.
  */
 import databaseReleases from "./releases.ts";
 import {
@@ -311,12 +311,43 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       `),
     ],
   }));
+  const threadOwnedLifecycle = evolveTable(lifecycle, {
+    extras: (table) => ({
+      constraints: [
+        foreignKey([table.turn_id, table.thread_id], {
+          table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+        }),
+        check(sql`
+          (${table.lifecycle_kind} = ${literal("working")} AND ${table.reason} = ${literal("acceptedIntent")}
+            AND ${table.settled} = ${literal(0)} AND ${table.request_key} IS NULL AND ${table.agent_status} IS ${literal("working")})
+          OR (${table.lifecycle_kind} = ${literal("needsAttention")} AND ${table.settled} = ${literal(0)} AND (
+            (${table.reason} = ${literal("noActiveTurn")} AND ${table.turn_id} IS NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("pendingInput")} AND ${table.request_key} IS NOT NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("agentBlocked")} AND ${table.request_key} IS NULL AND ${table.agent_status} IS ${literal("blocked")})
+          ))
+          OR (${table.lifecycle_kind} = ${literal("completed")} AND ${table.request_key} IS NULL AND (
+            (${table.reason} = ${literal("agentCompleted")} AND ${table.agent_status} IS ${literal("completed")})
+            OR (${table.reason} = ${literal("providerInactive")} AND ${table.turn_id} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("userCompleted")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+          ))
+          OR (${table.lifecycle_kind} = ${literal("stopped")} AND ${table.request_key} IS NULL AND (
+            (${table.reason} = ${literal("providerInterrupted")} AND ${table.turn_id} IS NOT NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("userMarkedStopped")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+          ))
+        `),
+      ],
+    }),
+  });
   const lifecycleHistory = defineTableHistory({
-    current: lifecycle,
+    current: threadOwnedLifecycle,
     versions: [
       ...workbenchThreadLifecycleHistory.versions,
       tableVersion({
         schemaVersion, table: lifecycle, migration: rebuildTable({ from: workbenchThreadLifecycleV1, to: lifecycle }),
+      }),
+      tableVersion({
+        schemaVersion: databaseReleases.threadOwnedLifecycle.version, table: threadOwnedLifecycle,
+        migration: rebuildTable({ from: lifecycle, to: threadOwnedLifecycle }),
       }),
     ],
   });

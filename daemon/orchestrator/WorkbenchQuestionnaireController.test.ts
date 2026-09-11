@@ -125,15 +125,45 @@ test("freeform request publishes one durable question and returns its correlated
   await nextWaiting;
 });
 
+for (const fails of [false, true]) {
+  test(`interruption retains the pending tool until provider ${fails ? "failure" : "success"}`, async () => {
+    const h = createHarness();
+    const abort = new AbortController();
+    let settled = false;
+    const waiting = h.controller.request(freeformInput, abort.signal).then(
+      () => { settled = true; }, () => { settled = true; },
+    );
+    const question = await h.published;
+    let interrupted = false;
+    const stopping = h.controller.interruptRetainingQuestionnaire(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey, async () => {
+      interrupted = true;
+      abort.abort();
+      await Promise.resolve();
+      assert.equal(settled, false);
+      assert.equal(h.clearCount(), 0);
+      if (fails) throw new Error("provider stop failed");
+      return true;
+    });
+    if (fails) await assert.rejects(stopping, /provider stop failed/u);
+    else await stopping;
+    await waiting;
+    assert.equal(interrupted, true);
+    assert.equal(settled, true);
+    assert.deepEqual(h.readPending(), question);
+    assert.equal(h.clearCount(), 0);
+    await h.controller.dispose();
+  });
+}
+
 test("interruption releases only the matching waiter and preserves its durable question after caller abort", async () => {
   const h = createHarness();
   const abort = new AbortController();
   const waiting = h.controller.request(freeformInput, abort.signal);
   const question = await h.published;
-  await h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], "stale");
+  await h.controller.interruptRetainingQuestionnaire(fixtureIdentityValues.NativeThreadId["thread-one"], "stale", async () => true);
   assert.equal(h.controller.list().data.length, 1);
   const rejected = assert.rejects(waiting, /being interrupted/u);
-  await h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey);
+  await h.controller.interruptRetainingQuestionnaire(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey, async () => true);
   await rejected;
   abort.abort();
   assert.deepEqual(h.readPending(), question);
@@ -153,7 +183,7 @@ test("answer persistence wins interruption, while failed persistence retains the
     const response = { answers: { details: { answers: ["proceed"] } } };
     const answering = h.controller.respond({ threadId: fixtureIdentityValues.NativeThreadId["thread-one"], requestKey: question.requestKey, response });
     await started.promise;
-    const released = h.controller.releaseForInterruption(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey);
+    const released = h.controller.interruptRetainingQuestionnaire(fixtureIdentityValues.NativeThreadId["thread-one"], question.requestKey, async () => true);
     if (fails) {
       const answerFailure = assert.rejects(answering, /write failed/u);
       const waitFailure = assert.rejects(waiting, /being interrupted/u);

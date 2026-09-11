@@ -6,12 +6,12 @@
  * - mapNativeThreadStateResult: derive draft wire aliases in canonical open and context responses.
  * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation and observation targets.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
- * - createNativeQuestionnaireStatePorts: bridge native questionnaire ownership to canonical thread state.
+ * - createNativeQuestionnaireStatePorts: validate questionnaire thread ownership without live-turn admission.
  */
 import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import { getWorkbenchLifecycleTurnId, serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -36,7 +36,7 @@ import type { WorkbenchQuestionnaireControllerOptions } from "./WorkbenchQuestio
 
 export function createNativeQuestionnaireStatePorts(
   owners: NativeTranscriptIdentityOwners,
-  state: Pick<WorkbenchThreadStateController, "observeLifecycle" | "getSnapshot" | "subscribe">,
+  state: Pick<WorkbenchThreadStateController, "getCanonicalThreadEntry" | "setPendingQuestionnaire" | "clearPendingQuestionnaire" | "subscribe">,
   resolveProject: (cwd: string) => Promise<ProjectId>,
 ): Pick<WorkbenchQuestionnaireControllerOptions, "clearPending" | "publishPending" | "resolveThread" | "subscribePending"> {
   const { threads, items } = owners;
@@ -48,14 +48,14 @@ export function createNativeQuestionnaireStatePorts(
   const nativeTurn = async (threadId: WorkbenchThreadId, nativeThreadId: NativeThreadId, turnId: WorkbenchTurnId) => {
     const turn = await threads.resolveTurn({ threadId, turnId });
     if (!turn || turn.native.harness !== "codex" || turn.native.nativeThreadId !== nativeThreadId || turn.native.nativeTurnId === null) {
-      throw new Error("The questionnaire turn does not belong to the caller's native execution.");
+      return null;
     }
     return turn.native.nativeTurnId;
   };
   return {
     clearPending: async (threadId, requestKey) => {
       const thread = await resolveThread(threadId);
-      await state.observeLifecycle("codex", thread.threadId, { kind: "inputResolved", requestKey });
+      await state.clearPendingQuestionnaire(thread.projectId, thread.threadId, requestKey);
     },
     publishPending: async (threadId, questionnaire) => {
       const thread = await resolveThread(threadId);
@@ -73,23 +73,17 @@ export function createNativeQuestionnaireStatePorts(
         itemId = item.itemId;
       }
       const canonical = { ...questionnaire, itemId, turnId: turn?.turnId ?? null };
-      await state.observeLifecycle("codex", thread.threadId, {
-        kind: "pendingInput", questionnaire: canonical, requestKey: questionnaire.requestKey, turnId: canonical.turnId,
-      });
+      await state.setPendingQuestionnaire(thread.projectId, thread.threadId, canonical);
     },
     resolveThread: async (cwd, threadId) => {
       const projectId = await resolveProject(cwd);
       const thread = await resolveThread(threadId, projectId);
-      const snapshot = await state.getSnapshot(projectId);
-      const entry = snapshot.entries.find(candidate => candidate.entryKind !== "draft"
-        && candidate.identity.harness === "codex" && candidate.identity.threadId === thread.threadId);
-      if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
-      const turnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
-      if (!turnId) throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
+      const entry = await state.getCanonicalThreadEntry(projectId, thread.threadId);
+      if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire caller has no stored thread in this cwd project.");
       const pending = entry.pendingQuestionnaire;
       return {
         projectId,
-        turnId: await nativeTurn(thread.threadId, threadId, turnId),
+        turnId: null,
         pendingQuestionnaire: pending ? {
           ...pending,
           turnId: pending.turnId === null ? null : await nativeTurn(thread.threadId, threadId, pending.turnId),
@@ -97,7 +91,7 @@ export function createNativeQuestionnaireStatePorts(
       };
     },
     subscribePending: listener => state.subscribe((projectId, entry) => {
-      if (entry.entryKind === "draft" || entry.identity.harness !== "codex") return;
+      if (entry.entryKind === "draft") return;
       const thread = threads.knownThread(entry.identity.threadId);
       if (thread.projectId !== projectId) throw new Error("Questionnaire observation crossed project ownership.");
       for (const binding of thread.bindings) {

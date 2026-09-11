@@ -10,7 +10,7 @@ import WorkbenchTranscriptIdentityRepository from "./database/transcript/Workben
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import { mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
+import { createNativeQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -54,6 +54,26 @@ test("observation requests validate canonical ownership and outbound state needs
       nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
     });
     const owners = { threads, items };
+    const entry = {
+      entryKind: "thread" as const, identity: { harness: "codex" as const, threadId: thread.threadId },
+      activityAt: 1, title: "Thread", metadata: { archived: false as const, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+      profile: null, mcpGeneration: null, snoozedUntil: null, settledAt: null, gitHistoryCleanedAt: null,
+      providerObserved: true,
+    };
+    const questionnaireState = {
+      getCanonicalThreadEntry: async () => entry,
+      setPendingQuestionnaire: async () => entry,
+      clearPendingQuestionnaire: async () => entry,
+      subscribe: () => () => true,
+    };
+    const ports = createNativeQuestionnaireStatePorts(owners, questionnaireState, async cwd => (
+      cwd === "/repo" ? thread.projectId : fixtureIdentityValues.ProjectId.foreign
+    ));
+    const admittedQuestionnaire = await ports.resolveThread("/repo", native.nativeThreadId);
+    assert.equal(admittedQuestionnaire.projectId, thread.projectId);
+    assert.equal(admittedQuestionnaire.turnId, null);
+    await assert.rejects(ports.resolveThread("/foreign", native.nativeThreadId));
     const [question] = await items.admit([{ threadId: thread.threadId, sources: [], legacyAliases: [] }]);
     const source: WorkbenchThreadObservationSnapshot = {
       projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",
@@ -87,14 +107,14 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.equal(pushed.projectId, source.projectId);
     assert.equal(pushed.subscriptionId, source.subscriptionId);
     assert.equal(pushed.target.threadId, thread.threadId);
-    const entry = pushed.entries[0]!;
-    assert.ok(entry.entryKind !== "draft");
-    assert.equal(entry.identity.threadId, thread.threadId);
-    assert.ok("turnId" in entry.lifecycle);
-    assert.equal(entry.lifecycle.turnId, turn.turnId);
-    assert.equal(entry.pendingQuestionnaire?.turnId, turn.turnId);
-    assert.equal(entry.pendingQuestionnaire?.itemId, question!.itemId);
-    assert.deepEqual(entry.pendingQuestionnaire?.request, source.entries[0]!.entryKind !== "draft" && source.entries[0]!.pendingQuestionnaire?.request);
+    const projectedEntry = pushed.entries[0]!;
+    assert.ok(projectedEntry.entryKind !== "draft");
+    assert.equal(projectedEntry.identity.threadId, thread.threadId);
+    assert.ok("turnId" in projectedEntry.lifecycle);
+    assert.equal(projectedEntry.lifecycle.turnId, turn.turnId);
+    assert.equal(projectedEntry.pendingQuestionnaire?.turnId, turn.turnId);
+    assert.equal(projectedEntry.pendingQuestionnaire?.itemId, question!.itemId);
+    assert.deepEqual(projectedEntry.pendingQuestionnaire?.request, source.entries[0]!.entryKind !== "draft" && source.entries[0]!.pendingQuestionnaire?.request);
     const child = await threads.observe({
       native: { harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"] },
       projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "/repo", title: "Child", createdAt: 1, updatedAt: 1, activityAt: 1,

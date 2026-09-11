@@ -3221,7 +3221,7 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
           title: "smoke test",
         },
         requestKey,
-        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+        turnId: null,
       },
       title: "Thread",
     }],
@@ -3235,6 +3235,7 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
     answers: { smoke_test: { answers: ["hello lily"] } },
   });
   assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), true);
+  assert.equal(socket.requests.find((candidate) => candidate.method === "questionnaire/respond")?.params?.turnId, "turn");
   assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
   assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
 }));
@@ -3242,6 +3243,7 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
 async function installRecoveredWorkbenchQuestionnaire(
   client: ReturnType<typeof WorkbenchThreadClient>,
   requestKey = "workbench-mcp:recovered",
+  turnId: fixtureIdentitySchemas.WorkbenchTurnId | null = fixtureIdentityValues.WorkbenchTurnId.turn,
 ) {
   const request = {
     id: requestKey,
@@ -3257,7 +3259,7 @@ async function installRecoveredWorkbenchQuestionnaire(
     summary: "",
     title: "details",
   };
-  const pending = { itemId: null, request, requestKey, threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn };
+  const pending = { itemId: null, request, requestKey, threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId };
   const { threadId: _threadId, ...durable } = pending;
   await installProjectThreadState(client, {
     entries: [{
@@ -3444,6 +3446,16 @@ test("a stale route cannot select a shared read but the document remains cached"
   assert.deepEqual(await opening, { kind: "superseded" });
   assert.equal(client.getSnapshot().currentThread, null);
   assert.ok(client.getThreadController("project", { kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread") }).getSnapshot().document);
+}));
+
+test("saved turnless questionnaires place their answer in the admitted response turn", async () => withClient(async (client, socket) => {
+  await installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:turnless", null);
+  const response = { answers: { details: { answers: ["continue"] } } };
+  await client.submitPendingUserInputRequest("thread", response);
+  const history = socket.requests.find(request => request.method === "questionnaire/history/record");
+  assert.equal(history?.params?.turnId, "thread-started");
+  assert.deepEqual(history?.params?.response, response);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
 }));
 
 test("repeated opens of one identity share the pending read without invalidating it", async () => withClient(async (client, socket) => {

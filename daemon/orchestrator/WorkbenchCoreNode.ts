@@ -298,7 +298,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
-    releaseQuestionnaire: (threadId, requestKey) => questionnaires.releaseForInterruption(threadId, requestKey),
+    interruptRetainingQuestionnaire: (threadId, requestKey, interrupt) => questionnaires.interruptRetainingQuestionnaire(threadId, requestKey, interrupt),
     identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
     database,

@@ -207,14 +207,18 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         const source = WorkbenchThreadCreationProfileSchema.parse(workbenchCreationProfile);
         const cwd = record(request.params)?.cwd;
         if (typeof cwd !== "string") throw new Error("Thread creation requires a project cwd.");
+        bridge.traceThreadCreation(request.id, "profile-capture");
         const captured = await threadState.captureCreationProfile("codex", cwd, source);
+        bridge.traceThreadCreation(request.id, "profile-configuration");
         const configured = await configureProfileRequests({ resumeRequest: nativeRequest }, {
           ...captured, subagentName: readWorkbenchPromptContext(request)?.subagentName ?? null,
         }, null, signal);
+        bridge.traceThreadCreation(request.id, "native-creation");
         const response = await create(configured.resumeRequest);
         if (response.error) return response;
         const thread = record(response.result)?.thread as ThreadReadResponse["thread"] | undefined;
         if (!thread) throw new Error("Codex creation returned no thread to store its profile.");
+        bridge.traceThreadCreation(request.id, "profile-installation");
         await threadState.installCreatedProfile("codex", thread, captured.selection);
         return response;
       },
