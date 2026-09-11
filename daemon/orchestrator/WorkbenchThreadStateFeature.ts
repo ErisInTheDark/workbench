@@ -2,7 +2,10 @@
  * Exports:
  * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports.
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
- * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications.
+ * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
+ * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
+ * - mapProviderLifecycleNotification: translate provider lifecycle notifications.
+ * - mapProviderActivityNotification: translate provider activity notifications.
  * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite state, provider titles, thread-owned status commands, and provider notifications.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
@@ -558,7 +561,7 @@ export default class WorkbenchThreadStateFeature {
 
   async readProviderProfile(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"]) {
     const target = await this.providerProfileTarget(harness, thread);
-    const selection = await this.controller.readComposerProfileTarget(target.slot);
+    const selection = await this.controller.readComposerProfileSnapshot(target.slot);
     if (!selection) throw new Error("The thread has no available daemon composer profile.");
     const entry = await this.controller.getThreadEntry(target.projectId, harness, target.slot.threadId);
     return { selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null, cwd: target.cwd, projectId: target.projectId };

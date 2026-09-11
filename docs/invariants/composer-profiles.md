@@ -1,0 +1,5 @@
+- Composer state previews the next new turn, including subagents; resolve linked profiles from current definitions, Custom from saved settings.
+- Keep applied-turn configuration separate from preview resolution. Reads never reconfigure active turns; recovery and compaction preserve applied settings.
+- Accepted draft edits/autosaves update project new-thread defaults. Defaults never overwrite existing drafts or configured threads.
+- Missing ordinary-thread settings may use same-harness project defaults; missing subagent snapshots may resolve their linked profile. Deleted definitions retain saved settings as Custom.
+- Failed admission preserves the applied snapshot, not a stale composer preview. Persistence failure after acceptance never permits resending.

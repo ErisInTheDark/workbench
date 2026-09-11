@@ -147,7 +147,9 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const promptContext = readWorkbenchPromptContext(message);
     if (!promptContext) return message;
     const params = asRecord(message.params);
-    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics({ ...promptContext, harness: "codex" });
+    // This adapter installs Workbench MCP even before native creation returns an id.
+    const context = { ...promptContext, harness: "codex" as const, managedThread: true };
+    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context);
     const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
       available,
       field,
@@ -155,8 +157,6 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
     });
-    const context = { ...promptContext, harness: "codex" as const };
-
     if (isPromptAugmentedTurnMethod(method)) {
       const activatedSkillCatalog = filter(
         await workbenchPromptFiles.buildWorkbenchActivatedSkillCatalog(context),

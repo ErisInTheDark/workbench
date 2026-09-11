@@ -289,7 +289,7 @@ test("profile harness is immutable and project agents cannot be promoted globall
   controller.dispose();
 });
 
-test("deleting a definition leaves the target snapshot intact until admission", async () => {
+test("deleting a definition previews Custom without rewriting the saved snapshot", async () => {
   const slot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
@@ -297,9 +297,10 @@ test("deleting a definition leaves the target snapshot intact until admission", 
 
   await controller.deleteProfile("profile-a");
   const selection = controller.getSelection(slot);
+  assert.equal(selection.kind, "custom");
   assert.equal(controller.getSelectedProfile(slot), null);
   assert.deepEqual(selection.settings, CODEX_SETTINGS);
-  assert.deepEqual(await targets.read(slot), selection);
+  assert.deepEqual(await targets.read(slot), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
   controller.dispose();
 });
 
@@ -374,7 +375,7 @@ test("draft profile slots remain UUID-isolated and harness-bound", async () => {
   controller.dispose();
 });
 
-test("acknowledged definition edits preserve the target snapshot until admission", async () => {
+test("definition edits update next-turn preview without rewriting target snapshots", async () => {
   const slot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
@@ -386,7 +387,7 @@ test("acknowledged definition edits preserve the target snapshot until admission
   });
 
   await controller.updateProfile("profile-a", { model: "gpt-5.5", reasoningEffort: "medium" });
-  assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
+  assert.deepEqual(controller.resolveSettings(slot), { ...CODEX_SETTINGS, model: "gpt-5.5", reasoningEffort: "medium" });
   assert.equal(controller.getSelectedProfile(slot)?.model, "gpt-5.5");
   const synchronized = controller.getSelection(slot);
   assert.deepEqual(synchronized, {
@@ -395,6 +396,65 @@ test("acknowledged definition edits preserve the target snapshot until admission
     settings: CODEX_SETTINGS,
   });
   assert.deepEqual(await targets.read(slot), synchronized);
+  controller.dispose();
+});
+
+test("reopening refreshes an externally edited definition", async () => {
+  const { controller, persistence, targets } = await createController([profile()]);
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-a"] };
+  await targets.write(slot, { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
+  await controller.loadSelection(slot);
+  persistence.profiles = [profile({ model: "external-model" })];
+  await controller.loadSelection(slot);
+  assert.equal(controller.resolveSettings(slot)?.model, "external-model");
+  controller.dispose();
+});
+
+test("a pushed target does not discard the current catalogue refresh", async (context) => {
+  const { controller, persistence, targets } = await createController([profile()]);
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-a"] };
+  const selection = { kind: "profile" as const, profileId: "profile-a", settings: CODEX_SETTINGS };
+  await targets.write(slot, selection);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  context.after(() => { release(); controller.dispose(); });
+  persistence.read = async () => { await gate; return { profiles: [profile({ model: "fresh-definition" })] }; };
+  const loading = controller.loadSelection(slot);
+  controller.observeSelection(slot, selection);
+  release();
+  await loading;
+  assert.equal(controller.resolveSettings(slot)?.model, "fresh-definition");
+  assert.deepEqual(await targets.read(slot), selection);
+});
+
+test("a Custom deletion preview still waits for the pending definition save", async (context) => {
+  const { controller, persistence } = await createController([profile()]);
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-a"] };
+  controller.selectProfile(slot, "profile-a");
+  await controller.waitForSelection(slot);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  context.after(() => { release(); controller.dispose(); });
+  persistence.mutate = async () => { await gate; throw new Error("Deletion rejected"); };
+  const deleting = controller.deleteProfile("profile-a");
+  const waiting = controller.waitForSelection(slot);
+  release();
+  assert.equal(await deleting, null);
+  await assert.rejects(waiting, /Deletion rejected/);
+  assert.equal(controller.getSelection(slot).kind, "profile");
+});
+
+test("missing pushed snapshots recover next-turn settings and catalogue failures stay visible", async () => {
+  const { controller, persistence, targets } = await createController([profile()]);
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread-a"] };
+  const selection = { kind: "profile" as const, profileId: "profile-a", settings: CODEX_SETTINGS };
+  await targets.write(slot, selection);
+  await controller.observeSelection(slot, null);
+  assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
+  persistence.read = async () => { throw new Error("Catalogue unavailable"); };
+  await controller.loadSelection(slot);
+  assert.match(controller.getSnapshot().error, /Catalogue unavailable/);
+  assert.deepEqual(await targets.read(slot), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
   controller.dispose();
 });
 

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WorkbenchPromptContext/WorkbenchPromptInstructions: prompt assembly input and output contracts. Keywords: prompt, context, instructions.
+ * - WorkbenchPromptContext: prompt assembly input and installed capabilities.
+ * - WorkbenchPromptInstructions: assembled base and developer instructions.
  */
 
 import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/types";
@@ -9,6 +10,7 @@ export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
   readonly cwd?: string | null;
   readonly harness?: WorkbenchHarness | null;
+  readonly managedThread?: boolean;
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly activatedSkillPaths?: readonly string[];

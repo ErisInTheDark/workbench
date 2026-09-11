@@ -11,8 +11,8 @@
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
 | dependent snooze | Durable thread state that wakes only when its target thread is completed and has no live Git claims. |
-| profile | The exact composer settings snapshot held by a thread or draft. If tied to a stored profile, it also keeps that profile id |
-| stored profile | A named reusable profile. A tied thread copies its latest settings whenever it starts a new turn |
+| profile | Composer settings plus optional stored-profile id. Saved settings provide a fallback, not a frozen composer preview |
+| stored profile | Named reusable settings. Linked composers and new turns resolve its current definition |
 | profile ribbon | The composer controls immediately to the left of the send button, regardless of their visual treatment |
 | mosaic | A desktop-only Workbench route/view that renders a URL-encoded split tree of file and thread panels, separate from normal single file/thread routes so the single-route app shell and scroll behavior remain stable fallback paths |
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |

@@ -1,3 +1,4 @@
 - Codex start, resume, and fork rebuild one compact thread-owned Workbench payload from current sources. Unchanged sources and selections must produce identical payloads.
+- Managed instruction availability follows installed capabilities, not native thread-id existence or caller origin. Verify final creation/resume/fork packets, preserving subagent exclusions.
 - Slash commands are resolved anywhere in user text and expand into a full skill payload.
 - Keep live Workbench-owned instruction Markdown editable in the Workbench Library. The repository `instructions/` source tree contains only instruction payloads. Every source path mirrors its emitted path. Generated bases refresh on instruction use; retired bases may remain.

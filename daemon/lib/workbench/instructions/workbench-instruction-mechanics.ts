@@ -1,19 +1,19 @@
 /*
  * Exports:
- * - isManagedPromptThread: detect prompt contexts that belong to a managed Workbench thread. Keywords: instructions, thread, context.
- * - listWorkbenchInstructionMechanics: resolve typed Workbench mechanics and local capability availability for a prompt context. Keywords: instructions, mechanics, availability.
+ * - isManagedPromptThread: recognise installed managed capabilities before or after native creation.
+ * - listWorkbenchInstructionMechanics: resolve managed mechanics and local capability availability.
  */
 
 import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
 
 export function isManagedPromptThread(context: WorkbenchPromptContext) {
-  return Boolean(context.threadId?.trim() && context.workbenchOrigin?.trim());
+  return context.managedThread === true || Boolean(context.threadId?.trim() && context.workbenchOrigin?.trim());
 }
 
 export async function listWorkbenchInstructionMechanics(context: WorkbenchPromptContext) {
   const available = new Set<string>();
-  if (context.workbenchOrigin?.trim()) {
+  if (context.managedThread || context.workbenchOrigin?.trim()) {
     available.add("browse");
     available.add("long-waits");
     available.add("subagents");

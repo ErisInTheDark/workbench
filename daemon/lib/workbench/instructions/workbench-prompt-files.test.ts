@@ -5,6 +5,20 @@ import { test } from "node:test";
 import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
 import { listWorkbenchInstructionMechanics } from "./WorkbenchPromptFiles.ts";
 
+test("installed managed capabilities do not depend on a native identity or caller origin", async (context) => {
+  context.mock.method(WorkbenchServerSettings.prototype, "readLocalCapabilities", async () => ({ browseRawCommandsEnabled: false }));
+  for (const subagentName of [null, "Akari"]) {
+    const promptContext = { managedThread: true, threadId: null, subagentName };
+    const available = await listWorkbenchInstructionMechanics(promptContext);
+    for (const mechanic of ["browse", "long-waits", "subagents", "thread-status", "thread-git", "thread-recall", "thread-refresh"]) {
+      assert.equal(available.has(mechanic), true, mechanic);
+    }
+    assert.equal(available.has("thread-title"), subagentName === null);
+    assert.equal(available.has("browse-raw"), false);
+  }
+  assert.equal((await listWorkbenchInstructionMechanics({})).has("thread-title"), false);
+});
+
 test("managed top-level threads expose current-thread mechanics before and after materialization", async (context) => {
   context.mock.method(
     WorkbenchServerSettings.prototype,

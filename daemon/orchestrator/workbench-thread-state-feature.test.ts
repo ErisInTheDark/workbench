@@ -537,11 +537,19 @@ test("creation installs captured settings before first admission and refreshes o
       }, signal);
       assert.equal(catalogueReads, 1);
       assert.equal((await feature.readProviderProfile(harness, native)).selection.settings.model, "later-definition");
+      const entries = (await feature.controller.getSnapshot(projectId)).entries;
+      const created = entries.find(entry => entry.entryKind !== "draft");
+      assert.ok(created);
+      const slot = { kind: "thread" as const, projectId, harness, threadId: created.identity.threadId };
+      model = "preview-definition";
+      assert.equal((await feature.controller.readComposerProfileTarget(slot))?.settings.model, model);
+      assert.equal((await feature.readProviderProfile(harness, native)).selection.settings.model, "later-definition");
       model = "rejected-definition";
       await assert.rejects(feature.withProviderProfileAdmission(harness, native, async () => {
         throw new Error("Native admission failed");
       }, signal), /Native admission failed/);
       assert.equal((await feature.readProviderProfile(harness, native)).selection.settings.model, "later-definition");
+      assert.equal((await feature.controller.readComposerProfileTarget(slot))?.settings.model, model);
       await assert.rejects(feature.captureCreationProfile(harness, "C:/workspace", {
         kind: "target", slot: { kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project-b"] },
       }), /another project/);

@@ -1,7 +1,11 @@
 /*
  * Exports:
  * - WorkbenchObservedThreadEntry: provider sidebar input with an optional explicit name, separate from display fallback.
- * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input.
+ * - WorkbenchThreadStateControllerOptions: catalogue, project-state, persistence and lifecycle ports.
+ * - WorkbenchThreadReconciliationFailure: bounded provider reconciliation failure.
+ * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
+ * - WorkbenchThreadClaimContext: thread-owned claim context.
+ * - WorkbenchObservedLifecycleEvent: identity-owned provider lifecycle input.
  * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative SQLite state, durable display order, provider observation, and local/cross-project sidebar projection.
  */
 import { z } from "zod";
@@ -719,11 +723,19 @@ export default class WorkbenchThreadStateController {
   }
 
   readComposerProfileTarget(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    return this.readComposerProfile(slot, true);
+  }
+
+  readComposerProfileSnapshot(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    return this.readComposerProfile(slot, false);
+  }
+
+  private readComposerProfile(slot: WorkbenchComposerProfileSlot, refresh: boolean) {
     const key = `${slot.projectId}:profiles`;
     const pending = this.operationQueues.get(key);
     return this.enqueue(key, async () => {
       await pending;
-      return await this.resolveComposerProfileTarget(await this.getProject(slot.projectId), slot);
+      return await this.resolveComposerProfileTarget(await this.getProject(slot.projectId), slot, refresh);
     });
   }
 
@@ -789,7 +801,12 @@ export default class WorkbenchThreadStateController {
       : draft ? this.profileFromDraft(draft)
         : entry && entry.entryKind !== "draft" ? entry.profile
           : null;
-    const profileId = selection?.kind === "profile" ? selection.profileId : null;
+    if (refresh && !selection && slot.kind === "thread" && entry?.entryKind === "thread"
+      && state.newThreadProfile?.settings.harness === slot.harness) {
+      selection = state.newThreadProfile;
+    }
+    const profileId = selection?.kind === "profile" ? selection.profileId
+      : refresh && !selection && entry?.entryKind === "subagent" ? entry.profileId : null;
     if (refresh && profileId) {
       if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
       const profile = (await this.options.readComposerProfiles()).profiles.find((candidate) => candidate.id === profileId);
@@ -819,6 +836,7 @@ export default class WorkbenchThreadStateController {
       state.drafts.set(slot.draftId, next);
       const entry = state.entries.get(`draft:${slot.draftId}`);
       state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, entry?.entryKind === "draft" ? entry.metadata : undefined));
+      state.newThreadProfile = selection;
     } else {
       const key = `${slot.harness}:${slot.threadId}`;
       const entry = state.entries.get(key);
@@ -836,7 +854,7 @@ export default class WorkbenchThreadStateController {
       await this.writeSelectedState(slot.projectId, staged,
         slot.kind === "thread" ? [`${slot.harness}:${slot.threadId}`]
           : slot.kind === "draft" ? [getThreadDisplayDraftKey(slot.draftId)] : [],
-        { profile: slot.kind === "new-thread" });
+        { profile: slot.kind !== "thread" });
       this.installComposerProfileTarget(state, slot, selection);
       this.publish(slot.projectId, state);
       return true;
@@ -2190,14 +2208,16 @@ export default class WorkbenchThreadStateController {
 
   private async upsertDraft(projectId: ProjectId, draft: WorkbenchThreadDraft, folderId?: string) {
     const state = await this.getProject(projectId);
-    return await this.enqueue(folderId ? `${projectId}:display-order` : `${projectId}:draft:${draft.draftId}`, async () => {
+    return await this.enqueue(folderId ? `${projectId}:display-order` : `${projectId}:draft:${draft.draftId}`, () => this.enqueue(`${projectId}:storage:write`, async () => {
       const current = state.drafts.get(draft.draftId);
       if (current && current.clientUpdatedAt > draft.clientUpdatedAt) return { accepted: true, revision: state.revision };
       const targetFolder = folderId ? state.displayOrder.folders?.find((folder) => folder.folderId === folderId) : null;
       if (folderId && (!targetFolder || targetFolder.section === "settled")) return { accepted: false, revision: state.revision };
       const timestamp = this.now();
       const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
-      state.drafts.set(accepted.draftId, accepted);
+      const staged = { ...state, drafts: new Map(state.drafts), entries: new Map(state.entries) };
+      staged.drafts.set(accepted.draftId, accepted);
+      staged.newThreadProfile = this.profileFromDraft(accepted);
       const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
       const metadata = existingEntry?.entryKind === "draft"
         ? existingEntry.metadata
@@ -2205,20 +2225,20 @@ export default class WorkbenchThreadStateController {
           ? { archived: false as const, pinned: targetFolder.section === "pinned", snoozed: targetFolder.section === "snoozed" }
           : undefined;
       const entry = this.draftEntry(accepted, metadata);
-      state.entries.set(entryKey(entry), entry);
+      staged.entries.set(entryKey(entry), entry);
       if (targetFolder) {
-        const displayOrder = moveWorkbenchThreadDisplayItem(this.naturallyOrderedEntries(state), state.displayOrder, targetFolder.section, entryKey(entry), targetFolder.folderId, targetFolder.threadKeys[0] ?? null);
-        if (!displayOrder) {
-          if (current) state.drafts.set(current.draftId, current); else state.drafts.delete(accepted.draftId);
-          if (existingEntry) state.entries.set(entryKey(existingEntry), existingEntry); else state.entries.delete(entryKey(entry));
-          return { accepted: false, revision: state.revision };
-        }
-        state.displayOrder = displayOrder;
+        const displayOrder = moveWorkbenchThreadDisplayItem(this.naturallyOrderedEntries(staged), staged.displayOrder, targetFolder.section, entryKey(entry), targetFolder.folderId, targetFolder.threadKeys[0] ?? null);
+        if (!displayOrder) return { accepted: false, revision: state.revision };
+        staged.displayOrder = displayOrder;
       }
-      await this.persist(projectId, state, [entryKey(entry)], { layout: Boolean(targetFolder) });
+      await this.writeSelectedState(projectId, staged, [entryKey(entry)], { profile: true, layout: Boolean(targetFolder) });
+      state.drafts.set(accepted.draftId, accepted);
+      state.entries.set(entryKey(entry), entry);
+      state.newThreadProfile = staged.newThreadProfile;
+      if (targetFolder) state.displayOrder = staged.displayOrder;
       this.publish(projectId, state, entry);
       return { accepted: true, revision: state.revision };
-    });
+    }));
   }
 
   private async moveDraft(sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) {

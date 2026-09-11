@@ -102,7 +102,12 @@ export default class WorkbenchComposerProfileController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
   hasSelection(slot: WorkbenchComposerProfileSlot) { return Object.hasOwn(this.selections, getSlotKey(slot)); }
-  getSelection(slot: WorkbenchComposerProfileSlot) { return this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION; }
+  getSelection(slot: WorkbenchComposerProfileSlot): WorkbenchComposerProfileSelection {
+    const selection = this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION;
+    return selection.kind === "profile" && this.stableProfileGeneration > 0 && !this.getProfile(selection.profileId)
+      ? { kind: "custom", settings: selection.settings }
+      : selection;
+  }
   getProfile(profileId: string) { return this.profiles.find((profile) => profile.id === profileId) ?? null; }
   getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getSelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
   getVisibleProfiles(projectId: string, harness?: WorkbenchHarness | null) {
@@ -111,7 +116,8 @@ export default class WorkbenchComposerProfileController {
 
   resolveSettings(slot: WorkbenchComposerProfileSlot) {
     const selection = this.getSelection(slot);
-    return selection.settings ? cloneSettings(selection.settings) : null;
+    const definition = this.getSelectedProfile(slot);
+    return selection.settings ? cloneSettings(definition ?? selection.settings) : null;
   }
 
   resolveThread(slot: WorkbenchComposerProfileSlot, thread: ThreadPayload) {
@@ -194,6 +200,7 @@ export default class WorkbenchComposerProfileController {
 
   observeSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection | null) {
     if (this.selectionWrites.has(getSlotKey(slot))) return;
+    if (!selection && slot.kind === "thread") return this.loadSelection(slot);
     if (areDeeplyEqual(this.getSelection(slot), selection ?? EMPTY_CUSTOM_SELECTION)) return;
     if (selection) this.installStableSelection(slot, selection);
     else {
@@ -205,7 +212,8 @@ export default class WorkbenchComposerProfileController {
   async waitForSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     while (true) {
-      const selection = this.getSelection(slot);
+      // Pending deletion already previews Custom; its saved association still owns the write.
+      const selection = this.selections[key] ?? EMPTY_CUSTOM_SELECTION;
       const pending = this.selectionWrites.get(key)
         ?? (selection.kind === "profile" ? this.profileWrites.get(selection.profileId) : null);
       if (!pending) return;
@@ -239,9 +247,26 @@ export default class WorkbenchComposerProfileController {
     if (!persistence) return;
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
     this.selectionGenerations.set(key, generation);
+    // Initial catalogue loading must not hide usable target settings. Later target
+    // loads refresh definitions, fenced against concurrent catalogue edits/loads.
+    const catalogue = this.persistence && this.stableProfileGeneration > 0 && this.profileWrites.size === 0
+      ? this.persistence : null;
+    const profileGeneration = catalogue ? ++this.profileGeneration : this.profileGeneration;
     try {
-      const selection = await persistence.read(slot);
-      if ((this.selectionGenerations.get(key) ?? 0) !== generation) return;
+      const [selection, definitions] = await Promise.all([
+        persistence.read(slot),
+        catalogue?.read() ?? Promise.resolve(null),
+      ]);
+      const refreshedCatalogue = definitions && this.profileGeneration === profileGeneration;
+      if (refreshedCatalogue) {
+        this.profiles = [...definitions.profiles];
+        this.stableProfiles = this.profiles;
+        this.stableProfileGeneration = profileGeneration;
+      }
+      if ((this.selectionGenerations.get(key) ?? 0) !== generation) {
+        if (refreshedCatalogue) this.publish();
+        return;
+      }
       if (selection) {
         this.installStableSelection(slot, selection, false);
       }
