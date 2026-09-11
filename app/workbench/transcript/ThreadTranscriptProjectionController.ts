@@ -1,9 +1,8 @@
 /*
- * Keywords: transcript, snapshot freshness, subscription, parity.
  * Exports:
- * ThreadTranscriptProjectionSelection: selected JSON oracle and renderer-side Browse facts. Keywords: transcript, parity, selection.
- * ThreadTranscriptProjectionState: explicit SQLite transcript source lifecycle. Keywords: transcript, projection, source, lifecycle.
- * default ThreadTranscriptProjectionController: owns SQLite source publication, serialized subscription, and deferred parity reporting. Keywords: transcript, projection, subscription, parity, lifecycle.
+ * - ThreadTranscriptProjectionSelection: selected window, local inputs and legacy comparison facts.
+ * - ThreadTranscriptProjectionState: SQLite source presentation lifecycle.
+ * - default ThreadTranscriptProjectionController: own incremental publication, local input presentation and subscriptions.
  */
 import type { ThreadPayload, WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -13,6 +12,8 @@ import type {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
+import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
   compareWorkbenchTranscriptParity,
   createWorkbenchTranscriptProjectionFailureDiagnostic,
@@ -56,6 +57,18 @@ function sameDurableTurnIds(
   const rightIds = durableTurnIds(right);
   return leftIds.length === rightIds.length
     && leftIds.every((turnId, index) => turnId === rightIds[index]);
+}
+
+function localSteers(thread: ThreadPayload | undefined) {
+  return (thread?.turns ?? []).flatMap(turn => {
+    const items = turn.items.flatMap(item => item.type === "userMessage" && isWorkbenchSyntheticSteerUserMessage(item) ? [item] : []);
+    if (!items.length) return [];
+    const ids = new Set(items.map(item => item.id));
+    return [{
+      turnId: turn.id, items,
+      timeline: thread?.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline?.filter(entry => ids.has(entry.itemId)) ?? [],
+    }];
+  });
 }
 
 interface ThreadTranscriptProjectionControllerOptions {
@@ -177,6 +190,7 @@ export default class ThreadTranscriptProjectionController {
       this.#selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
       selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
     );
+    const steersChanged = !areDeeplyEqual(localSteers(this.#selection?.thread), localSteers(selection?.thread));
     this.#selection = selection;
     if (previousThreadId !== nextThreadId) {
       this.#cancelScheduledComparison();
@@ -212,7 +226,7 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    if (publishState && (!this.#incremental || connectingChanged)) this.#publishProjection();
+    if (publishState && (!this.#incremental || connectingChanged || steersChanged)) this.#publishProjection();
   }
 
   #cancelScheduledComparison() {
@@ -250,24 +264,57 @@ export default class ThreadTranscriptProjectionController {
     if (!this.#selection || !this.#projection?.value) return null;
     if (this.#incremental) {
       const projection = this.#projection.value;
+      const canonicalItems = projection.turns.flatMap(turn => turn.items);
+      const canonicalIds = new Set(canonicalItems.map(item => item.id));
+      const canonicalClients = new Set(canonicalItems.flatMap(item => item.type === "userMessage" && item.clientId ? [item.clientId] : []));
+      const steers = localSteers(this.#selection.thread).map(entry => ({
+        ...entry,
+        items: entry.items.filter(item => !canonicalIds.has(item.id) && !(item.clientId && canonicalClients.has(item.clientId))),
+      })).filter(entry => entry.items.length > 0);
       // Local connecting input is not provider transcript truth. Keep it visible until admission.
       const pending = this.#selection.thread.turns.filter(turn =>
         getWorkbenchTurnAdmission(turn) === "connecting" && !projection.turns.some(existing => existing.id === turn.id));
-      if (!pending.length) return projection;
+      if (!pending.length && !steers.length) return projection;
       const pendingTurns = pending.map((turn, index) => ({
         ...turn, turnIndex: Math.max(-1, ...projection.turns.map(existing => existing.turnIndex)) + index + 1,
         itemTimeline: this.#selection!.thread.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline ?? [],
       }));
+      const turns = [...projection.turns, ...pendingTurns];
+      for (const entry of steers) {
+        const index = turns.findIndex(turn => turn.id === entry.turnId);
+        if (index >= 0) {
+          const turn = turns[index]!;
+          const items = entry.items.filter(item => !turn.items.some(existing => existing.id === item.id));
+          turns[index] = {
+            ...turn, items: [...turn.items, ...items],
+            itemTimeline: [...turn.itemTimeline, ...entry.timeline.filter(event => items.some(item => item.id === event.itemId))],
+          };
+        } else {
+          const source = this.#selection.thread.turns.find(turn => turn.id === entry.turnId)!;
+          turns.push({
+            ...source, items: entry.items, itemTimeline: entry.timeline,
+            turnIndex: Math.max(-1, ...turns.map(turn => turn.turnIndex)) + 1,
+          });
+        }
+      }
+      const virtualTail = turns.flatMap(turn => turn.items
+        .filter(item => !canonicalIds.has(item.id)).map(payload => ({ turnId: turn.id, payload })));
+      const histories = turns.map(turn => ({
+        completedAt: turn.completedAt, durationMs: turn.durationMs,
+        itemCount: turn.items.length, itemIds: turn.items.map(item => item.id),
+        itemTimeline: turn.itemTimeline, loadState: "loaded" as const,
+        startedAt: turn.startedAt, status: turn.status, turnId: turn.id,
+      }));
       return {
         ...projection,
-        turns: [...projection.turns, ...pendingTurns],
-        display: {
-          ...projection.display,
-          segments: [...projection.display.segments, ...pendingTurns.map(turn => ({
-            id: `${turn.id}:connecting`, turnId: turn.id, items: turn.items, kind: "virtual" as const,
-            isFirstForTurn: true, isLastForTurn: true, ownsCanonicalTerminal: false,
-          }))],
-        },
+        turns,
+        display: planCanonicalTranscriptDisplay({
+          items: projection.display.orderedItems, turns: turns.map(turn => ({ turnId: turn.id, turnIndex: turn.turnIndex })), virtualTail,
+        }),
+        turnHistory: [
+          ...projection.turnHistory.map(entry => histories.find(history => history.turnId === entry.turnId) ?? entry),
+          ...histories.filter(history => !projection.turnHistory.some(entry => entry.turnId === history.turnId)),
+        ],
       };
     }
     let projection: WorkbenchTranscriptProjection;

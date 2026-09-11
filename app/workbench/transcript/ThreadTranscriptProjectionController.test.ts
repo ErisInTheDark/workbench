@@ -7,6 +7,9 @@ import test from "node:test";
 import type { ThreadPayload } from "workbench-shared/types";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { applySteerHistoryToThread, isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import ThreadOptimisticInputStore from "../thread/ThreadOptimisticInputStore";
 import {
   transcriptSnapshotTables,
   type WorkbenchTranscriptParityDiagnostic,
@@ -124,6 +127,111 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
     kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: false,
     layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)),
   };
+}
+
+for (const correlation of ["item", "client"] as const) {
+  test(`incremental SQL retains local steers until canonical ${correlation} delivery`, async () => {
+    const states: ThreadTranscriptProjectionState[] = [];
+    const errors: Error[] = [];
+    let receive!: (update: TranscriptStreamUpdate) => void;
+    let subscriptions = 0;
+    const controller = new ThreadTranscriptProjectionController({
+      available: true, turnLimit: 4,
+      onStateChange: state => states.push(state), onError: error => errors.push(error),
+      reconcileProjection: () => { throw new Error("Provider overlay must remain unused"); },
+      scheduleComparison: callback => callback as unknown as ReturnType<typeof setTimeout>, cancelComparison() {},
+      transcripts: {
+        reportParity: async () => {}, unsubscribe: async () => {},
+        subscribe: async (_params, _snapshot, stream) => { subscriptions++; receive = stream!; },
+      },
+    });
+    const source = thread("thread");
+    source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
+    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
+    const select = () => controller.select({ thread: inputs.apply(source, []), browseResultEntries: [] });
+    const projection = () => {
+      const state = states.at(-1)!;
+      assert.ok(state.status === "ready");
+      return state.projection;
+    };
+    const inputStates = () => projection().turns[0]!.items.map(item => item.type === "userMessage" ? getWorkbenchInputState(item) : null);
+    try {
+      select();
+      await flush();
+      receive(streamBaseline("thread"));
+      const canonicalSegment = projection().display.segments[0]!.id;
+      const first = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
+      const second = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
+      select();
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
+      assert.deepEqual(projection().display.segments.flatMap(segment => segment.items.map(item => item.id)),
+        ["plan:turn", first.handle, second.handle]);
+      assert.equal(projection().display.segments[0]!.id, canonicalSegment);
+      assert.equal(projection().turns[0]!.itemTimeline.find(entry => entry.itemId === first.handle)?.firstSeenAt, 42);
+      const pendingHistory = [{
+        threadId: source.id, turnId: "turn", entryKey: first.handle, itemId: first.handle,
+        clientUserMessageId: first.handle, canonicalItemId: null, input: first.input,
+        status: "pending" as const, attemptedAt: 42, resolvedAt: null, error: null, requestId: null,
+      }];
+      controller.select({
+        thread: inputs.apply(applySteerHistoryToThread(source, pendingHistory), pendingHistory), browseResultEntries: [],
+      });
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
+      assert.ok(inputs.movePending(first.handle, "turn"));
+      select();
+      assert.equal(inputStates()[1]?.status, "pending", "Admission is not delivery");
+      const publications = states.length;
+      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
+        field: "planText", index: null, text: " delta", append: true });
+      select();
+      assert.equal(states.length, publications, "Provider text must not republish local input");
+      receive(streamBaseline("thread"));
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      const unsent = correlation === "item" ? "failed" : "interrupted";
+      inputs.transition(second.handle, unsent);
+      select();
+      assert.equal(inputStates()[2]?.status, unsent);
+
+      const delivered = streamBaseline("thread");
+      assert.ok(delivered.kind === "structure");
+      const deliveredId = correlation === "item" ? first.handle : "delivered";
+      delivered.snapshot.rows.threadItems.push({
+        ...delivered.snapshot.rows.threadItems[0]!, id: 2, source_id: deliveredId, item_position: 1, type: "userMessage",
+      });
+      delivered.snapshot.rows.threadItemUserMessages.push({
+        item_id: 2, item_type: "userMessage", input_kind: "steer", delivery_state: "delivered",
+        client_id: correlation === "client" ? first.handle : null, error_text: null,
+      });
+      delivered.snapshot.rows.threadUserMessageParts.push({
+        item_id: 2, part_index: 0, part_type: "text", text: "same", url: null, path: null, name: null, image_detail: null,
+      });
+      const canonical = projectWorkbenchTranscript(delivered.snapshot);
+      assert.ok(canonical.success);
+      delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
+      receive(delivered);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", deliveredId, second.handle]);
+      assert.equal(inputStates()[1]?.status, "sent");
+      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), ["plan:turn", deliveredId]);
+      assert.equal(subscriptions, 1, "Local input changes must not resubscribe");
+
+      const retained = applySteerHistoryToThread(source, [{
+        threadId: source.id, turnId: "turn", entryKey: second.handle, itemId: second.handle,
+        clientUserMessageId: second.handle, canonicalItemId: null, input: second.input,
+        status: unsent, attemptedAt: 42, resolvedAt: 43, error: null, requestId: null,
+      }]);
+      controller.select({ thread: retained, browseResultEntries: [] });
+      assert.equal(inputStates().at(-1)?.status, unsent);
+      controller.select({ thread: source, browseResultEntries: [] });
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", deliveredId], "Removing local state must remove its presentation");
+      controller.select({ thread: thread("other"), browseResultEntries: [] });
+      await flush();
+      receive(streamBaseline("other"));
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn"]);
+      assert.deepEqual(errors, []);
+    } finally { await controller.dispose(); }
+  });
 }
 
 test("incremental SQL never reconciles provider-live state and text does not republish the tree", async () => {
