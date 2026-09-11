@@ -15,6 +15,7 @@ import * as threadBootstrap from "../lib/thread-bootstrap";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type { TranscriptStreamUpdate, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,
@@ -145,6 +146,8 @@ export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentit
 }
 
 export interface OrchestratorTranscriptRegistration {
+  acceptLiveUpdate?(update: TranscriptLiveUpdate): void;
+  registerLiveBoundary?(boundary: (operation: () => Promise<void>) => Promise<void>): () => void;
   assertCutoverReady(): void;
   assertReady(): void;
   captureProviderGap(threadId: string, error: unknown): Promise<Error>;
@@ -163,6 +166,7 @@ export interface OrchestratorTranscriptRegistration {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };
     publish(snapshot: WorkbenchTranscriptSnapshot | null): void | Promise<void>;
+    publishStream?(update: TranscriptStreamUpdate): void;
   }): Promise<void>;
   unsubscribe(id: string): void;
 }

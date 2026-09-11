@@ -117,7 +117,8 @@ import CodexTranscriptRecordingController, {
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
 import { log, logError } from "./process-helpers";
 import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
-import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
+import { admitProviderNotifications, admitProviderThreads, mapProviderNotification } from "./thread-identity-provider-mapping";
+import type { TranscriptTextField, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import {
   admitNativeTranscriptObservations,
   mapNativeTranscriptObservation,
@@ -174,6 +175,7 @@ export type CodexStdioBridgeOptions = {
   identities?: NativeTranscriptIdentityOwners;
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
+  onTranscriptLiveUpdate?: (update: TranscriptLiveUpdate) => void;
   onInitialized?: () => void;
   createThread?: (request: JsonRpcRequest, create: (request: JsonRpcRequest) => Promise<JsonRpcResponse>, signal: AbortSignal) => Promise<JsonRpcResponse>;
   prepareThreadConfiguration?: <T extends { resumeRequest: JsonRpcRequest; startRequest?: JsonRpcRequest }>(
@@ -223,6 +225,14 @@ const UNCONFIGURED_CODEX_INSTRUCTIONS: WorkbenchCodexInstructionPort = {
 const UNCONFIGURED_WORKBENCH_QUESTIONNAIRES: Pick<WorkbenchQuestionnaireController, "list" | "respond"> = {
   list: () => ({ data: [] }),
   respond: async () => null,
+};
+
+const TRANSCRIPT_TEXT_NOTIFICATIONS: Readonly<Record<string, { field: TranscriptTextField; index?: string }>> = {
+  "item/agentMessage/delta": { field: "agentMessageText" },
+  "item/plan/delta": { field: "planText" },
+  "item/commandExecution/outputDelta": { field: "commandExecutionOutput" },
+  "item/reasoning/textDelta": { field: "reasoningContent", index: "contentIndex" },
+  "item/reasoning/summaryTextDelta": { field: "reasoningSummary", index: "summaryIndex" },
 };
 
 type RequestIdAllocator = {
@@ -946,6 +956,7 @@ export default class CodexStdioBridge {
   private readonly retiringResponses: Map<number, PendingResponse>;
   private readonly requestIdAllocator: RequestIdAllocator;
   private transcriptQueue: Promise<void> = Promise.resolve();
+  private readonly onTranscriptLiveUpdate?: (update: TranscriptLiveUpdate) => void;
   private readonly transcriptTasks = new Set<Promise<void>>();
   private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
   private readonly pendingCompatibilityWindowImports = new Map<string, PendingCompatibilityWindowImport>();
@@ -970,7 +981,8 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+    this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
@@ -2415,6 +2427,33 @@ export default class CodexStdioBridge {
       signal.throwIfAborted();
       this.onNotification(this.fileChanges.present(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
+      const textField = TRANSCRIPT_TEXT_NOTIFICATIONS[message.method!];
+      if ((textField || message.method === "item/fileChange/patchUpdated") && this.onTranscriptLiveUpdate) {
+        const nativeThreadId = asString(asRecord(message.params)?.threadId);
+        const mapped = this.identities && nativeThreadId
+          ? mapProviderNotification(this.identities,
+            this.identities.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(nativeThreadId)),
+            message as ServerNotification)
+          : message;
+        const params = asRecord(mapped.params);
+        const threadId = asString(params?.threadId);
+        const turnId = asString(params?.turnId);
+        const itemId = asString(params?.itemId);
+        if (threadId && turnId && itemId) {
+          if (mapped.method === "item/fileChange/patchUpdated") {
+            const changes = (mapped as Extract<ServerNotification, { method: "item/fileChange/patchUpdated" }>).params.changes;
+            const update: TranscriptLiveUpdate = { kind: "patch", threadId, turnId, itemId, changes };
+            void this.captureTranscript("live-patch", async () => { this.onTranscriptLiveUpdate?.(update); });
+          } else if (textField) {
+            const text = asString(params?.delta);
+            const index = textField.index ? asNumber(params?.[textField.index]) : null;
+            if (text !== null) {
+              const update: TranscriptLiveUpdate = { kind: "text", threadId, turnId, itemId, text, index, field: textField.field, append: true };
+              void this.captureTranscript(`live-text:${message.method}`, async () => { this.onTranscriptLiveUpdate?.(update); });
+            }
+          }
+        }
+      }
       if (!shouldRecordDurableTranscriptNotification(message.method)) {
         return;
       }
@@ -2555,6 +2594,10 @@ export default class CodexStdioBridge {
       }));
       if (key && settledSteer) this.transcriptSteers.delete(key);
     });
+  }
+
+  async withTranscriptBoundary(operation: () => Promise<void>) {
+    await this.captureTranscript("live-subscription-bootstrap", operation, { propagateFailure: true, requireSqlite: true });
   }
 
   private async captureTranscript(

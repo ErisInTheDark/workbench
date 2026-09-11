@@ -4,12 +4,8 @@
  * - default ThreadTextPresentationController: owns bounded frame-paced text presentation and exact-field subscriptions. Keywords: thread, text, replay, frame, lifecycle.
  */
 
-export type ThreadTextPresentationField =
-  | "agentMessageText"
-  | "commandExecutionOutput"
-  | "planText"
-  | "reasoningContent"
-  | "reasoningSummary";
+import type { TranscriptTextField } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+export type ThreadTextPresentationField = TranscriptTextField;
 
 export interface ThreadTextPresentationSource {
   kind: "json" | "sqlite";

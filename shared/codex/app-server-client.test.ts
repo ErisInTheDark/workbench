@@ -186,6 +186,10 @@ test("shared transcript notifications and connection closure reach their Workben
       params: { matchingMethodIsNotProof: true },
     });
     socket.notify({
+      method: workbenchTranscriptNotifications.streamed.method,
+      params: { subscriptionId: "sql", update: { kind: "absent" } },
+    });
+    socket.notify({
       method: WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
       params: { revision: 1, snapshot: { dirtyScopes: [], error: null, pendingScopes: [] } },
     });
@@ -197,6 +201,10 @@ test("shared transcript notifications and connection closure reach their Workben
       {
         method: workbenchTranscriptNotifications.updated.method,
         params: { matchingMethodIsNotProof: true },
+      },
+      {
+        method: workbenchTranscriptNotifications.streamed.method,
+        params: { subscriptionId: "sql", update: { kind: "absent" } },
       },
       {
         method: WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,

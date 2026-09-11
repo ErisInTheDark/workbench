@@ -244,14 +244,20 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       recordSqliteTranscript: async (observations, recordingContext) => {
         await transcript.record(observations, recordingContext);
       },
+      onTranscriptLiveUpdate: update => transcript.acceptLiveUpdate?.(update),
       restartingAppServer: build.isReplacing("harness:codex"),
       transcriptShadowLog: build.get("transcriptShadowLog"),
     });
+    let releaseLiveBoundary: (() => void) | undefined;
     return {
       activate: () => {
+        releaseLiveBoundary = transcript.registerLiveBoundary?.(operation => bridge.withTranscriptBoundary(operation));
         parent.attachBridge(bridge, { publish: false });
       },
-      deactivate: () => parent.deactivateBridge(bridge),
+      deactivate: () => {
+        releaseLiveBoundary?.();
+        parent.deactivateBridge(bridge);
+      },
       afterCommit: () => {
         if (build.isReplacing("harness:codex")) {
           turnRecovery.captureForReload(["codex"]);
@@ -300,6 +306,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         };
       },
       dispose: async () => {
+        releaseLiveBoundary?.();
         generation.abort(new Error("Codex bridge node disposed."));
         stopRecovery();
         bridge.expireForReload();

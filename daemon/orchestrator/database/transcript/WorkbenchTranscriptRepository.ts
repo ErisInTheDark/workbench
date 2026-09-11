@@ -96,6 +96,13 @@ interface CanonicalSettlementIndex {
   readonly turnsById: Map<string, TranscriptTurnRow>;
 }
 
+interface SettlementChanges {
+  itemIds: Set<number>;
+  completedItemIds: Set<number>;
+  turnIds: Set<string>;
+  removedItems: Map<string, Set<string>>;
+}
+
 function earliestTimestamp(left: number | null, right: number | null) {
   if (left === null) return right;
   if (right === null) return left;
@@ -117,6 +124,7 @@ export default class WorkbenchTranscriptRepository {
   readonly #identity: WorkbenchThreadIdentityRepository;
   readonly #itemIdentity: WorkbenchTranscriptIdentityRepository;
   readonly #contextUsage: WorkbenchThreadContextUsageRepository;
+  #settlementChanges: SettlementChanges | null = null;
 
   constructor(database: Database.Database, identity = new WorkbenchThreadIdentityRepository(database)) {
     this.#database = database;
@@ -131,21 +139,51 @@ export default class WorkbenchTranscriptRepository {
 
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {
     const changedThreadIds = new Set<string>();
-    this.#database.transaction(() => {
-      for (const observation of observations) {
-        const threadId = observation.kind === "canonicalWindow"
-          ? this.#settleCanonicalWindow(observation)
-          : observation.kind === "usageWindow"
-            ? this.#settleUsageWindow(observation)
-          : observation.kind === "turnCatalog"
-            ? this.#settleTurnCatalog(observation)
-          : observation.kind === "providerTurnScope"
-            ? this.#settleProviderTurnScope(observation)
-          : this.#settleObservation(observation);
-        if (threadId) changedThreadIds.add(threadId);
-      }
-    })();
-    return { changedThreadIds: [...changedThreadIds] };
+    const affected: SettlementChanges = { itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map() };
+    try {
+      this.#settlementChanges = affected;
+      return this.#database.transaction(() => {
+        for (const observation of observations) {
+          const threadId = observation.kind === "canonicalWindow"
+            ? this.#settleCanonicalWindow(observation)
+            : observation.kind === "usageWindow"
+              ? this.#settleUsageWindow(observation)
+            : observation.kind === "turnCatalog"
+              ? this.#settleTurnCatalog(observation)
+            : observation.kind === "providerTurnScope"
+              ? this.#settleProviderTurnScope(observation)
+            : this.#settleObservation(observation);
+          if (threadId) changedThreadIds.add(threadId);
+        }
+        const items: TranscriptItemRow[] = [];
+        const itemIds = [...affected.itemIds];
+        for (let offset = 0; offset < itemIds.length; offset += SQLITE_ITEM_ID_BATCH_SIZE) {
+          items.push(...this.#all(selectRows(itemTables.threadItems, {
+            whereIn: { id: itemIds.slice(offset, offset + SQLITE_ITEM_ID_BATCH_SIZE) },
+          })));
+        }
+        for (const item of items) affected.turnIds.add(item.turn_id);
+        const turns = this.#all(selectRows(coreTables.threadTurns, { whereIn: { id: [...affected.turnIds] } }));
+        const changes = [...changedThreadIds].map(threadId => {
+          const changedTurns = turns.filter(turn => turn.thread_id === threadId);
+          return {
+            removedItemIds: [...(affected.removedItems.get(threadId) ?? [])],
+            completedItemIds: items.filter(item => item.thread_id === threadId && affected.completedItemIds.has(item.id))
+              .map(item => item.public_id ?? item.source_id),
+            snapshot: {
+              thread: this.#requiredThread(threadId),
+              turns: changedTurns,
+              loadedTurnIds: changedTurns.filter(turn => this.#isTurnMaterialized(threadId, turn.id)).map(turn => turn.id),
+              hasPreviousTurns: false,
+              rows: this.#readRows(threadId, items.filter(item => item.thread_id === threadId)),
+            },
+          };
+        });
+        return { changedThreadIds: [...changedThreadIds], changes };
+      })();
+    } finally {
+      this.#settlementChanges = null;
+    }
   }
 
   read(request: WorkbenchTranscriptReadRequest): WorkbenchTranscriptSnapshot | null {
@@ -364,6 +402,12 @@ export default class WorkbenchTranscriptRepository {
   }
 
   #deleteCanonicalItem(index: CanonicalSettlementIndex, item: TranscriptItemRow) {
+    if (this.#settlementChanges) {
+      const removed = this.#settlementChanges.removedItems.get(item.thread_id) ?? new Set<string>();
+      removed.add(item.public_id ?? item.source_id);
+      this.#settlementChanges.removedItems.set(item.thread_id, removed);
+      this.#settlementChanges.turnIds.add(item.turn_id);
+    }
     this.#run(updateRows(evidenceTables.transcriptNativeRecords, {
       link_kind: "turn", item_id: null,
     }, { item_id: item.id }));
@@ -1057,7 +1101,7 @@ export default class WorkbenchTranscriptRepository {
           }
         }
       }
-      this.#writeItem({
+      const settledItemId = this.#writeItem({
         createTransform: (itemId, sourceRevision) => transformWorkbenchTranscriptItem({
           item,
           itemId,
@@ -1076,6 +1120,7 @@ export default class WorkbenchTranscriptRepository {
         canonicalIndex,
         allowToolOutputTransition: item.type === "functionCallOutput",
       });
+      if (observation.lifecycle !== "streaming") this.#settlementChanges?.completedItemIds.add(settledItemId);
       return observation.threadId;
     }
     if (observation.kind === "questionnaire") {
@@ -1347,6 +1392,7 @@ export default class WorkbenchTranscriptRepository {
         }
       }
     }
+    return itemId;
   }
 
   #writeItemTimeline(
@@ -1701,7 +1747,25 @@ export default class WorkbenchTranscriptRepository {
 
   #run(statement: WorkbenchDatabaseMutation) {
     const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, statement);
-    return this.#database.prepare(compiled.sql).run(...compiled.parameters);
+    const result = this.#database.prepare(compiled.sql).run(...compiled.parameters);
+    if (this.#settlementChanges) {
+      const values = statement.kind === "insert" || statement.kind === "upsert"
+        ? statement.values : statement.where;
+      const itemId = values.find(([column]) => column === (
+        statement.tableName === itemTables.threadItems.name ? "id" : "item_id"
+      ))?.[1];
+      if (typeof itemId === "number" && statement.tableName !== evidenceTables.transcriptNativeRecords.name) {
+        this.#settlementChanges.itemIds.add(itemId);
+      }
+      if (statement.tableName === itemTables.threadItems.name && statement.kind === "insert") {
+        this.#settlementChanges.itemIds.add(Number(result.lastInsertRowid));
+      }
+      if (statement.tableName === coreTables.threadTurns.name) {
+        const turnId = values.find(([column]) => column === "id")?.[1];
+        if (typeof turnId === "string") this.#settlementChanges.turnIds.add(turnId);
+      }
+    }
+    return result;
   }
 
   #all<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Row[] {

@@ -7,6 +7,8 @@ import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbe
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
+import WorkbenchTranscriptLiveController from "./WorkbenchTranscriptLiveController.ts";
+import type { TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import WorkbenchTranscriptSubscriptionController, {
   type WorkbenchTranscriptSubscription,
 } from "./WorkbenchTranscriptSubscriptionController.ts";
@@ -118,6 +120,8 @@ export default class WorkbenchTranscriptController {
   > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>;
   readonly #recorder: WorkbenchTranscriptRecorder;
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
+  readonly #live = new WorkbenchTranscriptLiveController();
+  #liveBoundary: ((operation: () => Promise<void>) => Promise<void>) | null = null;
   #disposed = false;
 
   constructor(
@@ -133,6 +137,10 @@ export default class WorkbenchTranscriptController {
     this.#subscriptions = new WorkbenchTranscriptSubscriptionController(
       (request) => this.read(request),
       reportSubscriptionFailure,
+      {
+        controller: this.#live,
+        runOrdered: operation => this.#liveBoundary ? this.#liveBoundary(operation) : operation(),
+      },
     );
   }
 
@@ -203,9 +211,10 @@ export default class WorkbenchTranscriptController {
           ...identity,
         });
       }
-      if (requestsSubscriptionRefresh(recoveryObservations, context.source)) {
-        this.#subscriptions.settle(settlement.changedThreadIds);
-      }
+      this.#subscriptions.settle(settlement.changedThreadIds, {
+        snapshots: requestsSubscriptionRefresh(recoveryObservations, context.source),
+      });
+      this.#publishSettlement(settlement, recoveryObservations, context.source);
       return settlement;
     }
     let settlement: WorkbenchTranscriptSettlement;
@@ -219,15 +228,43 @@ export default class WorkbenchTranscriptController {
         ...identity,
       });
     }
-    if (requestsSubscriptionRefresh(observations, context.source)) {
-      this.#subscriptions.settle(settlement.changedThreadIds);
-    }
+    this.#subscriptions.settle(settlement.changedThreadIds, {
+      snapshots: requestsSubscriptionRefresh(observations, context.source),
+    });
+    this.#publishSettlement(settlement, observations, context.source);
     return settlement;
   }
 
   async read(request: WorkbenchTranscriptReadRequest) {
     this.#assertActive();
     return this.#database.readTranscript(request);
+  }
+
+  registerLiveBoundary(boundary: (operation: () => Promise<void>) => Promise<void>) {
+    this.#liveBoundary = boundary;
+    return () => {
+      if (this.#liveBoundary === boundary) this.#liveBoundary = null;
+    };
+  }
+
+  acceptLiveUpdate(update: TranscriptLiveUpdate) {
+    if (!this.#disposed) this.#live.acceptLiveUpdate(update);
+  }
+
+  #publishSettlement(
+    settlement: WorkbenchTranscriptSettlement,
+    observations: readonly WorkbenchTranscriptObservation[],
+    source: WorkbenchTranscriptRecordingContext["source"],
+  ) {
+    if (!settlement.changes) return;
+    try {
+      this.#live.settle(settlement.changes, {
+        replaceLiveText: source === "provider" && observations.some(observation => observation.kind === "providerTurnScope"),
+      });
+    } catch (error) {
+      // Publication failure must never relabel a successful durable commit as a capture gap.
+      reportSubscriptionFailure(error);
+    }
   }
 
   async readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {

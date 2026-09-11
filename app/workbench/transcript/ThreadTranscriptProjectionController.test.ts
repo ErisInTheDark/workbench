@@ -17,6 +17,10 @@ import {
 import ThreadTranscriptProjectionController from "./ThreadTranscriptProjectionController";
 import type { ThreadTranscriptProjectionState } from "./ThreadTranscriptProjectionController";
 import reconcileTranscriptProjectionWithLiveThread from "./reconcile-transcript-projection-with-live-thread";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import {
+  createTranscriptLayout, createTranscriptLayoutPatch, type TranscriptStreamUpdate,
+} from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 function flush() {
   return new Promise<void>((resolve) => setImmediate(resolve));
@@ -100,6 +104,73 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
     turns: [],
   };
 }
+
+function streamBaseline(threadId: string): TranscriptStreamUpdate {
+  const snapshot = emptySnapshot(threadId);
+  snapshot.turns = [{
+    id: "turn", identity_origin: "legacy", thread_id: threadId, turn_index: 0, harness_id: "codex",
+    native_location: "C:/project", native_thread_id: threadId, native_turn_id: "turn", state: "inProgress",
+    created_at: 1, started_at: 1, ended_at: null, duration_ms: null,
+  }];
+  snapshot.loadedTurnIds = ["turn"];
+  snapshot.rows.threadItems = [{
+    id: 1, public_id: null, source_id: "plan:turn", thread_id: threadId, turn_id: "turn",
+    item_position: 0, type: "plan", created_at: 1, updated_at: 1,
+  }];
+  snapshot.rows.threadItemPlans = [{ item_id: 1, item_type: "plan", text: "stored" }];
+  const projected = projectWorkbenchTranscript(snapshot);
+  assert.ok(projected.success);
+  return {
+    kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: false,
+    layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)),
+  };
+}
+
+test("incremental SQL never reconciles provider-live state and text does not republish the tree", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  const text: string[] = [];
+  const errors: Error[] = [];
+  let receive!: (update: TranscriptStreamUpdate) => void;
+  let subscriptions = 0;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 4,
+    onStateChange: state => states.push(state),
+    onText: (_update, value) => text.push(value),
+    onError: error => errors.push(error),
+    reconcileProjection: () => { throw new Error("legacy projection must not be read"); },
+    scheduleComparison: callback => callback as unknown as ReturnType<typeof setTimeout>,
+    cancelComparison: () => {},
+    transcripts: {
+      reportParity: async () => {},
+      unsubscribe: async () => {},
+      subscribe: async (_params, _snapshot, stream) => { subscriptions++; receive = stream!; },
+    },
+  });
+  try {
+    controller.select({ thread: thread("thread"), browseResultEntries: [] });
+    await flush();
+    receive(streamBaseline("thread"));
+    const count = states.length;
+    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
+      field: "planText", index: null, append: true, text: " delta" });
+    controller.select({ thread: thread("thread"), browseResultEntries: [] });
+    assert.deepEqual(text, ["stored delta"]);
+    assert.equal(states.length, count);
+    assert.deepEqual(errors, []);
+    controller.select({ thread: thread("thread", ["turn", "next"]), browseResultEntries: [] });
+    await flush();
+    assert.equal(subscriptions, 1, "new live turns arrive on the existing stream");
+    const obsolete = receive;
+    controller.select({ thread: thread("other"), browseResultEntries: [] });
+    await flush();
+    receive(streamBaseline("other"));
+    obsolete({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
+      field: "planText", index: null, append: true, text: " stale" });
+    assert.deepEqual(text, ["stored delta"]);
+  } finally {
+    await controller.dispose();
+  }
+});
 
 test("an initial same-thread snapshot remains usable while its replacement window loads", async () => {
   const states: ThreadTranscriptProjectionState[] = [];
@@ -576,7 +647,8 @@ test("the subscription follows the exact loaded turns and replaces itself when t
   controller.dispose();
 });
 
-test("a connecting turn stays in the live overlay and never enters durable subscription scope", async () => {
+for (const incremental of [false, true]) {
+test(`a connecting turn stays visible outside durable scope with incremental=${incremental}`, async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const subscriptions: WorkbenchTranscriptSubscribeParams[] = [];
   const readyTurnIds: string[][] = [];
@@ -594,9 +666,17 @@ test("a connecting turn stays in the live overlay and never enters durable subsc
     }),
     transcripts: {
       reportParity: async () => undefined,
-      subscribe: async (params, listener) => {
+      subscribe: async (params, listener, stream) => {
         subscriptions.push(params);
-        listeners.set(params.subscriptionId, listener);
+        listeners.set(params.subscriptionId, snapshot => {
+          if (!incremental || !snapshot) return listener(snapshot);
+          const projected = projectWorkbenchTranscript(snapshot);
+          assert.ok(projected.success);
+          stream!({
+            kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: false,
+            layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)),
+          });
+        });
       },
       unsubscribe: async ({ subscriptionId }) => { listeners.delete(subscriptionId); },
     },
@@ -635,9 +715,10 @@ test("a connecting turn stays in the live overlay and never enters durable subsc
   controller.select({ browseResultEntries: [], thread: admitted });
   await flush();
   await flush();
-  assert.deepEqual(subscriptions.at(-1)?.turnIds, ["provider-turn"]);
+  assert.deepEqual(subscriptions.at(-1)?.turnIds, incremental ? [] : ["provider-turn"]);
   controller.dispose();
 });
+}
 
 test("selection stays inert until capability and reconnect capability creates a fresh subscription", async () => {
   const events: string[] = [];

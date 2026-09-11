@@ -1,5 +1,5 @@
 /*
- * WorkbenchProjectedTranscriptTurn/WorkbenchTranscriptProjection: browser-owned canonical transcript values reconstructed from relational rows. Keywords: transcript, projection, turn, browser.
+ * WorkbenchProjectedTranscriptTurn/WorkbenchTranscriptProjection: canonical transcript values reconstructed from relational rows.
  * WorkbenchTranscriptProjectionResult: complete hydration-bounded projection or one bounded relational-integrity failure. Keywords: transcript, projection, validation.
  * projectWorkbenchTranscript: reconstruct turns, Browse facts, item timing, and display segments from canonical item projection. Keywords: transcript, browser, canonical, parity.
  * Re-exports: shared canonical item projection values from the lower database transcript owner. Keywords: transcript, projection, item, database.

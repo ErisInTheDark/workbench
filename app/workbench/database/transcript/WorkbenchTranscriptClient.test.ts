@@ -12,6 +12,7 @@ import {
   workbenchTranscriptOperations,
   type WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type { TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 const emptySnapshot = {
   thread: {
@@ -33,6 +34,40 @@ const emptySnapshot = {
   hasPreviousTurns: false,
   rows: {},
 };
+
+test("incremental subscriptions negotiate independently and reject malformed stream updates without admitting them", async () => {
+  let notify!: (notification: { method: string; params: unknown }) => void;
+  let disconnect!: () => void;
+  const requests: unknown[] = [];
+  const updates: TranscriptStreamUpdate[] = [];
+  const reports: WorkbenchTranscriptConformanceReport[] = [];
+  const client = new WorkbenchTranscriptClient({
+    reportConformance: report => reports.push(report),
+    transport: {
+      onNotification: listener => { notify = listener; return () => {}; },
+      onDisconnect: listener => { disconnect = listener; return () => {}; },
+      request: async (_method, params) => { requests.push(params); return { subscribed: true }; },
+    },
+  });
+  try {
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 3 } });
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "live" }, () => assert.fail("not a snapshot"), update => updates.push(update));
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "snapshot" }, () => {});
+    assert.deepEqual(requests.map(value => (value as { protocolVersion: number }).protocolVersion), [3, 2]);
+    const update = { kind: "text", threadId: "thread", turnId: "turn", itemId: "item",
+      field: "reasoningSummary", index: 0, append: true, text: "visible" };
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "live", update: { ...update, index: -1 } } });
+    assert.equal(updates.length, 0);
+    assert.equal(reports.length, 1);
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "live", update } });
+    assert.equal(updates.length, 1);
+    disconnect();
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "live", update } });
+    assert.equal(updates.length, 1);
+  } finally {
+    client.dispose();
+  }
+});
 
 test("native-item support follows server capabilities and is cleared on reconnect", async () => {
   const requests: Array<{ method: string; params: unknown }> = [];

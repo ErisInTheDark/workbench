@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexAppServerClient: persistent typed WebSocket client with fenced reconnects for the local stdio bridge and app-server notifications. Keywords: codex, websocket, reconnect, stdio, notifications.
+ * - CodexAppServerClient: persistent WebSocket transport for provider and Workbench notifications with fenced reconnects.
  */
 import type { WorkbenchHarness } from "../types.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload.ts";
@@ -42,8 +42,7 @@ type WorkbenchNotification = {
     | "workbench/thread-state/reset"
     | "workbench/thread-state/updated"
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
-    | typeof workbenchTranscriptNotifications.capabilities.method
-    | typeof workbenchTranscriptNotifications.updated.method
+    | (typeof workbenchTranscriptNotifications)[keyof typeof workbenchTranscriptNotifications]["method"]
     | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
   params: unknown;
 };
@@ -293,8 +292,7 @@ export class CodexAppServerClient {
     if (workbenchMessage.method === "workbench/thread-state/updated"
       || workbenchMessage.method === "workbench/thread-state/reset"
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
-      || workbenchMessage.method === workbenchTranscriptNotifications.capabilities.method
-      || workbenchMessage.method === workbenchTranscriptNotifications.updated.method
+      || Object.values(workbenchTranscriptNotifications).some(notification => notification.method === workbenchMessage.method)
       || workbenchMessage.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD) {
       for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);
       return;

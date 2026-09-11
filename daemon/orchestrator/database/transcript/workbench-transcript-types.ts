@@ -30,6 +30,7 @@ import type { CoreSchemaRows } from "workbench-shared/workbench/database/schema/
 import type { EvidenceSchemaRows } from "workbench-shared/workbench/database/schema/evidence-schema";
 import type { WorkbenchCumulativeTokenUsage } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
+import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 export type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,
@@ -239,4 +240,9 @@ export interface WorkbenchTranscriptRecordingContext {
 
 export interface WorkbenchTranscriptSettlement {
   changedThreadIds: string[];
+  changes?: {
+    snapshot: WorkbenchTranscriptSnapshot;
+    removedItemIds: string[];
+    completedItemIds: string[];
+  }[];
 }

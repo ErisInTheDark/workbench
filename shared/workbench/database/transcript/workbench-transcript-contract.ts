@@ -5,6 +5,7 @@
  * WorkbenchTranscriptConformanceReport/WorkbenchTranscriptParityDiagnostic: bounded structural and semantic mismatch evidence safe for browser-to-orchestrator logging. Keywords: transcript, conformance, parity, diagnostic.
  * WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: exact server dispatch union decoded by the shared registry. Keywords: transcript, websocket, request.
  * workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: shared notification identities and payload conformance. Keywords: transcript, websocket, capability, notification.
+ * WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: conformed incremental presentation notifications.
  */
 import { coreTables } from "../schema/core-schema.ts";
 import { evidenceTables } from "../schema/evidence-schema.ts";
@@ -20,6 +21,9 @@ import {
   type DatabaseConformanceResult,
 } from "../../../database/schema/schema-conformance.ts";
 import type { SelectRow } from "../../../database/schema/schema-definition.ts";
+import type {
+  TranscriptLayout, TranscriptLayoutPatch, TranscriptSequenceEdit, TranscriptStreamUpdate, TranscriptTextField, TranscriptPatchUpdate,
+} from "../../transcript/thread-transcript-stream.ts";
 
 export const transcriptSnapshotTables = Object.freeze({
   itemIdentities: transcriptIdentityTables.itemIdentities,
@@ -75,7 +79,7 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
-  protocolVersion?: 1 | 2;
+  protocolVersion?: 1 | 2 | 3;
   threadId: string;
   turnIds?: string[];
   turnLimit: number;
@@ -376,7 +380,7 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const turnLimit = value.turnLimit;
   const beforeTurnIndex = value.beforeTurnIndex;
   const turnIds = value.turnIds;
-  if (value.protocolVersion !== undefined && value.protocolVersion !== 1 && value.protocolVersion !== 2) {
+  if (value.protocolVersion !== undefined && value.protocolVersion !== 1 && value.protocolVersion !== 2 && value.protocolVersion !== 3) {
     return { success: false, message: "Unsupported transcript protocol version." };
   }
   if (!threadId || typeof turnLimit !== "number" || !Number.isSafeInteger(turnLimit) || turnLimit <= 0) {
@@ -399,7 +403,7 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const data: WorkbenchTranscriptReadRequest = { threadId, turnLimit };
   if (typeof beforeTurnIndex === "number") data.beforeTurnIndex = beforeTurnIndex;
   if (Array.isArray(turnIds)) data.turnIds = turnIds;
-  if (value.protocolVersion === 1 || value.protocolVersion === 2) data.protocolVersion = value.protocolVersion;
+  if (value.protocolVersion === 1 || value.protocolVersion === 2 || value.protocolVersion === 3) data.protocolVersion = value.protocolVersion;
   return { success: true, data };
 }
 
@@ -567,7 +571,7 @@ export interface WorkbenchTranscriptUpdatedParams {
   subscriptionId: string;
 }
 
-export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 2;
+export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 3;
 
 export interface WorkbenchTranscriptCapabilities {
   protocolVersion: number;
@@ -576,7 +580,97 @@ export interface WorkbenchTranscriptCapabilities {
 export const workbenchTranscriptNotifications = Object.freeze({
   capabilities: Object.freeze({ method: "workbench/transcript/capabilities" as const }),
   updated: Object.freeze({ method: "workbench/transcript/updated" as const }),
+  streamed: Object.freeze({ method: "workbench/transcript/streamed" as const }),
 });
+
+export interface WorkbenchTranscriptStreamedParams {
+  subscriptionId: string;
+  update: TranscriptStreamUpdate;
+}
+
+function isNonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isSequenceEdit<Value>(
+  value: unknown, isValue: (entry: unknown) => entry is Value,
+): value is TranscriptSequenceEdit<Value> {
+  return isRecord(value) && isNonnegativeInteger(value.offset) && isNonnegativeInteger(value.deleteCount)
+    && Array.isArray(value.values) && value.values.every(isValue);
+}
+
+function isLayoutItem(value: unknown): value is TranscriptLayout["items"][number] {
+  return isRecord(value) && isString(value.itemId) && isString(value.turnId) && isNonnegativeInteger(value.itemIndex);
+}
+
+function isLayoutSegment(value: unknown): value is TranscriptLayout["segments"][number] {
+  return isRecord(value) && isString(value.id) && isString(value.turnId)
+    && isNonnegativeInteger(value.offset) && isNonnegativeInteger(value.count)
+    && typeof value.isFirstForTurn === "boolean" && typeof value.isLastForTurn === "boolean"
+    && typeof value.ownsCanonicalTerminal === "boolean" && (value.kind === "canonical" || value.kind === "virtual");
+}
+
+function isLayoutPatch(value: unknown): value is TranscriptLayoutPatch {
+  return isRecord(value)
+    && (value.turns === undefined || isSequenceEdit(value.turns, isString))
+    && (value.history === undefined || isSequenceEdit(value.history, isString))
+    && (value.items === undefined || isSequenceEdit(value.items, isLayoutItem))
+    && (value.segments === undefined || isSequenceEdit(value.segments, isLayoutSegment));
+}
+
+function isTextField(value: unknown): value is TranscriptTextField {
+  return value === "agentMessageText" || value === "commandExecutionOutput" || value === "planText"
+    || value === "reasoningContent" || value === "reasoningSummary";
+}
+
+function isFilePatch(value: unknown): value is TranscriptPatchUpdate["changes"][number] {
+  return isRecord(value) && isString(value.path) && isString(value.diff) && isRecord(value.kind)
+    && (value.kind.type === "add" || value.kind.type === "delete"
+      || (value.kind.type === "update" && (value.kind.move_path === null || isString(value.kind.move_path))));
+}
+
+export function conformWorkbenchTranscriptStreamed(value: unknown): DatabaseConformanceResult<WorkbenchTranscriptStreamedParams> {
+  const invalid = (): DatabaseConformanceResult<WorkbenchTranscriptStreamedParams> => ({
+    success: false, repairedPaths: [], issues: [invalidValue(["update"])],
+  });
+  if (!isRecord(value) || !isString(value.subscriptionId) || !isRecord(value.update)) return invalid();
+  const update = value.update;
+  if (update.kind === "absent") {
+    return { success: true, repairedPaths: [], data: { subscriptionId: value.subscriptionId, update: { kind: "absent" } } };
+  }
+  if (update.kind === "patch" && isString(update.threadId) && isString(update.turnId) && isString(update.itemId)
+    && Array.isArray(update.changes) && update.changes.every(isFilePatch)) {
+    return { success: true, repairedPaths: [], data: { subscriptionId: value.subscriptionId, update: {
+      kind: "patch", threadId: update.threadId, turnId: update.turnId, itemId: update.itemId, changes: update.changes,
+    } } };
+  }
+  if (update.kind === "text" && isString(update.threadId) && isString(update.turnId) && isString(update.itemId)
+    && isString(update.text) && isTextField(update.field) && typeof update.append === "boolean"
+    && (update.index === null || isNonnegativeInteger(update.index))) {
+    return {
+      success: true, repairedPaths: [],
+      data: { subscriptionId: value.subscriptionId, update: {
+        kind: "text", threadId: update.threadId, turnId: update.turnId, itemId: update.itemId,
+        text: update.text, field: update.field, append: update.append, index: typeof update.index === "number" ? update.index : null,
+      } },
+    };
+  }
+  if (update.kind !== "structure" || typeof update.reset !== "boolean" || typeof update.hasPreviousTurns !== "boolean"
+    || !Array.isArray(update.removedItemIds) || !update.removedItemIds.every(isString) || !isLayoutPatch(update.layout)) return invalid();
+  const snapshot = conformWorkbenchTranscriptSnapshot(update.snapshot);
+  if (!("data" in snapshot)) return { success: false, repairedPaths: snapshot.repairedPaths, issues: snapshot.issues };
+  return {
+    success: true, repairedPaths: snapshot.repairedPaths.map(path => ["update", "snapshot", ...path]),
+    data: { subscriptionId: value.subscriptionId, update: {
+      kind: "structure", reset: update.reset, hasPreviousTurns: update.hasPreviousTurns,
+      removedItemIds: update.removedItemIds, layout: update.layout, snapshot: snapshot.data,
+    } },
+  };
+}
 
 export function conformWorkbenchTranscriptCapabilities(
   value: unknown,

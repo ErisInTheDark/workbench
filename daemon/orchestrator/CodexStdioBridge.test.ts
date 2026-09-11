@@ -2594,6 +2594,7 @@ test("live transcript recording survives throwing compatibility readers across r
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const sqliteFailures: Error[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
+  const streamed: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptTextUpdate[] = [];
   let compatibilityReads = 0;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const client: BridgeClient = {
@@ -2613,6 +2614,7 @@ test("live transcript recording survives throwing compatibility readers across r
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     onNotification() {},
+    onTranscriptLiveUpdate(update) { if (update.kind === "text") streamed.push(update); },
     readSqliteTranscriptMaterializedTurnIds: async (threadId, turnIds) => (
       repository.readMaterializedTurnIds(threadId, turnIds)
     ),
@@ -2684,6 +2686,19 @@ test("live transcript recording survives throwing compatibility readers across r
     await bridge.handleUpstreamMessage({
       method: "item/started",
       params: { item, startedAtMs: 1_000, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.withTranscriptBoundary(async () => {});
+    const beforeDelta = sqliteBatches.length;
+    await bridge.handleUpstreamMessage({
+      method: "item/agentMessage/delta",
+      params: { delta: " text", itemId: item.id, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.withTranscriptBoundary(async () => {
+      assert.equal(streamed.length, 1, "bootstrap must observe already admitted text");
+      assert.equal(streamed[0]!.text, " text");
+      assert.notEqual(streamed[0]!.threadId, "thread");
+      assert.notEqual(streamed[0]!.itemId, item.id);
+      assert.equal(sqliteBatches.length, beforeDelta, "text must not create a durable settlement");
     });
     await bridge.handleUpstreamMessage({
       method: "item/completed",

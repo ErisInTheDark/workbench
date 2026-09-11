@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadTranscriptComparison: render one item-aligned desktop comparison of JSON and SQLite transcript projections. Keywords: transcript, parity, comparison, desktop.
+ * - default ThreadTranscriptComparison: render item-aligned JSON and SQLite projections with independent live text.
  */
 "use client";
 
@@ -46,6 +46,7 @@ function TranscriptComparisonCell({
   projectId,
   projectRootPath,
   relatedThreadsById,
+  source,
   subagents,
   threadCwdPath,
   threadId,
@@ -62,6 +63,7 @@ function TranscriptComparisonCell({
   projectId: string;
   projectRootPath: string;
   relatedThreadsById: Record<string, ThreadPayload | undefined>;
+  source: "json" | "sqlite";
   subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath: string;
   threadId: string;
@@ -90,7 +92,7 @@ function TranscriptComparisonCell({
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
-        presentationSource={null}
+        presentationSource={turn.status === "inProgress" ? { kind: source, sourceKey: `codex:${threadId}` } : null}
         relatedThreadsById={relatedThreadsById}
         subagents={subagents}
         threadCwdPath={threadCwdPath}
@@ -206,6 +208,7 @@ export default function ThreadTranscriptComparison({
                   ? jsonBrowseEntriesByTurnId.get(row.json.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES
                   : EMPTY_BROWSE_RESULT_ENTRIES}
                 entry={row.json}
+                source="json"
                 hiddenReasoningStep={hiddenReasoningStep}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
@@ -225,6 +228,7 @@ export default function ThreadTranscriptComparison({
                   ? sqliteBrowseEntriesByTurnId.get(row.sqlite.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES
                   : EMPTY_BROWSE_RESULT_ENTRIES}
                 entry={row.sqlite}
+                source="sqlite"
                 hiddenReasoningStep={hiddenReasoningStep}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}

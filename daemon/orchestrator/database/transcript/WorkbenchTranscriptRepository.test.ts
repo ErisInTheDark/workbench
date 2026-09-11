@@ -175,6 +175,61 @@ function providerTurnScope(
   };
 }
 
+test("settlement publishes only affected bodies, including augmentation replacement", () => {
+  const { database, repository } = createRepository();
+  const item = (id: string, text: string): WorkbenchTranscriptAtomicObservation => ({
+    kind: "item",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+    lifecycle: "completed",
+    observedAt: 4,
+    item: { type: "reasoning", id, summary: [text], content: [] },
+  });
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(), turnObservation("turn", 0),
+      ...Array.from({ length: 100 }, (_, index) => item(`reasoning-${index}`, "retained")),
+    ], ["turn"])]);
+    const settlement = repository.settle([item("reasoning-50", "updated")]);
+    assert.ok(settlement.changes, "settlement must carry committed changes, not require a window reread");
+    assert.equal(settlement.changes.length, 1);
+    const change = settlement.changes[0]!;
+    assert.deepEqual(change.snapshot.rows.threadItems.map(row => row.source_id), ["reasoning-50"]);
+    const projected = projectWorkbenchTranscriptItems(change.snapshot.rows);
+    assert.equal(projected.success, true);
+    if (projected.success) {
+      assert.equal(projected.data.length, 1);
+      const updated = projected.data[0]!.item;
+      assert.equal(updated.type, "reasoning");
+      if (updated.type === "reasoning") assert.deepEqual(updated.summary, ["updated"]);
+    }
+    assert.deepEqual(change.removedItemIds, []);
+  } finally {
+    database.close();
+  }
+});
+
+test("rolled back settlement cannot leak a body into a later publication", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    assert.throws(() => repository.settle([
+      {
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+        turnId: fixtureIdentityValues.WorkbenchTurnId.turn, lifecycle: "completed", observedAt: 4,
+        item: { type: "reasoning", id: "rolled-back", summary: ["not committed"], content: [] },
+      },
+      { ...turnObservation("turn", 0), threadId: fixtureIdentityValues.WorkbenchThreadId.other },
+    ]));
+    const settlement = repository.settle([threadObservation()]);
+    assert.ok(settlement.changes, "settlement must carry its own committed changes");
+    assert.deepEqual(settlement.changes.flatMap(change => change.snapshot.rows.threadItems), []);
+    assert.deepEqual(settlement.changes.flatMap(change => change.removedItemIds), []);
+  } finally {
+    database.close();
+  }
+});
+
 test("canonical reads convert only selected retained bodies and preserve old references across reopen", () => {
   const { database, repository } = createRepository();
   try {

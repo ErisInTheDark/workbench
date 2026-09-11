@@ -1,15 +1,20 @@
 /*
- * WorkbenchTranscriptSubscriptionController: owns active latest-window reads, coalesced refresh, replacement, and disposal. Keywords: transcript, subscription, lifecycle.
+ * Exports:
+ * - WorkbenchTranscriptSubscription: snapshot or incremental latest-window subscription.
+ * - default WorkbenchTranscriptSubscriptionController: own bootstrap, replacement and disposal.
  */
 import type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,
 } from "./workbench-transcript-types.ts";
+import type { TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type WorkbenchTranscriptLiveController from "./WorkbenchTranscriptLiveController";
 
 export interface WorkbenchTranscriptSubscription {
   id: string;
   request: WorkbenchTranscriptReadRequest;
   publish: (snapshot: WorkbenchTranscriptSnapshot | null) => void | Promise<void>;
+  publishStream?: (update: TranscriptStreamUpdate) => void;
 }
 
 interface ActiveSubscription extends WorkbenchTranscriptSubscription {
@@ -17,18 +22,26 @@ interface ActiveSubscription extends WorkbenchTranscriptSubscription {
   refreshing: boolean;
 }
 
+interface LiveSubscriptionSource {
+  controller: WorkbenchTranscriptLiveController;
+  runOrdered: (operation: () => Promise<void>) => Promise<void>;
+}
+
 export default class WorkbenchTranscriptSubscriptionController {
   readonly #read: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>;
   readonly #reportFailure: (error: unknown) => void;
   readonly #subscriptions = new Map<string, ActiveSubscription>();
+  readonly #live?: LiveSubscriptionSource;
   #disposed = false;
 
   constructor(
     read: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>,
     reportFailure: (error: unknown) => void,
+    live?: LiveSubscriptionSource,
   ) {
     this.#read = read;
     this.#reportFailure = reportFailure;
+    this.#live = live;
   }
 
   async subscribe(subscription: WorkbenchTranscriptSubscription) {
@@ -42,7 +55,7 @@ export default class WorkbenchTranscriptSubscriptionController {
     try {
       await this.#readAndPublish(active);
     } catch (error) {
-      if (this.#subscriptions.get(active.id) === active) this.#subscriptions.delete(active.id);
+      if (this.#subscriptions.get(active.id) === active) this.unsubscribe(active.id);
       throw error;
     } finally {
       active.refreshing = false;
@@ -52,12 +65,14 @@ export default class WorkbenchTranscriptSubscriptionController {
 
   unsubscribe(id: string) {
     this.#subscriptions.delete(id);
+    this.#live?.controller.close(id);
   }
 
-  settle(changedThreadIds: readonly string[]) {
+  settle(changedThreadIds: readonly string[], { snapshots = true } = {}) {
     if (this.#disposed || changedThreadIds.length === 0) return;
     const changed = new Set(changedThreadIds);
     for (const subscription of this.#subscriptions.values()) {
+      if (subscription.publishStream ? this.#live?.controller.hasView(subscription.id) : !snapshots) continue;
       if (!changed.has(subscription.request.threadId)) continue;
       subscription.dirty = true;
       this.#startRefresh(subscription);
@@ -67,10 +82,20 @@ export default class WorkbenchTranscriptSubscriptionController {
   dispose() {
     this.#disposed = true;
     this.#subscriptions.clear();
+    this.#live?.controller.dispose();
   }
 
   async #readAndPublish(subscription: ActiveSubscription) {
     if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+    if (subscription.publishStream && this.#live) {
+      await this.#live.runOrdered(async () => {
+        if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+        const snapshot = await this.#read(subscription.request);
+        if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+        this.#live!.controller.open(subscription.id, snapshot, subscription.publishStream!);
+      });
+      return;
+    }
     const snapshot = await this.#read(subscription.request);
     if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
     await subscription.publish(snapshot);

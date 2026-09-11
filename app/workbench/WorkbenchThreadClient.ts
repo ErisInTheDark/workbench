@@ -928,13 +928,19 @@ function WorkbenchThreadClient(
           const projection = new ThreadTranscriptProjectionController({
             onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
             onStateChange: publish,
+            onText: (update, canonicalText) => {
+              const sourceKey = getThreadStateKey("codex", update.threadId);
+              const key = presentationKey(sourceKey, update.threadId, update.turnId, update.itemId, update.field, update.index, "sqlite");
+              textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
+              if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
+            },
             reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
               mergeLiveTurn: (incoming, live) => mergeLiveStreamingTurn(incoming, live, { settleStreamingKeys: false }),
               projection, thread: selection.thread,
             }),
             transcripts: {
               reportParity: diagnostic => transcripts.reportParity(diagnostic),
-              subscribe: (params, listener) => transcripts.subscribe(params, listener),
+              subscribe: (params, listener, streamListener) => transcripts.subscribe(params, listener, streamListener),
               unsubscribe: async params => {
                 // Closing this client closes the shared socket and releases all server subscriptions.
                 if (disposed) return;
@@ -3997,12 +4003,13 @@ function WorkbenchThreadClient(
     const isReasoningField = field === "reasoningContent" || field === "reasoningSummary";
     const hasVisibleLeaf = priorText !== null && (!isReasoningField || Boolean(priorText.trim()));
     const selected = threadDocuments.getSelectedThreadKey() === threadKey;
-    const keys = (["json", "sqlite"] as const).map((kind) => (
+    const kinds: readonly ("json" | "sqlite")[] = transcripts.incremental ? ["json"] : ["json", "sqlite"];
+    const keys = kinds.map((kind) => (
       presentationKey(threadKey, threadId, turnId, itemId, field, index, kind)
     ));
     const useLeafPresentation = selected
       && hasVisibleLeaf
-      && keys.some((key) => textPresentation.hasSubscribers(key));
+      && (transcripts.incremental || keys.some((key) => textPresentation.hasSubscribers(key)));
     const applied = apply(!useLeafPresentation);
     if (!applied || !useLeafPresentation) return applied;
     const canonicalText = readPresentationText(threadKey, turnId, itemId, field, index);
@@ -4039,7 +4046,8 @@ function WorkbenchThreadClient(
       item.content.forEach((text, index) => fields.push({ field: "reasoningContent", index, text }));
     }
     for (const entry of fields) {
-      for (const kind of ["json", "sqlite"] as const) {
+      const kinds: readonly ("json" | "sqlite")[] = transcripts.incremental ? ["json"] : ["json", "sqlite"];
+      for (const kind of kinds) {
         textPresentation.complete(
           presentationKey(threadKey, threadId, turnId, item.id, entry.field, entry.index, kind),
           entry.text,

@@ -19,8 +19,13 @@ import {
 } from "./thread-transcript-parity";
 import {
   projectWorkbenchTranscript,
+  type WorkbenchProjectedTranscriptItem,
   type WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import {
+  applyTranscriptLayoutPatch, applyTranscriptStructure, readTranscriptText, writeTranscriptText,
+  type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate,
+} from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 export interface ThreadTranscriptProjectionSelection {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
@@ -58,6 +63,7 @@ interface ThreadTranscriptProjectionControllerOptions {
   cancelComparison?: (timer: ReturnType<typeof setTimeout>) => void;
   onError?: (error: Error) => void;
   onStateChange?: (state: ThreadTranscriptProjectionState) => void;
+  onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
   reconcileProjection?: (
     projection: WorkbenchTranscriptProjection,
     selection: ThreadTranscriptProjectionSelection,
@@ -72,6 +78,7 @@ export default class ThreadTranscriptProjectionController {
   readonly #cancelComparison: NonNullable<ThreadTranscriptProjectionControllerOptions["cancelComparison"]>;
   readonly #onError: NonNullable<ThreadTranscriptProjectionControllerOptions["onError"]>;
   readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
+  readonly #onText: NonNullable<ThreadTranscriptProjectionControllerOptions["onText"]>;
   readonly #reconcileProjection: NonNullable<ThreadTranscriptProjectionControllerOptions["reconcileProjection"]>;
   readonly #scheduleComparison: NonNullable<ThreadTranscriptProjectionControllerOptions["scheduleComparison"]>;
   readonly #transcripts: ThreadTranscriptProjectionControllerOptions["transcripts"];
@@ -87,12 +94,16 @@ export default class ThreadTranscriptProjectionController {
   #projection: { value: WorkbenchTranscriptProjection | null; generation: number } | null = null;
   #reporting = Promise.resolve();
   #selection: ThreadTranscriptProjectionSelection | null = null;
+  #streamLayout: TranscriptLayout | null = null;
+  #streamItems = new Map<string, WorkbenchProjectedTranscriptItem>();
+  #incremental = false;
 
   constructor({
     available = false,
     cancelComparison = (timer) => clearTimeout(timer),
     onError = (error) => console.error("Workbench transcript projection failed.", error),
     onStateChange = () => undefined,
+    onText = () => undefined,
     reconcileProjection = (projection) => projection,
     scheduleComparison = (callback) => setTimeout(callback, 0),
     transcripts,
@@ -101,6 +112,7 @@ export default class ThreadTranscriptProjectionController {
     this.#cancelComparison = cancelComparison;
     this.#onError = onError;
     this.#onStateChange = onStateChange;
+    this.#onText = onText;
     this.#available = available;
     this.#reconcileProjection = reconcileProjection;
     this.#scheduleComparison = scheduleComparison;
@@ -114,6 +126,8 @@ export default class ThreadTranscriptProjectionController {
     this.#cancelScheduledComparison();
     this.#selection = null;
     this.#projection = null;
+    this.#streamItems.clear();
+    this.#streamLayout = null;
     this.#onStateChange({ status: "idle" });
     this.#lastDiagnostic = null;
     this.#generation += 1;
@@ -133,6 +147,9 @@ export default class ThreadTranscriptProjectionController {
     if (available) this.#hasBeenAvailable = true;
     this.#cancelScheduledComparison();
     this.#projection = null;
+    this.#streamItems.clear();
+    this.#streamLayout = null;
+    this.#incremental = false;
     this.#lastDiagnostic = null;
     if (!available) {
       this.#generation += 1;
@@ -151,11 +168,21 @@ export default class ThreadTranscriptProjectionController {
     if (this.#disposed) return;
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
-    const loadedTurnsChanged = !sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns);
+    const previousIds = durableTurnIds(this.#selection?.thread.turns);
+    const nextIds = durableTurnIds(selection?.thread.turns);
+    const appendedOnly = nextIds.length >= previousIds.length && previousIds.every((id, index) => nextIds[index] === id);
+    const loadedTurnsChanged = !sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns)
+      && !(this.#incremental && appendedOnly);
+    const connectingChanged = !areDeeplyEqual(
+      this.#selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
+      selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
+    );
     this.#selection = selection;
     if (previousThreadId !== nextThreadId) {
       this.#cancelScheduledComparison();
       this.#projection = null;
+      this.#streamItems.clear();
+      this.#streamLayout = null;
       this.#lastDiagnostic = null;
       if (!selection) {
         this.#onStateChange({ status: "idle" });
@@ -185,7 +212,7 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    if (publishState) this.#publishProjection();
+    if (publishState && (!this.#incremental || connectingChanged)) this.#publishProjection();
   }
 
   #cancelScheduledComparison() {
@@ -221,6 +248,28 @@ export default class ThreadTranscriptProjectionController {
 
   #reconcileCurrentProjection() {
     if (!this.#selection || !this.#projection?.value) return null;
+    if (this.#incremental) {
+      const projection = this.#projection.value;
+      // Local connecting input is not provider transcript truth. Keep it visible until admission.
+      const pending = this.#selection.thread.turns.filter(turn =>
+        getWorkbenchTurnAdmission(turn) === "connecting" && !projection.turns.some(existing => existing.id === turn.id));
+      if (!pending.length) return projection;
+      const pendingTurns = pending.map((turn, index) => ({
+        ...turn, turnIndex: Math.max(-1, ...projection.turns.map(existing => existing.turnIndex)) + index + 1,
+        itemTimeline: this.#selection!.thread.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline ?? [],
+      }));
+      return {
+        ...projection,
+        turns: [...projection.turns, ...pendingTurns],
+        display: {
+          ...projection.display,
+          segments: [...projection.display.segments, ...pendingTurns.map(turn => ({
+            id: `${turn.id}:connecting`, turnId: turn.id, items: turn.items, kind: "virtual" as const,
+            isFirstForTurn: true, isLastForTurn: true, ownsCanonicalTerminal: false,
+          }))],
+        },
+      };
+    }
     let projection: WorkbenchTranscriptProjection;
     try {
       projection = this.#reconcileProjection(this.#projection.value, this.#selection);
@@ -305,6 +354,54 @@ export default class ThreadTranscriptProjectionController {
     if (this.#publishProjection() && generation === this.#generation) this.#scheduleCompare();
   }
 
+  #receiveStream(generation: number, update: TranscriptStreamUpdate) {
+    if (this.#disposed || !this.#available || generation !== this.#generation) return;
+    this.#incremental = true;
+    if (update.kind === "absent") {
+      this.#receiveSnapshot(generation, null);
+      return;
+    }
+    const threadId = update.kind === "structure" ? update.snapshot.thread.id : update.threadId;
+    if (threadId !== this.#selection?.thread.id) return;
+    if (update.kind === "patch") {
+      const item = this.#streamItems.get(update.itemId);
+      if (item?.type === "fileChange") {
+        item.changes = update.changes;
+        this.#publishProjection();
+      } else {
+        this.#onError(new Error("SQLite patch update arrived without its file-change baseline."));
+      }
+      return;
+    }
+    if (update.kind === "text") {
+      const item = this.#streamItems.get(update.itemId);
+      if (!item) {
+        this.#onError(new Error("SQLite text update arrived without its item baseline."));
+        return;
+      }
+      const previous = readTranscriptText(item, update.field, update.index);
+      const text = writeTranscriptText(item, update);
+      this.#onText(update, text);
+      // The first nonempty field creates a rendering leaf; subsequent text only updates that leaf.
+      if (!previous.trim() && text.trim()) this.#publishProjection();
+      return;
+    }
+    try {
+      const layout = applyTranscriptLayoutPatch(update.reset ? null : this.#streamLayout, update.layout);
+      const projection = applyTranscriptStructure(this.#projection?.value ?? null, update, layout);
+      this.#streamLayout = layout;
+      this.#streamItems = new Map(projection.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const)));
+      this.#projection = { value: projection, generation };
+      this.#publishProjection();
+      this.#scheduleCompare();
+    } catch (error) {
+      this.#onError(new Error("SQLite structural update could not be applied.", { cause: error }));
+      if (!this.#projection?.value) {
+        this.#onStateChange({ status: "failed", threadId, message: "Unable to present the SQLite transcript baseline." });
+      }
+    }
+  }
+
   #reportError(stage: "report" | "subscription", error: unknown, generation = this.#generation) {
     if (this.#disposed || !this.#available) return;
     const cause = error instanceof Error ? error : new Error(String(error));
@@ -347,7 +444,8 @@ export default class ThreadTranscriptProjectionController {
           threadId: selection.thread.id,
           turnIds: durableTurnIds(selection.thread.turns),
           turnLimit: this.#turnLimit,
-        }, (snapshot) => this.#receiveSnapshot(generation, snapshot));
+        }, (snapshot) => this.#receiveSnapshot(generation, snapshot),
+        update => this.#receiveStream(generation, update));
         if (!this.#disposed && generation !== this.#generation) {
           if (this.#activeSubscriptionId === subscriptionId) this.#activeSubscriptionId = null;
           await this.#transcripts.unsubscribe({ subscriptionId });

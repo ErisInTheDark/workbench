@@ -183,7 +183,8 @@ for (const kind of ["event", "response"] as const) {
   });
 }
 
-test("rollback restores transcript subscriptions without reviving their old publication callbacks", async () => {
+for (const protocolVersion of [2, 3] as const) {
+test(`rollback restores transcript protocol ${protocolVersion} without reviving old publication callbacks`, async () => {
   const subscriptions = new Map<string, Parameters<WorkbenchWebSocketRequestControllerOptions["transcript"]["subscribe"]>[0]>();
   const sent: Array<{ method?: string }> = [];
   const { controller } = createController({
@@ -197,7 +198,7 @@ test("rollback restores transcript subscriptions without reviving their old publ
   const client = createClient((data, callback) => { sent.push(JSON.parse(String(data))); callback?.(); });
   try {
     await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", 1, {
-      params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub" },
+      params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion },
     }), false);
     const previous = [...subscriptions.values()][0]!;
     controller.detachForReload();
@@ -205,14 +206,23 @@ test("rollback restores transcript subscriptions without reviving their old publ
     await controller.resumeAfterFailedReload();
     assert.equal(subscriptions.size, 1);
     const restored = [...subscriptions.values()][0]!;
-    await previous.publish(null);
-    assert.equal(sent.filter(({ method }) => method === "workbench/transcript/updated").length, 0);
-    await restored.publish(null);
-    assert.equal(sent.filter(({ method }) => method === "workbench/transcript/updated").length, 1);
+    const method = protocolVersion === 3 ? "workbench/transcript/streamed" : "workbench/transcript/updated";
+    if (protocolVersion === 3) {
+      assert.ok(previous.publishStream);
+      assert.ok(restored.publishStream);
+      previous.publishStream({ kind: "absent" });
+    } else {
+      await previous.publish(null);
+    }
+    assert.equal(sent.filter((entry) => entry.method === method).length, 0);
+    if (protocolVersion === 3) restored.publishStream!({ kind: "absent" });
+    else await restored.publish(null);
+    assert.equal(sent.filter((entry) => entry.method === method).length, 1);
   } finally {
     controller.dispose();
   }
 });
+}
 
 test("traffic logs cover notifications in both directions without adding event logs for query replies", async () => {
   const clock = new FakeClock();
