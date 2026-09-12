@@ -459,9 +459,10 @@ export default class GitArcPlanController {
     const registryEntries = await registry.list();
     const collisions = findGitArcCollisions(registryEntries, { harness, threadId: input.threadId }, paths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
-    const currentTree = await repository.writeScopedWorktreeTree(paths);
+    const headIdentity = await repository.readHead();
+    const head = headIdentity?.commit ?? null;
+    const currentTree = await repository.writeScopedWorktreeTree(paths, head);
     const snapshotDrift = await repository.listChangedPaths(plan.checkpointCommit, currentTree, paths);
-    const head = await repository.headOrNull();
     if (snapshotDrift.length) {
       throw await createGitArcStartDiagnosticError({
         adoptedPaths,
@@ -496,7 +497,7 @@ export default class GitArcPlanController {
       scopePaths: paths,
       version: 3,
     };
-    const baselineTree = await repository.resolveTree(head);
+    const baselineTree = headIdentity?.identity.tree ?? await repository.resolveTree(null);
     const prepared = await store.prepareCheckpoint(harness, input.threadId, baselineTree, head, activeMetadata);
     const releasedClaims = current ? liveClaims(current) : [];
     const registryMutation = await registry.prepareClaim({
@@ -512,10 +513,9 @@ export default class GitArcPlanController {
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([prepared.update, ...registryMutation.updates]);
-    const activeTree = await repository.writeScopedWorktreeTree(paths, head);
     return {
       acquiredClaims: paths,
-      changes: await repository.buildFileChanges(prepared.checkpointCommit, activeTree, paths),
+      changes: await repository.buildFileChanges(prepared.checkpointCommit, currentTree, paths),
       checkpointCommit: prepared.checkpointCommit,
       checkpointRef: prepared.checkpointRef,
       intentName: metadata.intentName ?? null,

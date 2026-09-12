@@ -1,8 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchGitHistoryRewriter: amend one unpushed commit in a linear local stack without touching worktree files. Keywords: git, amend, history, plumbing.
- * - WorkbenchGitHistoryRewriteResult: report target/tip replacements, committed paths, and bounded warnings. Keywords: git, commit, sha, result.
- * - WorkbenchGitCommitAmendability: explain whether one exact commit can use the Workbench history rewriter. Keywords: amend, safety, reason.
+ * - default WorkbenchGitHistoryRewriter: amend one unpushed commit in a linear local stack without touching worktree files.
+ * - WorkbenchGitHistoryRewriteResult: target/tip replacements, committed paths and bounded warnings.
+ * - WorkbenchGitCommitAmendability: whether one exact commit can use the history rewriter.
+ * - WorkbenchGitPreparedHead: future history used only for read-only presentation.
+ * - WorkbenchGitHistoryMutationContext: prepared history and arc changes before atomic publication.
+ * - WorkbenchGitHistoryAdditionalMutation: extra ref mutations included in history publication.
  */
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcPublishState from "./GitArcPublishState";
@@ -21,10 +24,16 @@ export type WorkbenchGitCommitAmendability =
   | { resolvedTarget: string; status: "available" }
   | { reason: string; status: "unavailable" };
 
+export interface WorkbenchGitPreparedHead {
+  commit: string;
+  ref: string | null;
+}
+
 export interface WorkbenchGitHistoryMutationContext {
   amendedCommit: string;
   arcPlan: GitArcHistoryRewritePlan;
   branchCommits: ReadonlyMap<string, string>;
+  headRef: string;
   newHead: string;
   oldHead: string;
   targetTree: string;
@@ -39,19 +48,19 @@ export interface WorkbenchGitHistoryAdditionalMutation {
 export default class WorkbenchGitHistoryRewriter {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
-  private async readAmendRange(target: string) {
-    const headRef = await this.repository.symbolicHead();
+  private async readAmendRange(target: string, preparedHead?: WorkbenchGitPreparedHead) {
+    const headRef = preparedHead ? preparedHead.ref : await this.repository.symbolicHead();
     if (!headRef) throw new Error("Detached HEAD is unsafe for an amend.");
-    const head = await this.repository.currentHead();
+    const head = preparedHead ? preparedHead.commit : await this.repository.currentHead();
     const arcRewriter = new GitArcHistoryRewriter(this.repository);
-    let resolvedTarget = await this.repository.resolveCommit(target);
-    if (!await this.repository.isAncestor(resolvedTarget, head)) {
+    let resolvedTarget = target === head ? head : await this.repository.resolveCommit(target);
+    if (resolvedTarget !== head && !await this.repository.isAncestor(resolvedTarget, head)) {
       resolvedTarget = await this.repository.resolveCommit(await arcRewriter.resolveAlias(resolvedTarget));
+      if (resolvedTarget !== head && !await this.repository.isAncestor(resolvedTarget, head)) {
+        throw new Error("The amend target is not on the current branch history.");
+      }
     }
-    if (!await this.repository.isAncestor(resolvedTarget, head)) {
-      throw new Error("The amend target is not on the current branch history.");
-    }
-    const range = await this.repository.firstParentRange(resolvedTarget, head);
+    const range = resolvedTarget === head ? [head] : await this.repository.firstParentRange(resolvedTarget, head);
     const commitBatch = await this.repository.readCommits(range);
     const commits = range.map((commit) => {
       const metadata = commitBatch.commits.get(commit);
@@ -67,10 +76,15 @@ export default class WorkbenchGitHistoryRewriter {
     return { arcRewriter, commits, head, headRef, resolvedTarget };
   }
 
-  async classifyAmendability(target: string, options: { refresh?: boolean } = {}): Promise<WorkbenchGitCommitAmendability> {
+  async classifyAmendability(target: string, options: {
+    preparedHead?: WorkbenchGitPreparedHead;
+    refresh?: boolean;
+  } = {}): Promise<WorkbenchGitCommitAmendability> {
     try {
-      const { resolvedTarget } = await this.readAmendRange(target);
-      const publishState = await new GitArcPublishState(this.repository).classifyCommit(resolvedTarget, options);
+      const { resolvedTarget } = await this.readAmendRange(target, options.preparedHead);
+      const publishState = await new GitArcPublishState(this.repository).classifyCommit(resolvedTarget, {
+        refresh: options.preparedHead ? false : options.refresh,
+      });
       if (publishState.kind === "unpushed") return { resolvedTarget, status: "available" };
       if (publishState.kind === "pushed") {
         return { reason: `Commit is already present on remote refs: ${publishState.refs.join(", ")}`, status: "unavailable" };
@@ -141,6 +155,7 @@ export default class WorkbenchGitHistoryRewriter {
       amendedCommit,
       arcPlan,
       branchCommits,
+      headRef,
       newHead: newParent,
       oldHead: head,
       targetTree,

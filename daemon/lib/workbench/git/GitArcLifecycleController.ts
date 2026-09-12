@@ -3,6 +3,7 @@
  * - default GitArcLifecycleController: own current lifecycle reads and combined active scope transitions.
  */
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcMutationResult, type GitArcScopeState } from "workbench-shared/workbench/git/git-arc-state";
+import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import type { CheckpointMetadata, GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError } from "./GitArcRegistry";
 import GitArcProposalController from "./GitArcProposalController";
@@ -16,6 +17,10 @@ interface Identity {
   harness?: GitArcHarness;
   threadId: string;
 }
+
+type ClaimChangeRequest =
+  | { kind: "add"; paths: string[] }
+  | { kind: "claims"; changes: GitArcClaimChanges };
 
 function covers(scope: string, candidate: string) {
   return scope === candidate || candidate.startsWith(`${scope}/`);
@@ -48,12 +53,17 @@ export default class GitArcLifecycleController {
 
   async claims(input: Identity & GitArcClaimChanges) {
     if (input.inherit !== true) throw new GitArcRejectionError({ reason: "inheritanceRequired" }, "Active claim edits require inherit: true.");
-    return await this.transition(input, input);
+    return await this.transition(input, { kind: "claims", changes: input });
+  }
+
+  async add(input: Identity & { paths: string[] }) {
+    if (!input.paths.length) throw new Error("Arc add requires at least one additional clean path.");
+    return await this.transition(input, { kind: "add", paths: input.paths });
   }
 
   private async transition(
     input: Identity & { checkpointCommit?: string },
-    changes?: GitArcClaimChanges,
+    request?: ClaimChangeRequest,
   ): Promise<GitArcMutationResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = input.harness ?? "codex";
@@ -61,6 +71,14 @@ export default class GitArcLifecycleController {
     const store = new GitCheckpointStore(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
+    if (request?.kind === "add") {
+      const existing = getGitArcLiveClaimPaths(current);
+      const overlapping = request.paths.filter((candidate) => existing.some((claim) => gitArcPathsOverlap(claim, candidate)));
+      if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
+    }
+    const changes: GitArcClaimChanges | undefined = request?.kind === "add"
+      ? { inherit: true, addPaths: request.paths }
+      : request?.changes;
     if (current.phase === "plan") throw new GitArcRejectionError({ reason: "inactiveArcRequiresStart" }, "Activate the inactive plan before editing active claims.");
     const checkpoint = await store.readCheckpoint(harness, input.threadId, current.checkpointCommit);
     const metadata = checkpoint.metadata;
@@ -78,7 +96,7 @@ export default class GitArcLifecycleController {
       }
     }
     const acceptedProposals = await this.proposals.readAcceptedOutcomes({
-      ...input, harness, checkpointCommit: checkpoint.checkpointCommit,
+      ...input, harness, checkpointCommit: checkpoint.checkpointCommit, checkpoint, repository,
     });
     const existing = getGitArcLiveClaimPaths(current);
     if (current.phase !== "resolved" && (
@@ -116,7 +134,8 @@ export default class GitArcLifecycleController {
       return { ...result, kind: "noop", noOp: true };
     }
     if (current.phase === "resolved" && !scopePaths.length) return result;
-    const head = await repository.headOrNull();
+    const headIdentity = await repository.readHead();
+    const head = headIdentity?.commit ?? null;
     const retained = existing.filter((scope) => scopePaths.some((candidate) => covers(scope, candidate) || covers(candidate, scope)));
     const movement = await repository.classifyHeadMovement(checkpoint.parent, retained, checkpoint.checkpointCommit, head);
     if (current.phase !== "resolved" && movement.kind === "incompatible") {
@@ -145,6 +164,7 @@ export default class GitArcLifecycleController {
     }
     const proposalUpdates = scopePaths.length ? await this.proposals.prepareUnavailableUpdates({
       cwd: repository.root, harness, threadId: input.threadId,
+      repository,
       proposalIds: current.proposalIds ?? (current.proposalId ? [current.proposalId] : []),
       reason: "Implementation continued after this proposal was created.",
     }) : [];
@@ -160,9 +180,8 @@ export default class GitArcLifecycleController {
       scopePaths,
       version: 3,
     };
-    const tree = retained.length
-      ? await repository.writeTreeWithPathsFromSource(head, checkpoint.checkpointCommit, retained)
-      : await repository.resolveTree(head);
+    // The movement check proved every retained path already matches HEAD.
+    const tree = headIdentity?.identity.tree ?? await repository.resolveTree(null);
     const prepared = scopePaths.length ? await store.prepareCheckpoint(harness, input.threadId, tree, head, nextMetadata) : null;
     const checkpointCommit = prepared?.checkpointCommit ?? checkpoint.checkpointCommit;
     const registryMutation = await registry.prepareClaim({

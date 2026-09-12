@@ -293,6 +293,7 @@ export default class WorkbenchGitCheckpointController {
     await this.proposals.requireNoAcceptedReceipts({
       checkpointCommit: activeArc.active.checkpointCommit,
       cwd: activeArc.repository.root,
+      repository: activeArc.repository,
       harness: activeArc.harness,
       threadId: input.threadId,
     });
@@ -417,6 +418,7 @@ export default class WorkbenchGitCheckpointController {
     const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit);
     const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
       cwd: repository.root,
+      repository,
       harness,
       proposalIds: active.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
       reason: "Implementation continued after this proposal was created.",
@@ -630,11 +632,7 @@ export default class WorkbenchGitCheckpointController {
   }
 
   async addToArc(input: ControllerInput & { paths: string[] }) {
-    if (!input.paths.length) throw new Error("Arc add requires at least one additional clean path.");
-    const scope = await this.lifecycle.scope(input);
-    const overlapping = input.paths.filter((candidate) => scope?.claimedPaths.some((claim) => gitArcPathsOverlap(claim, candidate)));
-    if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
-    return await this.lifecycle.claims({ ...input, inherit: true, addPaths: input.paths });
+    return await this.lifecycle.add(input);
   }
 
   async adoptIntoArc(input: ControllerInput & { paths: string[] }) {

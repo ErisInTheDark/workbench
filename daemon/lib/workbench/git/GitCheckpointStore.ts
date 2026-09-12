@@ -1,14 +1,13 @@
 /*
- * Keywords: git, checkpoint, proposal, outcome, storage, unborn.
  * Exports:
- * - default GitCheckpointStore: own durable checkpoint outcome and batched proposal metadata reads for one repository. Keywords: git, checkpoint, proposal, outcome, batch.
- * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection. Keywords: git, proposal, summary, status.
+ * - default GitCheckpointStore: own checkpoint/outcome storage and scoped batched history and proposal reads.
+ * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
  * - StoredProposal: owned proposal identity, metadata, and tree.
- * - GitCheckpointMissingObjectError: preserve a requested checkpoint ref that Git cannot resolve. Keywords: git, checkpoint, missing, ref, error.
+ * - GitCheckpointMissingObjectError: preserve a requested checkpoint ref that Git cannot resolve.
  */
-import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import {
@@ -92,10 +91,51 @@ export default class GitCheckpointStore {
   async readOutcome(harness: GitArcHarness, threadId: string, sourceCheckpoint: string) {
     const resolved = await this.repository.readBlobAtRef(outcomeRef(harness, threadId, sourceCheckpoint));
     if (!resolved) return null;
-    const outcome = validateOutcome(JSON.parse(resolved.contents) as Partial<ArcOutcome>, sourceCheckpoint);
+    return await this.decodeOutcome(resolved.contents, sourceCheckpoint);
+  }
+
+  private async decodeOutcome(contents: string, sourceCheckpoint: string) {
+    const outcome = validateOutcome(JSON.parse(contents) as Partial<ArcOutcome>, sourceCheckpoint);
     return outcome.acceptedProposals
       ? normalizeArcOutcome(outcome)
       : normalizeArcOutcome(outcome, await this.repository.currentHead());
+  }
+
+  async readAcceptedOutcomes(harness: GitArcHarness, threadId: string, start: string | StoredCheckpoint) {
+    let checkpoint = typeof start === "string" ? await this.readCheckpoint(harness, threadId, start) : start;
+    if (!checkpoint.metadata?.amendedFrom || checkpoint.metadata.kind === "plan") {
+      return (await this.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals ?? [];
+    }
+    const refs = await this.repository.listRefsWithValues(
+      checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
+    );
+    const byCommit = new Map<string, (typeof refs)[number]>();
+    for (const ref of refs) if (!byCommit.has(ref.value)) byCommit.set(ref.value, ref);
+    const [commits, outcomes] = await Promise.all([
+      this.repository.readCommits([...byCommit.keys()]),
+      this.repository.readBlobs([...new Set([checkpoint.checkpointCommit, ...byCommit.keys()])]
+        .map((commit) => outcomeRef(harness, threadId, commit))),
+    ]);
+    while (true) {
+      const ref = outcomeRef(harness, threadId, checkpoint.checkpointCommit);
+      const error = outcomes.errors.get(ref);
+      if (error) throw new Error(error);
+      const blob = outcomes.blobs.get(ref);
+      const outcome = outcomes.blobs.has(ref)
+        ? blob ? await this.decodeOutcome(blob.contents, checkpoint.checkpointCommit) : null
+        : await this.readOutcome(harness, threadId, checkpoint.checkpointCommit);
+      if (outcome?.acceptedProposals?.length) return outcome.acceptedProposals;
+      const parent = checkpoint.metadata?.amendedFrom;
+      if (!parent || checkpoint.metadata?.kind === "plan") return [];
+      const entry = byCommit.get(normalizeCommit(parent));
+      const identity = entry && commits.commits.get(entry.value);
+      if (!entry || !identity) {
+        // Preserve alias resolution and the existing ownership/missing-object errors.
+        checkpoint = await this.readCheckpoint(harness, threadId, parent);
+        continue;
+      }
+      checkpoint = this.decodeCheckpoint(entry.value, entry.ref, identity);
+    }
   }
 
   async prepareOutcome(harness: GitArcHarness, threadId: string, outcome: ArcOutcome): Promise<GitRefUpdate> {
@@ -160,6 +200,14 @@ export default class GitCheckpointStore {
 
   async readCheckpoint(harness: GitArcHarness, threadId: string, rawCommit: string): Promise<StoredCheckpoint> {
     const original = normalizeCommit(rawCommit);
+    if (original.length === 40 || original.length === 64) {
+      const owned = await this.repository.readCommitRef(
+        original, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
+      );
+      if (owned) {
+        return this.decodeCheckpoint(original, owned.ref, owned.identity);
+      }
+    }
     let checkpointCommit = original;
     let resolved = await this.repository.readCommitAt(checkpointCommit);
     if (!resolved) throw new GitCheckpointMissingObjectError(original);
@@ -171,12 +219,15 @@ export default class GitCheckpointStore {
       refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
     }
     if (!refs.length) throw new GitArcRejectionError({ reason: "wrongCheckpointOwnership" }, "Checkpoint commit is not in this thread/worktree checkpoint timeline.");
-    if (resolved.identity.parents.length > 1) throw new Error("Checkpoint commit parent metadata is invalid.");
+    return this.decodeCheckpoint(checkpointCommit, refs[0]!, resolved.identity);
+  }
+
+  private decodeCheckpoint(checkpointCommit: string, checkpointRef: string, identity: GitCommitIdentity): StoredCheckpoint {
+    if (identity.parents.length > 1) throw new Error("Checkpoint commit parent metadata is invalid.");
     return {
-      checkpointCommit,
-      checkpointRef: refs[0]!,
-      metadata: parseMarkedMetadata<CheckpointMetadata>(resolved.identity.message, CHECKPOINT_METADATA_MARKER),
-      parent: resolved.identity.parents[0] ?? null,
+      checkpointCommit, checkpointRef,
+      metadata: parseMarkedMetadata<CheckpointMetadata>(identity.message, CHECKPOINT_METADATA_MARKER),
+      parent: identity.parents[0] ?? null,
     };
   }
 

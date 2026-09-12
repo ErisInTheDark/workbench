@@ -1,9 +1,8 @@
 /*
- * Keywords: git, repository, stdin, ref patterns, pathspec, process boundary.
  * Exports:
- * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, ignored-path classification and tracked traversal, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, ignore, staged deletion, tracked path, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
- * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitWorktreeSnapshot: typed Git history, ancestry, object-read, worktree-snapshot, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, snapshot, ref, transaction.
- * - GitCommitIdentity/GitCommitBatch: parsed commit metadata and batched read results.
+ * - default WorkbenchGitRepository: own Git processes, object decoding, paths, snapshots and atomic publication for one repository.
+ * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeSnapshot: typed history, object, snapshot and publication facts.
+ * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  */
 import { execFile, spawn } from "node:child_process";
@@ -13,6 +12,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import parseGitFileChangeOutput from "./git-file-change-output";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const execFileAsync = promisify(execFile);
@@ -57,6 +57,17 @@ export interface GitCommitBatch {
   errors: Map<string, string>;
 }
 
+export interface GitBlobBatch {
+  blobs: Map<string, GitResolvedBlob | null>;
+  errors: Map<string, string>;
+}
+
+interface GitObject {
+  contents: Buffer;
+  objectId: string;
+  type: string;
+}
+
 export interface GitResolvedBlob {
   blob: string;
   contents: string;
@@ -66,6 +77,8 @@ export interface GitResolvedCommit {
   commit: string;
   identity: GitCommitIdentity;
 }
+
+export type GitResolvedCommitRef = GitResolvedCommit & { ref: string };
 
 export interface GitWorktreeSnapshot {
   head: string | null;
@@ -299,8 +312,12 @@ export default class WorkbenchGitRepository {
   }
 
   async headOrNull(): Promise<string | null> {
+    return (await this.readHead())?.commit ?? null;
+  }
+
+  async readHead(): Promise<GitResolvedCommit | null> {
     const head = await this.readCommitAt("HEAD");
-    if (head) return head.commit;
+    if (head) return head;
     const branch = (await this.run(["symbolic-ref", "-q", "HEAD"])).trim();
     const refs = (await this.run(["for-each-ref", "--format=%(refname)", branch])).trim().split(/\r?\n/u);
     if (!branch.startsWith("refs/heads/") || refs.includes(branch)) {
@@ -360,45 +377,64 @@ export default class WorkbenchGitRepository {
   }
 
   async readCommits(commits: string[]): Promise<GitCommitBatch> {
-    const requested = [...new Set(commits)];
-    const result: GitCommitBatch = { commits: new Map(), errors: new Map() };
-    if (!requested.length) return result;
-    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${requested.join("\n")}\n`);
-    let offset = 0;
-    for (const requestedCommit of requested) {
-      const headerEnd = output.indexOf(0x0a, offset);
-      if (headerEnd < 0) {
-        result.errors.set(requestedCommit, "Git cat-file batch output ended before its object header.");
-        break;
-      }
-      const header = output.subarray(offset, headerEnd).toString("utf8");
-      offset = headerEnd + 1;
-      const missing = /^([a-f0-9]+) missing$/iu.exec(header);
-      if (missing) {
-        result.errors.set(requestedCommit, `Git object ${missing[1]} is missing.`);
-        continue;
-      }
-      const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
-      if (!match) {
-        result.errors.set(requestedCommit, `Git cat-file returned an invalid object header: ${header}`);
-        continue;
-      }
-      const size = Number(match[3]);
-      const objectEnd = offset + size;
-      if (!Number.isSafeInteger(size) || size < 0 || objectEnd > output.length) {
-        result.errors.set(requestedCommit, `Git object ${match[1]} has an invalid size.`);
-        break;
-      }
-      const contents = output.subarray(offset, objectEnd);
-      offset = objectEnd + 1;
-      if (match[2] !== "commit") {
-        result.errors.set(requestedCommit, `Git object ${match[1]} is not a commit.`);
+    const batch = await this.readObjects(commits);
+    const result: GitCommitBatch = { commits: new Map(), errors: batch.errors };
+    for (const [requestedCommit, object] of batch.objects) {
+      if (!object || object.type !== "commit") {
+        result.errors.set(requestedCommit, object
+          ? `Git object ${object.objectId} is not a commit.`
+          : `Git object ${requestedCommit} is missing.`);
         continue;
       }
       try {
-        result.commits.set(requestedCommit, parseRawCommit(contents));
+        result.commits.set(requestedCommit, parseRawCommit(object.contents));
       } catch (error) {
         result.errors.set(requestedCommit, error instanceof Error ? error.message : String(error));
+      }
+    }
+    return result;
+  }
+
+  async readCommitRef(commit: string, ...namespaces: string[]): Promise<GitResolvedCommitRef | null> {
+    const normalized = this.normalizeCommit(commit);
+    let output: Buffer;
+    try {
+      output = await this.runBufferWithInput([
+        "for-each-ref", "--count=1", "--points-at", normalized,
+        "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(raw)",
+        ...namespaces,
+      ], "");
+    } catch (error) {
+      // A dangling selected ref must retain the ordinary missing-object result.
+      if (error instanceof Error && /missing object [a-f0-9]+ for /iu.test(error.message)
+        && !(await this.readCommitAt(normalized))) return null;
+      throw error;
+    }
+    if (!output.length) return null;
+    let offset = 0;
+    const field = () => {
+      const end = output.indexOf(0, offset);
+      if (end < 0) throw new Error("Git returned invalid commit-ref metadata.");
+      const value = output.subarray(offset, end).toString("utf8");
+      offset = end + 1;
+      return value;
+    };
+    const ref = field();
+    const objectId = field();
+    const type = field();
+    if (type !== "commit") throw new Error(`Git object ${normalized} is not a commit.`);
+    if (output.at(-1) !== 0x0a) throw new Error("Git commit-ref output terminator is missing.");
+    return { commit: objectId, ref, identity: parseRawCommit(output.subarray(offset, -1)) };
+  }
+
+  async readBlobs(refs: string[]): Promise<GitBlobBatch> {
+    const batch = await this.readObjects(refs);
+    const result: GitBlobBatch = { blobs: new Map(), errors: batch.errors };
+    for (const [ref, object] of batch.objects) {
+      if (object && object.type !== "blob") {
+        result.errors.set(ref, `Git ref ${ref} does not resolve to a blob.`);
+      } else {
+        result.blobs.set(ref, object ? { blob: object.objectId, contents: object.contents.toString("utf8") } : null);
       }
     }
     return result;
@@ -696,7 +732,33 @@ export default class WorkbenchGitRepository {
 
   async buildFileChanges(from: string | null, to: string, paths: string[]) {
     from = await this.contentBase(from);
-    const changedPaths = await this.listChangedPaths(from, to, paths);
+    const scopes = paths.includes(".") ? [] : paths;
+    let output: string;
+    try {
+      output = await this.run([
+        "diff", "--raw", "--numstat", "--binary", "-z", "--no-renames", from, to,
+        "--", ...scopes.map((scope) => this.literalPathspec(scope)),
+      ]);
+    } catch (error) {
+      const capacityExceeded = error instanceof Error && "code" in error && (
+        error.code === "E2BIG" || error.code === "ENAMETOOLONG"
+        || (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.message.startsWith("stdout "))
+      );
+      if (!capacityExceeded) throw error;
+      // Combined output/arguments can overflow even when each selected file fits.
+      return await this.inspectFileChanges(from, to, await this.listChangedPaths(from, to, paths));
+    }
+    const parsed = parseGitFileChangeOutput(output);
+    if (parsed.kind === "changes") {
+      const selected = new Set(filterPathsByScopes(parsed.changes.map(({ path: filePath }) => filePath), paths));
+      return parsed.changes.filter(({ path: filePath }) => selected.has(filePath))
+        .sort((left, right) => left.path.localeCompare(right.path));
+    }
+    const changedPaths = filterPathsByScopes(parsed.paths, paths).sort((left, right) => left.localeCompare(right));
+    return await this.inspectFileChanges(from, to, changedPaths);
+  }
+
+  private async inspectFileChanges(from: string, to: string, changedPaths: string[]) {
     return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
       const pathspec = this.literalPathspec(filePath);
       const inspected = await this.run([
@@ -723,10 +785,9 @@ export default class WorkbenchGitRepository {
 
   async listTreePaths(treeish: string | null, paths?: string[]) {
     const scopes = paths?.length && !paths.includes(".") ? this.normalizePaths(paths) : [];
-    return parseNullPaths(await this.run([
+    return filterPathsByScopes(parseNullPaths(await this.run([
       "ls-tree", "-r", "--name-only", "-z", await this.contentBase(treeish),
-      ...(scopes.length ? ["--", ...scopes.map((scope) => this.literalPathspec(scope))] : []),
-    ]));
+    ])), scopes);
   }
 
   async resetMixedPaths(commit: string, paths: string[]) {
@@ -794,24 +855,48 @@ export default class WorkbenchGitRepository {
 
   private async readObject(objectish: string) {
     const normalized = String(objectish ?? "").trim();
-    if (!normalized || /[\r\n]/u.test(normalized)) throw new Error("A valid Git object expression is required.");
-    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${normalized}\n`);
-    const headerEnd = output.indexOf(0x0a);
-    if (headerEnd < 0) throw new Error("Git cat-file batch output ended before its object header.");
-    const header = output.subarray(0, headerEnd).toString("utf8");
-    if (/ missing$/u.test(header)) return null;
-    const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
-    if (!match) throw new Error(`Git cat-file returned an invalid object header: ${header}`);
-    const size = Number(match[3]);
-    const contentsStart = headerEnd + 1;
-    const contentsEnd = contentsStart + size;
-    if (!Number.isSafeInteger(size) || size < 0 || contentsEnd > output.length) {
-      throw new Error(`Git object ${match[1]} has an invalid size.`);
+    const batch = await this.readObjects([normalized]);
+    const error = batch.errors.get(normalized);
+    if (error) throw new Error(error);
+    return batch.objects.get(normalized) ?? null;
+  }
+
+  private async readObjects(objectishes: string[]) {
+    const requested = [...new Set(objectishes)];
+    const objects = new Map<string, GitObject | null>();
+    const errors = new Map<string, string>();
+    if (!requested.length) return { objects, errors };
+    if (requested.some((value) => !value.trim() || /[\r\n]/u.test(value))) {
+      throw new Error("A valid Git object expression is required.");
     }
-    return {
-      contents: output.subarray(contentsStart, contentsEnd),
-      objectId: match[1]!,
-      type: match[2]!,
-    };
+    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${requested.join("\n")}\n`);
+    let offset = 0;
+    for (let index = 0; index < requested.length; index += 1) {
+      const key = requested[index]!;
+      const headerEnd = output.indexOf(0x0a, offset);
+      const header = headerEnd < 0 ? "" : output.subarray(offset, headerEnd).toString("utf8");
+      if (headerEnd >= 0 && header === `${key} missing`) {
+        objects.set(key, null);
+        offset = headerEnd + 1;
+        continue;
+      }
+      const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
+      const size = match ? Number(match[3]) : NaN;
+      const start = headerEnd + 1;
+      const end = start + size;
+      const error = headerEnd < 0 ? "Git cat-file batch output ended before its object header."
+        : !match ? `Git cat-file returned an invalid object header: ${header}`
+        : !Number.isSafeInteger(size) || size < 0 || end > output.length ? `Git object ${match[1]} has an invalid size.`
+        : output[end] !== 0x0a ? "Git cat-file batch payload terminator is missing."
+        : null;
+      if (error) {
+        // Framing loss makes every remaining response ambiguous.
+        for (const remaining of requested.slice(index)) errors.set(remaining, error);
+        break;
+      }
+      objects.set(key, { contents: output.subarray(start, end), objectId: match![1]!, type: match![2]! });
+      offset = end + 1;
+    }
+    return { objects, errors };
   }
 }

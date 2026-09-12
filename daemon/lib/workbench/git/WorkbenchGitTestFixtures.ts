@@ -2,12 +2,6 @@
  * Exports:
  * - UNBORN_FIXTURE: repository before its first commit.
  * - THREAD_GIT_BASE_FIXTURE: basic thread repository.
- * - CHECKPOINT_OPERATIONS_BASE_FIXTURE: checkpoint operation base.
- * - CHECKPOINT_ADDITIONS_READY_FIXTURE: active addition scenario.
- * - CHECKPOINT_RELEASE_READY_FIXTURE: releasable claim scenario.
- * - CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE: dirty owned work.
- * - CHECKPOINT_PROPOSAL_READY_FIXTURE: proposal-ready changes.
- * - CHECKPOINT_REBASE_READY_FIXTURE: proposal rebase graph.
  * - PATH_MOVER_BASE_FIXTURE: source paths for move tests.
  * - PATH_MOVER_ARC_READY_FIXTURE: claimed move sources.
  * - THREAD_GIT_LINEAR_FIXTURE: linear thread commit graph.
@@ -33,6 +27,7 @@ import path from "node:path";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
+import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
   gitTestFixtureKey,
@@ -113,240 +108,6 @@ export const THREAD_GIT_BASE_FIXTURE = {
   }],
   name: "thread-git-base",
 } satisfies GitTestFixtureSpec;
-
-export const CHECKPOINT_OPERATIONS_BASE_FIXTURE = {
-  commits: [{
-    files: {
-      "deleted.txt": "deleted checkpoint\n",
-      "literal[1].txt": "literal checkpoint\n",
-      "literal1.txt": "neighbor checkpoint\n",
-      "selected.txt": "selected checkpoint\n",
-      "unrelated.txt": "unrelated checkpoint\n",
-    },
-    message: "base",
-  }],
-  name: "checkpoint-operations-base",
-} satisfies GitTestFixtureSpec;
-
-export const CHECKPOINT_ADDITIONS_READY_FIXTURE = {
-  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
-  name: "checkpoint-additions-ready",
-  prepare: async ({ repositoryRoot, runGit }) => {
-    await write(repositoryRoot, "later-claim.txt", "captured before plan\n");
-    const controller = new WorkbenchGitCheckpointController();
-    const original = await controller.createPlan({
-      cwd: repositoryRoot,
-      intentName: "Update selected",
-      paths: ["selected.txt"],
-      threadId: "thread-one",
-    });
-    await controller.startArc({ checkpointCommit: original.checkpointCommit, cwd: repositoryRoot, threadId: "thread-one" });
-    const originalTree = (await runGit(["rev-parse", `${original.checkpointCommit}^{tree}`])).trim();
-    const originalParent = (await runGit(["rev-parse", `${original.checkpointCommit}^`])).trim();
-    const released = await controller.removeFromArc({ cwd: repositoryRoot, paths: ["selected.txt"], threadId: "thread-one" });
-    await controller.startArc({ checkpointCommit: original.checkpointCommit, cwd: repositoryRoot, threadId: "thread-one" });
-    return {
-      originalCheckpoint: original.checkpointCommit,
-      originalParent,
-      originalTree,
-      releasedScopePaths: released.scopePaths,
-    };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{
-  originalCheckpoint: string;
-  originalParent: string;
-  originalTree: string;
-  releasedScopePaths: string[];
-}>;
-
-export const CHECKPOINT_RELEASE_READY_FIXTURE = {
-  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
-  name: "checkpoint-release-ready",
-  prepare: async ({ repositoryRoot, runGit }) => {
-    const controller = new WorkbenchGitCheckpointController();
-    const restoreThreadId = "thread-release-restore";
-    const restorePlan = await controller.createPlan({
-      cwd: repositoryRoot,
-      intentName: "Restore proposed work",
-      paths: ["selected.txt"],
-      threadId: restoreThreadId,
-    });
-    await controller.startArc({ checkpointCommit: restorePlan.checkpointCommit, cwd: repositoryRoot, threadId: restoreThreadId });
-    await write(repositoryRoot, "selected.txt", "proposed restore work\n");
-    const restoredProposal = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["selected.txt"],
-      threadId: restoreThreadId,
-      title: "Restore this proposal",
-    });
-
-    const unclaimThreadId = "thread-release-clean";
-    const unclaimPlan = await controller.createPlan({
-      cwd: repositoryRoot,
-      intentName: "Unclaim proposed work",
-      paths: ["literal[1].txt"],
-      threadId: unclaimThreadId,
-    });
-    await controller.startArc({ checkpointCommit: unclaimPlan.checkpointCommit, cwd: repositoryRoot, threadId: unclaimThreadId });
-    await write(repositoryRoot, "literal[1].txt", "proposed clean release\n");
-    const unclaimedProposal = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["literal[1].txt"],
-      threadId: unclaimThreadId,
-      title: "Unclaim this proposal",
-    });
-    await runGit(["restore", "--", "literal[1].txt"]);
-    return {
-      restorePlanCheckpoint: restorePlan.checkpointCommit,
-      restoredProposalId: restoredProposal.proposalId,
-      unclaimedProposalId: unclaimedProposal.proposalId,
-    };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{
-  restorePlanCheckpoint: string;
-  restoredProposalId: string;
-  unclaimedProposalId: string;
-}>;
-
-export const CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE = {
-  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
-  name: "checkpoint-dirty-claim-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const controller = new WorkbenchGitCheckpointController();
-    const owner = await controller.createPlan({
-      cwd: repositoryRoot,
-      intentName: "Own selected",
-      paths: ["selected.txt"],
-      threadId: "owner-thread",
-    });
-    await controller.startArc({ checkpointCommit: owner.checkpointCommit, cwd: repositoryRoot, threadId: "owner-thread" });
-    await write(repositoryRoot, "selected.txt", "already dirty\n");
-    return {};
-  },
-} satisfies GitTestFixtureSpec;
-
-export const CHECKPOINT_PROPOSAL_READY_FIXTURE = {
-  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
-  name: "checkpoint-proposal-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const controller = new WorkbenchGitCheckpointController();
-    const plans = [
-      { intentName: "Freeze proposal files", paths: ["selected.txt", "unrelated.txt"], threadId: "thread-frozen" },
-      { intentName: "Include newer proposal work", paths: ["deleted.txt"], threadId: "thread-newer" },
-      { intentName: "Expire a clean proposal", paths: ["literal[1].txt"], threadId: "thread-clean" },
-    ];
-    await write(repositoryRoot, ".git/info/exclude", ".workbench/\n");
-    for (const { intentName, paths, threadId } of plans) {
-      await createTranscript(repositoryRoot, "codex", threadId);
-      const plan = await controller.createPlan({ cwd: repositoryRoot, intentName, paths, threadId });
-      await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: repositoryRoot, threadId });
-    }
-    await write(repositoryRoot, "selected.txt", "proposed version\n");
-    await write(repositoryRoot, "deleted.txt", "proposed newer-path version\n");
-    await write(repositoryRoot, "literal[1].txt", "proposed clean-path version\n");
-    const original = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "Frozen proposal",
-      paths: ["selected.txt", "unrelated.txt"],
-      threadId: "thread-frozen",
-      title: "Commit selected",
-    });
-    const current = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "Replacement proposal",
-      paths: ["selected.txt", "unrelated.txt"],
-      threadId: "thread-frozen",
-      title: "Commit selected replacement",
-    });
-    const newer = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["deleted.txt"],
-      threadId: "thread-newer",
-      title: "Commit newer selected",
-    });
-    const clean = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["literal[1].txt"],
-      threadId: "thread-clean",
-      title: "Expire clean selected",
-    });
-    return {
-      cleanProposalId: clean.proposalId,
-      currentProposalId: current.proposalId,
-      newerProposalId: newer.proposalId,
-      originalProposalId: original.proposalId,
-    };
-  },
-  revision: 2,
-} satisfies GitTestFixtureSpec<{
-  cleanProposalId: string;
-  currentProposalId: string;
-  newerProposalId: string;
-  originalProposalId: string;
-}>;
-
-export const CHECKPOINT_REBASE_READY_FIXTURE = {
-  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
-  name: "checkpoint-rebase-ready",
-  prepare: async ({ repositoryRoot, runGit }) => {
-    const controller = new WorkbenchGitCheckpointController();
-    const rootCommit = (await runGit(["rev-parse", "HEAD"])).trim();
-    const plans = [
-      { intentName: "Rebase compatible proposal", paths: ["selected.txt"], threadId: "thread-compatible" },
-      { intentName: "Reject committed proposal path", paths: ["deleted.txt"], threadId: "thread-conflict" },
-      { intentName: "Reject incompatible history", paths: ["literal[1].txt"], threadId: "thread-incompatible" },
-    ];
-    for (const { intentName, paths, threadId } of plans) {
-      const plan = await controller.createPlan({ cwd: repositoryRoot, intentName, paths, threadId });
-      await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: repositoryRoot, threadId });
-    }
-    await write(repositoryRoot, "selected.txt", "proposed version\n");
-    await write(repositoryRoot, "deleted.txt", "conflicting proposal version\n");
-    await write(repositoryRoot, "literal[1].txt", "alternate-branch proposal version\n");
-    await write(repositoryRoot, "before-proposal.txt", "committed before proposal\n");
-    await runGit(["add", "--", "before-proposal.txt"]);
-    await runGit(["commit", "-m", "advance before proposal"]);
-    const compatible = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["selected.txt"],
-      threadId: "thread-compatible",
-      title: "Commit selected",
-    });
-    const conflict = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["deleted.txt"],
-      threadId: "thread-conflict",
-      title: "Conflict selected path",
-    });
-    const incompatible = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "",
-      paths: ["literal[1].txt"],
-      threadId: "thread-incompatible",
-      title: "Incompatible history",
-    });
-    return {
-      compatibleProposalId: compatible.proposalId,
-      conflictProposalId: conflict.proposalId,
-      incompatibleProposalId: incompatible.proposalId,
-      rootCommit,
-    };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{
-  compatibleProposalId: string;
-  conflictProposalId: string;
-  incompatibleProposalId: string;
-  rootCommit: string;
-}>;
 
 export const PATH_MOVER_BASE_FIXTURE = {
   commits: [{ files: { "src/one.test.ts": "one\n" }, message: "initial" }],
@@ -885,6 +646,12 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["GitArcLifecycleController.test.ts", { fixtures: [
+    demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["GitArcPlanController.test.ts", { fixtures: [
+    demand(THREAD_GIT_BASE_FIXTURE, 3),
+  ], nested: false }],
   ["GitClaimRenameReader.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 3 : 4),
   ], nested: false }],
@@ -902,12 +669,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CONTROLLER_BASE_FIXTURE, 2),
   ], nested: false }],
   ["git-checkpoints.test.ts", { fixtures: [
-    demand(CHECKPOINT_OPERATIONS_BASE_FIXTURE, 4),
-    demand(CHECKPOINT_ADDITIONS_READY_FIXTURE, 1),
-    demand(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE, 1),
-    demand(CHECKPOINT_PROPOSAL_READY_FIXTURE, 1),
-    demand(CHECKPOINT_REBASE_READY_FIXTURE, 1),
-    demand(CHECKPOINT_RELEASE_READY_FIXTURE, 1),
+    demand(CHECKPOINT_OPERATIONS_FIXTURE, 1),
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [
     demand(UNBORN_FIXTURE, 1),
@@ -918,6 +680,9 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(HISTORY_LINEAR_FIXTURE, 3),
     demand(HISTORY_CONFLICT_READY_FIXTURE, 1),
     demand(HISTORY_ARC_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["WorkbenchGitHistoryRewriter.prepared.test.ts", { fixtures: [
+    demand(HISTORY_LINEAR_FIXTURE, 1),
   ], nested: false }],
   ["WorkbenchThreadGit.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 8),

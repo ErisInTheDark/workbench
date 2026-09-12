@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; bounded concurrent Node tests cover full checkpoints, arc claims, proposals, commit isolation, branch replacement, and restore. Keywords: git, checkpoint, arc, proposal, restore, rebase, branch replacement, concurrency, test.
- */
+/* No production exports. A shared-state battery covers checkpoints, claims, proposals, commit isolation, history replacement and restore. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -10,18 +7,16 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import WorkbenchGitCheckpointController from "./workbench/git/WorkbenchGitCheckpointController";
-import GitTestFixtureCache from "./workbench/git/GitTestFixtureCache";
+import WorkbenchGitRepository from "./workbench/git/WorkbenchGitRepository";
+import GitTestFixtureCache, { type GitTestFixtureCopy } from "./workbench/git/GitTestFixtureCache";
 import {
-  CHECKPOINT_ADDITIONS_READY_FIXTURE,
-  CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE,
-  CHECKPOINT_OPERATIONS_BASE_FIXTURE,
-  CHECKPOINT_PROPOSAL_READY_FIXTURE,
-  CHECKPOINT_REBASE_READY_FIXTURE,
-  CHECKPOINT_RELEASE_READY_FIXTURE,
-} from "./workbench/git/WorkbenchGitTestFixtures";
+  CHECKPOINT_OPERATIONS_FIXTURE,
+  type CheckpointFixtureState,
+} from "./workbench/git/GitCheckpointTestFixtures";
 
 const execFileAsync = promisify(execFile);
-const checkpointCases: Array<{ name: string; priority: number; run: (context: TestContext) => Promise<void> }> = [];
+type CheckpointFixture = GitTestFixtureCopy<CheckpointFixtureState>;
+const checkpointCases: Array<{ name: string; priority: number; run: (fixture: CheckpointFixture, context: TestContext) => Promise<void> }> = [];
 const controller = new WorkbenchGitCheckpointController();
 const fixtureCache = new GitTestFixtureCache();
 const createGitPlan = controller.createPlan.bind(controller);
@@ -58,8 +53,13 @@ const restoreGitCheckpointPaths = async ({
   filePaths: string[];
   threadId: string;
 }) => await controller.restore({ checkpointCommit, cwd, paths: filePaths, threadId });
-function checkpointTest(name: string, priority: number, run: (context: TestContext) => Promise<void>) {
+function checkpointTest(name: string, priority: number, run: (fixture: CheckpointFixture, context: TestContext) => Promise<void>) {
   checkpointCases.push({ name, priority, run });
+}
+
+function branchFixture<Key extends keyof CheckpointFixtureState>(fixture: CheckpointFixture, key: Key) {
+  const state = fixture.state[key];
+  return { root: path.join(fixture.bundleRoot, state.root), state };
 }
 
 async function git(cwd: string, args: string[]) {
@@ -86,26 +86,13 @@ async function write(repoRoot: string, relativePath: string, contents: string) {
   await fs.writeFile(filePath, contents, "utf8");
 }
 
-async function createRepository(context: TestContext) {
-  const fixture = await fixtureCache.copy(CHECKPOINT_OPERATIONS_BASE_FIXTURE);
-  context.after(fixture.dispose);
-  return { repoRoot: fixture.root, testRoot: fixture.temporaryRoot };
-}
-
-checkpointTest("restores only selected checkpoint paths while preserving the ordinary index and unrelated worktree changes", 5, async (context) => {
-  const { repoRoot } = await createRepository(context);
-  const checkpoint = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Restore selected paths",
-    paths: ["selected.txt"],
-    threadId: "thread-one",
-  });
-  await write(repoRoot, "selected.txt", "selected lint change\n");
-  await fs.rm(path.join(repoRoot, "deleted.txt"));
-  await write(repoRoot, "created.txt", "created by lint\n");
-  await write(repoRoot, "unrelated.txt", "unrelated staged\n");
-  await git(repoRoot, ["add", "--", "unrelated.txt"]);
-  await write(repoRoot, "unrelated.txt", "unrelated worktree\n");
+checkpointTest("rejects dirty unclaimed plans then restores selected paths without disturbing unrelated work", 5, async (bundle) => {
+  const fixture = branchFixture(bundle, "restore");
+  const repoRoot = fixture.root;
+  const checkpoint = fixture.state;
+  await assert.rejects(createGitPlan({
+    cwd: repoRoot, intentName: "reject mystery dirt", paths: ["selected.txt"], threadId: "mystery",
+  }), /clean against HEAD|adopt/u);
 
   const result = await restoreGitCheckpointPaths({
     checkpointCommit: checkpoint.checkpointCommit,
@@ -230,122 +217,111 @@ checkpointTest("restores only selected checkpoint paths while preserving the ord
   }), /Selected restore paths no longer match the arc baseline.*selected\.txt/u);
 });
 
-checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snapshot the full worktree", 3, async (context) => {
-  const fixture = await fixtureCache.copy(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE);
-  context.after(fixture.dispose);
+checkpointTest("plans snapshot claimed work and their checked proposals feed continuation", 9, async (bundle) => {
+  const fixture = branchFixture(bundle, "planning");
   const repoRoot = fixture.root;
+  const threadId = "thread-planning";
   const future = await createGitPlan({
     cwd: repoRoot,
     intentName: "Update selected",
     paths: ["selected.txt"],
-    threadId: "thread-one",
+    threadId,
   });
   assert.deepEqual(future.scopePaths, ["selected.txt"]);
 
   await git(repoRoot, ["restore", "--", "selected.txt"]);
-  await removeFromGitArc({ cwd: repoRoot, paths: ["selected.txt"], threadId: "owner-thread" });
+  await removeFromGitArc({ cwd: repoRoot, paths: ["selected.txt"], threadId: fixture.state.ownerThreadId });
   await write(repoRoot, "unrelated.txt", "unrelated dirty at checkpoint\n");
   await write(repoRoot, "untracked-at-checkpoint.txt", "untracked checkpoint content\n");
   const checkpoint = await createGitPlan({
     cwd: repoRoot,
     intentName: "Update selected",
     paths: ["selected.txt"],
-    threadId: "thread-one",
+    threadId,
   });
   assert.deepEqual(checkpoint.planningDrift?.paths, ["selected.txt"]);
   assert.equal(checkpoint.planningDrift?.previousRef, future.checkpointCommit);
   const refreshedCheckpoint = await addToGitPlan({
     cwd: repoRoot,
     paths: ["selected.txt"],
-    threadId: "thread-one",
+    threadId,
   });
   assert.deepEqual(refreshedCheckpoint.planningDrift?.paths, []);
   const started = await startGitArc({
     checkpointCommit: refreshedCheckpoint.checkpointCommit,
     cwd: repoRoot,
-    threadId: "thread-one",
+    threadId,
   });
-  await addToGitArc({
-    cwd: repoRoot,
-    paths: ["planned-new.tsx"],
-    threadId: "thread-one",
-  });
-  assert.equal(await git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:unrelated.txt`]), "unrelated dirty at checkpoint\n");
-  assert.equal(
-    await git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:untracked-at-checkpoint.txt`]),
-    "untracked checkpoint content\n",
-  );
+  const [unrelatedCheckpoint, untrackedCheckpoint] = await Promise.all([
+    git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:unrelated.txt`]),
+    git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:untracked-at-checkpoint.txt`]),
+  ]);
+  assert.equal(unrelatedCheckpoint, "unrelated dirty at checkpoint\n");
+  assert.equal(untrackedCheckpoint, "untracked checkpoint content\n");
   await write(repoRoot, "selected.txt", "implementation\n");
   await write(repoRoot, "unrelated.txt", "later unrelated change\n");
-  const arcComparison = await compareGitCheckpoint({
-    cwd: repoRoot,
-    threadId: "thread-one",
-  });
+  const implementationSnapshot = await controller.createInspectionSnapshot(repoRoot);
+  const [arcComparison, explicitPlanComparison, historicalArcComparison, comparison, implicitDiff] = await Promise.all([
+    compareGitCheckpoint({ cwd: repoRoot, threadId }, implementationSnapshot),
+    compareGitCheckpoint({
+      cwd: repoRoot,
+      ref: refreshedCheckpoint.checkpointCommit,
+      threadId,
+    }, implementationSnapshot),
+    compareGitCheckpoint({
+      cwd: repoRoot,
+      ref: started.checkpointCommit,
+      threadId,
+    }, implementationSnapshot),
+    compareGitCheckpoint({
+      cwd: repoRoot,
+      paths: ["selected.txt", "unrelated.txt"],
+      threadId,
+    }, implementationSnapshot),
+    diffGitCheckpoint({ cwd: repoRoot, threadId }, implementationSnapshot),
+  ]);
   assert.deepEqual(arcComparison.changes.map((change) => change.path), ["selected.txt"]);
-  const explicitPlanComparison = await compareGitCheckpoint({
-    cwd: repoRoot,
-    ref: refreshedCheckpoint.checkpointCommit,
-    threadId: "thread-one",
-  });
   assert.equal(explicitPlanComparison.checkpointCommit, refreshedCheckpoint.checkpointCommit);
   assert.deepEqual(explicitPlanComparison.changes.map((change) => change.path), ["selected.txt"]);
-  const historicalArcComparison = await compareGitCheckpoint({
-    cwd: repoRoot,
-    ref: started.checkpointCommit,
-    threadId: "thread-one",
-  });
   assert.deepEqual(historicalArcComparison.changes.map((change) => change.path), ["selected.txt"]);
-  const comparison = await compareGitCheckpoint({
-    cwd: repoRoot,
-    paths: ["selected.txt", "unrelated.txt"],
-    threadId: "thread-one",
-  });
   assert.deepEqual(comparison.changes.map((change) => change.path), ["selected.txt", "unrelated.txt"]);
-  const implicitDiff = await diffGitCheckpoint({
-    cwd: repoRoot,
-    threadId: "thread-one",
-  });
   assert.match(implicitDiff.diff, /implementation/u);
   const proposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
     paths: ["selected.txt"],
-    threadId: "thread-one",
+    threadId,
     title: "Commit selected work",
   });
   assert.deepEqual(proposal.paths, ["selected.txt"]);
   assert.equal("changes" in proposal, false);
   await write(repoRoot, "selected.txt", "after proposal\n");
-  const proposalComparison = await compareGitCheckpoint({
-    cwd: repoRoot,
-    ref: proposal.proposalId,
-    threadId: "thread-one",
-  });
+  const proposalSnapshot = await controller.createInspectionSnapshot(repoRoot);
+  const [proposalComparison, proposalDiff] = await Promise.all([
+    compareGitCheckpoint({
+      cwd: repoRoot,
+      ref: proposal.proposalId,
+      threadId,
+    }, proposalSnapshot),
+    diffGitCheckpoint({
+      cwd: repoRoot,
+      ref: proposal.proposalId,
+      threadId,
+    }, proposalSnapshot),
+  ]);
   assert.equal(proposalComparison.proposalId, proposal.proposalId);
   assert.deepEqual(proposalComparison.changes.map((change) => change.path), ["selected.txt"]);
   assert.match(proposalComparison.changes[0]?.diff ?? "", /after proposal/u);
-  const proposalDiff = await diffGitCheckpoint({
-    cwd: repoRoot,
-    ref: proposal.proposalId,
-    threadId: "thread-one",
-  });
   assert.equal(proposalDiff.proposalId, proposal.proposalId);
   assert.match(proposalDiff.diff, /after proposal/u);
+  await write(repoRoot, "unrelated.txt", "unrelated checkpoint\n");
+  await checkContinuation(repoRoot, threadId, refreshedCheckpoint.checkpointCommit, proposal.proposalId);
 });
 
-checkpointTest("plans reject dirty unclaimed paths unless adoption is explicit", 1, async (context) => {
-  const { repoRoot } = await createRepository(context);
-  await write(repoRoot, "selected.txt", "mystery dirt\n");
-  await assert.rejects(createGitPlan({
-    cwd: repoRoot, intentName: "reject mystery dirt", paths: ["selected.txt"], threadId: "mystery",
-  }), /clean against HEAD|adopt/u);
-});
-
-checkpointTest("claim release preserves proposals unless restore discards their work", 2, async (context) => {
-  const fixture = await fixtureCache.copy(CHECKPOINT_RELEASE_READY_FIXTURE);
-  context.after(fixture.dispose);
+checkpointTest("restore discards proposed work while clean unclaim expires only its proposal", 2, async (bundle) => {
+  const fixture = branchFixture(bundle, "releaseRestore");
   const repoRoot = fixture.root;
-  const restoreThreadId = "thread-release-restore";
+  const { restoreThreadId, unclaimThreadId } = fixture.state;
   await controller.restore({
     checkpointCommit: fixture.state.restorePlanCheckpoint,
     confirmRestore: true,
@@ -364,7 +340,6 @@ checkpointTest("claim release preserves proposals unless restore discards their 
   assert.equal(unavailableAfterRestore.status, "unavailable");
   assert.match(unavailableAfterRestore.unavailableReason ?? "", /restored and unclaimed/u);
 
-  const unclaimThreadId = "thread-release-clean";
   const released = await removeFromGitArc({ cwd: repoRoot, paths: ["literal[1].txt"], threadId: unclaimThreadId });
   assert.deepEqual(released.scopePaths, []);
   assert.equal(await controller.findActiveClaim({ cwd: repoRoot, threadId: unclaimThreadId }), null);
@@ -376,57 +351,37 @@ checkpointTest("claim release preserves proposals unless restore discards their 
   });
   assert.equal(cleanProposalAfterUnclaim.status, "unavailable");
   assert.match(cleanProposalAfterUnclaim.unavailableReason ?? "", /no longer has working-tree changes/u);
+});
 
-  const cleanPlan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Release clean claims",
-    paths: ["selected.txt"],
-    threadId: "release-thread",
-  });
-  await startGitArc({ checkpointCommit: cleanPlan.checkpointCommit, cwd: repoRoot, threadId: "release-thread" });
-  const cleanRelease = await releaseGitArc({ cwd: repoRoot, disown: false, threadId: "release-thread" });
+checkpointTest("clean release resolves its lifecycle and releases every claim", 1, async (bundle) => {
+  const fixture = branchFixture(bundle, "cleanRelease");
+  const repoRoot = fixture.root;
+  const { threadId } = fixture.state;
+  const cleanRelease = await releaseGitArc({ cwd: repoRoot, disown: false, threadId });
   assert.deepEqual(cleanRelease.releasedClaims, ["selected.txt"]);
   assert.deepEqual(cleanRelease.scopePaths, []);
-  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: "release-thread" }))?.phase, "resolved");
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId }))?.phase, "resolved");
+});
 
-  const dirtyPlan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Release dirty claims",
-    paths: ["selected.txt"],
-    threadId: "release-thread",
-  });
-  const dirtyArc = await startGitArc({ checkpointCommit: dirtyPlan.checkpointCommit, cwd: repoRoot, threadId: "release-thread" });
-  await write(repoRoot, "selected.txt", "staged dirty release\n");
-  await git(repoRoot, ["add", "--", "selected.txt"]);
-  await write(repoRoot, "selected.txt", "worktree dirty release\n");
-  const proposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["selected.txt"],
-    threadId: "release-thread",
-    title: "Keep dirty work",
-  });
-  const futurePlan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Keep the inactive plan",
-    paths: ["selected.txt"],
-    threadId: "release-thread",
-  });
+checkpointTest("dirty disown preserves inactive plans and proposals remain committable after unclaim", 4, async (bundle, context) => {
+  const fixture = branchFixture(bundle, "dirtyRelease");
+  const repoRoot = fixture.root;
+  const { threadId, dirtyArcCheckpoint, futurePlanCheckpoint, proposalId, commitThreadId, commitProposalId } = fixture.state;
   const statusBefore = await git(repoRoot, ["status", "--short", "--", "selected.txt"]);
   const indexBefore = await git(repoRoot, ["show", ":selected.txt"]);
   const worktreeBefore = await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8");
 
   await assert.rejects(
-    releaseGitArc({ cwd: repoRoot, disown: false, threadId: "release-thread" }),
+    releaseGitArc({ cwd: repoRoot, disown: false, threadId }),
     /Arc release paths must be clean against HEAD: selected\.txt/u,
   );
-  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId: "release-thread" }))?.checkpointCommit, futurePlan.checkpointCommit);
+  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId }))?.checkpointCommit, futurePlanCheckpoint);
 
-  const disowned = await releaseGitArc({ cwd: repoRoot, disown: true, threadId: "release-thread" });
+  const disowned = await releaseGitArc({ cwd: repoRoot, disown: true, threadId });
   assert.deepEqual(disowned.releasedClaims, ["selected.txt"]);
-  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId: "release-thread" }))?.checkpointCommit, futurePlan.checkpointCommit);
-  const releasedLifecycle = await controller.findLifecycleState({ cwd: repoRoot, threadId: "release-thread" });
-  assert.equal(releasedLifecycle?.checkpointCommit, dirtyArc.checkpointCommit);
+  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId }))?.checkpointCommit, futurePlanCheckpoint);
+  const releasedLifecycle = await controller.findLifecycleState({ cwd: repoRoot, threadId });
+  assert.equal(releasedLifecycle?.checkpointCommit, dirtyArcCheckpoint);
   assert.deepEqual(releasedLifecycle?.claimedPaths, []);
   assert.equal(releasedLifecycle?.phase, "resolved");
   assert.equal(await git(repoRoot, ["status", "--short", "--", "selected.txt"]), statusBefore);
@@ -435,50 +390,45 @@ checkpointTest("claim release preserves proposals unless restore discards their 
   const preservedProposal = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: proposal.proposalId,
-    threadId: "release-thread",
+    proposalId,
+    threadId,
   });
   assert.equal(preservedProposal.status, "proposed");
   assert.equal(preservedProposal.unavailableReason, null);
 
-  const commitThreadId = "proposal-after-unclaim";
-  const commitPlan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Commit after unclaim",
-    paths: ["literal1.txt"],
-    threadId: commitThreadId,
-  });
-  await startGitArc({ checkpointCommit: commitPlan.checkpointCommit, cwd: repoRoot, threadId: commitThreadId });
-  await write(repoRoot, "literal1.txt", "proposal preserved after unclaim\n");
-  const commitProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    threadId: commitThreadId,
-    title: "Commit preserved proposal",
-  });
   await releaseGitArc({ cwd: repoRoot, disown: true, threadId: commitThreadId });
   const stillProposed = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: commitProposal.proposalId,
+    proposalId: commitProposalId,
     threadId: commitThreadId,
   });
   assert.equal(stillProposed.status, "proposed");
+  const snapshot = WorkbenchGitRepository.prototype.writeScopedWorktreeTree;
+  let unscopedSnapshots = 0;
+  context.mock.method(WorkbenchGitRepository.prototype, "writeScopedWorktreeTree", function (
+    this: WorkbenchGitRepository,
+    ...args: Parameters<typeof snapshot>
+  ) {
+    if (this.root === repoRoot && !args[0].length) unscopedSnapshots++;
+    return snapshot.apply(this, args);
+  });
   const committedAfterUnclaim = await commitGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
     includeNewer: false,
-    proposalId: commitProposal.proposalId,
+    proposalId: commitProposalId,
     threadId: commitThreadId,
     title: "Commit preserved proposal",
   });
   assert.equal(committedAfterUnclaim.status, "committed");
+  assert.equal(unscopedSnapshots, 0, "accepting a disowned proposal must not inspect the whole worktree");
+  assert.equal(committedAfterUnclaim.amendability?.status, "available");
   assert.equal(await git(repoRoot, ["show", "HEAD:literal1.txt"]), "proposal preserved after unclaim\n");
 });
 
-checkpointTest("arc additions preserve claimed baselines while advancing unclaimed paths to current HEAD", 6, async (context) => {
-  const fixture = await fixtureCache.copy(CHECKPOINT_ADDITIONS_READY_FIXTURE);
-  context.after(fixture.dispose);
+checkpointTest("arc additions preserve claimed baselines while advancing unclaimed paths to current HEAD", 6, async (bundle) => {
+  const fixture = branchFixture(bundle, "additions");
   const repoRoot = fixture.root;
   const { originalCheckpoint, originalParent, originalTree, releasedScopePaths } = fixture.state;
   assert.deepEqual(releasedScopePaths, []);
@@ -595,38 +545,21 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
   }), /Retained paths no longer match the arc baseline.*selected\.txt/u);
 });
 
-checkpointTest("arc continuation retires pending proposals before extending or revising implementation", 4, async (context) => {
-  const { repoRoot } = await createRepository(context);
-  const threadId = "thread-proposal-correction";
-  const original = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Correct proposed work",
-    paths: ["selected.txt"],
-    threadId,
-  });
-  await startGitArc({ checkpointCommit: original.checkpointCommit, cwd: repoRoot, threadId });
-  await write(repoRoot, "selected.txt", "first proposed version\n");
-  const firstProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    threadId,
-    title: "First proposal",
-  });
-
+async function checkContinuation(repoRoot: string, threadId: string, originalCheckpoint: string, firstProposalId: string) {
   const extended = await addToGitArc({ cwd: repoRoot, paths: ["unrelated.txt"], threadId });
   assert.deepEqual(extended.scopePaths, ["selected.txt", "unrelated.txt"]);
-  assert.notEqual(extended.checkpointCommit, original.checkpointCommit);
+  assert.notEqual(extended.checkpointCommit, originalCheckpoint);
   const firstUnavailable = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: firstProposal.proposalId,
+    proposalId: firstProposalId,
     threadId,
   });
   assert.equal(firstUnavailable.status, "unavailable");
   assert.match(firstUnavailable.unavailableReason ?? "", /Implementation continued/u);
   assert.equal((await controller.findActiveClaim({ cwd: repoRoot, threadId }))?.proposalId, null);
   const followed = await controller.continueArc({
-    checkpointCommit: original.checkpointCommit,
+    checkpointCommit: originalCheckpoint,
     cwd: repoRoot,
     threadId,
   });
@@ -653,15 +586,12 @@ checkpointTest("arc continuation retires pending proposals before extending or r
   const active = await controller.findActiveClaim({ cwd: repoRoot, threadId });
   assert.equal(active?.checkpointCommit, revised.checkpointCommit);
   assert.equal(active?.proposalId, null);
-});
+}
 
-checkpointTest("proposal file sets stay frozen while newer selected edits remain optional", 8, async (context) => {
-  const fixture = await fixtureCache.copy(CHECKPOINT_PROPOSAL_READY_FIXTURE);
-  context.after(fixture.dispose);
+checkpointTest("proposal file sets stay frozen while newer selected edits remain optional", 8, async (bundle) => {
+  const fixture = branchFixture(bundle, "frozen");
   const repoRoot = fixture.root;
-  const frozenThreadId = "thread-frozen";
-  const newerThreadId = "thread-newer";
-  const cleanThreadId = "thread-clean";
+  const { threadId: frozenThreadId, newerThreadId, cleanThreadId } = fixture.state;
   await assert.rejects(createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
@@ -736,23 +666,10 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   assert.match(unavailable.unavailableReason ?? "", /no longer has working-tree changes/u);
 });
 
-checkpointTest("manual commits resolve exact proposals without treating committed history as worktree dirt", 7, async (context) => {
-  const { repoRoot } = await createRepository(context);
-  const threadId = "thread-manual-commit";
-  const plan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Commit proposed work manually",
-    paths: ["selected.txt"],
-    threadId,
-  });
-  await startGitArc({ checkpointCommit: plan.checkpointCommit, cwd: repoRoot, threadId });
-  await write(repoRoot, "selected.txt", "proposed manual commit\n");
-  const proposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    threadId,
-    title: "Propose selected work",
-  });
+checkpointTest("manual commits resolve exact proposals without treating committed history as worktree dirt", 7, async (bundle) => {
+  const fixture = branchFixture(bundle, "manual");
+  const repoRoot = fixture.root;
+  const { threadId, proposalId } = fixture.state;
 
   await write(repoRoot, "unrelated.txt", "other committed work\n");
   await git(repoRoot, ["add", "--", "selected.txt", "unrelated.txt"]);
@@ -761,7 +678,7 @@ checkpointTest("manual commits resolve exact proposals without treating committe
   const resolved = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: proposal.proposalId,
+    proposalId,
     threadId,
   });
   assert.equal(resolved.status, "unavailable");
@@ -776,14 +693,13 @@ checkpointTest("manual commits resolve exact proposals without treating committe
   assert.equal(dirtyComparison.hasUncommittedChanges, true);
 });
 
-checkpointTest("proposals follow selected content across fast-forward and replacement history", 7, async (context) => {
-  const fixture = await fixtureCache.copy(CHECKPOINT_REBASE_READY_FIXTURE);
-  context.after(fixture.dispose);
+checkpointTest("proposals follow selected content across fast-forward and replacement history", 7, async (bundle) => {
+  const fixture = branchFixture(bundle, "rebase");
   const repoRoot = fixture.root;
-  const { compatibleProposalId, conflictProposalId, incompatibleProposalId, rootCommit } = fixture.state;
-  const compatibleThreadId = "thread-compatible";
-  const conflictThreadId = "thread-conflict";
-  const incompatibleThreadId = "thread-incompatible";
+  const {
+    compatibleProposalId, conflictProposalId, incompatibleProposalId, replacementProposalId, rootCommit,
+    compatibleThreadId, conflictThreadId, incompatibleThreadId, replacementThreadId,
+  } = fixture.state;
   await write(repoRoot, "head-moved.txt", "new head\n");
   await git(repoRoot, ["add", "--", "head-moved.txt"]);
   await git(repoRoot, ["commit", "-m", "move head"]);
@@ -823,26 +739,6 @@ checkpointTest("proposals follow selected content across fast-forward and replac
   assert.equal(conflicted.unavailableReasonCode ?? null, null);
   assert.match(conflicted.unavailableReason ?? "", /newer commit changed files/u);
 
-  const replacementThreadId = "thread-replacement";
-  const replacementPlan = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Rebase across replacement history",
-    paths: ["unrelated.txt"],
-    threadId: replacementThreadId,
-  });
-  await startGitArc({
-    checkpointCommit: replacementPlan.checkpointCommit,
-    cwd: repoRoot,
-    threadId: replacementThreadId,
-  });
-  await write(repoRoot, "unrelated.txt", "replacement proposal version\n");
-  const replacementProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    threadId: replacementThreadId,
-    title: "Commit replacement-safe work",
-  });
-
   await git(repoRoot, ["checkout", "--quiet", "--detach", rootCommit]);
   await write(repoRoot, "branch-only.txt", "alternate advance\n");
   await write(repoRoot, "literal[1].txt", "replacement branch conflict\n");
@@ -852,7 +748,7 @@ checkpointTest("proposals follow selected content across fast-forward and replac
   const replacementRebased = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: replacementProposal.proposalId,
+    proposalId: replacementProposalId,
     threadId: replacementThreadId,
   });
   assert.equal(replacementRebased.status, "proposed");
@@ -862,11 +758,12 @@ checkpointTest("proposals follow selected content across fast-forward and replac
     cwd: repoRoot,
     description: "",
     includeNewer: false,
-    proposalId: replacementProposal.proposalId,
+    proposalId: replacementProposalId,
     threadId: replacementThreadId,
     title: "Commit replacement-safe work",
   });
   assert.equal(replacementCommitted.status, "committed");
+  assert.equal(replacementCommitted.amendability?.status, "unavailable");
   assert.equal((await git(repoRoot, ["rev-parse", "HEAD^"])).trim(), replacementHead);
   assert.equal(await git(repoRoot, ["show", "HEAD:unrelated.txt"]), "replacement proposal version\n");
 
@@ -902,13 +799,16 @@ checkpointTest("proposals follow selected content across fast-forward and replac
     title: "Commit recovered proposal",
   });
   assert.equal(recoveredCommit.status, "committed");
+  assert.equal(recoveredCommit.amendability?.status, "unavailable");
   assert.equal((await git(repoRoot, ["rev-parse", "HEAD^"])).trim(), restoredHead);
   assert.equal(await git(repoRoot, ["show", "HEAD:literal[1].txt"]), "alternate-branch proposal version\n");
 });
 
 test("Git checkpoint controller operations", { concurrency: true }, async (context) => {
+  const fixture = await fixtureCache.copy(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
   const scheduledCases = [...checkpointCases].sort((left, right) => right.priority - left.priority);
   await Promise.all(scheduledCases.map(async ({ name, run }) => (
-    await context.test(name, { concurrency: true }, run)
+    await context.test(name, { concurrency: true }, async (childContext) => await run(fixture, childContext))
   )));
 });
