@@ -26,6 +26,7 @@ import type {
   ThreadCommandSummaryDisplay,
   ThreadCommandSummaryStats,
 } from "./types";
+import type { WorkbenchThreadRecallOperation } from "./thread-context";
 
 export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "toc",
@@ -112,7 +113,7 @@ export type WorkbenchSpecializedOperation =
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
   | { kind: "gitArcWait"; ref: string | null }
   | { kind: "subagent"; operation: WorkbenchSubagentOperation }
-  | { kind: "threadRecall" }
+  | { kind: "threadRecall"; operation: WorkbenchThreadRecallOperation }
   | { kind: "threadStatus"; status: "blocked" | "completed" }
   | { kind: "threadTitle"; title: string };
 
@@ -567,9 +568,20 @@ export function getWorkbenchCommandRoute(
     case "thread_refresh":
       return simple("workbench-cli.thread-refresh", actionTarget("Refreshing ", "thread"), actionTarget("Refreshed ", "thread"));
     case "thread_recall_search":
+      return specialized("thread-context.read", {
+        kind: "threadRecall",
+        operation: { action: "search", query: readString(args.query) },
+      });
     case "thread_recall_expand":
+      return specialized("thread-context.read", {
+        kind: "threadRecall",
+        operation: { action: "expand", query: null },
+      });
     case "thread_recall":
-      return specialized("thread-context.read", { kind: "threadRecall" });
+      return specialized("thread-context.read", {
+        kind: "threadRecall",
+        operation: { action: "recall", query: null },
+      });
     case "git_add":
       return simple("workbench-git.selection", actionTarget("Selecting ", "files for commit"), actionTarget("Selected ", "files for commit"));
     case "git_unstage":

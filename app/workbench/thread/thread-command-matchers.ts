@@ -9,7 +9,7 @@
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
- * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering.
+ * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
  * - parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb subagent/task-title actions and identify standalone title sets.
  * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.
@@ -70,9 +70,12 @@ import {
     unwrapShellCommand,
 } from "./command-matchers/shells";
 import {
+    getWorkbenchThreadRecallSummaryDisplay,
     isThreadContextMatcherClaim,
+    parseWorkbenchThreadRecallCommand,
     THREAD_CONTEXT_COMMAND_MATCHERS,
 } from "./command-matchers/thread-context";
+import type { WorkbenchThreadRecallOperation } from "./command-matchers/thread-context";
 import type {
     CommandShell,
     CommandDisplayContext,
@@ -278,7 +281,8 @@ export {
     parseGitArcCommand,
     parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
-    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand
+    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
+    parseWorkbenchThreadRecallCommand, getWorkbenchThreadRecallSummaryDisplay
 };
 export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay } from "./command-matchers/workbench-command-rendering";
@@ -295,6 +299,7 @@ export type {
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
     WorkbenchTaskStatusCommand,
+    WorkbenchThreadRecallOperation,
 };
 
 export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";

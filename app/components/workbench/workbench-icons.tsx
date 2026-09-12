@@ -5,6 +5,7 @@
  * - StarIcon/StarOffIcon: emphasise and de-emphasise model choices.
  * - BotIcon: composer profile glyph.
  * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: harness identity glyphs.
+ * - BookIcon/BookBookmarkIcon/BookSearchIcon and dashed variants: Thread Recall activity and empty-result glyphs.
  * - SaveIcon: save glyph with disabled slash.
  * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: lifecycle and draft glyphs.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
@@ -60,6 +61,52 @@ function OutlinedIcon({ size = 16, ...props }: IconProps) {
 
 function BrandIcon({ size = 16, ...props }: IconProps) {
   return <svg {...props} aria-hidden="true" height={size} width={size} xmlns="http://www.w3.org/2000/svg" />;
+}
+
+type DashedBookDetail = "bookmark" | "search" | null;
+
+function DashedBookIcon({ detail, ...props }: IconProps & { detail: DashedBookDetail }) {
+  return (
+    <OutlinedIcon {...props}>
+      <path d="M12 17h1.5" />
+      <path d="M12 22h1.5" />
+      <path d="M12 2h1.5" />
+      <path d="M17.5 22H19a1 1 0 0 0 1-1" />
+      <path d="M17.5 2H19a1 1 0 0 1 1 1v1.5" />
+      <path d="M20 14v3h-2.5" />
+      <path d="M20 8.5V10" />
+      <path d="M4 10V8.5" />
+      <path d="M4 19.5V14" />
+      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H8" />
+      <path d="M8 22H6.5a1 1 0 0 1 0-5H8" />
+      {detail === "bookmark" ? <path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /> : null}
+      {detail === "search" ? <><path d="m21 22-1.879-1.878" /><circle cx="17" cy="18" r="3" /></> : null}
+    </OutlinedIcon>
+  );
+}
+
+export function BookIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></OutlinedIcon>;
+}
+
+export function BookBookmarkIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" /></OutlinedIcon>;
+}
+
+export function BookSearchIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M11 22H5.5a1 1 0 0 1 0-5h4.501" /><path d="m21 22-1.879-1.878" /><path d="M3 19.5v-15A2.5 2.5 0 0 1 5.5 2H18a1 1 0 0 1 1 1v8" /><circle cx="17" cy="18" r="3" /></OutlinedIcon>;
+}
+
+export function BookDashedIcon(props: IconProps) {
+  return <DashedBookIcon {...props} detail={null} />;
+}
+
+export function BookBookmarkDashedIcon(props: IconProps) {
+  return <DashedBookIcon {...props} detail="bookmark" />;
+}
+
+export function BookSearchDashedIcon(props: IconProps) {
+  return <DashedBookIcon {...props} detail="search" />;
 }
 
 export function BotIcon(props: IconProps) {

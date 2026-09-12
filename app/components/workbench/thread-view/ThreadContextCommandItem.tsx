@@ -2,20 +2,37 @@
  * Exports:
  * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic tagged-record disclosure. Keywords: thread recall, context, records, disclosure.
  * - ThreadContextCommandSource: transport-neutral Thread Recall lifecycle and output data. Keywords: thread recall, CLI, MCP, source.
- * - Local helpers: format execution metadata for the Thread Recall disclosure summary. Keywords: status, duration, exit code.
+ * - Local helpers: select recall result icons and format execution metadata for the disclosure summary. Keywords: status, duration, exit code.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import type { WorkbenchThreadRecallOutputRecord } from "../../../workbench/thread/thread-recall-output";
-import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
+import {
+  summarizeWorkbenchThreadRecallOutput,
+  type WorkbenchThreadRecallOutputRecord,
+} from "../../../workbench/thread/thread-recall-output";
+import {
+  getThreadCommandOutcomeDisplay,
+  getWorkbenchThreadRecallSummaryDisplay,
+  type ThreadCommandExecutionOutcome,
+  type WorkbenchThreadRecallOperation,
+} from "../../../workbench/thread/thread-command-matchers";
+import {
+  BookBookmarkDashedIcon,
+  BookBookmarkIcon,
+  BookDashedIcon,
+  BookIcon,
+  BookSearchDashedIcon,
+  BookSearchIcon,
+} from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
+import { ThreadCommandSummary } from "./thread-view-primitives";
 
 export interface ThreadContextCommandSource {
   cwd: string;
@@ -67,8 +84,24 @@ function ThreadContextCommandMetaParts({
   );
 }
 
+function ThreadRecallIcon({
+  empty,
+  operation,
+}: {
+  empty: boolean;
+  operation: WorkbenchThreadRecallOperation;
+}) {
+  const Icon = operation.action === "search"
+    ? empty ? BookSearchDashedIcon : BookSearchIcon
+    : operation.action === "expand"
+      ? empty ? BookBookmarkDashedIcon : BookBookmarkIcon
+      : empty ? BookDashedIcon : BookIcon;
+  return <Icon size={16} />;
+}
+
 export default function ThreadContextCommandItem ({
   defaultOpen = false,
+  operation,
   source,
   projectFilePaths,
   projectId,
@@ -78,6 +111,7 @@ export default function ThreadContextCommandItem ({
   workspaceRoots,
 }: {
   defaultOpen?: boolean;
+  operation: WorkbenchThreadRecallOperation;
   source: ThreadContextCommandSource;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -87,24 +121,32 @@ export default function ThreadContextCommandItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const markdown = source.output.trim();
-  const summary = source.outcome === "completed"
-    ? "Recalled thread history"
-    : source.outcome === "inProgress"
-      ? "Recalling thread history"
-      : source.outcome === "timedOut"
-        ? "Timed out recalling thread history"
-        : source.outcome === "declined"
-          ? "Declined Thread Recall"
-          : "Failed recalling thread history";
+  const outputSummary = summarizeWorkbenchThreadRecallOutput(markdown);
+  const summaryDisplay = getThreadCommandOutcomeDisplay(
+    getWorkbenchThreadRecallSummaryDisplay(operation, outputSummary),
+    source.outcome,
+  );
+  const emptyResult = source.outcome === "completed" && outputSummary?.recordCount === 0;
+  const iconLabel = operation.action === "search"
+    ? "Thread Recall search"
+    : operation.action === "expand"
+      ? "Thread Recall from position"
+      : "Thread Recall";
 
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2"
       defaultOpen={defaultOpen}
+      leading={<ThreadRecallIcon empty={emptyResult} operation={operation} />}
+      leadingLabel={iconLabel}
       summary={(
         <>
-          <ThreadSummaryText text={summary} />
+          <ThreadCommandSummary
+            display={summaryDisplay}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+          />
           <ThreadContextCommandMetaParts source={source} />
         </>
       )}

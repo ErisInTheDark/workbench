@@ -97,6 +97,7 @@ export default function ThreadWorkbenchCommandItem({
     return (
       <ThreadContextCommandItem
         defaultOpen={item.status !== "completed"}
+        operation={operation.operation}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}

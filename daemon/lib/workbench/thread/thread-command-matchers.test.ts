@@ -21,6 +21,7 @@ import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  getWorkbenchThreadRecallSummaryDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
   getWorkbenchMcpShellCommandItem,
@@ -33,6 +34,7 @@ import {
   parseWorkbenchSubagentCommand,
   parseWorkbenchTaskStatusCommand,
   parseWorkbenchTaskTitleCommand,
+  parseWorkbenchThreadRecallCommand,
 } from "../../../../app/workbench/thread/thread-command-matchers.ts";
 
 const PROJECT_ROOT = "C:/git/web/workbench";
@@ -373,6 +375,80 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wbex", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(subagentRoute, true), false);
+});
+
+test("Thread Recall CLI and MCP routes preserve the same useful intent", () => {
+  const command = 'wb thread recall search --thread thread-one --query "cache invalidation" --kind commentary --before opaque-ref';
+  const cliIntent = parseWorkbenchThreadRecallCommand(command);
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: {
+      before: "opaque-ref",
+      kinds: ["commentary"],
+      query: "cache invalidation",
+      threadId: "thread-one",
+    },
+    server: "wb",
+    tool: "thread_recall_search",
+  });
+
+  assert.deepEqual(cliIntent, { action: "search", query: "cache invalidation" });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind !== "specialized" || route.operation.kind !== "threadRecall") {
+    assert.fail("Expected a specialised Thread Recall route.");
+  }
+  assert.deepEqual(route.operation.operation, cliIntent);
+
+  const display = getThreadCommandDisplay({
+    command,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.deepEqual(codeOperands(display.summaryParts), ["cache invalidation"]);
+  assert.doesNotMatch(display.summaryText, /opaque-ref|thread-one/u);
+});
+
+test("Thread Recall record reads do not expose refs or cursors in summaries", () => {
+  const display = getThreadCommandDisplay({
+    command: "wb thread recall expand --ref record-ref --cursor opaque-cursor",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.deepEqual(parseWorkbenchThreadRecallCommand(display.unwrappedCommand), {
+    action: "expand",
+    query: null,
+  });
+  assert.doesNotMatch(display.summaryText, /record-ref|opaque-cursor/u);
+});
+
+test("Thread Recall result summaries expose useful captured-result statistics", () => {
+  const display = getWorkbenchThreadRecallSummaryDisplay(
+    { action: "search", query: "cache invalidation" },
+    {
+      mode: "search",
+      recordCount: 5,
+      recordCounts: { agent: 3, plan: 0, questionnaire: 0, user: 2 },
+      searchMatches: { shown: 5, total: 20 },
+    },
+  );
+
+  assert.deepEqual(codeOperands(display.summaryParts), ["cache invalidation"]);
+  assert.match(display.summaryText, /\b20\b/u);
+  assert.match(display.summaryText, /\b5\b/u);
+  assert.notEqual(
+    display.summaryText,
+    getWorkbenchThreadRecallSummaryDisplay(
+      { action: "search", query: "cache invalidation" },
+      {
+        mode: "search",
+        recordCount: 0,
+        recordCounts: { agent: 0, plan: 0, questionnaire: 0, user: 0 },
+        searchMatches: { shown: 0, total: 0 },
+      },
+    ).summaryText,
+  );
 });
 
 test("PowerShell ripgrep summaries do not treat an uppercase context value as the query", () => {

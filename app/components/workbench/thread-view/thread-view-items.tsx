@@ -1958,6 +1958,7 @@ function ThreadCommandSequence ({
                 workspaceRoots={workspaceRoots}
               />
             )}
+            operation={segment.operation}
             source={{
               cwd: segment.item.cwd,
               durationMs: segment.item.durationMs,

@@ -20,8 +20,9 @@ import {
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
-  parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
+  parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
+  type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
 import { omitThreadReasoningStep, type ThreadReasoningStepReference } from "./thread-reasoning-display";
@@ -140,7 +141,7 @@ export type CommandSequenceRenderSegment =
   | { items: CommandSequenceItem[]; kind: "commands" }
   | { item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "subagent" }
-  | { item: CommandItem; kind: "threadContext" }
+  | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
   | { item: CommandItem; kind: "threadTitle"; title: string };
@@ -165,8 +166,9 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     const display = getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell, ...context });
     const title = isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy) ? parseWorkbenchTaskTitleCommand(display.unwrappedCommand, item.commandActions) : null;
     const status = isWorkbenchTaskStatusMatcherClaim(display.claimedBy) ? parseWorkbenchTaskStatusCommand(display.unwrappedCommand, item.commandActions) : null;
-    if (isThreadContextMatcherClaim(display.claimedBy) && (outcome === "completed" || outcome === "inProgress")) {
-      flushCommands(); flushWaits(); segments.push({ kind: "threadContext", item }); continue;
+    const recall = isThreadContextMatcherClaim(display.claimedBy) ? parseWorkbenchThreadRecallCommand(display.unwrappedCommand) : null;
+    if (recall && (outcome === "completed" || outcome === "inProgress")) {
+      flushCommands(); flushWaits(); segments.push({ kind: "threadContext", item, operation: recall }); continue;
     }
     if (title?.action === "set") { flushCommands(); flushWaits(); segments.push({ kind: "threadTitle", item, title: title.title }); continue; }
     if (status && (outcome === "completed" || outcome === "inProgress")) {

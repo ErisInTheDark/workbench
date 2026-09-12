@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - WorkbenchThreadRecallOutputSegment/WorkbenchThreadRecallOutputRecord: parsed recall command-output contracts. Keywords: thread recall, output, tags.
+ * - WorkbenchThreadRecallOutputSummary/WorkbenchThreadRecallRecordGroup: compact parsed result statistics for recall disclosures.
  * - parseWorkbenchThreadRecallOutput: split Markdown chrome from strict kind-tagged narrative records. Keywords: parser, HTML tags, fallback.
+ * - summarizeWorkbenchThreadRecallOutput: count captured records and strict search-page metadata without inventing fallback semantics.
  */
 
 import type { WorkbenchThreadRecallKind } from "workbench-shared/types";
@@ -17,8 +19,18 @@ export type WorkbenchThreadRecallOutputSegment =
   | { markdown: string; type: "markdown" }
   | { record: WorkbenchThreadRecallOutputRecord; type: "record" };
 
+export type WorkbenchThreadRecallRecordGroup = "agent" | "plan" | "questionnaire" | "user";
+
+export interface WorkbenchThreadRecallOutputSummary {
+  mode: "history" | "record" | "search";
+  recordCount: number;
+  recordCounts: Record<WorkbenchThreadRecallRecordGroup, number>;
+  searchMatches: { shown: number; total: number } | null;
+}
+
 const RECALL_TAG_PATTERN = "user-message|user-steer|questionnaire|commentary|final-answer|agent-message|plan";
 const OPEN_TAG_PATTERN = new RegExp(`^<(${RECALL_TAG_PATTERN})\\s+([^>]*)>$`, "u");
+const SEARCH_MATCHES_PATTERN = /^Matches:\s+([\d,]+)\s+total;\s+([\d,]+)\s+shown on this newest-first page\.$/mu;
 
 function decodeAttribute(value: string) {
   return value
@@ -88,4 +100,61 @@ export function parseWorkbenchThreadRecallOutput(markdown: string): WorkbenchThr
 
   flushMarkdown();
   return segments.length ? segments : [{ markdown: normalized.trim(), type: "markdown" }];
+}
+
+function getRecordGroup(kind: WorkbenchThreadRecallKind): WorkbenchThreadRecallRecordGroup {
+  if (kind === "user-message" || kind === "user-steer") return "user";
+  if (kind === "plan") return "plan";
+  if (kind === "questionnaire") return "questionnaire";
+  return "agent";
+}
+
+function parseCount(value: string | undefined) {
+  if (!value) return null;
+  const parsed = Number(value.replaceAll(",", ""));
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function summarizeWorkbenchThreadRecallOutput(markdown: string): WorkbenchThreadRecallOutputSummary | null {
+  const normalized = markdown.replace(/\r\n?/gu, "\n").trim();
+  const mode = normalized.startsWith("# Thread Recall Search")
+    ? "search"
+    : normalized.startsWith("# Thread Recall Record")
+      ? "record"
+      : normalized.startsWith("# Thread Recall History")
+        ? "history"
+        : null;
+  if (!mode) return null;
+
+  const records = parseWorkbenchThreadRecallOutput(normalized)
+    .flatMap((segment) => segment.type === "record" ? [segment.record] : []);
+  const expectedRecordCount = normalized.split("\n").filter((line) => {
+    const opening = OPEN_TAG_PATTERN.exec(line.trim());
+    return opening?.[2] !== undefined && readAttribute(opening[2], "id")?.startsWith("ref:");
+  }).length;
+  if (records.length !== expectedRecordCount) return null;
+
+  const recordCounts: WorkbenchThreadRecallOutputSummary["recordCounts"] = {
+    agent: 0,
+    plan: 0,
+    questionnaire: 0,
+    user: 0,
+  };
+  for (const record of records) {
+    recordCounts[getRecordGroup(record.kind)] += 1;
+  }
+
+  const searchMatch = mode === "search" ? SEARCH_MATCHES_PATTERN.exec(normalized) : null;
+  const total = parseCount(searchMatch?.[1]);
+  const shown = parseCount(searchMatch?.[2]);
+  const searchMatches = total !== null && shown !== null && shown <= total
+    ? { shown, total }
+    : null;
+
+  return {
+    mode,
+    recordCount: records.length,
+    recordCounts,
+    searchMatches,
+  };
 }
