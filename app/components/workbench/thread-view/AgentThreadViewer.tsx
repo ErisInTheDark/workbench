@@ -181,7 +181,7 @@ export default function AgentThreadViewer({
     <main className="min-h-dvh bg-bg text-text">
       {!locationOptions.threadId ? (
         <div className="mx-auto flex min-h-dvh max-w-[42rem] items-center px-5 py-8 md:px-6">
-          <p className="m-0 text-[0.92rem] leading-6 text-muted">
+          <p className="m-0 text-[0.92rem] leading-6 text-fg/muted">
             Add a thread id to the URL, such as <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread/&lt;threadId&gt;</code> or <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread?threadId=&lt;threadId&gt;</code>.
           </p>
         </div>

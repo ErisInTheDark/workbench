@@ -462,7 +462,7 @@ export default function ThreadComposer ({
         "inline-flex size-10 items-center justify-center rounded-full border transition",
         showQuestionnairePanel
           ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-text"
-          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
+          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_96%,var(--composer-surface-bg))] text-fg/muted hover:text-text",
       )}
       onClick={() => {
         setIsQuestionnaireVisible((current) => !current);
@@ -500,7 +500,9 @@ export default function ThreadComposer ({
         )}
         onSubmit={handleSubmit}
       >
-        <div className={effectiveSurface === "card" ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3" : "p-0"}>
+        <div className={effectiveSurface === "card"
+          ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--composer-surface-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] [--fg-bg:var(--composer-surface-bg)] p-3"
+          : "[--composer-surface-bg:var(--app-bg-solid)] [--fg-bg:var(--composer-surface-bg)] p-0"}>
           {header ? (
             <div className="mb-3 px-1">
               {header}
@@ -610,7 +612,7 @@ export default function ThreadComposer ({
                     {helperText ? (
                       <p className={joinClasses(
                         attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
-                        isThreadStateBroken ? "text-danger" : "text-muted",
+                        isThreadStateBroken ? "text-danger" : "text-fg/muted",
                       )}>
                         {helperText}
                       </p>
@@ -722,7 +724,7 @@ export default function ThreadComposer ({
             </span>
           ))}
           {hiddenAttachmentCount ? (
-            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] text-[0.76em] font-medium text-muted">
+            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--composer-surface-bg))] text-[0.76em] font-medium text-fg/muted">
               +{hiddenAttachmentCount}
             </span>
           ) : null}

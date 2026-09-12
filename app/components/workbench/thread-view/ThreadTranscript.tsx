@@ -94,7 +94,7 @@ export default function ThreadTranscript({
 
   if (!visibleHistoryEntries.length) {
     return (
-      <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
+      <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-fg/muted">
         No turns were returned for this thread yet.
       </p>
     );

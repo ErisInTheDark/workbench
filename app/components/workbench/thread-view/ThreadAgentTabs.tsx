@@ -35,7 +35,7 @@ function handleThreadLinkClick(event: MouseEvent<HTMLAnchorElement>, onSelect: (
 
 const tabClassName = "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[0.95rem] font-medium leading-none transition-[color,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 const selectedTabClassName = "text-text";
-const unselectedTabClassName = "text-muted opacity-60 hover:opacity-80 hover:text-text";
+const unselectedTabClassName = "text-fg/muted opacity-60 hover:opacity-80 hover:text-text";
 function SelectedTabUnderline({ className, style }: { className: string; style?: IdentityAccentStyle }) {
   return <span aria-hidden="true" className={`pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted ${className}`} style={style} />;
 }
@@ -133,7 +133,7 @@ export default function ThreadAgentTabs ({
         <ThreadLifecycleStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} lifecycle={tab.subagent?.lifecycle ?? null} subagent={tab.subagent} />
         {tab.isPinned ? <LockIcon className="shrink-0" size={16} /> : null}
         <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
-        {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+        {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
         {activeThreadId === tab.id && tab.subagent ? (
           <SelectedTabUnderline
             className="border-hue-(--identity-hue)/35"

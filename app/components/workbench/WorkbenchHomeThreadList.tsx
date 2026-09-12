@@ -299,7 +299,7 @@ export default function WorkbenchHomeThreadList({
         aria-current={selected ? "page" : undefined}
         className={`
           ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
-          ${selected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+          ${selected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
         `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -383,7 +383,7 @@ export default function WorkbenchHomeThreadList({
         aria-current={blankThreadSelected ? "page" : undefined}
         className={`
           ${workbenchOptionRowClassName} mt-1 min-h-9 w-full md:min-h-8
-          ${blankThreadSelected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-muted hover:text-text`}
+          ${blankThreadSelected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
         `}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -410,11 +410,11 @@ export default function WorkbenchHomeThreadList({
             open={preferences.settledThreadsOpen}
             onToggle={(event) => setDisclosureOpen("settledThreadsOpen", event.currentTarget.open)}
             summary="Settled threads"
-            summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
+            summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-fg/muted"
           >
             {renderSection(displayedHistoryItems.filter(item => item.itemKind === "folder" || !item.entry.entry.metadata.archived), "settled")}
             {displayedHistoryItems.some(item => item.itemKind === "thread" && item.entry.entry.metadata.archived) ? (
-              <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-muted">Archived threads</h3>
+              <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-fg/muted">Archived threads</h3>
             ) : null}
             <ul className="m-0 flex flex-col gap-1 p-0">
               {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && item.entry.entry.metadata.archived ? [renderEntry(item.entry)] : [])}
@@ -423,7 +423,7 @@ export default function WorkbenchHomeThreadList({
               <button
                 type="button"
                 aria-label={`Load ${nextSettledThreadCount} more historical threads`}
-                className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`}
+                className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-fg/muted`}
                 onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + SETTLED_THREAD_PAGE_SIZE)}
               >
                 Load {nextSettledThreadCount} more

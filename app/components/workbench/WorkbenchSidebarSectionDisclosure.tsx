@@ -34,7 +34,7 @@ export default function WorkbenchSidebarSectionDisclosure({
 }: WorkbenchSidebarSectionDisclosureProps) {
   const { preferences, setDisclosureOpen } = useWorkbenchSidebarPreferences();
   const disclosureClassName = ["pl-3", className].filter(Boolean).join(" ");
-  const disclosureSummaryClassName = ["-ml-3", "h-11 text-muted md:h-8", summaryClassName].filter(Boolean).join(" ");
+  const disclosureSummaryClassName = ["-ml-3", "h-11 text-fg/muted md:h-8", summaryClassName].filter(Boolean).join(" ");
   return (
     <ThreadDisclosure
       className={disclosureClassName}

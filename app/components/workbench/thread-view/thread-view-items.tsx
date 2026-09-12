@@ -223,7 +223,7 @@ export function ThreadTurnLoadFailure({
       className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"
       data-thread-turn-load-state={entry.loadState}
     >
-      <div className="flex items-center justify-between gap-3 text-[0.88em] leading-[1.5] text-muted" role="status">
+      <div className="flex items-center justify-between gap-3 text-[0.88em] leading-[1.5] text-fg/muted" role="status">
         <span>Could not load this previous turn.</span>
         <button
           type="button"
@@ -433,20 +433,20 @@ function ThreadUserInputLine ({
       );
     case "localImage":
       return (
-        <p className="m-0 break-all font-mono text-[0.78em] leading-[1.6] text-muted">
+        <p className="m-0 break-all font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           Local image: {input.path}
         </p>
       );
     case "skill":
       return (
-        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
           Skill: <span className="text-text">{input.name}</span>{" "}
           <span className="break-all font-mono text-[0.78em]">({input.path})</span>
         </p>
       );
     case "mention":
       return (
-        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
           Mention: <span className="text-text">{input.name}</span>{" "}
           <span className="break-all font-mono text-[0.78em]">({input.path})</span>
         </p>
@@ -515,10 +515,10 @@ function ThreadUserMessageItem ({
       ? " thread-unsent-steer-message px-0.5 py-0.5"
       : "";
   const decoratedSteerSurfaceClass = steerState === "pending"
-    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
+    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
     : isDecoratedSteer
-      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"
-      : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3";
+      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3"
+      : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3";
   return (
     <section className="flex flex-col items-end py-2" data-thread-user-message-state={steerState ? `${steerState}-steer` : undefined}>
       <div className="group/thread-bubble relative w-full max-w-[42rem]">
@@ -537,7 +537,7 @@ function ThreadUserMessageItem ({
                 workspaceRoots={workspaceRoots}
               />
             )) : (
-              <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No user content captured.</p>
+              <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
             )}
           </div>
         </div>
@@ -636,7 +636,7 @@ function ThreadPlanItem ({
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={<ThreadPlanSummary markdown={text} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
@@ -710,14 +710,14 @@ function ThreadReasoningSequence ({
     return (
       <ThreadDisclosureStaticRow
         summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       />
     );
   }
 
   const content = onlyStep && steps.length === 1 ? (
     <ThreadMarkdown
-      className="text-[0.8em] text-muted"
+      className="text-[0.8em] text-fg/muted"
       inlineMentionSources={inlineMentionSources}
       markdown={onlyStep.body ?? ""}
       threadCwdPath={threadCwdPath}
@@ -754,7 +754,7 @@ function ThreadReasoningSequence ({
       contentClassName="mt-2 space-y-4 pl-6"
       defaultOpen={isMostRecent}
       summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       {content}
     </ThreadDisclosure>
@@ -805,14 +805,14 @@ function ThreadCommandDetailMeta({ row }: { row: ThreadCommandDetailRow }) {
   }
 
   return (
-    <span className="inline-flex min-w-0 max-w-full items-baseline gap-x-1.5 text-[0.78em] text-muted">
+    <span className="inline-flex min-w-0 max-w-full items-baseline gap-x-1.5 text-[0.78em] text-fg/muted">
       {hasDuration ? <ThreadDurationText durationMs={row.durationMs ?? null} /> : null}
       {hasDuration && hasDetailText ? <span aria-hidden="true">·</span> : null}
       {hasDetailText ? (
         <span className="inline-flex min-w-0 max-w-full items-baseline gap-x-1">
           {row.detailLabel ? <span>{row.detailLabel}:</span> : null}
           <span
-            className={`min-w-0 max-w-[36rem] truncate ${row.detailKind === "error" ? "text-danger" : "text-muted"}`}
+            className={`min-w-0 max-w-[36rem] truncate ${row.detailKind === "error" ? "text-danger" : "text-fg/muted"}`}
             title={row.detailText ?? undefined}
           >
             {row.detailText}
@@ -873,10 +873,10 @@ function ThreadStructuredCommandDetailRow({
 
   return (
     <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 gap-y-1 align-bottom">
-      {row.label ? <span className="shrink-0 text-muted">{row.label}</span> : null}
+      {row.label ? <span className="shrink-0 text-fg/muted">{row.label}</span> : null}
       {row.target ? <ThreadCommandDetailTargetView target={row.target} /> : null}
       {row.contextText && !hideSharedContext ? (
-        <span className="min-w-0 text-muted">
+        <span className="min-w-0 text-fg/muted">
           in <span className="font-medium text-text">{row.contextText}</span>
         </span>
       ) : null}
@@ -1042,11 +1042,11 @@ function renderCommandDetailStateIcon(row: ThreadCommandDetailRow) {
 function getCommandDetailStateMarkerClassName(row: ThreadCommandDetailRow) {
   switch (row.state) {
     case "queued":
-      return "text-muted opacity-60";
+      return "text-fg/muted opacity-60";
     case "inProgress":
       return "text-accent";
     case "completed":
-      return "text-muted";
+      return "text-fg/muted";
     case "failed":
       return "text-danger";
     default:
@@ -1165,7 +1165,7 @@ function ThreadSubagentCurrentActivityPreview ({
   const block = blocks.at(-1) ?? null;
   if (!block) {
     return (
-      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+      <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
         No subagent activity was captured yet.
       </p>
     );
@@ -1578,10 +1578,10 @@ function ThreadCommandExecutionDetails ({
         <>
           <ThreadCommandSummary display={outcomeCommandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
           {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-muted">
+            <span className="ml-2 text-[0.78em] text-fg/muted">
               {metaParts.map((part, index) => (
                 <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-muted"> | </span> : null}
+                  {index ? <span className="text-fg/muted"> | </span> : null}
                   {part}
                 </span>
               ))}
@@ -1589,16 +1589,16 @@ function ThreadCommandExecutionDetails ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
         {/*commandDisplay.showShell && commandDisplay.shell ? (
-          <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
+          <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">
             Shell: <span className="font-mono text-text">{commandDisplay.shell}</span>
           </p>
         ) : null*/}
         {commandDisplay.cwdDisplay && !commandDisplay.hideCommandCwd ? (
-          <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
+          <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">
             Working dir: <span className="break-all font-mono text-text">{commandDisplay.cwdDisplay}</span>
           </p>
         ) : null}
@@ -1826,7 +1826,7 @@ function ThreadRegularCommandSequence ({
       contentClassName="mt-2 space-y-1 pl-6"
       defaultOpen={isMostRecent}
       summary={<ThreadCommandSummary display={commandBlockDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
         {items.map((item, index) => (
@@ -2679,7 +2679,7 @@ function ThreadTurnDetailsComponent ({
             </div>
           )}
           summary={getWorkedSummaryForDuration(collapsedSection.durationMs)}
-          summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+          summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
         />
       );
     };
@@ -2691,7 +2691,7 @@ function ThreadTurnDetailsComponent ({
           {renderCollapsedEarlierSection()}
           {visibleWorkBlocks.length ? renderBlocks(visibleWorkBlocks, primaryUserBlock) : null}
           {!compactionRenderPlan.collapsedEarlierSection && !visibleWorkBlocks.length ? (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
+            <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No intermediate work captured.</p>
           ) : null}
         </div>
       );
@@ -2716,7 +2716,7 @@ function ThreadTurnDetailsComponent ({
               summary={completedWorkPartition?.statusMarkerId
                 ? getWorkedSummaryForDuration(completedWorkPartition.workedDurationMs)
                 : getWorkedSummary(turn)}
-              summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+              summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
             />
             {renderBlocks(terminalBlocks, primaryUserBlock)}
           </div>
@@ -2744,7 +2744,7 @@ function ThreadTurnDetailsComponent ({
       return (
         <div className="space-y-2">
           {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
+            <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No intermediate work captured.</p>
           )}
         </div>
       );
@@ -2762,7 +2762,7 @@ function ThreadTurnDetailsComponent ({
             summary={completedWorkPartition?.statusMarkerId
               ? getWorkedSummaryForDuration(completedWorkPartition.workedDurationMs)
               : getWorkedSummary(turn)}
-            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+            summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
           />
           {renderBlocks(terminalBlocks, primaryUserBlock)}
         </div>
@@ -2790,11 +2790,11 @@ function ThreadTurnDetailsComponent ({
         </div>
       ) : (
         <div className="space-y-2">
-          {/* <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
+          {/* <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">
             {humanizeThreadLabel(turn.status)}
           </p> */}
           {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : (
-            <></> // <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
+            <></> // <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No captured items.</p>
           )}
         </div>
       )}
@@ -2898,7 +2898,7 @@ export function ThreadThreadContent ({
     }
 
     return (
-      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+      <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
         {emptyMessage}
       </p>
     );

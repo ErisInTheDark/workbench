@@ -29,7 +29,7 @@ export default function WorkbenchThreadStatusCountsButton({
     <button
       aria-label={actionLabel}
       aria-pressed={showStatuses}
-      className="inline-flex min-h-7 min-w-7 shrink-0 items-center justify-center rounded-lg px-1.5 py-1 text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+      className="inline-flex min-h-7 min-w-7 shrink-0 items-center justify-center rounded-lg px-1.5 py-1 text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
       data-thread-summary-action="true"
       onClick={() => setStatusCountsExpanded(scope, !showStatuses)}
       title={actionLabel}
@@ -37,7 +37,7 @@ export default function WorkbenchThreadStatusCountsButton({
     >
       {showStatuses
         ? <WorkbenchThreadStatusCounts counts={counts} />
-        : <WorkingThreadIcon className="text-muted" size={14} />}
+        : <WorkingThreadIcon className="text-fg/muted" size={14} />}
     </button>
   );
 }

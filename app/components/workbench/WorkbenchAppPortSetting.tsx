@@ -86,7 +86,7 @@ export default function WorkbenchAppPortSetting() {
     <section className="space-y-3 rounded-[0.85rem] py-1">
       <div className="min-w-0">
         <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">App port</h3>
-        <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{sourceDescription(snapshot)}</p>
+        <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{sourceDescription(snapshot)}</p>
       </div>
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { void apply(event); }}>
         <label className="sr-only" htmlFor="workbench-app-port">App port</label>
@@ -108,7 +108,7 @@ export default function WorkbenchAppPortSetting() {
         />
         <button
           type="submit"
-          className="h-10 rounded-xl px-3 text-[0.84rem] font-medium text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted"
+          className="h-10 rounded-xl px-3 text-[0.84rem] font-medium text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg/muted"
           disabled={disabled || port === null}
         >
           {isApplying ? "Applying..." : "Apply"}

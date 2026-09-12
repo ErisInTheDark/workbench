@@ -242,7 +242,7 @@ export default function StickyCollapsibleSurface({
                     <button
                       aria-expanded={!collapsed}
                       aria-label={collapseControlLabel}
-                      className="inline-flex size-9 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                      className="inline-flex size-9 items-center justify-center rounded-full text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       onClick={() => onCollapsedChange(!collapsed)}
                       title={collapseControlLabel}
                       type="button"

@@ -184,8 +184,8 @@ function ThreadApprovalCommandSummary ({
   }
 
   return (
-    <div className="rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-2.5">
-      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+    <div className="rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--approval-summary-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-2.5">
+      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--approval-summary-fg-bg))] uppercase">
         Matched action
       </p>
       <p className="mt-1 mb-0 min-w-0 text-[0.92em] leading-[1.65] text-text">
@@ -384,7 +384,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                 {requestTitle}
               </h3>
               {requestSummary ? (
-                <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-muted">
+                <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-fg/muted">
                   {requestSummary}
                 </p>
               ) : null}
@@ -392,7 +392,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
           </div>
           {isHistoryMode ? (
             historyProps?.statusLabel ? (
-              <p className="m-0 text-[0.76em] font-medium leading-[1.6] text-muted">{historyProps.statusLabel}</p>
+              <p className="m-0 text-[0.76em] font-medium leading-[1.6] text-fg/muted">{historyProps.statusLabel}</p>
             ) : null
           ) : (
             <>{/*
@@ -453,7 +453,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                 {showQuestionHeader || showQuestionText ? (
                   <div className="space-y-1">
                     {showQuestionHeader ? (
-                      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+                      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-fg/muted uppercase">
                         {headerText}
                       </p>
                     ) : null}
@@ -555,7 +555,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
+                            className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
                             readOnly
                             spellCheck={false}
                             highlights={customValueHighlights}
@@ -578,7 +578,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             autoFocus={isSoleFreeformQuestion || customInputRequestId === request.id}
-                            className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
+                            className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
                             placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                             highlights={customValueHighlights}
@@ -609,10 +609,10 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           className={joinClasses(
                             "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
                             customValue || isSoleFreeformQuestion
-                              ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
+                              ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] py-3 mt-1 mb-3"
                               : `
-                              hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
-                              focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
+                              hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:[--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] hover:py-3 hover:mb-3
+                              focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:[--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
                             `,
                           )}
                           placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
@@ -675,7 +675,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
               </div>
             ) : null}
             {isAttaching && !isPreviewMode ? (
-              <p className="m-0 text-[0.78em] leading-[1.6] text-muted">Attaching pasted image...</p>
+              <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">Attaching pasted image...</p>
             ) : null}
           </div>
         ) : null}

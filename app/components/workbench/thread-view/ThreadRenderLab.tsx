@@ -92,17 +92,17 @@ export default function ThreadRenderLab() {
       <div className="mx-auto grid min-h-dvh w-full max-w-[92rem] grid-rows-[auto_1fr] gap-4 px-4 py-4 md:px-6 md:py-6">
         <header className="space-y-1">
           <h1 className="m-0 text-[1.15rem] font-semibold tracking-tight">Thread render lab</h1>
-          <p className="m-0 max-w-[62rem] text-[0.86rem] leading-6 text-muted">
+          <p className="m-0 max-w-[62rem] text-[0.86rem] leading-6 text-fg/muted">
             Paste a full thread payload, a <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">{"{ thread }"}</code> response, a turn, an array of thread items, command strings, or simplified command objects to test the real transcript renderer and command matcher display.
           </p>
         </header>
         <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(20rem,0.78fr)_minmax(0,1.22fr)]">
-          <section className="flex min-h-[18rem] flex-col rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_3%,transparent)]">
+          <section className="flex min-h-[18rem] flex-col rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_3%,var(--app-bg-solid))]">
             <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <p className="m-0 text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-muted">Input JSON</p>
+              <p className="m-0 text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-fg/muted">Input JSON</p>
               <button
                 type="button"
-                className="rounded-full px-3 py-1.5 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                className="rounded-full px-3 py-1.5 text-[0.78rem] font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                 onClick={() => {
                   setInputText(sampleText);
                 }}
@@ -112,7 +112,7 @@ export default function ThreadRenderLab() {
             </div>
             <textarea
               ref={textareaRef}
-              className="explorer-scrollbar min-h-0 flex-1 resize-none bg-transparent px-4 pb-4 font-mono text-[0.78rem] leading-6 text-text outline-none placeholder:text-muted"
+              className="explorer-scrollbar min-h-0 flex-1 resize-none bg-transparent px-4 pb-4 font-mono text-[0.78rem] leading-6 text-text outline-none placeholder:text-fg/muted"
               data-thread-render-lab-hydrated={hasMounted ? "true" : "false"}
               spellCheck={false}
               value={inputText}
@@ -121,7 +121,7 @@ export default function ThreadRenderLab() {
               }}
             />
           </section>
-          <section className="explorer-scrollbar min-h-[24rem] overflow-y-auto rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]">
+          <section className="explorer-scrollbar min-h-[24rem] overflow-y-auto rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]">
             {parsedInput.error ? (
               <p className="m-0 px-5 py-4 text-[0.9rem] leading-6 text-danger">{parsedInput.error}</p>
             ) : (

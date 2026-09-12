@@ -31,10 +31,10 @@ interface RegexPatternToken {
 }
 
 const REGEX_TOKEN_CLASS_NAMES: Record<RegexPatternTokenKind, string> = {
-  escape: "text-muted",
+  escape: "text-fg/muted",
   group: "text-[color:color-mix(in_srgb,var(--accent)_30%,var(--text)_70%)]",
   literal: "text-text",
-  operator: "text-muted",
+  operator: "text-fg/muted",
 };
 
 function tokenizeRegexPattern(pattern: string) {
@@ -220,7 +220,7 @@ export function ThreadCommandSummary ({
   return (
     <span className="inline-flex max-w-[calc(100%-0.6rem)] min-w-0 flex-wrap items-center gap-x-[0.45rem] gap-y-[0.3rem] align-bottom">
       {display.showShell && display.shell ? (
-        <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-muted">
+        <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           {display.shell}:
         </span>
       ) : null}

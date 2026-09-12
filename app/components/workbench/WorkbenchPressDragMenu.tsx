@@ -168,7 +168,7 @@ export default function WorkbenchPressDragMenu({
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
       className={`
-        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center justify-center gap-2 rounded-lg touch-auto select-none bg-transparent px-2.5 py-2 text-muted outline-none transition hover:text-text
+        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center justify-center gap-2 rounded-lg touch-auto select-none bg-transparent px-2.5 py-2 text-fg/muted outline-none transition hover:text-text
         before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover
         ${menu.interaction.kind === "dragging" ? "" : "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"}
       `}

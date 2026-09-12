@@ -26,7 +26,7 @@ export default function ThreadTitleCommandItem({
 
   return (
     <div className="py-1.5 text-[0.92em] leading-[1.6]" data-role="thread-title-command">
-      <div className={`flex items-center gap-2 ${failed ? "text-danger" : "text-muted"}`}>
+      <div className={`flex items-center gap-2 ${failed ? "text-danger" : "text-fg/muted"}`}>
         <TitleCommandIcon className="shrink-0" size={16} />
         <span><span>{prefix}</span> <span className={failed ? "font-semibold" : "font-semibold text-text"}>{title}</span></span>
       </div>

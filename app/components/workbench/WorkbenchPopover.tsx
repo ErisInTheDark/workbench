@@ -74,7 +74,7 @@ export default function WorkbenchPopover({
       aria-label={label}
       tabIndex={-1}
       style={position ?? { visibility: "hidden" }}
-      className="fixed z-50 grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] text-text shadow-float backdrop-blur-xl focus:outline-none"
+      className="fixed z-50 grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] [--fg-bg:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg)_80%,var(--app-bg-solid)))] text-text shadow-float backdrop-blur-xl focus:outline-none"
     >
       {children}
     </div>,

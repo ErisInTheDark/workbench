@@ -122,7 +122,7 @@ export default function WorkbenchThreadPanel ({
         <div className={`flex min-w-0 items-start justify-between gap-3${isMinimizedVertical ? " rotate-90 whitespace-nowrap" : ""}`}>
           <div className="min-w-0">
             <p className="truncate text-base font-semibold leading-tight text-text">{threadLabel}</p>
-            <p className="mt-1 truncate text-[0.84rem] tracking-[0.02em] text-muted" hidden={isMinimized}>{threadStatusLabel}</p>
+            <p className="mt-1 truncate text-[0.84rem] tracking-[0.02em] text-fg/muted" hidden={isMinimized}>{threadStatusLabel}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onMinimizeToggle ? (

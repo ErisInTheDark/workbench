@@ -77,7 +77,7 @@ export default function ReloadNecessary ({
   return (
     <section className="sticky bottom-0 z-20 mt-auto ml-3">
       <div
-        className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
+        className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
         data-reload-necessary="true"
       >
         <div
@@ -88,7 +88,7 @@ export default function ReloadNecessary ({
             <button
               aria-expanded={!collapsed}
               aria-label={collapsed ? "Expand reload controls" : "Collapse reload controls"}
-              className="inline-flex size-8 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+              className="inline-flex size-8 items-center justify-center rounded-full text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
               onClick={() => setReloadNecessaryOpen(collapsed)}
               title={collapsed ? "Expand reload controls" : "Collapse reload controls"}
               type="button"

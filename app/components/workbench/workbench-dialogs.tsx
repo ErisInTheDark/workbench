@@ -47,8 +47,8 @@ export function WorkbenchDialog ({
         }
       }}
     >
-      <div className="w-full max-w-md rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-5 py-4 shadow-float">
-        <p className="m-0 text-[0.84rem] tracking-[0.02em] text-muted">{eyebrow}</p>
+      <div className="w-full max-w-md rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_98%,var(--app-bg-solid))] px-5 py-4 shadow-float">
+        <p className="m-0 text-[0.84rem] tracking-[0.02em] text-fg/muted">{eyebrow}</p>
         <h2 id={titleId} className="mt-0.5 text-base font-semibold leading-tight">
           {title}
         </h2>

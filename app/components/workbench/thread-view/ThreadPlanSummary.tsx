@@ -63,7 +63,7 @@ export default function ThreadPlanSummary ({ markdown }: { markdown: string }) {
       <span className="min-w-0 truncate">Plan</span>
       <button
         aria-label={copyButtonLabel}
-        className="inline-flex size-[1.65rem] shrink-0 items-center justify-center rounded-[0.38rem] text-muted transition-[background-color,color,opacity] duration-150 ease-out hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none data-[thread-plan-copy-state=copied]:text-success data-[thread-plan-copy-state=failed]:text-danger"
+        className="inline-flex size-[1.65rem] shrink-0 items-center justify-center rounded-[0.38rem] text-fg/muted transition-[background-color,color,opacity] duration-150 ease-out hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none data-[thread-plan-copy-state=copied]:text-success data-[thread-plan-copy-state=failed]:text-danger"
         data-thread-plan-copy="true"
         data-thread-plan-copy-state={copyState}
         onClick={() => { void copyPlan(); }}

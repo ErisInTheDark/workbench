@@ -246,7 +246,7 @@ export default function WorkbenchFilePanel ({
             <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
               {titleLabel ?? snapshot?.currentPath ?? path}
             </p>
-            <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" hidden={isMinimized}>
+            <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" hidden={isMinimized}>
               Markdown files open as rich text. Save with Ctrl/Cmd+S.
             </p>
           </div>
@@ -359,11 +359,11 @@ export default function WorkbenchFilePanel ({
         }
       >
         <>
-          <p id={`save-conflict-summary-${panelIdSuffix}`} ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-muted">
+          <p id={`save-conflict-summary-${panelIdSuffix}`} ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-fg/muted">
             Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
           </p>
-          <p ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-          <p ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+          <p ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
+          <p ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
         </>
       </WorkbenchDialog>
 
@@ -382,7 +382,7 @@ export default function WorkbenchFilePanel ({
           </>
         }
       >
-        <p id={`reset-draft-summary-${panelIdSuffix}`} className="mt-3 text-sm leading-6 text-muted">
+        <p id={`reset-draft-summary-${panelIdSuffix}`} className="mt-3 text-sm leading-6 text-fg/muted">
           Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
         </p>
       </WorkbenchDialog>

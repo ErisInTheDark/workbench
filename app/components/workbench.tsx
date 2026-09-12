@@ -2406,7 +2406,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{definition.description}</p>
+            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
           </div>
         </div>
         {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
@@ -2482,7 +2482,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{definition.description}</p>
+            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
           </div>
           {override.enabled ? (
             <WorkbenchIconButton
@@ -2772,7 +2772,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       title="Explorer"
                     >
                       {!explorer.projects.length && !isProjectIdentityLoading ? (
-                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
+                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-fg/muted md:pr-4.5">
                           No projects were found.
                         </p>
                       ) : null}
@@ -2894,7 +2894,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
                           ) : showSettingsView ? "Settings" : "Select a file"}
                         </p>
-                        <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
+                        <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                           {showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
@@ -3005,7 +3005,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <section className="space-y-6">
                       <div className="flex flex-wrap items-end justify-between gap-4">
                         <div className="space-y-2">
-                          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Preferences</p>
+                          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Preferences</p>
                           <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
                         </div>
                         <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
@@ -3015,7 +3015,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             aria-selected={settingsScope === "global"}
                             className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
                               ? " border-text text-text"
-                              : " border-transparent text-muted hover:text-text"}`}
+                              : " border-transparent text-fg/muted hover:text-text"}`}
                             onClick={(event) => {
                               openSettingsScopeFromLink(event, "global");
                             }}
@@ -3028,7 +3028,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             aria-selected={settingsScope === "project"}
                             className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"
                               ? " border-text text-text"
-                              : " border-transparent text-muted hover:text-text"}`}
+                              : " border-transparent text-fg/muted hover:text-text"}`}
                             onClick={(event) => {
                               openSettingsScopeFromLink(event, "project");
                             }}
@@ -3070,10 +3070,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
-                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
                     </div>
                   </div>
                 ) : showEmptyState && !shouldRenderMainLayout ? (
@@ -3114,7 +3114,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                     />
                                   ) : null}
                                 </span>
-                                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-muted">
+                                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-fg/muted">
                                   <span>{formatQuickOpenTimestamp(quickOpenUpdatedAtByPath[path])}</span>
                                   {explorer.changes[path] ? (
                                     <span>{formatQuickOpenChangeSummary(explorer.changes[path].additions, explorer.changes[path].deletions)}</span>
@@ -3248,8 +3248,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
                       return (
                         <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                            <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Workbench</p>
+                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                            <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Workbench</p>
                             <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
                           </div>
                         </div>
@@ -3270,19 +3270,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showFileView && selectionError ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
-                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
                     </div>
                   </div>
                 ) : null}
                 {showFileView && !selectionError && !isFileViewReady ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
+                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
-                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{effectiveFilePath}</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{effectiveFilePath}</p>
                     </div>
                   </div>
                 ) : null}
@@ -3326,11 +3326,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 }
               >
                 <>
-                  <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-muted">
+                  <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-fg/muted">
                     Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
                   </p>
-                  <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-                  <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+                  <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
+                  <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
                 </>
               </WorkbenchDialog>
 
@@ -3370,7 +3370,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </>
                 }
               >
-                <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
+                <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-fg/muted">
                   Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
                 </p>
               </WorkbenchDialog>
@@ -3407,7 +3407,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 }
               >
                 <>
-                  <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-muted">
+                  <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-fg/muted">
                     Git cannot restore this file. This also discards its saved Workbench draft.
                   </p>
                   <p className="mt-3 break-all text-[0.84rem] leading-6 text-text">{pendingDeleteFilePath}</p>
@@ -3460,10 +3460,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 }
               >
                 <>
-                  <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-muted">
+                  <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-fg/muted">
                     Enter a name for the new file or folder. New files are created as markdown files.
                   </p>
-                  <label className="mt-4 block text-sm text-muted" htmlFor="create-entry-name">
+                  <label className="mt-4 block text-sm text-fg/muted" htmlFor="create-entry-name">
                     Name
                   </label>
                   <input

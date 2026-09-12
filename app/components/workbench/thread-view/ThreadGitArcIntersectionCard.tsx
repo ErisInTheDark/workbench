@@ -54,7 +54,7 @@ export default function ThreadGitArcIntersectionCard({
 
   return (
     <section
-      className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]"
+      className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]"
       data-thread-git-arc-intersection-card={mode}
       data-thread-plan-conflict-card={waiting ? undefined : "true"}
     >

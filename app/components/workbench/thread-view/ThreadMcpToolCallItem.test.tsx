@@ -170,7 +170,7 @@ test("ripgrep alternation punctuation stays dim across escaped character boundar
   });
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, { item, route }));
-  const dimAlternations = html.match(/class="text-muted" data-thread-pattern-token="operator">\|<\/span>/gu) ?? [];
+  const dimAlternations = html.match(/class="text-fg\/muted" data-thread-pattern-token="operator">\|<\/span>/gu) ?? [];
 
   assert.equal(dimAlternations.length, 3);
   assert.match(html, /\[font-variant-ligatures:none\]/u);

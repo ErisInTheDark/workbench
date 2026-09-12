@@ -50,7 +50,7 @@ function TargetCard({ children, hoverScope, kind, label, selected, targetProject
   return (
     <div
       aria-hidden="true"
-      className={`pointer-events-none inline-flex size-9 items-center justify-center rounded-[0.7rem] border text-muted backdrop-blur transition ${
+      className={`pointer-events-none inline-flex size-9 items-center justify-center rounded-[0.7rem] border text-fg/muted backdrop-blur transition ${
         selected
           ? "border-accent bg-accent-soft text-accent opacity-100"
           : `border-[color-mix(in_srgb,var(--text)_14%,transparent)] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] opacity-0${hoverClassName}`

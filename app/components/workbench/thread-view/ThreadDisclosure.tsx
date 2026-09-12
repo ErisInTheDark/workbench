@@ -132,7 +132,7 @@ export default function ThreadDisclosure ({
     >
       <summary
         className={joinClasses(
-          "flex min-w-0 items-center cursor-pointer list-none text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
+          "flex min-w-0 items-center cursor-pointer list-none text-fg/muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
           compactSummary ? "gap-1" : "max-w-full gap-2",
           summaryClassName,
         )}
@@ -190,7 +190,7 @@ export function ThreadDisclosureStaticRow ({
         type={onClick ? "button" : undefined}
         onClick={onClick}
         className={joinClasses(
-          "flex min-w-0 max-w-full items-center gap-2 text-muted",
+          "flex min-w-0 max-w-full items-center gap-2 text-fg/muted",
           onClick ? "group/worked w-full cursor-pointer text-left transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none" : undefined,
           summaryClassName,
         )}

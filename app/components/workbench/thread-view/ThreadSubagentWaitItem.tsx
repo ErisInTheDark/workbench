@@ -70,7 +70,7 @@ export default function ThreadSubagentWaitItem ({
         </span>
       ))}
       {showFailureExit || showDuration ? (
-        <span className="ml-2 text-[0.84em] text-muted">
+        <span className="ml-2 text-[0.84em] text-fg/muted">
           {showFailureExit ? <ThreadSummaryText text={`exit ${exitCode}`} /> : null}
           {showFailureExit && showDuration ? <span> | </span> : null}
           {showDuration ? <ThreadDurationText durationMs={visibleDurationMs} /> : null}
@@ -83,7 +83,7 @@ export default function ThreadSubagentWaitItem ({
     return (
       <ThreadDisclosureStaticRow
         summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       />
     );
   }
@@ -94,7 +94,7 @@ export default function ThreadSubagentWaitItem ({
       contentClassName="mt-2 pl-6"
       defaultOpen={active}
       summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       {disclosureContent ? disclosureContent : multiplexed && active ? (
         <>
@@ -113,7 +113,7 @@ export default function ThreadSubagentWaitItem ({
                   aria-selected={selected}
                   className={`shrink-0 border-b-2 px-1 py-2 text-[0.84rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${selected
                     ? " border-text text-text"
-                    : " border-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
+                    : " border-transparent text-fg/muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
                   id={tabId}
                   key={`${entry.targetKey}:${index}`}
                   onClick={() => setSelectedTargetKey(entry.targetKey)}

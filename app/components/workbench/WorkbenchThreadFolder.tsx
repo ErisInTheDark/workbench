@@ -54,7 +54,7 @@ function folderStatusRank(entry: FolderEntry) {
 
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
-  if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-muted", strokeOpacity: 0.24 };
+  if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-fg/muted", strokeOpacity: 0.24 };
   const waiting = Boolean(entry.waitingFor) && !(entry.metadata.snoozed && entry.lifecycle.kind === "needsAttention");
   const proposed = !waiting && entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
   const tone: WorkbenchThreadStatusTone = waiting
@@ -293,7 +293,7 @@ export default function WorkbenchThreadFolder({
             open={open}
             onToggle={(event) => onOpenChange(event.currentTarget.open)}
             summary={summary}
-            summaryClassName="min-h-11 text-muted md:min-h-0"
+            summaryClassName="min-h-11 text-fg/muted md:min-h-0"
           >
             {children}
           </ThreadDisclosure>

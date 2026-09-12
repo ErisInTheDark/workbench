@@ -25,7 +25,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
     <section aria-labelledby="rate-limit-heading" className="space-y-3">
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="rate-limit-heading">Rate limits</h2>
-        <span className="text-[0.72rem] text-muted">account-wide</span>
+        <span className="text-[0.72rem] text-fg/muted">account-wide</span>
       </div>
       <div>
       {stats?.rateLimits.length ? (
@@ -46,7 +46,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
                   <h3 className="m-0 text-[0.82rem] font-semibold text-text">
                     {formatRateLimitIdentity(limit.harness, limit.limitId, limit.limitName)}
                   </h3>
-                  <span className="flex flex-wrap gap-x-3 text-[0.72rem] text-muted">
+                  <span className="flex flex-wrap gap-x-3 text-[0.72rem] text-fg/muted">
                     {windows.map(({ kind, window }) => (
                       <span key={kind}>
                         {formatRateLimitWindowLabel(window.durationMinutes, kind === "primary" ? "Primary" : "Secondary")}
@@ -70,7 +70,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
             );
           })}
         </div>
-      ) : <p className="m-0 text-[0.8rem] text-muted">{stats ? "No rate-limit history is available yet." : "-"}</p>}
+      ) : <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No rate-limit history is available yet." : "-"}</p>}
       </div>
     </section>
   );

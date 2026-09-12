@@ -117,16 +117,16 @@ export default function ThreadGitArcItem ({
 }) {
   if (commandIntent.action === "propose" && proposalRedirect) {
     return (
-      <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card="propose">
+      <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5" data-thread-git-arc-card="propose">
         <button
-          className="flex w-full min-w-0 items-baseline gap-2 text-left text-[0.82em] leading-[1.45] text-muted hover:text-text"
+          className="flex w-full min-w-0 items-baseline gap-2 text-left text-[0.82em] leading-[1.45] text-fg/muted hover:text-text"
           onClick={proposalRedirect.onActivate}
           type="button"
         >
           <GitArcIcon action="propose" size={16} />
           <span>Proposed</span>
           <span className="min-w-0 truncate font-medium text-text">{proposalRedirect.title.trim() || "Commit proposal"}</span>
-          <span className="shrink-0 font-mono text-[0.86em] text-muted">{proposalRedirect.proposalId.slice(0, 8)}</span>
+          <span className="shrink-0 font-mono text-[0.86em] text-fg/muted">{proposalRedirect.proposalId.slice(0, 8)}</span>
         </button>
       </article>
     );
@@ -219,7 +219,7 @@ export default function ThreadGitArcItem ({
   ));
 
   return (
-    <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
+    <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
         defaultOpen={commandIntent.action !== "compare" && commandIntent.action !== "diff"}
@@ -236,23 +236,23 @@ export default function ThreadGitArcItem ({
             </span>
             {commandIntent.action === "rescind" || commandIntent.action === "status" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
             {commandIntent.action === "rescind" && commandIntent.proposalId ? (
-              <span className="font-mono text-[0.86em] text-muted">{commandIntent.proposalId.slice(0, 8)}</span>
+              <span className="font-mono text-[0.86em] text-fg/muted">{commandIntent.proposalId.slice(0, 8)}</span>
             ) : null}
-            {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
-            {memberRefs.length > 1 ? <span className="text-[0.86em] text-muted">{memberRefs.length} roots</span> : null}
+            {ref ? <span className="font-mono text-[0.86em] text-fg/muted">{ref.slice(0, 8)}</span> : null}
+            {memberRefs.length > 1 ? <span className="text-[0.86em] text-fg/muted">{memberRefs.length} roots</span> : null}
             {receipt?.phase ? <span>{receipt.phase}</span> : null}
             {receipt?.claimedPathCount !== undefined ? <span>{receipt.claimedPathCount} claimed</span> : null}
             {receipt?.plannedPathCount !== undefined ? <span>{receipt.plannedPathCount} planned</span> : null}
             {receipt?.adoptedPathCount !== undefined && receipt.adoptedPathCount > 0 ? <span>{receipt.adoptedPathCount} adopted</span> : null}
             {receipt?.unchanged ? <span>unchanged</span> : null}
             {durationMs !== null ? durationPresentation === "waited" ? (
-              <span className="text-muted" data-thread-git-arc-duration="waited">
+              <span className="text-fg/muted" data-thread-git-arc-duration="waited">
                 (waited <ThreadDurationText className="inline" durationMs={durationMs} />)
               </span>
             ) : <ThreadDurationText durationMs={durationMs} /> : null}
           </span>
         )}
-        summaryClassName="text-[0.82em] leading-[1.45] text-muted"
+        summaryClassName="text-[0.82em] leading-[1.45] text-fg/muted"
       >
         {commandIntent.action === "mv" && !ignoredFailure ? (
           <ThreadGitArcMoveList
@@ -267,7 +267,7 @@ export default function ThreadGitArcItem ({
           <ThreadGitArcStatusDetails output={statusOutput} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
         ) : null}
         {memberRefs.length > 1 ? (
-          <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-muted" data-thread-git-arc-members="true">
+          <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-fg/muted" data-thread-git-arc-members="true">
             {memberRefs.map((member) => (
               <div className="flex min-w-0 items-baseline gap-2" key={`${member.rootId}:${member.ref}`}>
                 <span className="min-w-0 flex-1 truncate">{member.rootId}</span>
@@ -341,7 +341,7 @@ export default function ThreadGitArcItem ({
             className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-1.5"
             contentClassName="pl-1"
             summary={`${claimedPaths.length} claimed ${claimedPaths.length === 1 ? "file" : "files"}`}
-            summaryClassName="text-[0.78em] leading-[1.45] text-muted"
+            summaryClassName="text-[0.78em] leading-[1.45] text-fg/muted"
           >
             <ThreadClaimedFileList
               paths={claimedPaths}

@@ -29,7 +29,7 @@ export interface ThreadWebSearchOutput {
 
 const JSON_BLOCK_CLASS = "m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text";
 const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.78em] leading-[1.6] text-text";
-const ROW_LABEL_CLASS = "shrink-0 text-muted";
+const ROW_LABEL_CLASS = "shrink-0 text-fg/muted";
 const ROW_VALUE_CLASS = "min-w-0 break-words font-medium text-text";
 
 function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
@@ -217,7 +217,7 @@ function ThreadDetailLine ({
   value: ReactNode;
 }) {
   return (
-    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
+    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-fg/muted">
       <span>{label}</span>
       <span className="min-w-0 text-text">{value}</span>
     </p>
@@ -235,7 +235,7 @@ function ThreadQueriesList ({
 
   return (
     <div className="space-y-2">
-      <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
+      <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">
         {queries.length === 1 ? "Query" : "Queries"}
       </p>
       <ul className="m-0 space-y-1 pl-4 text-[0.84em] leading-[1.6] text-text">
@@ -269,7 +269,7 @@ export function ThreadWebSearchActionRow ({
               {query.scope ? (
                 <>
                   <span className="font-medium">{query.scope}</span>
-                  <span className="text-muted"> for </span>
+                  <span className="text-fg/muted"> for </span>
                   <span className="font-medium">{query.terms}</span>
                 </>
               ) : (
@@ -325,13 +325,13 @@ function ThreadWebSearchOutputDetails ({
       ) : null}
       {isNonEmptyString(output.text) ? (
         <div className="space-y-2">
-          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">Output</p>
+          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">Output</p>
           <pre className={JSON_BLOCK_CLASS}>{output.text.trim()}</pre>
         </div>
       ) : null}
       {sources.length ? (
         <div className="space-y-2">
-          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">Sources</p>
+          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">Sources</p>
           <div className="space-y-2">
             {sources.map((source, index) => (
               <div
@@ -346,7 +346,7 @@ function ThreadWebSearchOutputDetails ({
                   )}
                 </p>
                 {isNonEmptyString(source.snippet) ? (
-                  <p className="m-0 mt-1 text-[0.78em] leading-[1.6] text-muted">{source.snippet.trim()}</p>
+                  <p className="m-0 mt-1 text-[0.78em] leading-[1.6] text-fg/muted">{source.snippet.trim()}</p>
                 ) : null}
               </div>
             ))}
@@ -402,7 +402,7 @@ function ThreadWebSearchDetails ({
       {output ? <ThreadWebSearchOutputDetails output={output} /> : null}
       {action?.type === "other" ? (
         <div className="space-y-2">
-          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">Action</p>
+          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">Action</p>
           <pre className={JSON_BLOCK_CLASS}>{JSON.stringify(action, null, 2)}</pre>
         </div>
       ) : null}
@@ -475,7 +475,7 @@ export function ThreadWebSearchSequence ({
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
       summary={getWebSearchSequenceSummary(visibleItems)}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <div className="space-y-1">
         {visibleItems.map((item) => (
@@ -509,7 +509,7 @@ export default function ThreadWebSearchItem ({
       contentClassName="mt-2 space-y-3 pl-6"
       defaultOpen={shouldOpen}
       summary={getWebSearchSummary(item)}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadWebSearchDetails item={item} output={output} />
     </ThreadDisclosure>

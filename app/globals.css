@@ -1,6 +1,51 @@
 @import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+@utility text-fg-* {
+  color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility border-fg-* {
+  border-color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  border-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility fill-fg-* {
+  fill: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  fill: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility stroke-fg-* {
+  stroke: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  stroke: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility bg-fg-* {
+  background-color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
 @font-face {
   font-family: "Workbench Comic Code Light";
   font-style: normal;
@@ -17,7 +62,7 @@
   --bg-soft: rgba(49, 34, 15, 0.045);
   --text: #191614;
   --oklch-text-lightness: 35%;
-  --muted: rgba(25, 22, 20, 0.62);
+  --muted-strength: 62%;
   --accent: #1a42b0;
   --accent-soft: #1a42b044;
   --danger: #8f3d3d;
@@ -27,6 +72,7 @@
   --shadow: rgba(14, 12, 10, 0.12);
   --selection: #1a42b044;
   --app-bg-solid: var(--bg);
+  --fg-bg: var(--app-bg-solid);
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
   --edge-fade: color-mix(in srgb, var(--text) 12%, transparent);
   --shell-fade-bg: var(--app-bg-solid);
@@ -39,7 +85,7 @@
   --bg-soft: rgba(255, 82, 178, 0.12);
   --text: #3a1831;
   --oklch-text-lightness: 36%;
-  --muted: rgba(58, 24, 49, 0.64);
+  --muted-strength: 64%;
   --accent: #d11b8f;
   --accent-soft: #ff73c24a;
   --danger: #b92f67;
@@ -63,7 +109,7 @@
   --bg-soft: rgba(92, 105, 151, 0.14);
   --text: #182433;
   --oklch-text-lightness: 35%;
-  --muted: rgba(24, 36, 51, 0.61);
+  --muted-strength: 61%;
   --accent: #596f9d;
   --accent-soft: #8c9fd347;
   --danger: #9b405a;
@@ -86,7 +132,7 @@
     --bg-soft: rgba(239, 225, 203, 0.08);
     --text: #eee8df;
     --oklch-text-lightness: 65%;
-    --muted: rgba(238, 232, 223, 0.65);
+    --muted-strength: 65%;
     --accent: #74a0ff;
     --accent-soft: #74a0ff44;
     --danger: #ff6161;
@@ -108,7 +154,7 @@
     --bg-soft: rgba(255, 101, 196, 0.12);
     --text: #ffe4f6;
     --oklch-text-lightness: 75%;
-    --muted: rgba(255, 228, 246, 0.66);
+    --muted-strength: 66%;
     --accent: #ff86d5;
     --accent-soft: #ff86d54d;
     --danger: #ff75a4;
@@ -130,7 +176,7 @@
     --bg-soft: rgba(151, 197, 255, 0.1);
     --text: #eef7ff;
     --oklch-text-lightness: 74%;
-    --muted: rgba(238, 247, 255, 0.66);
+    --muted-strength: 66%;
     --accent: #9bcaff;
     --accent-soft: #9bcaff42;
     --danger: #ff7f9f;
@@ -154,7 +200,7 @@
  */
 @utility text-hue-* {
   color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
-  color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+  color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), var(--fg-bg, var(--bg)));
 }
 
 @utility border-hue-* {
@@ -173,10 +219,12 @@
 }
 
 @theme inline {
+  --opacity-muted: var(--muted-strength);
+  --opacity-muted-grid: calc(var(--muted-strength) * 0.18);
+  --opacity-muted-soft: calc(var(--muted-strength) * 0.6);
   --color-bg: var(--bg);
   --color-bg-soft: var(--bg-soft);
   --color-text: var(--text);
-  --color-muted: var(--muted);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
@@ -309,6 +357,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .sticky-collapsible-shell {
+    --fg-bg: var(--shell-fade-bg);
     background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
     border-radius: 1.15rem;
     transition:
@@ -317,6 +366,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .sticky-collapsible-surface {
+    --fg-bg: color-mix(in srgb, var(--text) 4%, var(--shell-fade-bg));
     background: color-mix(in srgb, var(--text) 4%, transparent);
     border-radius: 1.15rem;
     display: grid;
@@ -408,7 +458,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .sticky-collapsible-collapsed-text[data-preview-kind="placeholder"] {
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
   }
 
   .sticky-collapsible-collapsed-accessory {
@@ -504,7 +554,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-collapsed-chevron {
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -527,7 +577,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .editor-content:empty::before {
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
     content: attr(data-placeholder);
   }
 
@@ -750,7 +800,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .editor-content blockquote {
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
   }
 
   .editor-content a {
@@ -781,7 +831,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     font-family: var(--font-mono);
     font-size: 0.72em;
     line-height: 1;
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
   }
 
   .editor-content pre code {
@@ -804,6 +854,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .editor-content [data-block-comment="true"] {
+    --comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)));
     background: color-mix(in srgb, var(--text) 6%, transparent);
     border-radius: 0.45rem;
     padding: 0.45rem 0.75rem;
@@ -811,14 +862,15 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     margin-inline: -0.75rem;
     white-space: pre-wrap;
     font-family: var(--font-sans);
-    color: color-mix(in srgb, var(--text) 60%, transparent);
+    color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg));
     font-size: 0.85em;
   }
 
   .editor-content [data-inline-comment="true"] {
+    --comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)));
     background: color-mix(in srgb, var(--text) 6%, transparent);
     border-radius: 0.35rem;
-    color: color-mix(in srgb, var(--text) 60%, transparent);
+    color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg));
     padding: 0.08em 0.34em;
   }
 
@@ -862,11 +914,11 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background:
       linear-gradient(
         90deg,
-        color-mix(in srgb, var(--muted) 78%, transparent) 34%,
+        color-mix(in srgb, var(--text) calc(var(--muted-strength) * 0.78), var(--fg-bg, var(--bg))) 34%,
         var(--accent),
         color-mix(in srgb, var(--text) 86%, var(--accent) 14%),
         var(--accent),
-        color-mix(in srgb, var(--muted) 78%, transparent) 66%
+        color-mix(in srgb, var(--text) calc(var(--muted-strength) * 0.78), var(--fg-bg, var(--bg))) 66%
       );
     background-clip: text;
     background-size: 300% 100%;
@@ -1220,7 +1272,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   .thread-plaintext-editable[data-empty="true"]::before {
     content: attr(data-placeholder);
-    color: var(--muted);
+    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--editable-fg-bg, var(--fg-bg, var(--bg))));
     pointer-events: none;
   }
 

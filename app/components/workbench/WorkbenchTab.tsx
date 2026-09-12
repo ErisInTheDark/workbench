@@ -20,7 +20,7 @@ export default function WorkbenchTab(props: TabProps) {
   const className = `
     inline-flex max-w-full items-center border-b-2 pb-1 font-semibold transition
     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
-    ${props.selected ? "border-text text-text" : "border-transparent text-muted hover:text-text"}
+    ${props.selected ? "border-text text-text" : "border-transparent text-fg/muted hover:text-text"}
   `;
   const content = <span className="truncate">{props.children}</span>;
   return props.href !== undefined

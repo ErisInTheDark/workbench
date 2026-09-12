@@ -154,7 +154,7 @@ export default function ThreadCheckpointDiffItem({
 
   if (diffArtifactId) {
     return (
-      <p className="m-0 py-2 text-[0.92em] leading-[1.6] text-muted">
+      <p className="m-0 py-2 text-[0.92em] leading-[1.6] text-fg/muted">
         Loading checkpoint diff...
       </p>
     );

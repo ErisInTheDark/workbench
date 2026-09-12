@@ -71,7 +71,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
           aria-autocomplete="list"
           aria-controls="workbench-search-results"
           aria-expanded="true"
-          className="h-20 w-full shrink-0 bg-transparent px-6 text-2xl text-text outline-none placeholder:text-muted md:h-24 md:px-8 md:text-3xl"
+          className="h-20 w-full shrink-0 bg-transparent px-6 text-2xl text-text outline-none placeholder:text-fg/muted md:h-24 md:px-8 md:text-3xl"
           onChange={(event) => controller.setQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") { event.preventDefault(); controller.moveSelection(1); }
@@ -95,9 +95,9 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
           role="listbox"
         >
           {snapshot.error ? <p className="px-4 py-5 text-sm text-red-500">{snapshot.error}</p> : null}
-          {snapshot.isLoading ? <p className="px-2 py-2 text-sm text-muted">Searching...</p> : null}
+          {snapshot.isLoading ? <p className="px-2 py-2 text-sm text-fg/muted">Searching...</p> : null}
           {!snapshot.error && !snapshot.isLoading && snapshot.results.length === 0 ? (
-            <p className="px-4 py-5 text-sm text-muted">No matching results.</p>
+            <p className="px-4 py-5 text-sm text-fg/muted">No matching results.</p>
           ) : null}
           {snapshot.results.map((result, index) => {
             const id = `workbench-search-result-${index}`;
@@ -142,7 +142,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
                     projectId={ProjectIdSchema.parse(result.projectId)}
                     role="option"
                     secondaryRow={(
-                      <span className="flex min-w-0 gap-2 pl-5 text-[0.72rem] leading-4 text-muted">
+                      <span className="flex min-w-0 gap-2 pl-5 text-[0.72rem] leading-4 text-fg/muted">
                         <span className="max-w-40 shrink-0 truncate">{project?.name || result.projectId}</span>
                         {result.detail !== result.projectId ? <span className="min-w-0 truncate" title={result.detail}>{result.detail}</span> : null}
                       </span>

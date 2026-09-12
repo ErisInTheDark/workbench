@@ -280,7 +280,7 @@ function ThreadQuestionnaireTranscriptPreview ({
               {pair.promptText}
             </div>
           ) : null}
-          <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3 text-left leading-[1.55] text-text">
+          <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3 text-left leading-[1.55] text-text">
             <ThreadMarkdown
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
               inlineMentionSources={inlineMentionSources}
@@ -371,7 +371,7 @@ function ThreadMetaLine ({
   value: ReactNode;
 }) {
   return (
-    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
+    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-fg/muted">
       <span>{label}</span>
       <span className="text-text">{value}</span>
     </p>
@@ -456,10 +456,10 @@ function ThreadQuestionnaireToolCallItem ({
           workspaceRoots={workspaceRoots}
         />
       )}
-      summaryClassName="items-start text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="items-start text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
-        <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
+        <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] p-3">
           {request ? (
             <ThreadUserInputRequest
               mode="history"
@@ -468,11 +468,11 @@ function ThreadQuestionnaireToolCallItem ({
               statusLabel={item.durationMs !== null ? `${statusLabel} | ${Math.round(item.durationMs)}ms` : statusLabel}
             />
           ) : item.status === "inProgress" ? (
-            <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-muted">
+            <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-fg/muted">
               Waiting for a response in the composer.
             </p>
           ) : (
-            <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-muted">
+            <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-fg/muted">
               Questionnaire details unavailable.
             </p>
           )}
@@ -509,10 +509,10 @@ function ThreadGenericDynamicToolCallItem ({
             <code className={INLINE_CODE_CLASS}>{item.tool}</code>
           </span>
           {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-muted">
+            <span className="ml-2 text-[0.78em] text-fg/muted">
               {metaParts.map((part, index) => (
                 <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-muted"> | </span> : null}
+                  {index ? <span className="text-fg/muted"> | </span> : null}
                   {part}
                 </span>
               ))}
@@ -520,7 +520,7 @@ function ThreadGenericDynamicToolCallItem ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadToolCallDetails invocation={invocation} output={output} />
     </ThreadDisclosure>
@@ -535,8 +535,8 @@ function ThreadToolBubble ({
   label: ReactNode;
 }) {
   return (
-    <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
-      <div className="m-0 pb-2 text-[0.74em] font-medium leading-[1.4] text-muted">
+    <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] px-4 py-3">
+      <div className="m-0 pb-2 text-[0.74em] font-medium leading-[1.4] text-fg/muted">
         {label}
       </div>
       {children}
@@ -569,10 +569,10 @@ function ThreadSkillToolCallItem ({
           <span>Loaded skill: </span>
           <code className={INLINE_CODE_CLASS}>{skillName}</code>
           {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-muted">
+            <span className="ml-2 text-[0.78em] text-fg/muted">
               {metaParts.map((part, index) => (
                 <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-muted"> | </span> : null}
+                  {index ? <span className="text-fg/muted"> | </span> : null}
                   {part}
                 </span>
               ))}
@@ -580,12 +580,12 @@ function ThreadSkillToolCallItem ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
         {skillPath ? <ThreadMetaLine label="Path:" value={<code className={INLINE_CODE_CLASS}>{skillPath}</code>} /> : null}
         {skillDescription ? (
-          <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
+          <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] px-4 py-3">
             <p className="m-0 text-[0.84em] leading-[1.65] text-text">{skillDescription}</p>
           </div>
         ) : null}
@@ -593,7 +593,7 @@ function ThreadSkillToolCallItem ({
           <ThreadDisclosure
             contentClassName="mt-2 pl-6"
             summary={<ThreadSummaryText text="Skill context" />}
-            summaryClassName="text-[0.84em] leading-[1.6] text-muted"
+            summaryClassName="text-[0.84em] leading-[1.6] text-fg/muted"
           >
             <pre className={`${JSON_BLOCK_CLASS} mt-2`}>{skillContent}</pre>
           </ThreadDisclosure>
@@ -639,10 +639,10 @@ function ThreadTaskToolCallItem ({
           <span>{item.status === "completed" ? "Ran " : "Running "}</span>
           <span className="font-medium text-text">{labelText}</span>
           {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-muted">
+            <span className="ml-2 text-[0.78em] text-fg/muted">
               {metaParts.map((part, index) => (
                 <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-muted"> | </span> : null}
+                  {index ? <span className="text-fg/muted"> | </span> : null}
                   {part}
                 </span>
               ))}
@@ -650,7 +650,7 @@ function ThreadTaskToolCallItem ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
         {description ? <ThreadMetaLine label="Task:" value={description} /> : null}
@@ -666,7 +666,7 @@ function ThreadTaskToolCallItem ({
           </ThreadToolBubble>
         ) : (
           item.status !== "completed" ? (
-            <p className="m-0 text-[0.84em] leading-[1.6] text-muted">
+            <p className="m-0 text-[0.84em] leading-[1.6] text-fg/muted">
               Waiting for the subagent response.
             </p>
           ) : null

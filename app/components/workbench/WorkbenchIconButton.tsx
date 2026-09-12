@@ -20,7 +20,7 @@ export default function WorkbenchIconButton({
   label, size = "medium", tone = "default", display = "bordered", className = "", title = label, ...props
 }: WorkbenchIconButtonProps) {
   const classes = `
-      inline-flex shrink-0 items-center justify-center rounded-full border bg-transparent text-muted transition enabled:cursor-pointer
+      inline-flex shrink-0 items-center justify-center rounded-full border bg-transparent text-fg/muted transition enabled:cursor-pointer
       [&:not(:disabled)]:hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] [&:not(:disabled)]:hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45
       aria-pressed:text-text data-[thread-codeblock-toggle-state=active]:text-text

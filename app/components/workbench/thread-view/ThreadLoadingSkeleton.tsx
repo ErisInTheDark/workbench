@@ -43,7 +43,7 @@ export default function ThreadLoadingSkeleton ({
               <div className="h-4 w-48 max-w-[70%] rounded-full workbench-skeleton" aria-hidden="true" />
             )}
             {statusLabel ? (
-              <p className="m-0 truncate text-[0.84rem] tracking-[0.02em] text-muted">{statusLabel}</p>
+              <p className="m-0 truncate text-[0.84rem] tracking-[0.02em] text-fg/muted">{statusLabel}</p>
             ) : (
               <div className="h-3 w-24 rounded-full workbench-skeleton" aria-hidden="true" />
             )}

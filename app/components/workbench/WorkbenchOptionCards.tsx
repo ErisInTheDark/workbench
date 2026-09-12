@@ -70,6 +70,7 @@ export function WorkbenchOptionCard ({
   const compactInline = presentation === "compact-inline";
   const compactPresentation = presentation !== "card";
   const isComposed = !isHistoryMode && Boolean(actions || labelEditor || children);
+  const selectedBackdropClassName = isChecked ? "[--fg-bg:var(--option-card-bg)]" : "";
   const optionCardClassName = joinClasses(
     compactInline
       ? "flex w-full min-w-0 items-center gap-2 border-0 bg-transparent px-0 py-1 text-left transition"
@@ -107,7 +108,10 @@ export function WorkbenchOptionCard ({
   const optionBody = (
     <>
       {optionMarker}
-      <span className={compactPresentation ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0"}>
+      <span className={joinClasses(
+        compactPresentation ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0",
+        selectedBackdropClassName,
+      )}>
         <span className={compactPresentation
           ? "shrink-0 truncate text-[0.84em] font-medium leading-[1.4] text-text"
           : "block text-[0.86em] font-medium leading-[1.5] text-text"}
@@ -117,13 +121,13 @@ export function WorkbenchOptionCard ({
         {optionDescription ? (
           compactPresentation ? (
             <>
-              <span className="shrink-0 text-[0.72em] text-muted" aria-hidden="true">·</span>
-              <span className="min-w-0 flex-1 truncate text-[0.76em] leading-[1.4] text-muted">
+              <span className="shrink-0 text-[0.72em] text-fg/muted" aria-hidden="true">·</span>
+              <span className="min-w-0 flex-1 truncate text-[0.76em] leading-[1.4] text-fg/muted">
                 {optionDescription}
               </span>
             </>
           ) : (
-            <span className="mt-0.5 block text-[0.78em] leading-[1.55] text-muted">
+            <span className="mt-0.5 block text-[0.78em] leading-[1.55] text-fg/muted">
               {optionDescription}
             </span>
           )
@@ -134,7 +138,11 @@ export function WorkbenchOptionCard ({
 
   if (isComposed) {
     return <div className={joinClasses(optionCardClassName, "flex-col", density === "tight" && "justify-center")} data-workbench-option-presentation={presentation}>
-      <div className={`flex w-full min-w-0 gap-2 ${density === "tight" ? "items-center" : "items-start"}`}>
+      <div className={joinClasses(
+        "flex w-full min-w-0 gap-2",
+        density === "tight" ? "items-center" : "items-start",
+        selectedBackdropClassName,
+      )}>
         {labelEditor ? <div className={`flex min-w-0 flex-1 gap-3 ${density === "tight" ? "items-center" : "items-start"}`}>
           <button
             type="button"
@@ -158,7 +166,7 @@ export function WorkbenchOptionCard ({
         >{optionBody}</button>}
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
-      {children ? <div className="w-full min-w-0 pl-7">{children}</div> : null}
+      {children ? <div className={joinClasses("w-full min-w-0 pl-7", selectedBackdropClassName)}>{children}</div> : null}
     </div>;
   }
 

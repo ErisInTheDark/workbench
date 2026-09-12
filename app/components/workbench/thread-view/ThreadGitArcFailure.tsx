@@ -93,11 +93,11 @@ export default function ThreadGitArcFailure({
           {rejectedPaths.length ? (
             <ProjectFileLinkList paths={rejectedPaths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
           ) : null}
-          {rejectedProjects.length ? <p className="m-0 text-muted">Projects: {rejectedProjects.join(", ")}</p> : null}
-          {rejection && "proposalId" in rejection ? <p className="m-0 text-muted">Proposal <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode></p> : null}
-          {rejection && "refs" in rejection ? <p className="m-0 text-muted">Published on {rejection.refs.join(", ")}</p> : null}
+          {rejectedProjects.length ? <p className="m-0 text-fg/muted">Projects: {rejectedProjects.join(", ")}</p> : null}
+          {rejection && "proposalId" in rejection ? <p className="m-0 text-fg/muted">Proposal <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode></p> : null}
+          {rejection && "refs" in rejection ? <p className="m-0 text-fg/muted">Published on {rejection.refs.join(", ")}</p> : null}
           {failure.workspace ? (
-            <div className="text-muted">
+            <div className="text-fg/muted">
               <p className="m-0">Failed in {failure.workspace.failedRootIds.join(", ")}.</p>
               {failure.workspace.stage === "preflight"
                 ? <p className="m-0">No projects were changed.</p>
@@ -131,8 +131,8 @@ export default function ThreadGitArcFailure({
               {missingOwners.map((owner) => (
                 <li className="min-w-0" key={identityKey(owner.harness, owner.threadId)}>
                   <span className="font-medium text-text">{owner.title || owner.intentName}</span>
-                  <span className="ml-2 text-muted">{owner.lifecycle}</span>
-                  <span className="ml-2 font-mono text-muted">{owner.checkpointCommit.slice(0, 8)}</span>
+                  <span className="ml-2 text-fg/muted">{owner.lifecycle}</span>
+                  <span className="ml-2 font-mono text-fg/muted">{owner.checkpointCommit.slice(0, 8)}</span>
                 </li>
               ))}
             </ul>

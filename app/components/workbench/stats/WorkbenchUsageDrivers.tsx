@@ -24,25 +24,25 @@ export default function WorkbenchUsageDrivers({
       <h2 className="m-0 text-[1rem] font-semibold text-text" id="drivers-heading">Usage drivers</h2>
       <div className="grid gap-8 lg:grid-cols-2">
         <div className="min-w-0">
-          <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-muted">By model</h3>
+          <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-fg/muted">By model</h3>
           {stats?.models.length ? (
             <ol className="m-0 grid auto-rows-[2rem] p-0">
               {stats.models.slice(0, 12).map((model) => (
                 <li className="flex min-w-0 items-baseline justify-between gap-4" key={`${model.provider}:${model.model}`}>
                   <span className="min-w-0 truncate text-[0.8rem] text-text">
-                    <span className="text-muted">{providerLabel(model.provider)} · </span>{model.model}
-                    {model.inferredModelTokens || model.defaultModelTokens ? <span className="ml-1 text-muted" title="Some model attribution was inferred">~</span> : null}
+                    <span className="text-fg/muted">{providerLabel(model.provider)} · </span>{model.model}
+                    {model.inferredModelTokens || model.defaultModelTokens ? <span className="ml-1 text-fg/muted" title="Some model attribution was inferred">~</span> : null}
                   </span>
-                  <span className="shrink-0 text-right text-[0.72rem] text-muted">
+                  <span className="shrink-0 text-right text-[0.72rem] text-fg/muted">
                     {compactNumber(model.tokens)} · {formatMoney(model.costUsd)} · {model.threadCount} threads
                   </span>
                 </li>
               ))}
             </ol>
-          ) : <p className="m-0 text-[0.8rem] text-muted">{stats ? "No model usage in this range." : "-"}</p>}
+          ) : <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No model usage in this range." : "-"}</p>}
         </div>
         <div className="min-w-0">
-          <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-muted">Top threads</h3>
+          <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-fg/muted">Top threads</h3>
           {stats?.topThreads.length ? (
             <ol className="m-0 grid auto-rows-[2rem] p-0">
               {stats.topThreads.map((thread) => (
@@ -54,18 +54,18 @@ export default function WorkbenchUsageDrivers({
                   >
                     {thread.title || thread.threadId}
                     {global ? (
-                      <span className="ml-2 font-normal text-muted">
+                      <span className="ml-2 font-normal text-fg/muted">
                         {projectNamesById.get(thread.projectId) ?? thread.projectId}
                       </span>
                     ) : null}
                   </a>
-                  <span className="shrink-0 text-right text-[0.72rem] text-muted">
+                  <span className="shrink-0 text-right text-[0.72rem] text-fg/muted">
                     {compactNumber(thread.tokens)} · {formatMoney(thread.costUsd)} · {thread.sharePercent.toFixed(1)}%
                   </span>
                 </li>
               ))}
             </ol>
-          ) : <p className="m-0 text-[0.8rem] text-muted">{stats ? "No thread usage in this range." : "-"}</p>}
+          ) : <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No thread usage in this range." : "-"}</p>}
         </div>
       </div>
     </section>

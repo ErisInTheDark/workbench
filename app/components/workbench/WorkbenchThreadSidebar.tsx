@@ -80,7 +80,7 @@ export default memo(function WorkbenchThreadSidebar({
           showPinnedThreadsInMain={selectedProjectPinPlacement === "threads-section"}
         />
       </nav>
-      {actions.error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">{actions.error}</p> : null}
+      {actions.error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-fg/muted">{actions.error}</p> : null}
     </>
   );
 });

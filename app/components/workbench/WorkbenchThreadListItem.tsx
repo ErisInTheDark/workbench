@@ -106,7 +106,7 @@ function ThreadTooltipContent({
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
       <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
       {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
-      <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-muted">
+      <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-fg/muted">
         <Icon className={`shrink-0 ${statusClassName}`} size={14} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
         <span className="ml-auto" />
@@ -115,13 +115,15 @@ function ThreadTooltipContent({
       </div>
       {extraDetails}
       {claimedPaths.length ? (
-        <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2">
-          <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
-            <FlagIcon size={14} />
-          </span>
-          {claimedPaths.map((filePath) => (
-            <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />
-          ))}
+        <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
+          <div className="contents [--fg-bg:var(--thread-files-bg)]">
+            <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
+              <FlagIcon size={14} />
+            </span>
+            {claimedPaths.map((filePath) => (
+              <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
@@ -239,7 +241,7 @@ export default function WorkbenchThreadListItem({
       : lifecycle?.kind === "stopped"
         ? "stopped"
         : "completed";
-  const statusClassName = entry.entryKind === "draft" ? "text-muted" : getWorkbenchThreadStatusClassName(statusTone);
+  const statusClassName = entry.entryKind === "draft" ? "text-fg/muted" : getWorkbenchThreadStatusClassName(statusTone);
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
@@ -252,7 +254,7 @@ export default function WorkbenchThreadListItem({
   const actionReplacesPriority = showActions && Boolean(action);
   const actionButton = showActions && actionDisplay ? (
     <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={`
-      pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text
+      pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-fg/muted focus-visible:flex focus-visible:text-text
       ${isDragActive ? "" : "hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"}
       ${compact ? "col-start-3 self-center" : "col-start-2 self-start"}
       ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}
@@ -269,7 +271,7 @@ export default function WorkbenchThreadListItem({
     <button
       type="button"
       aria-label={`More actions for ${entry.title}`}
-      className="pointer-events-auto absolute right-0 top-1/2 z-30 size-11 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+      className="pointer-events-auto absolute right-0 top-1/2 z-30 size-11 -translate-y-1/2 items-center justify-center rounded-lg text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
       data-thread-context-menu-trigger="true"
       onClick={(event) => {
         event.stopPropagation();
@@ -334,7 +336,7 @@ export default function WorkbenchThreadListItem({
         >
           <Icon className={`mr-1.5 ${statusClassName}`} size={14} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
+          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null}
             <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
           </span>

@@ -10,7 +10,7 @@ export default function WorkbenchSearchInput({ onOpen }: { onOpen(): void }) {
   return (
     <button
       aria-label="Open workspace search"
-      className="ml-5 mb-4 flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-xl px-3 text-left text-sm text-muted outline-none transition hover:bg-text/[0.07] hover:text-text focus-visible:ring-2 focus-visible:ring-accent-soft"
+      className="ml-5 mb-4 flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-xl px-3 text-left text-sm text-fg/muted outline-none transition hover:bg-text/[0.07] hover:text-text focus-visible:ring-2 focus-visible:ring-accent-soft"
       onClick={onOpen}
       type="button"
     >

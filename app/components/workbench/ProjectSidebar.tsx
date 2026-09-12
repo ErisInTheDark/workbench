@@ -75,14 +75,14 @@ export default function ProjectSidebar({
           ))}
           {hasMoreTimeGroups ? (
             <button
-              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
               onClick={() => setProjectTimeGroupCount(preferences.projectTimeGroupCount + 1)}
               type="button"
             >
               Show {grouped.timeGroups[preferences.projectTimeGroupCount]?.label ?? "older projects"}
             </button>
           ) : null}
-          {!projects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-muted">No projects were found.</p> : null}
+          {!projects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">No projects were found.</p> : null}
         </nav>
       </WorkbenchSidebarSectionDisclosure>
     </section>

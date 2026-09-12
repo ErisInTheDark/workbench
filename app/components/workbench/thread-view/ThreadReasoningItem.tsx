@@ -64,7 +64,7 @@ function ThreadReasoningSection({
       projectRootPath={projectRootPath}
       revealAppends={Boolean(presentationSource)}
       workspaceRoots={workspaceRoots}
-      className="text-[0.8em] text-muted"
+      className="text-[0.8em] text-fg/muted"
     />
   );
 }

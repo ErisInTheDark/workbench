@@ -138,18 +138,18 @@ export default function ThreadCheckpointCommitCard({
       aria-label="Checkpoint commit proposal"
       aria-busy={pending || undefined}
       className={compact
-        ? "w-full px-0 py-0"
+        ? "w-full px-0 py-0 [--checkpoint-card-bg:var(--fg-bg,var(--bg))]"
         : embedded
-          ? "w-full px-3 py-2.5"
-          : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5"}
+          ? "w-full px-3 py-2.5 [--checkpoint-card-bg:var(--fg-bg,var(--bg))]"
+          : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--checkpoint-card-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] [--fg-bg:var(--checkpoint-card-bg)] px-3 py-2.5"}
       data-thread-checkpoint-card="true"
       data-thread-checkpoint-card-embedded={embedded ? "true" : undefined}
       data-thread-checkpoint-card-presentation={presentation}
     >
       <div className="flex min-w-0 gap-2" data-thread-checkpoint-card-content="true">
         <span className={compact
-          ? "inline-flex h-6 w-5 shrink-0 items-center justify-center text-muted"
-          : "mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted"}
+          ? "inline-flex h-6 w-5 shrink-0 items-center justify-center text-fg/muted"
+          : "mt-1 inline-flex size-5 shrink-0 items-center justify-center text-fg/muted"}
           aria-hidden="true"
         >
           <GitArcIcon action="propose" size={20} />
@@ -157,7 +157,7 @@ export default function ThreadCheckpointCommitCard({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 items-start gap-1">
             {titleWillChange ? (
-              <span aria-label="Commit title differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
+              <span aria-label="Commit title differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-fg/muted" role="img">
                 <AsteriskIcon size={14} />
               </span>
             ) : null}
@@ -169,7 +169,7 @@ export default function ThreadCheckpointCommitCard({
               ) : (
                 <PlaintextEditable
                   ariaLabel="Commit title"
-                  className={`${titleClassName} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
+                  className={`${titleClassName} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-fg/muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
                   onChange={onTitleChange}
                   onKeyDown={commitFromEditable}
                   placeholder="Commit title"
@@ -182,7 +182,7 @@ export default function ThreadCheckpointCommitCard({
           {pending || editable || description.trim() ? (
             <div className="flex min-w-0 items-start gap-1">
               {descriptionWillChange ? (
-                <span aria-label="Commit description differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
+                <span aria-label="Commit description differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-fg/muted" role="img">
                   <AsteriskIcon size={14} />
                 </span>
               ) : null}
@@ -194,7 +194,7 @@ export default function ThreadCheckpointCommitCard({
                 ) : (
                   <PlaintextEditable
                     ariaLabel="Commit description"
-                    className={`${descriptionClassName} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
+                    className={`${descriptionClassName} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-fg/muted outline-none data-[empty=true]:before:text-fg/32 data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
                     onChange={onDescriptionChange}
                     onKeyDown={commitFromEditable}
                     placeholder="Optional description"
@@ -235,7 +235,7 @@ export default function ThreadCheckpointCommitCard({
           />
         ) : <ThreadDisclosure
           className="mt-1.5 py-0.5"
-          contentClassName="mt-1 rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2"
+          contentClassName="mt-1 rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--checkpoint-card-bg))] px-2"
           summary={(
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
@@ -281,16 +281,16 @@ export default function ThreadCheckpointCommitCard({
                     {committing ? "Amending..." : "Amend"}
                   </PrimaryButton>
                 ) : proposal?.status === "committed" ? (
-                  <span className="inline-flex items-center gap-2 text-[0.78em] text-muted">
+                  <span className="inline-flex items-center gap-2 text-[0.78em] text-fg/muted">
                     <CheckIcon className="text-[color:var(--success)]" size={16} />
                     <span>Committed</span>
                     {proposal.committedSha ? <span className="font-mono text-text">{proposal.committedSha.slice(0, 8)}</span> : null}
                   </span>
                 ) : proposal?.status === "superseded" ? (
-                  <span className="text-[0.78em] text-muted">Superseded</span>
+                  <span className="text-[0.78em] text-fg/muted">Superseded</span>
                 ) : committedOutsideProposal ? (
                   <span
-                    className="inline-flex items-center gap-2 text-[0.78em] text-muted"
+                    className="inline-flex items-center gap-2 text-[0.78em] text-fg/muted"
                     data-thread-checkpoint-committed-outside-proposal="true"
                   >
                     <CheckIcon className="text-[color:var(--success)]" size={16} />
@@ -302,7 +302,7 @@ export default function ThreadCheckpointCommitCard({
                   </span>
                 ) : state.status === "error" ? (
                   state.retryable ? (
-                    <button type="button" className="rounded-full px-2.5 py-1 text-[0.78em] text-muted hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text" onClick={onRetry}>
+                    <button type="button" className="rounded-full px-2.5 py-1 text-[0.78em] text-fg/muted hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text" onClick={onRetry}>
                       Try again
                     </button>
                   ) : <span className="text-[0.78em] text-[color:var(--danger)]">Unavailable</span>
@@ -325,7 +325,7 @@ export default function ThreadCheckpointCommitCard({
               </span>
             </span>
           )}
-          summaryClassName="text-[0.82em] leading-[1.5] text-muted"
+          summaryClassName="text-[0.82em] leading-[1.5] text-fg/muted"
         >
           {proposal ? (
             <ThreadFileChangeList
@@ -365,7 +365,7 @@ export default function ThreadCheckpointCommitCard({
               workspaceRoots={workspaceRoots}
             />
           ) : (
-            <p className="m-0 py-2 text-[0.78em] leading-[1.6] text-muted">
+            <p className="m-0 py-2 text-[0.78em] leading-[1.6] text-fg/muted">
               The arc&apos;s claimed changes will appear here.
             </p>
           )}

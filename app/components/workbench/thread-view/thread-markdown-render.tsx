@@ -194,7 +194,7 @@ function renderThreadInlineNodes (
       case "inlineComment":
         return (
           <span
-            className="rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-[0.34em] py-[0.08em] text-[color:color-mix(in_srgb,var(--text)_60%,transparent)]"
+            className="rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.34em] py-[0.08em] text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]"
             data-inline-comment="true"
             key={key}
           >
@@ -344,7 +344,7 @@ function renderThreadSingleItemOrderedStep (
         className="mb-[0.55em] font-sans text-[1em] font-semibold leading-[1.25] last:mb-0"
         data-thread-step-line="true"
       >
-        <span className="mr-[0.22em] text-muted" data-thread-step-marker="true">{item.marker}</span>
+        <span className="mr-[0.22em] text-fg/muted" data-thread-step-marker="true">{item.marker}</span>
         {content.length ? <> {content}</> : null}
       </p>
       {childContent}
@@ -355,7 +355,7 @@ function renderThreadSingleItemOrderedStep (
 function renderThreadStateChange (mode: string, keyPrefix: string) {
   return (
     <div
-      className="my-[0.85em] flex items-center gap-2 font-sans leading-none text-muted last:mb-0 before:block before:h-px before:flex-1 before:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] before:content-[''] after:block after:h-px after:flex-1 after:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] after:content-['']"
+      className="my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0 before:block before:h-px before:flex-1 before:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] before:content-[''] after:block after:h-px after:flex-1 after:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] after:content-['']"
       data-thread-state-change="true"
       data-thread-state-mode={mode}
       key={keyPrefix}
@@ -566,7 +566,7 @@ function renderThreadBlock (
     case "blockquote":
       return (
         <blockquote
-          className={`${BLOCK_SPACING_CLASS} border-l-[0.18rem] [border-left-color:color-mix(in_srgb,var(--text)_14%,transparent)] pl-[0.9rem] text-muted`}
+          className={`${BLOCK_SPACING_CLASS} border-l-[0.18rem] [border-left-color:color-mix(in_srgb,var(--text)_14%,transparent)] pl-[0.9rem] text-fg/muted`}
           key={keyPrefix}
         >
           {renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}
@@ -579,7 +579,7 @@ function renderThreadBlock (
     case "comment":
       return (
         <p
-          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-[0.75rem] py-[0.55rem] text-[0.9em] text-[color:color-mix(in_srgb,var(--text)_60%,transparent)]`}
+          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.75rem] py-[0.55rem] text-[0.9em] text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]`}
           data-block-comment="true"
           key={keyPrefix}
         >
@@ -608,7 +608,7 @@ function renderThreadBlock (
           key={keyPrefix}
         >
           <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
-            <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
+            <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-fg/muted">
               <span className="min-w-0 truncate">{language || "code"}</span>
               {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
             </span>

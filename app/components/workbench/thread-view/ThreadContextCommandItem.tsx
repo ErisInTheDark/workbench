@@ -56,10 +56,10 @@ function ThreadContextCommandMetaParts({
   }
 
   return (
-    <span className="ml-2 text-[0.78em] text-muted">
+    <span className="ml-2 text-[0.78em] text-fg/muted">
       {metaParts.map((part, index) => (
         <span key={`${source.id}:meta:${index}`}>
-          {index ? <span className="text-muted"> | </span> : null}
+          {index ? <span className="text-fg/muted"> | </span> : null}
           {part}
         </span>
       ))}
@@ -108,7 +108,7 @@ export default function ThreadContextCommandItem ({
           <ThreadContextCommandMetaParts source={source} />
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadPreviewFrame
         backgroundClassName="before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]"
@@ -128,7 +128,7 @@ export default function ThreadContextCommandItem ({
             workspaceRoots={workspaceRoots}
           />
         ) : (
-          <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No Thread Recall output captured.</p>
+          <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No Thread Recall output captured.</p>
         )}
       </ThreadPreviewFrame>
     </ThreadDisclosure>

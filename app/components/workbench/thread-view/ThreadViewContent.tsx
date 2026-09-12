@@ -1142,7 +1142,7 @@ export default memo(function ThreadViewContent ({
                   />
               ) : (
                 transcriptSourceMessage ? (
-                  <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted">
+                  <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-fg/muted">
                     {transcriptSourceMessage}
                   </div>
                 ) : (
@@ -1184,7 +1184,7 @@ export default memo(function ThreadViewContent ({
             )
           ) : (
             <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4">
-              <p className="m-0 text-[0.92em] leading-[1.6] text-muted">Loading subagent thread...</p>
+              <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>
             </div>
           )}
         </div>

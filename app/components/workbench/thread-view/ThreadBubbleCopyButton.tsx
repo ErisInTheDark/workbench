@@ -11,7 +11,7 @@ import { bubbleCopyFeedbackController } from "./bubble-copy";
 
 const controlClassName = [
   "group inline-flex size-7 items-center justify-center rounded-full",
-  "bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] text-muted",
+  "bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--bg))] text-fg/muted",
   "transition-[background-color,color] duration-200",
   "hover:bg-[color-mix(in_srgb,var(--accent)_10%,var(--bg))] hover:text-accent",
   "focus-visible:bg-[color-mix(in_srgb,var(--accent)_10%,var(--bg))] focus-visible:text-accent focus-visible:outline-none",

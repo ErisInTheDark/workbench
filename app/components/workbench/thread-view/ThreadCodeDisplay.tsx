@@ -33,7 +33,7 @@ type ThreadCodeDisplayProps =
 type ThreadCodeDisplaySurface = "default" | "framed";
 
 type ThreadCodeGradientStyle = CSSProperties;
-const CODE_SURFACE_BACKGROUND = "color-mix(in srgb, var(--muted) 5%, transparent)";
+const CODE_SURFACE_BACKGROUND = "color-mix(in srgb, var(--text) calc(var(--muted-strength) * 0.05), transparent)";
 const EDGE_GRADIENT_WIDTH_PX = 80;
 
 function createEdgeGradientStyle(rowBackground: string): ThreadCodeGradientStyle {
@@ -127,7 +127,7 @@ function ThreadUnifiedDiffLine ({
 }) {
   if (line.type === "note") {
     return (
-      <div className="col-span-4 ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic md:ml-12">
+      <div className="col-span-4 ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-fg/muted italic md:ml-12">
         {line.text}
       </div>
     );
@@ -196,9 +196,9 @@ function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
       return {
         contentClassName: "text-text",
         edgeStyle: CODE_SURFACE_EDGE_STYLE,
-        gutterTextClassName: "text-muted",
+        gutterTextClassName: "text-fg/muted",
         prefix: "\u00a0",
-        prefixClassName: "text-muted",
+        prefixClassName: "text-fg/muted",
         rowClassName: "",
       };
   }

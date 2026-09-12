@@ -33,9 +33,9 @@ export default function ThreadComposerPickerHeader({
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0 shrink-1">
-        <p className="m-0 text-[1.2em] font-semibold text-muted">{title}</p>
+        <p className="m-0 text-[1.2em] font-semibold text-fg/muted">{title}</p>
         {supportingText ? (
-          <p className="mt-1 mb-0 text-[0.78em] leading-[1.6] text-muted">{supportingText}</p>
+          <p className="mt-1 mb-0 text-[0.78em] leading-[1.6] text-fg/muted">{supportingText}</p>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2 self-start">

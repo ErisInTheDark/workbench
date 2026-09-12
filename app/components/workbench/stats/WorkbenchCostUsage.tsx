@@ -23,7 +23,7 @@ export default function WorkbenchCostUsage({ stats, selected = STATS_TOKEN_TYPES
     <section aria-labelledby="cost-heading" className="min-w-0 space-y-2">
       <div>
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="cost-heading">API-equivalent cost</h2>
-        <p className="m-0 mt-1 text-[0.72rem] text-muted">Current catalogue estimate, not a subscription invoice.</p>
+        <p className="m-0 mt-1 text-[0.72rem] text-fg/muted">Current catalogue estimate, not a subscription invoice.</p>
       </div>
       <WorkbenchStatsChart
         buckets={stats?.cost.buckets.map(({ startedAt }) => startedAt) ?? []}
@@ -40,7 +40,7 @@ export default function WorkbenchCostUsage({ stats, selected = STATS_TOKEN_TYPES
         }] : []}
         title="Estimated cost"
       />
-      <details className="relative h-6 text-[0.72rem] leading-5 text-muted" onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.open = false; }}>
+      <details className="relative h-6 text-[0.72rem] leading-5 text-fg/muted" onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.open = false; }}>
         <summary className="w-fit cursor-pointer rounded-md px-1 py-0.5 hover:bg-surface-hover hover:text-text">
           Estimate basis · catalogue {stats?.pricingCatalogDate ?? "-"}
         </summary>

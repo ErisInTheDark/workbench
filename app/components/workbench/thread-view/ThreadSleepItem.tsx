@@ -37,7 +37,7 @@ export default function ThreadSleepItem({
   return (
     <ThreadDisclosureStaticRow
       marker={<SnoozedThreadIcon size={16} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       summary={<ThreadSummaryText text={`${display.completed ? "Slept" : "Sleeping"} for ${display.seconds}s`} />}
     />
   );

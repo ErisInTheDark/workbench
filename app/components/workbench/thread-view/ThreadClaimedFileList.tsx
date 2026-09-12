@@ -35,7 +35,7 @@ export default function ThreadClaimedFileList({
         const targetType = isProjectDirectoryPath(displayPath, projectFilePaths ?? []) ? "directory" : "file";
         return (
           <div
-            className={`flex min-w-0 items-baseline gap-1 py-0.5 pl-6 text-[0.86em] leading-[1.5] ${tone === "danger" ? "text-danger" : "text-muted"}`}
+            className={`flex min-w-0 items-baseline gap-1 py-0.5 pl-6 text-[0.86em] leading-[1.5] ${tone === "danger" ? "text-danger" : "text-fg/muted"}`}
             data-thread-git-arc-path-tone={tone}
             key={filePath}
           >

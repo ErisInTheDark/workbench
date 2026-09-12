@@ -52,11 +52,11 @@ export default function ThreadProfileQuickPicker({
           content: <>
             <span className="flex w-full min-w-0 items-baseline gap-3">
               <span className="min-w-0 truncate font-semibold text-text">{name}</span>
-              <span className="ml-auto shrink-0 text-xs font-normal text-muted">
+              <span className="ml-auto shrink-0 text-xs font-normal text-fg/muted">
                 <time dateTime={new Date(recency).toISOString()} title={`${profile.lastUsedAt == null ? "Last edited" : "Last used"}: ${new Date(recency).toLocaleString()}`}>{formatThreadRelativeTimestamp(recency / 1000, now)}</time>
               </span>
             </span>
-            <span className="block w-full truncate text-xs leading-snug text-muted">
+            <span className="block w-full truncate text-xs leading-snug text-fg/muted">
               <span className="font-semibold">{agent}</span> via {profile.serviceTier === "fast" ? <><ZapIcon className="inline align-[-0.1em]" size={12} /><span className="sr-only">fast</span>{" "}</> : null}
               <span className="font-semibold">{model?.displayName ?? profile.model}</span>
               {profile.reasoningEffort ? <> <span className="font-semibold capitalize">{profile.reasoningEffort}</span></> : null}

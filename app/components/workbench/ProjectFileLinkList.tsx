@@ -21,7 +21,7 @@ export default function ProjectFileLinkList({
 }) {
   if (!paths.length) return null;
   return (
-    <div className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-muted">
+    <div className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-fg/muted">
       {paths.map((filePath) => (
         <span className="min-w-0 max-w-full" key={filePath}>
           <ProjectFilePath

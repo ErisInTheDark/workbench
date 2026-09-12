@@ -35,8 +35,8 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
       <span className="flex min-w-0 items-center gap-1.5 leading-tight" title={getWorkbenchProjectFullPath(project)}>
         <WorkbenchProjectIcon project={project} variant="thread" />
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="shrink-0 text-[0.68rem] font-medium text-[color-mix(in_srgb,var(--text)_72%,transparent)]">{projectName}</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-[0.64rem] font-normal text-muted">{getWorkbenchProjectDisplayPath(project)}</span>
+          <span className="shrink-0 text-[0.68rem] font-medium text-fg/72">{projectName}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[0.64rem] font-normal text-fg/muted">{getWorkbenchProjectDisplayPath(project)}</span>
         </span>
       </span>
     );
@@ -47,7 +47,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
         <WorkbenchProjectIcon project={project} variant="heading" />
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="shrink-0 truncate text-[1.05rem] font-semibold text-text">{projectName}</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] font-normal text-muted">{getWorkbenchProjectDisplayPath(project)}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] font-normal text-fg/muted">{getWorkbenchProjectDisplayPath(project)}</span>
         </span>
       </span>
     );
@@ -58,7 +58,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className={`${workbenchThreadListLabelClassName} shrink-0 text-text${active ? " font-semibold" : ""}`}>{projectName}</span>
         {project.kind === "workbench-library" ? null : (
-          <span className="min-w-0 flex-1 truncate font-mono text-[0.72rem] font-normal text-muted">{getWorkbenchProjectDisplayPath(project)}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[0.72rem] font-normal text-fg/muted">{getWorkbenchProjectDisplayPath(project)}</span>
         )}
       </span>
     </span>

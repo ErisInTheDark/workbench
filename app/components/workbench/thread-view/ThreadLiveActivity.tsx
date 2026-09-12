@@ -88,7 +88,7 @@ export default function ThreadLiveActivity({
             summaryClassName="text-[0.92em] font-medium leading-[1.6]"
           >
             {activity.contextItems.map((item) => (
-              <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-muted">
+              <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
                 <ThreadWebSearchActionRow item={item} />
               </p>
             ))}
@@ -107,7 +107,7 @@ export default function ThreadLiveActivity({
           summary={<span className="thread-thinking-text">{reasoningDisplay.title}</span>}
         >
           <ThreadMarkdown
-            className="text-[0.8em] text-muted"
+            className="text-[0.8em] text-fg/muted"
             inlineMentionSources={inlineMentionSources}
             markdown={reasoningDisplay.body}
             threadCwdPath={threadCwdPath}

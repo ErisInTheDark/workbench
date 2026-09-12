@@ -40,7 +40,7 @@ export default function ThreadToolOutputItem({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-2 pl-6"
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       summary={<>
         <span>Context: </span>
         <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{[item.namespace, item.name].filter(Boolean).join(".")}</span>

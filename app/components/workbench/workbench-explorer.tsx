@@ -71,7 +71,7 @@ function ThreadListRow ({
   onClick?: () => void;
   title: string;
 }) {
-  const className = `${workbenchThreadListButtonClassName}${active ? " text-accent" : " text-muted"}`;
+  const className = `${workbenchThreadListButtonClassName}${active ? " text-accent" : " text-fg/muted"}`;
   if (!onClick) {
     return (
       <div
@@ -174,7 +174,7 @@ export function BrowseSessionsList ({
                     <BrowserSessionIcon className="shrink-0" size={16} />
                     <span className="min-w-0">
                       <span className={`${workbenchThreadListLabelClassName}${isProblemState ? " font-semibold" : ""}`}>{session.name}</span>
-                      {detail ? <span className="block truncate text-[0.75rem] leading-4 text-muted">{detail}</span> : null}
+                      {detail ? <span className="block truncate text-[0.75rem] leading-4 text-fg/muted">{detail}</span> : null}
                     </span>
                   </span>
                 </span>
@@ -321,7 +321,7 @@ export function ExplorerTree ({
                     data-role="tree-button"
                     type="button"
                     aria-expanded={isExpanded}
-                    className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} max-w-full border-transparent text-muted hover:text-text`}
+                    className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} max-w-full border-transparent text-fg/muted hover:text-text`}
                     onClick={() => {
                       controls?.toggleDirectory(node.path);
                     }}
@@ -401,7 +401,7 @@ export function ExplorerTree ({
                   aria-current={isCurrent ? "page" : undefined}
                   className={`
                     ${workbenchOptionRowClassName} max-w-full
-                    ${isCurrent ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `border-transparent text-muted ${isOpenable ? `${workbenchOptionHoverClassName} hover:text-text` : ""}`}
+                    ${isCurrent ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `border-transparent text-fg/muted ${isOpenable ? `${workbenchOptionHoverClassName} hover:text-text` : ""}`}
                   `}
                   onPointerDown={(event) => {
                     if (!isOpenable) {

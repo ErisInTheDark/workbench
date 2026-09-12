@@ -150,7 +150,7 @@ function InlineMentionSuggestionsPopup ({
   return (
     <div
       ref={containerRef}
-      className="explorer-scrollbar grid grid-cols-[auto_1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] p-1.5 shadow-lg backdrop-blur"
+      className="explorer-scrollbar grid grid-cols-[auto_1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_96%,var(--app-bg-solid))] p-1.5 shadow-lg backdrop-blur"
       role="listbox"
     >
       {suggestions.map((suggestion, index) => {
@@ -176,7 +176,7 @@ function InlineMentionSuggestionsPopup ({
               {suggestion.replacementText}
             </span>
             {suggestion.candidate.description ? (
-              <span className="truncate text-[0.92em] text-muted">
+              <span className="truncate text-[0.92em] text-fg/muted">
                 {suggestion.candidate.description}
               </span>
             ) : null}

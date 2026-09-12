@@ -34,7 +34,7 @@ function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; n
   };
 
   return <span className="relative inline-grid min-w-[8ch] max-w-full">
-    {!hasText ? <span aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 whitespace-nowrap text-[0.96em] font-semibold text-muted">{fallback}</span> : null}
+    {!hasText ? <span aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 whitespace-nowrap text-[0.96em] font-semibold text-fg/muted">{fallback}</span> : null}
     <span ref={editableRef} aria-label="Profile name" contentEditable="plaintext-only" suppressContentEditableWarning role="textbox" className="relative col-start-1 row-start-1 inline-block min-w-[8ch] max-w-full overflow-hidden whitespace-nowrap text-[0.96em] font-semibold text-text outline-none" onBlur={commit} onClick={(event) => event.stopPropagation()} onInput={(event) => setHasText(Boolean(event.currentTarget.textContent))} onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }}>{name}</span>
   </span>;
 }
@@ -59,7 +59,7 @@ function ProfileDescriptionEditable({ description = "", onCommit }: { descriptio
   return <div>
     <PlaintextEditable
       ariaLabel="Profile description"
-      className="min-h-[1.45rem] whitespace-pre-wrap break-words text-[0.78em] leading-[1.6] text-muted outline-none before:pointer-events-none before:text-muted/60 data-[empty=true]:before:content-[attr(data-placeholder)]"
+      className="min-h-[1.45rem] whitespace-pre-wrap break-words text-[0.78em] leading-[1.6] text-fg/muted outline-none before:pointer-events-none before:text-fg/muted-soft data-[empty=true]:before:content-[attr(data-placeholder)]"
       onBlur={(event) => commit(event.currentTarget.innerText)}
       onChange={setDraft}
       placeholder="Describe when this profile should be used as a subagent…"
@@ -108,10 +108,10 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
   return <section aria-label="Composer profiles">
     <div role="group" aria-label="Composer profiles" className="mt-1 grid gap-2">
       <WorkbenchOptionCard density="tight" isChecked={selection.kind === "custom"} label="Custom" onClick={() => { void controller.selectCustom(slot, currentSettings); }} />
-      <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-muted">Global</p>{globals.map(renderProfile)}
-      <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-muted">Project</p>{projects.map(renderProfile)}
+      <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Global</p>{globals.map(renderProfile)}
+      <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Project</p>{projects.map(renderProfile)}
     </div>
-    <div className="mt-4 flex items-center justify-end gap-2 text-[0.78em] text-muted">
+    <div className="mt-4 flex items-center justify-end gap-2 text-[0.78em] text-fg/muted">
       <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className="inline-flex items-center gap-2 rounded-md px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] disabled:cursor-not-allowed disabled:opacity-40" onClick={() => {
         void controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }).then((profile) => {
           if (profile) controller.selectProfile(slot, profile.id);

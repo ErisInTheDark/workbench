@@ -86,7 +86,7 @@ export default function ThreadComposerRibbon({
               "relative isolate inline-flex shrink-0 items-center justify-center bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
               isFastModeEnabled
                 ? "text-text"
-                : "text-muted",
+                : "text-fg/muted",
             )}
             title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
             onClick={onFastModeToggle}

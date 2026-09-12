@@ -126,7 +126,7 @@ export default function WorkbenchStatsView({
     <div className="mx-auto flex w-full max-w-[72rem] flex-col gap-5 py-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Recent usage</p>
+          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Recent usage</p>
           <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Statistics</h1>
         </div>
           <div aria-label="Statistics scope" className="flex max-w-full items-end gap-4 text-[0.9rem]" role="tablist">

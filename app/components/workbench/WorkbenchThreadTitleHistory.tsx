@@ -35,7 +35,7 @@ export default function WorkbenchThreadTitleHistory({ projectId, harness, thread
   return (
     <div className="flex min-w-0 flex-col gap-1" aria-busy={pending}>
       {history.previousTitles.map(({ title }) => (
-        <div key={title} className="flex min-w-0 items-start gap-1 text-[0.8rem] text-muted">
+        <div key={title} className="flex min-w-0 items-start gap-1 text-[0.8rem] text-fg/muted">
           <span className="min-w-0 flex-1 truncate py-1">{title}</span>
           <button
             type="button"
@@ -59,7 +59,7 @@ export default function WorkbenchThreadTitleHistory({ projectId, harness, thread
           </button>
         </div>
       ))}
-      {error ? <p role="alert" className="m-0 break-words text-[0.8rem] text-muted">{error}</p> : null}
+      {error ? <p role="alert" className="m-0 break-words text-[0.8rem] text-fg/muted">{error}</p> : null}
     </div>
   );
 }

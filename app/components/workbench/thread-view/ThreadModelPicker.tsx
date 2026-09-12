@@ -101,7 +101,7 @@ export default function ThreadModelPicker ({
 					label={<span className="grid gap-1">
 						<span>{model.displayName}</span>
 						{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
-							{featureList.map((feature, index) => <span key={index} className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-2 py-0.5 text-xs font-medium text-muted">{feature}</span>)}
+							{featureList.map((feature, index) => <span key={index} className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--model-feature-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-2 py-0.5 text-xs font-medium [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--model-feature-fg-bg))]">{feature}</span>)}
 						</span> : null}
 					</span>}
 					actions={<WorkbenchIconButton
@@ -116,12 +116,12 @@ export default function ThreadModelPicker ({
 
 	return (
 		<>
-			{appliesOnNextTurnOnly ? <p className="text-xs text-muted">Changes apply to the next new turn.</p> : null}
+			{appliesOnNextTurnOnly ? <p className="text-xs text-fg/muted">Changes apply to the next new turn.</p> : null}
 			{error ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}
 			{isLoading ? (
-				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-muted">Loading models...</p>
+				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-fg/muted">Loading models...</p>
 			) : (
 				<div className="mt-1 space-y-2">
 					<div role="group" aria-label={`${harness} models`} className="grid gap-2">
@@ -135,7 +135,7 @@ export default function ThreadModelPicker ({
 						</ThreadDisclosure>
 					) : null}
 					{!visibleModels.length && !error ? (
-						<p className="m-0 text-[0.84em] leading-[1.6] text-muted">No models are available for this harness.</p>
+						<p className="m-0 text-[0.84em] leading-[1.6] text-fg/muted">No models are available for this harness.</p>
 					) : null}
 				</div>
 			)}

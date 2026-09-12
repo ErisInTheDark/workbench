@@ -51,7 +51,7 @@ export default function WorkbenchCheckbox({
 }) {
   return (
     <label className={joinClasses(
-      "inline-flex items-center gap-2 rounded-full px-2 py-1 text-[0.78em] text-muted transition",
+      "inline-flex items-center gap-2 rounded-full px-2 py-1 text-[0.78em] text-fg/muted transition",
       disabled
         ? "cursor-not-allowed opacity-55"
         : "cursor-pointer hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text",

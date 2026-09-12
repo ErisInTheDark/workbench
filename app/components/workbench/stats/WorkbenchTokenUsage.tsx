@@ -20,7 +20,7 @@ export default function WorkbenchTokenUsage({ stats, selected = STATS_TOKEN_TYPE
       <div>
         <div>
           <h2 className="m-0 text-[1rem] font-semibold text-text" id="tokens-heading">Tokens</h2>
-          <p className="m-0 mt-1 text-[0.72rem] text-muted">Independent scales. Cache includes reads and writes.</p>
+          <p className="m-0 mt-1 text-[0.72rem] text-fg/muted">Independent scales. Cache includes reads and writes.</p>
         </div>
       </div>
       <WorkbenchStatsChart

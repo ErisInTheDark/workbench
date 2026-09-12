@@ -87,7 +87,7 @@ export interface ProjectFilePathDisplayOptions extends ProjectFilePathLocation {
 
 export const projectFilePathPillClassName = [
   "inline-flex min-w-0 max-w-full items-baseline gap-[0.04rem] rounded-[0.55rem]",
-  "bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-[0.48rem] py-[0.14rem]",
+  "bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--file-path-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.48rem] py-[0.14rem]",
   "font-mono text-[0.78em] leading-[1.6] text-text transition-colors",
   "hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]",
 ].join(" ");
@@ -99,17 +99,17 @@ export const projectFilePathInteractiveClassName = [
 
 export const projectFilePathStaticClassName = [
   "border border-[color-mix(in_srgb,var(--text)_24%,transparent)]",
-  "!bg-transparent hover:!bg-transparent",
+  "!bg-transparent [--file-path-fg-bg:var(--fg-bg,var(--bg))] hover:!bg-transparent",
 ].join(" ");
 
 export const projectFilePathMissingClassName = [
   projectFilePathStaticClassName,
-  "text-[color:color-mix(in_srgb,var(--text)_82%,transparent)]",
+  "text-[color:color-mix(in_srgb,var(--text)_82%,var(--file-path-fg-bg))]",
 ].join(" ");
 
 export const projectFilePathLabelClassName = "min-w-0 truncate";
 
-export const projectFilePathLocationClassName = "text-[color:color-mix(in_srgb,var(--text)_54%,transparent)]";
+export const projectFilePathLocationClassName = "text-[color:color-mix(in_srgb,var(--text)_54%,var(--file-path-fg-bg))]";
 
 function normalizeComparableProjectFilePath(value: string) {
   return normalizeWorkbenchPath(value).toLocaleLowerCase();

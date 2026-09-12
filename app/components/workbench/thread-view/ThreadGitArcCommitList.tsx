@@ -15,7 +15,7 @@ export default function ThreadGitArcCommitList({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
-    <div className="space-y-1 py-1 text-[0.9em] text-muted">
+    <div className="space-y-1 py-1 text-[0.9em] text-fg/muted">
       {commits.map(({ commit, paths, subject }) => (
         <div key={commit}>
           <div className="flex min-w-0 items-baseline gap-2">

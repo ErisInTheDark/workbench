@@ -43,7 +43,7 @@ export default function WorkbenchModeRow<T extends string>({
   return (
     <div
       aria-label={ariaLabel}
-      className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-[color-mix(in_srgb,var(--text)_5%,transparent)] p-1"
+      className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-[color-mix(in_srgb,var(--text)_5%,transparent)] [--mode-row-fg-bg:color-mix(in_srgb,var(--text)_5%,var(--fg-bg,var(--bg)))] [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--mode-row-fg-bg))] p-1"
       role="radiogroup"
     >
       {options.map((option, index) => {
@@ -55,7 +55,7 @@ export default function WorkbenchModeRow<T extends string>({
             aria-label={option.ariaLabel}
             className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 py-1 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 ${selected
               ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text"
-              : "border-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
+              : "border-transparent hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
             disabled={disabled}
             key={option.value}
             onClick={() => onChange(option.value)}

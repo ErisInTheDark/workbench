@@ -34,7 +34,7 @@ function ThreadMetaLine ({
   value: ReactNode;
 }) {
   return (
-    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
+    <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-fg/muted">
       <span>{label}</span>
       <span className="text-text">{value}</span>
     </p>
@@ -107,10 +107,10 @@ export default function ThreadMcpToolCallItem ({
             </span>
           )}
           {metaParts.length ? (
-            <span className="ml-2 text-[0.78em] text-muted">
+            <span className="ml-2 text-[0.78em] text-fg/muted">
               {metaParts.map((part, index) => (
                 <span key={`${item.id}:meta:${index}`}>
-                  {index ? <span className="text-muted"> | </span> : null}
+                  {index ? <span className="text-fg/muted"> | </span> : null}
                   {part}
                 </span>
               ))}
@@ -118,7 +118,7 @@ export default function ThreadMcpToolCallItem ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
         {item.mcpAppResourceUri ? (

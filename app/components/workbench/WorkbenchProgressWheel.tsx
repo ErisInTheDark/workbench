@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProgressWheel: render a compact circular percent progress indicator. Keywords: workbench, progress, wheel, context, timer.
+ * - default WorkbenchProgressWheel: render a compact circular percent progress indicator.
  */
 "use client";
 
@@ -29,7 +29,7 @@ export default function WorkbenchProgressWheel ({
         fill="none"
         stroke="currentColor"
         strokeWidth="2"
-        className="text-[color-mix(in_srgb,var(--text)_14%,transparent)]"
+        className="stroke-fg/14"
       />
       {clampedPercent >= 99.5 ? (
         <circle

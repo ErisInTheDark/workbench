@@ -25,7 +25,7 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: ProjectSidebarProject;
     <div className="flex max-h-full min-w-0 max-w-[min(30rem,calc(100vw-2rem))] flex-col gap-2">
       <div className="min-w-0">
         <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{project.name || project.id}</p>
-        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-muted">{WorkbenchProjectLabel.getFullPath(project)}</p>
+        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">{WorkbenchProjectLabel.getFullPath(project)}</p>
       </div>
       <div className="explorer-scrollbar flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
         {unsettledThreads.map((thread) => {
@@ -37,13 +37,13 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: ProjectSidebarProject;
                 <status.Icon className={`size-3.5 ${getWorkbenchThreadStatusClassName(status.tone)}`} />
               </span>
               <span className="min-w-0 flex-1 truncate text-text">{thread.title}</span>
-              <time className="shrink-0 text-muted" dateTime={threadTimestamp.toISOString()} title={threadTimestamp.toLocaleString()}>
+              <time className="shrink-0 text-fg/muted" dateTime={threadTimestamp.toISOString()} title={threadTimestamp.toLocaleString()}>
                 {formatThreadRelativeTimestamp(thread.activityAt / 1000, nowMs)}
               </time>
             </div>
           );
         })}
-        {!unsettledThreads.length ? <p className="m-0 px-1.5 text-[0.76rem] text-muted">No unsettled threads.</p> : null}
+        {!unsettledThreads.length ? <p className="m-0 px-1.5 text-[0.76rem] text-fg/muted">No unsettled threads.</p> : null}
       </div>
     </div>
   );
@@ -75,7 +75,7 @@ export default function WorkbenchProjectListItem({
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
   const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => (counts[key] ?? 0) > 0) ?? null;
-  const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-muted";
+  const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-fg/muted";
   const timestamp = activityAt === null ? null : new Date(activityAt);
   const compact = compactOverride ?? (project.kind === "workbench-library" || !dominantStatus);
   const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
@@ -83,7 +83,7 @@ export default function WorkbenchProjectListItem({
     <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
       {dominantStatus ? <dominantStatus.Icon className={`mr-1.5 size-3.5 ${statusClassName}`} /> : null}
       <span className={dominantStatus ? "col-start-2 min-w-0" : "col-span-2 col-start-1 min-w-0"}>{projectTitle}</span>
-      <span className="col-start-3 row-start-1 ml-2 text-[0.72rem] text-muted">
+      <span className="col-start-3 row-start-1 ml-2 text-[0.72rem] text-fg/muted">
         {timestamp ? (
           <time dateTime={timestamp.toISOString()} title={timestamp.toLocaleString()}>
             {getProjectActivityLabel(activityAt, nowMs)}
@@ -96,7 +96,7 @@ export default function WorkbenchProjectListItem({
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] pt-1.5 pl-2">
         {projectTitle}
       </div>
-      <div className="mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 pb-1.5 pl-2 text-[0.72rem] text-muted">
+      <div className="mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 pb-1.5 pl-2 text-[0.72rem] text-fg/muted">
         <dominantStatus.Icon className={`size-3.5 ${statusClassName}`} />
         <span className="flex min-w-0 items-center gap-1.5">
           <span className={`inline-flex min-w-0 items-center gap-1 ${statusClassName}`}>

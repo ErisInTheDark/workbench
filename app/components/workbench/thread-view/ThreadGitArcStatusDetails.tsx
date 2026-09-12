@@ -26,14 +26,14 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
   const status = parsed.data;
   const context = { projectFilePaths, projectId, projectRootPath, workspaceRoots };
   const group = (label: string, paths: number | string[]) => typeof paths === "number"
-    ? <p className="m-0 py-1 text-muted" key={label}>{label}: {paths}</p>
+    ? <p className="m-0 py-1 text-fg/muted" key={label}>{label}: {paths}</p>
     : paths.length ? <ThreadClaimedFileList key={label} label={label} paths={paths} {...context} /> : null;
   return (
     <div className="min-w-0 py-1">
       {status.pending.map(proposal => (
         <div className="flex min-w-0 items-start gap-2 py-0.5" key={proposal.proposalId}>
           <span className="sr-only">Pending</span>
-          <EllipsisIcon className="mt-1.5 shrink-0 text-muted" size={16} />
+          <EllipsisIcon className="mt-1.5 shrink-0 text-fg/muted" size={16} />
           <span className="min-w-0 break-words">{proposal.title}</span>
         </div>
       ))}
@@ -41,7 +41,7 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
         <div className="flex min-w-0 items-baseline gap-2 py-0.5" key={proposal.proposalId}>
           <span className="sr-only">Accepted</span>
           <CheckIcon className="mt-1.5 shrink-0 self-start text-[color:var(--success)]" size={16} />
-          <span className="shrink-0 font-mono text-muted">{proposal.commitSha.slice(0, 8)}</span>
+          <span className="shrink-0 font-mono text-fg/muted">{proposal.commitSha.slice(0, 8)}</span>
           <span className="min-w-0 break-words">{proposal.title}</span>
         </div>
       ))}
@@ -53,13 +53,13 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
           {group("Lost claims", lost.paths)}
           {lost.headMovement === "incompatible" ? <p className="text-danger">HEAD moved incompatibly since claim loss.</p> : null}
           {lost.commits.length ? <ThreadGitArcCommitList commits={lost.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} {...context} /> : null}
-          {lost.omittedCommits ? <p className="text-muted">{lost.omittedCommits} more intersecting commits</p> : null}
+          {lost.omittedCommits ? <p className="text-fg/muted">{lost.omittedCommits} more intersecting commits</p> : null}
           {lost.comparison.length ? <ThreadCheckpointCompareItem changes={lost.comparison.map(change => ({
             ...change, status: change.kind === "add" ? "A" : change.kind === "delete" ? "D" : "U",
-          }))} {...context} /> : <p className="m-0 text-muted">No changes since claim loss.</p>}
+          }))} {...context} /> : <p className="m-0 text-fg/muted">No changes since claim loss.</p>}
         </section>
       ))}
-      {status.unavailableRecovery.length ? <p className="text-muted">Claim-loss baseline unavailable for {status.unavailableRecovery.join(", ")}.</p> : null}
+      {status.unavailableRecovery.length ? <p className="text-fg/muted">Claim-loss baseline unavailable for {status.unavailableRecovery.join(", ")}.</p> : null}
     </div>
   );
 }

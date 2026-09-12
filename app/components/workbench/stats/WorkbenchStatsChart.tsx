@@ -1,10 +1,8 @@
-"use client";
-
 /*
- * Keywords: stats, chart, SVG, keyboard, percentage scale.
  * Exports:
- * - default WorkbenchStatsChart: render one focusable, inspectable nullable multi-series graph. Keywords: stats, chart, SVG, keyboard.
+ * - default WorkbenchStatsChart: render one focusable, inspectable nullable multi-series graph.
  */
+"use client";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./stats-chart-geometry";
 
@@ -69,7 +67,7 @@ export default function WorkbenchStatsChart ({
     <figure className="m-0 min-w-0 space-y-2 [--hue-chroma:50%]">
       <figcaption className="flex min-h-6 flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="text-[0.9rem] font-semibold text-text">{title}</span>
-        <span className="flex flex-wrap gap-x-3 gap-y-1 text-[0.72rem] text-muted">
+        <span className="flex flex-wrap gap-x-3 gap-y-1 text-[0.72rem] text-fg/muted">
           {availableSeries.map(({ colour, colourClassName, label, summary, icon }) => (
             <span className={`inline-flex items-center gap-1.5 font-bold ${colourClassName ?? ""}`} style={{ color: colour }} key={label}>
               <span className="inline-flex">{icon ?? <span className="size-1.5 rounded-full bg-current" />}</span>
@@ -91,11 +89,11 @@ export default function WorkbenchStatsChart ({
       >
         <svg ref={svg} aria-hidden="true" className="h-40 w-full overflow-visible" viewBox="0 0 100 38" preserveAspectRatio="none">
           {[4, 19, 34].map((y) => (
-            <line key={y} stroke="color-mix(in srgb, var(--muted) 18%, transparent)" strokeWidth="1" vectorEffect="non-scaling-stroke" x1="0" x2="100" y1={y} y2={y} />
+            <line key={y} className="stroke-fg/muted-grid" strokeWidth="1" vectorEffect="non-scaling-stroke" x1="0" x2="100" y1={y} y2={y} />
           ))}
           {selectedAt !== null ? (
             <line
-              stroke="color-mix(in srgb, var(--text) 40%, transparent)"
+              className="stroke-fg/40"
               strokeDasharray="1 1.5"
               strokeWidth="1"
               vectorEffect="non-scaling-stroke"
@@ -136,7 +134,7 @@ export default function WorkbenchStatsChart ({
           ))}
         </svg>
       </div>
-      <div className="grid min-h-14 grid-cols-2 content-start gap-x-4 gap-y-1 text-[0.7rem] tabular-nums text-muted">
+      <div className="grid min-h-14 grid-cols-2 content-start gap-x-4 gap-y-1 text-[0.7rem] tabular-nums text-fg/muted">
         <span>{buckets.length ? new Date(buckets[0]!).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""}</span>
         <span aria-live="polite" className="col-span-2 row-start-2 grid grid-cols-2 gap-x-3 gap-y-1">
           <span className="font-medium text-text">{selectedDate}</span>

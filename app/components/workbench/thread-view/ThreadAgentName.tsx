@@ -14,7 +14,7 @@ import type { IdentityAccentStyle } from "../../../workbench/identity-accent-col
 export default function ThreadAgentName ({
   accentChromaPercent,
   className = "",
-  roleClassName = "text-muted",
+  roleClassName = "text-fg/muted",
   subagent,
   thread,
 }: {

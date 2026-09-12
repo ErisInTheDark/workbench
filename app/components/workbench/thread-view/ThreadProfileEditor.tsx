@@ -95,7 +95,7 @@ export default function ThreadProfileEditor ({
         aria-expanded={active}
         aria-controls={`${sectionId}-${section}-content`}
         className={`
-          enabled:cursor-pointer flex min-w-0 items-center gap-2 px-4 py-1.5 text-left text-sm text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
+          enabled:cursor-pointer flex min-w-0 items-center gap-2 px-4 py-1.5 text-left text-sm text-fg/muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
           ${active ? "border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
         `}
         onClick={() => controller.disclose(section, !active)}
@@ -145,7 +145,7 @@ export default function ThreadProfileEditor ({
       {block("profile", "Profile", profile?.name || (profile ? profile.model : "Custom"), <ThreadProfilePicker
         agents={state.agents} currentSettings={settings} models={state.models} projectId={slot.projectId} slot={slot}
       />)}
-      {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-muted">
+      {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
         {!profile && canToggleHarness && slot.kind !== "thread"
           ? onHarnessSelect
             ? <div className="grid gap-2">{(["codex", "copilot", "opencode"] as const).map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
@@ -153,7 +153,7 @@ export default function ThreadProfileEditor ({
           : <p className="m-0">The provider is fixed for this {profile ? "stored profile" : "thread"}.</p>}
       </div>)}
       {block("model", "Model", model?.displayName ?? settings.model, <>
-        {!canSaveFavourites ? <p className="text-xs text-muted">Reload the app database to enable saving model favourites.</p> : null}
+        {!canSaveFavourites ? <p className="text-xs text-fg/muted">Reload the app database to enable saving model favourites.</p> : null}
         {favouriteError ? <p role="alert" className="text-sm text-danger">{favouriteError}</p> : null}
         <ThreadModelPicker
           appliesOnNextTurnOnly={slot.kind === "thread"} unfavouritedModelIds={unfavouritedModelIds}
@@ -171,7 +171,7 @@ export default function ThreadProfileEditor ({
       </>)}
       {showsEffort || showsFastMode || capability ? <div className="grid [grid-template-columns:auto_1fr_auto_auto] pr-3">
         {showsEffort ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
-          <span className="text-muted">Effort</span>
+          <span className="text-fg/muted">Effort</span>
           <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
         </div> : null}
         {showsFastMode ? <WorkbenchIconButton
@@ -183,7 +183,7 @@ export default function ThreadProfileEditor ({
           onClick={() => update({ serviceTier: settings.serviceTier === "fast" ? null : "fast" })}
         ><ZapIcon size={16} /></WorkbenchIconButton> : null}
         {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
-          <span className="text-muted">Context</span>
+          <span className="text-fg/muted">Context</span>
           <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={capability.defaultTokens} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
         </div> : null}
       </div> : null}

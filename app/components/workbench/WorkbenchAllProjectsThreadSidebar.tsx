@@ -62,7 +62,7 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
         />
       ) : null}
       {errors.map((error) => (
-        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted" key={error}>{error}</p>
+        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-fg/muted" key={error}>{error}</p>
       ))}
     </nav>
   );

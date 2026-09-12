@@ -39,6 +39,7 @@ const baseClassName = [
   "disabled:cursor-not-allowed",
   "[--primary-button-bg:color-mix(in_srgb,white_14%,var(--shell-fade-bg)_86%)]",
   "disabled:[--primary-button-bg:color-mix(in_srgb,white_7%,var(--shell-fade-bg)_93%)]",
+  "[--fg-bg:var(--primary-button-bg)]",
 ].join(" ");
 
 const shapeClassNames: Record<PrimaryButtonShape, string> = {
@@ -160,8 +161,8 @@ export default function PrimaryButton ({
         shapeClassNames[shape],
         toneClassNames[tone],
         pendingHalo
-          ? "disabled:[color:color-mix(in_srgb,var(--text)_32%,transparent)]"
-          : "disabled:[color:color-mix(in_srgb,var(--text)_10%,transparent)]",
+          ? "disabled:text-fg/32"
+          : "disabled:text-fg/10",
         className,
       )}
       onBlur={(event) => {

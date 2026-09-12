@@ -34,7 +34,7 @@ export default function WorkbenchThreadListFullRowContent({
         {title}
         {action}
       </div>
-      <div className="pointer-events-none mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 pr-0 pb-1.5 pl-2 text-[0.72rem] text-muted">
+      <div className="pointer-events-none mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 pr-0 pb-1.5 pl-2 text-[0.72rem] text-fg/muted">
         {statusIcon}
         {statusLabel}
         {metadata ?? <span />}

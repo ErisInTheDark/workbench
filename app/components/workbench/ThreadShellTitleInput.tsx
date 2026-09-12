@@ -117,7 +117,7 @@ export default function ThreadShellTitleInput({
       <p
         id="status-line"
         ref={statusRef}
-        className={`mt-1 text-[0.84rem] tracking-[0.02em] ${error ? "text-danger" : "text-muted"}`}
+        className={`mt-1 text-[0.84rem] tracking-[0.02em] ${error ? "text-danger" : "text-fg/muted"}`}
         role={error ? "alert" : undefined}
       >
         {error || activityLabel}

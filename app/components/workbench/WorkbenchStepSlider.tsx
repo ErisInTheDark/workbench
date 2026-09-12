@@ -67,7 +67,7 @@ export default function WorkbenchStepSlider<T extends number> ({
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-1.5 bottom-3.5 left-1.5 hidden justify-between font-mono text-[0.9rem] font-medium leading-none text-muted md:flex"
+          className="pointer-events-none absolute right-1.5 bottom-3.5 left-1.5 hidden justify-between font-mono text-[0.9rem] font-medium leading-none text-fg/muted md:flex"
         >
           {steps.map((step, index) => (
             <span

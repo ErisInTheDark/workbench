@@ -139,7 +139,7 @@ export default function ThreadGitArcLifecycleCard({
 
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
-      <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]" data-thread-git-arc-lifecycle-card="true">
+      <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]" data-thread-git-arc-lifecycle-card="true">
         {visibleProposals.length ? (
           visibleProposals.map(({ proposalId }, index) => (
             <div
@@ -215,11 +215,11 @@ export default function ThreadGitArcLifecycleCard({
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void release("unclaim")}>
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
                       </PrimaryButton>
-                    ) : changeState === "loading" ? <span className="text-[0.74em] text-muted">Checking claimed files…</span> : null}
+                    ) : changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
                   </span>
                 </span>
               )}
-              summaryClassName="text-[0.76em] leading-[1.45] text-muted"
+              summaryClassName="text-[0.76em] leading-[1.45] text-fg/muted"
             >
               <ThreadClaimedFileList
                 paths={claim.claimedPaths}

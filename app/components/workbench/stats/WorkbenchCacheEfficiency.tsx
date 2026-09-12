@@ -29,17 +29,17 @@ export default function WorkbenchCacheEfficiency({
     <section aria-labelledby="cache-efficiency-heading" className="space-y-3 [--hue-chroma:50%]">
       <div className="space-y-1">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="cache-efficiency-heading">Input cache efficiency</h2>
-        <p className="m-0 text-[0.75rem] text-muted">
+        <p className="m-0 text-[0.75rem] text-fg/muted">
           Cache % is cached input as a percentage of all recorded input. Cache writes are not hits.
           Token-category toggles do not change these percentages.
         </p>
       </div>
       {!cache ? (
-        <p className="m-0 text-[0.8rem] text-muted">
+        <p className="m-0 text-[0.8rem] text-fg/muted">
           {stats ? "Independent cache statistics are unavailable from this server version." : "Waiting for cache statistics."}
         </p>
       ) : cache.totals.cacheHitPercent === null ? (
-        <p className="m-0 text-[0.8rem] text-muted">No recorded input for these filters.</p>
+        <p className="m-0 text-[0.8rem] text-fg/muted">No recorded input for these filters.</p>
       ) : (
         <div className="grid gap-8 lg:grid-cols-2">
           <div className="min-w-0">
@@ -54,12 +54,12 @@ export default function WorkbenchCacheEfficiency({
               }]}
               title="Cache % over time"
             />
-            <p className="m-0 text-[0.7rem] text-muted">
+            <p className="m-0 text-[0.7rem] text-fg/muted">
               Fixed 0-100% scale. Gaps mean no recorded input. Overall cache % is weighted by input volume.
             </p>
           </div>
           <div className="min-w-0 space-y-3">
-            <h3 className="m-0 text-[0.78rem] font-semibold text-muted">Lowest cache % threads</h3>
+            <h3 className="m-0 text-[0.78rem] font-semibold text-fg/muted">Lowest cache % threads</h3>
             <ol className="m-0 space-y-3 p-0">
               {cache.worstThreads.map((thread) => {
                 const tokens = thread.cacheWriteInputTokens === undefined ? null : {
@@ -80,10 +80,10 @@ export default function WorkbenchCacheEfficiency({
                     >
                       {thread.title || thread.threadId}
                       {global ? (
-                        <span className="ml-2 font-normal text-muted">{projectNamesById.get(thread.projectId) ?? thread.projectId}</span>
+                        <span className="ml-2 font-normal text-fg/muted">{projectNamesById.get(thread.projectId) ?? thread.projectId}</span>
                       ) : null}
                     </a>
-                    <span className="max-w-[65%] shrink-0 text-right text-[0.72rem] tabular-nums text-muted">
+                    <span className="max-w-[65%] shrink-0 text-right text-[0.72rem] tabular-nums text-fg/muted">
                       <span className={`font-semibold ${cacheCategory.colourClassName}`}>{thread.cacheHitPercent.toFixed(1)}%</span>
                       {tokens ? (
                         <span className="flex flex-wrap justify-end gap-x-2 gap-y-1 text-[0.68rem]">
@@ -99,12 +99,12 @@ export default function WorkbenchCacheEfficiency({
                 );
               })}
             </ol>
-            <p className="m-0 text-[0.7rem] text-muted">
+            <p className="m-0 text-[0.7rem] text-fg/muted">
               Lowest first within the selected filters. New or small threads can have low cache % without wasting much input.
               {" "}Cache includes cache writes, but cache % counts reads only.
             </p>
             {cache.worstThreads.some((thread) => thread.cacheWriteInputTokens === undefined) ? (
-              <p className="m-0 text-[0.7rem] text-muted">Category counts are unavailable from this server version.</p>
+              <p className="m-0 text-[0.7rem] text-fg/muted">Category counts are unavailable from this server version.</p>
             ) : null}
           </div>
         </div>

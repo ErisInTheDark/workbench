@@ -59,7 +59,7 @@ export default function ThreadRenderSurface({
       {sql ? (
         <>
           {sql.canLoadPrevious ? (
-            <button type="button" className="mb-3 rounded px-2 py-1 text-muted hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text" disabled={sql.loading} onClick={sql.loadPrevious}>
+            <button type="button" className="mb-3 rounded px-2 py-1 text-fg/muted hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text" disabled={sql.loading} onClick={sql.loadPrevious}>
               {sql.loading ? "Loading..." : "Load older turns"}
             </button>
           ) : null}
@@ -77,7 +77,7 @@ export default function ThreadRenderSurface({
               subagents={[]}
               workspaceRoots={[]}
             />
-          ) : <p className="text-muted">{emptyMessage}</p>}
+          ) : <p className="text-fg/muted">{emptyMessage}</p>}
         </>
       ) : <ThreadThreadContent
         browseResultEntries={thread?.browseResultEntries ?? []}

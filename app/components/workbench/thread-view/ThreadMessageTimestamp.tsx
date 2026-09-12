@@ -19,7 +19,7 @@ export default function ThreadMessageTimestamp({
   if (!Number.isFinite(date.getTime())) return null;
   return (
     <p className={`
-      m-0 text-[0.67em] leading-[1.5] text-muted
+      m-0 text-[0.67em] leading-[1.5] text-fg/muted
       ${align === "right" ? "text-right" : ""}
       ${className}
     `}>

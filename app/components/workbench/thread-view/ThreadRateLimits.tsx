@@ -58,7 +58,7 @@ export default function ThreadRateLimits ({
 
   if (canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
         <div className="flex items-center gap-3">{leadingControl}{harnessControl}</div>
         {trailingContent}
       </div>
@@ -69,7 +69,7 @@ export default function ThreadRateLimits ({
     const isAuthRequired = rateLimits?.limitId === "copilot:auth";
 
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {leadingControl}
           <div className="flex justify-center">{harnessControl}</div>
@@ -104,7 +104,7 @@ export default function ThreadRateLimits ({
 
   if (harness === "opencode") {
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {leadingControl}
           <div className="flex justify-center">{harnessControl}</div>
@@ -120,7 +120,7 @@ export default function ThreadRateLimits ({
   }
 
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {leadingControl}
         <div className="flex justify-center">{harnessControl}</div>

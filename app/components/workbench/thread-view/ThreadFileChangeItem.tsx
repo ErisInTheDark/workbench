@@ -216,7 +216,7 @@ function ThreadFileChangeDetails ({
   return (
     <div className="space-y-3">
       {parsedChange.change.workbenchAnalysis ? (
-        <div className="space-y-1 text-[0.78em] leading-[1.6] text-muted">
+        <div className="space-y-1 text-[0.78em] leading-[1.6] text-fg/muted">
           <p className="m-0">Counts show requested changes found in the observed file, not who wrote them or untouched-file integrity.</p>
           {parsedChange.change.workbenchAnalysis.detail ? <p className="m-0">{parsedChange.change.workbenchAnalysis.detail}</p> : null}
           {parsedChange.change.workbenchAnalysis.hunks.map((hunk) => (
@@ -231,7 +231,7 @@ function ThreadFileChangeDetails ({
         </div>
       ) : null}
       {parsedChange.movePathDisplay ? (
-        <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
+        <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-fg/muted">
           <span>From</span>
           <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
         </p>
@@ -239,7 +239,7 @@ function ThreadFileChangeDetails ({
       {parsedChange.change.diff.trim() ? (
         <ThreadCodeDisplay diff={parsedChange.diff} preview variant="diff" />
       ) : (
-        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No diff captured.</p>
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No diff captured.</p>
       )}
     </div>
   );
@@ -261,7 +261,7 @@ function ThreadFileChangeSummary ({
       className="inline-flex min-w-0 max-w-full items-baseline gap-1"
       data-thread-file-change-row-mode={parsedChange.detailsAvailable ? "disclosure" : parsedChange.staticMarker ? "static" : "plain"}
     >
-      <span className={`inline-flex shrink-0 self-center -mt-0.5 ${parsedChange.danger ? "text-danger" : "text-muted"}`} aria-hidden="true">
+      <span className={`inline-flex shrink-0 self-center -mt-0.5 ${parsedChange.danger ? "text-danger" : "text-fg/muted"}`} aria-hidden="true">
         {presentation.icon}
       </span>
       <span className={parsedChange.danger ? "text-danger" : undefined}>
@@ -301,7 +301,7 @@ export function ThreadFileChangeList ({
           workspaceRoots={workspaceRoots}
         />
       ) : (
-        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No changed files captured.</p>
       )}
     </div>
   );
@@ -351,7 +351,7 @@ function ThreadFileChangeRows ({
         className="py-0.5"
         contentClassName="mt-2 pl-6"
         summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       >
         <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
       </ThreadDisclosure>
@@ -361,10 +361,10 @@ function ThreadFileChangeRows ({
         className="!py-0.5"
         markerClassName={change.danger ? "text-danger" : undefined}
         summary={summary}
-        summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-muted"}`}
+        summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
       />
     ) : (
-      <div key={key} className="py-0.5 pl-6 text-[0.92em] leading-[1.6] text-muted">
+      <div key={key} className="py-0.5 pl-6 text-[0.92em] leading-[1.6] text-fg/muted">
         {summary}
       </div>
     );
@@ -388,7 +388,7 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
         className="!py-0.5"
         markerClassName={danger ? "text-danger" : undefined}
         summary={<ThreadSummaryText text={label} />}
-        summaryClassName={`text-[0.92em] leading-[1.6] ${danger ? "text-danger" : "text-muted"}`}
+        summaryClassName={`text-[0.92em] leading-[1.6] ${danger ? "text-danger" : "text-fg/muted"}`}
       />
     </div>
   );
@@ -442,7 +442,7 @@ export default function ThreadFileChangeItem ({
         </div>
       ))}
       {!hasRows ? (
-        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No changed files captured.</p>
       ) : null}
     </div>
   );

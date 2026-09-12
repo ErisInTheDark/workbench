@@ -35,7 +35,7 @@ export default function ThreadSubagentMessageItem ({
           />
         </span>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadSubagentUserMessage>{children}</ThreadSubagentUserMessage>
     </ThreadDisclosure>

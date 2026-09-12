@@ -254,7 +254,7 @@ export default function WorkbenchTooltip({
       role={interactive ? "dialog" : "tooltip"}
       aria-modal={interactive ? false : undefined}
       className={`
-        fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
+        fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] [--fg-bg:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg)_80%,var(--app-bg-solid)))] px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
         ${interactive ? "pointer-events-auto" : "pointer-events-none"}
       `}
       style={tooltipStyle}
