@@ -23,6 +23,7 @@ import path from "node:path";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
+import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
 import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE } from "./GitArcControllerTestFixtures";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
@@ -433,8 +434,8 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CONTROLLER_PARTIAL_READY_FIXTURE, 1),
   ], nested: false }],
   ["GitArcClaimLossStore.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 2),
-  ], nested: false }],
+    demand(CLAIM_LOSS_OPERATIONS_FIXTURE, 1),
+  ], nested: true }],
   ["git-checkpoints.test.ts", { fixtures: [
     demand(CHECKPOINT_OPERATIONS_FIXTURE, 1),
   ], nested: true }],

@@ -1,26 +1,23 @@
-/*
- * Exports: none. Protect exact final-loss publication, replacement and retention boundaries.
- */
+/* No production exports. Shared-state batteries protect atomic final-loss publication and every loss route. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcRegistry from "./GitArcRegistry";
-import GitTestFixtureCache from "./GitTestFixtureCache";
+import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
-import { CONTROLLER_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
+import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
 
 const fixtures = new GitTestFixtureCache();
+type ClaimLossFixture = GitTestFixtureCopy<Awaited<ReturnType<typeof CLAIM_LOSS_OPERATIONS_FIXTURE.prepare>>>;
 
-test("final-loss ref and registry compare-and-swap publish together and preserve the disown snapshot", async context => {
-  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(fixture.dispose);
-  const repository = await WorkbenchGitRepository.open(fixture.root);
+async function checkAtomicLoss(prepared: ClaimLossFixture) {
+  const fixture = { root: path.join(prepared.bundleRoot, prepared.state.atomicRoot) };
+  const repository = new WorkbenchGitRepository(fixture.root);
   const controller = new WorkbenchGitCheckpointController();
-  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "atomic-loss" };
-  await controller.createAndStartPlan({ ...identity, intentName: "atomic loss", paths: ["one.txt", "two.txt"] });
+  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: prepared.state.threadId };
   const registry = new GitArcRegistry(repository);
   const store = new GitArcClaimLossStore(repository);
   const entry = await registry.find(identity);
@@ -56,8 +53,9 @@ test("final-loss ref and registry compare-and-swap publish together and preserve
   await controller.editArcClaims({ ...identity, inherit: true, adoptPaths: ["one.txt"] });
   assert.deepEqual((await controller.readStatus(identity)).recovery, []);
   await controller.releaseArc({ ...identity, disown: true });
-  assert.notEqual((await store.read(identity))?.commit, boundary.commit);
-  const ref = (await store.read(identity))!.ref;
+  const replacement = await store.read(identity);
+  assert.notEqual(replacement?.commit, boundary.commit);
+  const ref = replacement!.ref;
   await controller.pruneThreadHistory(identity);
   assert.equal(await repository.readRef(ref), null);
   assert.equal(await store.read(identity), null);
@@ -67,17 +65,15 @@ test("final-loss ref and registry compare-and-swap publish together and preserve
   const wrongParent = await repository.createCommitFromTree(boundary.tree, boundary.head, JSON.stringify({ version: 1, paths: ["one.txt"], head: null }));
   await repository.updateRefs([{ ref, oldValue: corrupt, newValue: wrongParent }]);
   await assert.rejects(store.read(identity), /parent/u);
-});
+}
 
-test("planning, final removal and restore capture the boundary while a rejected release does not", async context => {
-  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(fixture.dispose);
+async function checkLossRoutes(prepared: ClaimLossFixture) {
   const controller = new WorkbenchGitCheckpointController();
-  const repository = await WorkbenchGitRepository.open(fixture.root);
-  const store = new GitArcClaimLossStore(repository);
-  for (const route of ["planning", "removal", "restore", "settlement"]) {
-    const identity = { cwd: fixture.root, harness: "codex" as const, threadId: route };
-    const started = await controller.createAndStartPlan({ ...identity, intentName: route, paths: ["one.txt"] });
+  for (const route of ["planning", "removal", "restore", "settlement"] as const) {
+    const fixture = { root: path.join(prepared.bundleRoot, prepared.state.routes[route]) };
+    const repository = new WorkbenchGitRepository(fixture.root);
+    const store = new GitArcClaimLossStore(repository);
+    const identity = { cwd: fixture.root, harness: "codex" as const, threadId: prepared.state.threadId };
     if (route === "planning") await controller.createPlan({ ...identity, intentName: "new plan", paths: ["two.txt"] });
     else if (route === "removal") await controller.editArcClaims({ ...identity, inherit: true, removePaths: ["one.txt"] });
     else if (route === "settlement") await controller.releaseActiveClaim(identity);
@@ -85,9 +81,18 @@ test("planning, final removal and restore capture the boundary while a rejected 
       await fs.writeFile(path.join(fixture.root, "one.txt"), "restore me\n");
       await assert.rejects(controller.releaseArc({ ...identity, disown: false }));
       assert.equal(await store.read(identity), null);
-      await controller.restore({ ...identity, checkpointCommit: started.checkpointCommit, confirmRestore: true });
+      await controller.restore({ ...identity, checkpointCommit: prepared.state.routeCheckpoint, confirmRestore: true });
     }
     assert.deepEqual((await store.read(identity))?.paths, ["one.txt"]);
     assert.deepEqual((await controller.compare(identity)).changes, []);
   }
+}
+
+test("claim-loss boundaries", { concurrency: 2 }, async context => {
+  const prepared = await fixtures.copy(CLAIM_LOSS_OPERATIONS_FIXTURE);
+  context.after(prepared.dispose);
+  await Promise.all([
+    context.test("final-loss ref and registry compare-and-swap publish together and preserve the disown snapshot", () => checkAtomicLoss(prepared)),
+    context.test("planning, final removal and restore capture the boundary while a rejected release does not", () => checkLossRoutes(prepared)),
+  ]);
 });
