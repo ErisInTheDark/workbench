@@ -133,7 +133,7 @@ export default function WorkbenchThreadPanel ({
                 display="hover-border"
                 onClick={onMinimizeToggle}
               >
-                {isMinimized ? <PanelExpandIcon /> : <PanelMinimizeIcon />}
+                {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
               </WorkbenchIconButton>
             ) : null}
@@ -158,7 +158,7 @@ export default function WorkbenchThreadPanel ({
                 display="hover-border"
                 onClick={onClose}
               >
-                <PanelCloseIcon />
+                <PanelCloseIcon size={16} />
                 <span className="sr-only">Close panel</span>
               </WorkbenchIconButton>
             ) : null}

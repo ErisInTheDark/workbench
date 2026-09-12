@@ -1,14 +1,14 @@
 /*
  * Exports:
- * - default ThreadInlineIcon: resolve and render one supported agent-authored inline icon marker. Keywords: thread, markdown, icon, registry, alert.
+ * - default ThreadInlineIcon: resolve and render one supported agent-authored inline icon marker.
  */
 
 import type { ComponentType } from "react";
 
-import { CircleAlertIcon } from "../workbench-icons";
+import { CircleAlertIcon, type IconProps } from "../workbench-icons";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
-type InlineIconComponent = ComponentType<{ className?: string }>;
+type InlineIconComponent = ComponentType<IconProps>;
 
 const THREAD_INLINE_ICON_REGISTRY = new Map<string, InlineIconComponent>([
   ["alert", CircleAlertIcon],
@@ -33,7 +33,7 @@ export default function ThreadInlineIcon ({ color, iconType, source }: {
       data-thread-inline-icon-color={color}
       role="img"
     >
-      <Icon className="size-full" />
+      <Icon size={16} />
     </span>
   );
 }

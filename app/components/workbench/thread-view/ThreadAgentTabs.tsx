@@ -54,7 +54,7 @@ function ThreadLifecycleStatusIcon({ accentChromaPercent, lifecycle, subagent }:
       )}
       style={accentStyle}
     >
-      <Icon className="size-4" />
+      <Icon size={16} />
     </span>
   );
 }
@@ -104,18 +104,18 @@ export default function ThreadAgentTabs ({
         label: "Subagent tab actions",
         items: [
           ...(!settled ? [{
-          icon: tab.isPinned ? <UnlockIcon className="size-4" /> : <LockIcon className="size-4" />,
+          icon: tab.isPinned ? <UnlockIcon size={16} /> : <LockIcon size={16} />,
           id: tab.isPinned ? "unlock" : "lock",
           label: tab.isPinned ? "Unlock subagent" : "Lock subagent",
           onSelect: () => onTogglePin(tab.id),
           }] : []),
           ...(settled ? [{
-            icon: <RestoreThreadIcon className="size-4" />,
+            icon: <RestoreThreadIcon size={16} />,
             id: "restore",
             label: "Restore subagent",
             onSelect: () => onToggleSettlement(tab.id, false),
           }] : terminal ? [{
-            icon: <SettleThreadIcon className="size-4" />,
+            icon: <SettleThreadIcon size={16} />,
             id: "settle",
             label: "Settle subagent",
             onSelect: () => onToggleSettlement(tab.id, true),
@@ -131,7 +131,7 @@ export default function ThreadAgentTabs ({
         onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(tab.id))}
       >
         <ThreadLifecycleStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} lifecycle={tab.subagent?.lifecycle ?? null} subagent={tab.subagent} />
-        {tab.isPinned ? <LockIcon className="size-4 shrink-0" /> : null}
+        {tab.isPinned ? <LockIcon className="shrink-0" size={16} /> : null}
         <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
         {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
         {activeThreadId === tab.id && tab.subagent ? (

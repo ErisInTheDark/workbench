@@ -57,7 +57,7 @@ export default function ThreadProfileQuickPicker({
               </span>
             </span>
             <span className="block w-full truncate text-xs leading-snug text-muted">
-              <span className="font-semibold">{agent}</span> via {profile.serviceTier === "fast" ? <><ZapIcon className="inline size-3 align-[-0.1em]" /><span className="sr-only">fast</span>{" "}</> : null}
+              <span className="font-semibold">{agent}</span> via {profile.serviceTier === "fast" ? <><ZapIcon className="inline align-[-0.1em]" size={12} /><span className="sr-only">fast</span>{" "}</> : null}
               <span className="font-semibold">{model?.displayName ?? profile.model}</span>
               {profile.reasoningEffort ? <> <span className="font-semibold capitalize">{profile.reasoningEffort}</span></> : null}
               {profile.contextWindowTokens ? <> <span className="font-semibold tabular-nums">{formatProfileContext(profile.contextWindowTokens)}</span></> : null} via <ThreadHarnessControl harness={profile.harness} inline />
@@ -83,7 +83,7 @@ export default function ThreadProfileQuickPicker({
       }
     }}
   >
-    <BotIcon className="size-4.5 shrink-0" />
+    <BotIcon className="shrink-0" size={18} />
     {selectedLabel ? <span className="truncate font-semibold">{selectedLabel}</span> : null}
   </WorkbenchPressDragMenu>;
 }

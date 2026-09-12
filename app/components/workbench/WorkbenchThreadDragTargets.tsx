@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadDragTargets: render compatible folder and dependent-snooze drop cards beside one sidebar thread row. Keywords: thread, drag, folder, snooze, target.
+ * - default WorkbenchThreadDragTargets: render compatible folder and dependent-snooze drop cards beside one sidebar thread row.
  */
 "use client";
 
@@ -119,7 +119,7 @@ export default function WorkbenchThreadDragTargets({
               {onFolderSelectedChange ? <DropSelectionEffect onChange={onFolderSelectedChange} selected={selected} /> : null}
               <div className={folderTargetClassName ? "absolute left-0 top-1/2 size-9 -translate-y-1/2" : ""}>
                 <TargetCard hoverScope={hoverScope} kind="folder" label={folderLabel ?? "Add to folder"} selected={selected} targetProjectId={targetProjectId}>
-                  <FolderInputIcon className="size-4" />
+                  <FolderInputIcon size={16} />
                 </TargetCard>
               </div>
             </>
@@ -137,7 +137,7 @@ export default function WorkbenchThreadDragTargets({
         >
           {({ selected }) => (
             <TargetCard hoverScope={hoverScope} kind="dependent-snooze" label={`Snooze until ${targetTitle} is completed without claims`} selected={selected} targetProjectId={targetProjectId}>
-              <SnoozedThreadIcon className="size-4" />
+              <SnoozedThreadIcon size={16} />
             </TargetCard>
           )}
         </DropTarget>

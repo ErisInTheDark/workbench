@@ -30,7 +30,7 @@ export default function ThreadStatusCommandItem({
   return (
     <div className={`py-1.5 text-[0.92em] leading-[1.6] ${colorClassName}`} data-role="thread-status-command" data-thread-status-tone={statusTone}>
       <div className="flex items-center gap-2">
-        <Icon className="size-4 shrink-0" />
+        <Icon className="shrink-0" size={16} />
         <span className="font-semibold">{label}</span>
       </div>
     </div>

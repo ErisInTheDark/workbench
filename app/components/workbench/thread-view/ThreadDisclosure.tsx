@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state. Keywords: thread, disclosure, chevron.
+ * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state.
  * - ThreadDisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
- * - Local helpers: joinClasses for compact className composition. Keywords: css, class names.
+ * - Local helpers: joinClasses for compact className composition.
  */
 "use client";
 
@@ -142,9 +142,10 @@ export default function ThreadDisclosure ({
         <ChevronIcon
           data-thread-chevron
           className={joinClasses(
-            "size-[1.1rem] transition-transform",
+            "transition-transform",
             chevronClassName,
           )}
+          size={18}
         />
         {leading ? (
           <span

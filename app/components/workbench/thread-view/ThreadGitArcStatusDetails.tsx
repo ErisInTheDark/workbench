@@ -6,7 +6,7 @@ import { useEffect, useMemo } from "react";
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { CheckIcon } from "../workbench-icons";
+import { CheckIcon, EllipsisIcon } from "../workbench-icons";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
@@ -33,16 +33,14 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
       {status.pending.map(proposal => (
         <div className="flex min-w-0 items-start gap-2 py-0.5" key={proposal.proposalId}>
           <span className="sr-only">Pending</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mt-1.5 size-4 shrink-0 text-muted">
-            <circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" />
-          </svg>
+          <EllipsisIcon className="mt-1.5 shrink-0 text-muted" size={16} />
           <span className="min-w-0 break-words">{proposal.title}</span>
         </div>
       ))}
       {status.accepted.map(proposal => (
         <div className="flex min-w-0 items-baseline gap-2 py-0.5" key={proposal.proposalId}>
           <span className="sr-only">Accepted</span>
-          <CheckIcon className="mt-1.5 size-4 shrink-0 self-start text-[color:var(--success)]" />
+          <CheckIcon className="mt-1.5 shrink-0 self-start text-[color:var(--success)]" size={16} />
           <span className="shrink-0 font-mono text-muted">{proposal.commitSha.slice(0, 8)}</span>
           <span className="min-w-0 break-words">{proposal.title}</span>
         </div>

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCostUsage: render API-equivalent cost and estimate provenance. Keywords: stats, cost, pricing, attribution.
+ * - default WorkbenchCostUsage: render API-equivalent cost and estimate provenance.
  */
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { hasStatsCategoryCosts, STATS_TOKEN_TYPES, type StatsTokenType } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -29,7 +29,7 @@ export default function WorkbenchCostUsage({ stats, selected = STATS_TOKEN_TYPES
         buckets={stats?.cost.buckets.map(({ startedAt }) => startedAt) ?? []}
         formatValue={formatMoney}
         series={detailed ? STATS_TOKEN_SERIES.filter(({ key }) => selected.includes(key)).map(({ key, colourClassName, label, Icon }) => ({
-          colourClassName, label, icon: <Icon className="size-3.5" />,
+          colourClassName, label, icon: <Icon size={14} />,
           summary: formatMoney(detailed.cost.byTokenType[key]),
           values: detailed.cost.buckets.map((bucket) => bucket.byTokenType[key]),
         })) : stats ? [{

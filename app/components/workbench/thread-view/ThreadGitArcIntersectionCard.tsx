@@ -59,7 +59,7 @@ export default function ThreadGitArcIntersectionCard({
       data-thread-plan-conflict-card={waiting ? undefined : "true"}
     >
       <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}`}>
-        {waiting ? <GitArcWaitIcon className="size-4 shrink-0" /> : <GitArcConflictIcon className="size-4 shrink-0" />}
+        {waiting ? <GitArcWaitIcon className="shrink-0" size={16} /> : <GitArcConflictIcon className="shrink-0" size={16} />}
         <span className="min-w-0 flex-1 truncate font-medium text-text">
           {waiting
             ? "Waiting for Git arc claims"

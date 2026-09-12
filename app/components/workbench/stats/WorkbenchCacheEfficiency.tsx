@@ -1,5 +1,4 @@
 /*
- * Keywords: stats, input cache, percentage, chart, leaderboard.
  * Exports:
  * - default WorkbenchCacheEfficiency: present independent cache percentages and lowest-cache thread links.
  */
@@ -90,7 +89,7 @@ export default function WorkbenchCacheEfficiency({
                         <span className="flex flex-wrap justify-end gap-x-2 gap-y-1 text-[0.68rem]">
                           {inputCategories.map(({ key, label, colourClassName, Icon, count }) => (
                             <span className={`inline-flex items-center gap-1 font-bold ${colourClassName}`} key={key}>
-                              <Icon className="size-3 shrink-0" />{label} {compactNumber(count(tokens))}
+                              <Icon className="shrink-0" size={12} />{label} {compactNumber(count(tokens))}
                             </span>
                           ))}
                         </span>

@@ -1,19 +1,23 @@
 /*
- * Keywords: search, result, action, file, settings, compact.
  * Exports:
  * - default WorkbenchSearchResultItem: compact search row for non-materialised and non-sidebar results.
  */
 "use client";
 
+import type { ComponentType } from "react";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
-import { FolderOpenIcon, GearIcon, OpenThreadIcon, ProjectIcon, SparkleIcon } from "./workbench-icons";
+import { FolderOpenIcon, GearIcon, OpenThreadIcon, ProjectIcon, SparkleIcon, type IconProps } from "./workbench-icons";
 
-const RESULT_PRESENTATION = {
-  action: { Icon: SparkleIcon, label: "Action" },
-  file: { Icon: FolderOpenIcon, label: "File" },
-  project: { Icon: ProjectIcon, label: "Project" },
-  projectSetting: { Icon: GearIcon, label: "Project setting" },
-  thread: { Icon: OpenThreadIcon, label: "Thread" },
+const RESULT_PRESENTATION: Record<WorkbenchSearchResult["kind"], {
+  Icon: ComponentType<IconProps>;
+  iconSize: NonNullable<IconProps["size"]>;
+  label: string;
+}> = {
+  action: { Icon: SparkleIcon, iconSize: 16, label: "Action" },
+  file: { Icon: FolderOpenIcon, iconSize: 16, label: "File" },
+  project: { Icon: ProjectIcon, iconSize: 16, label: "Project" },
+  projectSetting: { Icon: GearIcon, iconSize: 20, label: "Project setting" },
+  thread: { Icon: OpenThreadIcon, iconSize: 16, label: "Thread" },
 };
 
 export default function WorkbenchSearchResultItem({
@@ -27,7 +31,7 @@ export default function WorkbenchSearchResultItem({
   result: WorkbenchSearchResult;
   selected: boolean;
 }) {
-  const { Icon, label } = RESULT_PRESENTATION[result.kind];
+  const { Icon, iconSize, label } = RESULT_PRESENTATION[result.kind];
   return (
     <button
       aria-selected={selected}
@@ -50,7 +54,7 @@ export default function WorkbenchSearchResultItem({
       >
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity="0.24" />
       </svg>
-      <span aria-hidden="true" className="relative inline-flex shrink-0 items-center text-muted"><Icon /></span>
+      <span aria-hidden="true" className="relative inline-flex shrink-0 items-center text-muted"><Icon size={iconSize} /></span>
       <span className={`relative min-w-0 truncate ${selected ? "font-semibold" : "font-medium"}`}>{result.title}</span>
       <span className="relative min-w-0 flex-1 truncate text-[0.72rem] text-muted">{result.detail}</span>
       <span className="relative shrink-0 text-[0.72rem] text-muted">{label}</span>

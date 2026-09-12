@@ -30,7 +30,7 @@ import {
   isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import PrimaryButton from "../PrimaryButton";
-import { SendHorizontalIcon } from "../workbench-icons";
+import { FeatherIcon, SendHorizontalIcon, XIcon } from "../workbench-icons";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -370,7 +370,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       title={isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
       pendingHalo={isSubmitting || isAttaching}
     >
-      <SendHorizontalIcon />
+      <SendHorizontalIcon size={20} />
     </PrimaryButton>
   );
 
@@ -490,24 +490,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         isChecked={false}
                         isSingleChoice={false}
                         label={(
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={joinClasses(
-                              "lucide lucide-feather-icon lucide-feather",
-                              compact ? "size-5" : "size-8",
-                            )}
-                            aria-hidden="true"
-                          >
-                            <path d="M14.086 18.412A2 2 0 0112.67 19H5v-7.672a2 2 0 01.586-1.414L11.75 3.75a6 6 0 118.49 8.49z" />
-                            <path d="M16 8 2 22" />
-                            <path d="M17.488 15H9" />
-                          </svg>
+                          <FeatherIcon size={compact ? 20 : 32} />
                         )}
                         presentation={compact ? "compact-card" : "card"}
                         showMarker={false}
@@ -685,15 +668,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         }));
                       }}
                     >
-                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                        <path
-                          d="M4 4l8 8M12 4l-8 8"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeWidth="1.8"
-                        />
-                      </svg>
+                      <XIcon size={14} />
                     </button> : null}
                   </div>
                 ))}

@@ -259,7 +259,7 @@ export default function WorkbenchFilePanel ({
                 display="hover-border"
                 onClick={onMinimizeToggle}
               >
-                {isMinimized ? <PanelExpandIcon /> : <PanelMinimizeIcon />}
+                {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
               </WorkbenchIconButton>
             ) : null}
@@ -289,7 +289,7 @@ export default function WorkbenchFilePanel ({
                 display="hover-border"
                 data-invalid="false"
               >
-                <SaveIcon />
+                <SaveIcon size={20} />
                 <span className="sr-only">Save current file</span>
               </WorkbenchIconButton>
               <WorkbenchIconButton
@@ -299,7 +299,7 @@ export default function WorkbenchFilePanel ({
                 label="Discard the current draft"
                 display="hover-border"
               >
-                <BinIcon />
+                <BinIcon size={20} />
                 <span className="sr-only">Discard the current draft</span>
               </WorkbenchIconButton>
             </div>
@@ -311,7 +311,7 @@ export default function WorkbenchFilePanel ({
                 display="hover-border"
                 onClick={onClose}
               >
-                <PanelCloseIcon />
+                <PanelCloseIcon size={16} />
                 <span className="sr-only">Close panel</span>
               </WorkbenchIconButton>
             ) : null}

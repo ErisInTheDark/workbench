@@ -182,7 +182,7 @@ function WorkbenchThreadSidebarActionsProvider({
     const group = isPinnedDraftSummaryEntry(entry) ? "pinned" : getThreadSidebarGroup(entry);
     const terminal = entry.entryKind !== "draft" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
     const items: WorkbenchContextMenuDefinition["items"] = [{
-      icon: <OpenThreadIcon className="size-4" />,
+      icon: <OpenThreadIcon size={16} />,
       id: "open",
       label: "Open",
       onSelect: () => onOpenThread(targetForEntry(entry), ownerProjectId),
@@ -190,7 +190,7 @@ function WorkbenchThreadSidebarActionsProvider({
 
     if (terminal && group !== "archived" && entry.lifecycle.settled) {
       items.push({
-        icon: <RestoreThreadIcon className="size-4" />,
+        icon: <RestoreThreadIcon size={16} />,
         id: "restore",
         label: "Restore",
         onSelect: () => mutateEntry(entry, ownerProjectId, "restore"),
@@ -198,7 +198,7 @@ function WorkbenchThreadSidebarActionsProvider({
     }
 
     items.push({
-      icon: <CopyIcon className="size-4" />,
+      icon: <CopyIcon size={16} />,
       id: "copy-id",
       label: "Copy ID",
       onSelect: () => { void writeTextToClipboard(identifier); },
@@ -214,7 +214,7 @@ function WorkbenchThreadSidebarActionsProvider({
       : findWorkbenchThreadFolder(pinnedThreadLayout.displayOrder, displayKey);
     if (entry.entryKind !== "subagent" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
       items.push({
-        icon: <FolderInputIcon className="size-4" />,
+        icon: <FolderInputIcon size={16} />,
         id: "add-to-folder",
         label: "Add to folder",
         onSelect: () => {
@@ -239,14 +239,14 @@ function WorkbenchThreadSidebarActionsProvider({
       controls: [{
         checked: pinned,
         disabled: group === "archived",
-        icon: <PinIcon className="size-4" />,
+        icon: <PinIcon size={16} />,
         id: "pin",
         label: pinned ? "Unpin thread" : "Pin thread",
         onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned),
       }, {
         checked: snoozed,
         disabled: group === "archived" || (entry.entryKind !== "draft" && entry.lifecycle.settled),
-        icon: <SnoozedThreadIcon className="size-4" />,
+        icon: <SnoozedThreadIcon size={16} />,
         id: "snooze",
         label: snoozed ? "Wake" : "Snooze thread",
         onSelect: () => mutateEntry(entry, ownerProjectId, "snooze/set", !snoozed),
@@ -271,7 +271,7 @@ function WorkbenchThreadSidebarActionsProvider({
         controls: [{
           checked: entry.lifecycle.kind === "needsAttention",
           disabled: group === "archived" || entry.lifecycle.kind === "working",
-          icon: <NeedsAttentionThreadIcon className="size-4" />,
+          icon: <NeedsAttentionThreadIcon size={16} />,
           id: "needs-attention",
           label: "Needs attention",
           onSelect: () => selectStatus("needsAttention"),
@@ -279,7 +279,7 @@ function WorkbenchThreadSidebarActionsProvider({
         }, {
           checked: entry.lifecycle.kind === "completed",
           disabled: group === "archived" || (providerOwned && !canComplete),
-          icon: <CompletedThreadIcon className="size-4" />,
+          icon: <CompletedThreadIcon size={16} />,
           id: "completed",
           label: "Completed",
           onSelect: () => selectStatus("completed"),
@@ -287,7 +287,7 @@ function WorkbenchThreadSidebarActionsProvider({
         }, {
           checked: entry.lifecycle.kind === "stopped",
           disabled: group === "archived" || (providerOwned && !thread),
-          icon: <StoppedThreadIcon className="size-4" />,
+          icon: <StoppedThreadIcon size={16} />,
           id: "stopped",
           label: "Stopped",
           onSelect: () => selectStatus("stopped"),
@@ -304,21 +304,21 @@ function WorkbenchThreadSidebarActionsProvider({
       items.push({ id: "conclude-separator", kind: "separator" }, {
         controls: group === "archived" ? [{
           checked: false,
-          icon: <RestoreThreadIcon className="size-4" />,
+          icon: <RestoreThreadIcon size={16} />,
           id: "restore",
           label: "Restore",
           onSelect: () => mutateEntry(entry, ownerProjectId, "restore"),
         }] : [
           {
             checked: false,
-            icon: <SettleThreadIcon className="size-4" />,
+            icon: <SettleThreadIcon size={16} />,
             id: "settle",
             label: "Settle",
             onSelect: () => mutateEntry(entry, ownerProjectId, "settle"),
           },
           {
             checked: false,
-            icon: <ArchiveIcon className="size-4" />,
+            icon: <ArchiveIcon size={16} />,
             id: "archive",
             label: "Archive",
             onSelect: () => mutateEntry(entry, ownerProjectId, "archive/set", true),

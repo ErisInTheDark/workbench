@@ -109,7 +109,7 @@ export default function ThreadModelPicker ({
 						disabled={favouritesDisabled}
 						label={`${unfavourited ? "Favourite" : "Unfavourite"} ${model.displayName}`}
 						onClick={() => onToggleFavourite(model.id)}
-					>{unfavourited ? <StarIcon /> : <StarOffIcon />}</WorkbenchIconButton>}
+					>{unfavourited ? <StarIcon size={16} /> : <StarOffIcon size={16} />}</WorkbenchIconButton>}
 				/>
 		);
 	};

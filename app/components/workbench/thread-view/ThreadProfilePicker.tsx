@@ -97,7 +97,7 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
       labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
       actions={<>
           <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} />
-          <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon className="size-4" /></WorkbenchIconButton>
+          <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></WorkbenchIconButton>
       </>}
       description={!active ? profile.description : undefined}
     >
@@ -116,7 +116,7 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
         void controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }).then((profile) => {
           if (profile) controller.selectProfile(slot, profile.id);
         });
-      }}><SparkleIcon /><span>New</span></button>
+      }}><SparkleIcon size={16} /><span>New</span></button>
     </div>
   </section>;
 }

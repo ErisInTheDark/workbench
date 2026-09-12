@@ -38,7 +38,7 @@ import {
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
-import { PlayIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
+import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -436,7 +436,7 @@ export default function ThreadComposer ({
         void stop();
       }}
     >
-      {stopControlState.action === "snooze" ? <SnoozedThreadIcon className="h-4.5 w-4.5" /> : <SquareIcon className="h-4.5 w-4.5" />}
+      {stopControlState.action === "snooze" ? <SnoozedThreadIcon size={18} /> : <SquareIcon size={18} />}
     </PrimaryButton>
   ) : null;
   const resumeButton = canRecoverInterruptedTurn ? (
@@ -450,7 +450,7 @@ export default function ThreadComposer ({
         void recoverInterruptedTurn();
       }}
     >
-      <PlayIcon className="h-4.5 w-4.5" />
+      <PlayIcon size={18} />
     </PrimaryButton>
   ) : null;
   const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
@@ -468,10 +468,7 @@ export default function ThreadComposer ({
         setIsQuestionnaireVisible((current) => !current);
       }}
     >
-      <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden="true">
-        <path d="M5.25 5.5h9.5M5.25 10h9.5M5.25 14.5h5.2" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
-        <path d="M3.2 5.5h.1M3.2 10h.1M3.2 14.5h.1" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
-      </svg>
+      <QuestionnaireListIcon size={20} />
     </button>
   ) : null;
 
@@ -604,15 +601,7 @@ export default function ThreadComposer ({
                               }));
                             }}
                           >
-                            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                              <path
-                                d="M4 4l8 8M12 4l-8 8"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeLinecap="round"
-                                strokeWidth="1.8"
-                              />
-                            </svg>
+                            <XIcon size={14} />
                           </button>
                         </div>
                       ))}
@@ -694,7 +683,7 @@ export default function ThreadComposer ({
                       title={isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                       pendingHalo={isSending || isAttaching}
                     >
-                      <SendHorizontalIcon />
+                      <SendHorizontalIcon size={20} />
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchDragProvider: provide one drag controller and render its lifecycle-owned ghost. Keywords: React, drag, ghost, provider.
+ * - default WorkbenchDragProvider: provide one drag controller and render its lifecycle-owned ghost.
  */
 "use client";
 
@@ -36,7 +36,7 @@ export default function WorkbenchDragProvider ({ children, controller: suppliedC
             const ActionIcon = ACTION_ICONS[snapshot.targetPreview.action];
             return (
               <span className="inline-flex shrink-0 items-center gap-1 px-3 py-1.5 text-[0.92rem] font-bold text-accent border border-[color-mix(in_srgb,var(--text)_18%,transparent)] rounded-full bg-[color-mix(in_srgb,var(--bg)_8%,transparent)] backdrop-blur">
-                <ActionIcon className="size-3.5" />
+                <ActionIcon size={14} />
                 {snapshot.targetPreview.label}
               </span>
             );

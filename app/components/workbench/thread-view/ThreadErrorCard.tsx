@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadErrorCard: render the latest provider error while a thread remains in system-error state. Keywords: thread, system error, turn error, recovery.
+ * - default ThreadErrorCard: render the latest provider error while a thread remains in system-error state.
  */
 
 import type { ThreadPayload } from "workbench-shared/types";
@@ -27,7 +27,7 @@ export default function ThreadErrorCard({
       data-thread-error-card="true"
       role="alert"
     >
-      <CircleAlertIcon className="mt-[0.1em] size-4 shrink-0" />
+      <CircleAlertIcon className="mt-[0.1em] shrink-0" size={16} />
       <p className="m-0 min-w-0 whitespace-pre-wrap text-[0.86em] leading-[1.55]">{message}</p>
     </section>
   );

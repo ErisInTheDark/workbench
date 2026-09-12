@@ -34,7 +34,7 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 export const NewEntryIcon = FilePlusIcon;
 
 export function FileVisibilityIcon ({ visible }: { visible: boolean }) {
-  return visible ? <EyeIcon /> : <EyeOffIcon />;
+  return visible ? <EyeIcon size={16} /> : <EyeOffIcon size={16} />;
 }
 
 export function SidebarLoadingSkeleton ({
@@ -171,7 +171,7 @@ export function BrowseSessionsList ({
               >
                 <span className="flex w-full min-w-0 items-center justify-between gap-3">
                   <span className="inline-flex min-w-0 items-center gap-2">
-                    <BrowserSessionIcon className="size-4 shrink-0" />
+                    <BrowserSessionIcon className="shrink-0" size={16} />
                     <span className="min-w-0">
                       <span className={`${workbenchThreadListLabelClassName}${isProblemState ? " font-semibold" : ""}`}>{session.name}</span>
                       {detail ? <span className="block truncate text-[0.75rem] leading-4 text-muted">{detail}</span> : null}
@@ -329,10 +329,9 @@ export function ExplorerTree ({
                     <ChevronIcon
                       data-role="tree-chevron"
                       className="mt-0.5 transition-transform"
+                      size={18}
                       style={{
-                        width: "1.1rem",
-                        height: "1.1rem",
-                        transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                        transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)",
                       }}
                     />
                     <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
@@ -350,7 +349,7 @@ export function ExplorerTree ({
                       onCreateInDirectory?.(node.path);
                     }}
                   >
-                    <NewEntryIcon />
+                    <NewEntryIcon size={16} />
                     <span className="sr-only">{`Create in ${node.name}`}</span>
                   </WorkbenchIconButton>
                 </div>

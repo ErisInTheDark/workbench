@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectControl: render the home draft's click-to-next project rotator beside the harness control. Keywords: thread, composer, project, rotator.
+ * - default WorkbenchProjectControl: render the home draft's click-to-next project rotator beside the harness control.
  */
 "use client";
 
@@ -25,7 +25,7 @@ export default function WorkbenchProjectControl({
       onRotate={onRotate}
       title={label}
     >
-      <ProjectIcon className="size-4 shrink-0" />
+      <ProjectIcon className="shrink-0" size={16} />
       <span className="truncate">{label}</span>
     </WorkbenchRotatorButton>
   );

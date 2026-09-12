@@ -14,7 +14,7 @@ export default function WorkbenchSearchInput({ onOpen }: { onOpen(): void }) {
       onClick={onOpen}
       type="button"
     >
-      <SearchIcon className="size-[1em] shrink-0" />
+      <SearchIcon className="shrink-0" size={16} />
       <span>Search</span>
     </button>
   );

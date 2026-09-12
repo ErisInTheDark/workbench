@@ -1027,13 +1027,13 @@ function ThreadCommandDetailRows ({
 function renderCommandDetailStateIcon(row: ThreadCommandDetailRow) {
   switch (row.state) {
     case "queued":
-      return <ClockIcon className="size-[0.9rem]" />;
+      return <ClockIcon size={16} />;
     case "inProgress":
-      return <PlayIcon className="size-[0.85rem]" />;
+      return <PlayIcon size={14} />;
     case "completed":
-      return <CheckIcon className="size-[0.95rem]" />;
+      return <CheckIcon size={16} />;
     case "failed":
-      return <WarningIcon className="size-[0.95rem]" />;
+      return <WarningIcon size={16} />;
     default:
       return null;
   }

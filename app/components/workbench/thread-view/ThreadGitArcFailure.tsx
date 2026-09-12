@@ -80,7 +80,7 @@ export default function ThreadGitArcFailure({
         className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-0.5 rounded-[0.45rem] bg-[color-mix(in_srgb,var(--danger)_6%,transparent)] px-2.5 py-1.5 text-danger"
         data-thread-git-arc-failure-panel="true"
       >
-        <GitArcConflictIcon className="col-start-1 row-start-1 size-4 shrink-0 self-center" />
+        <GitArcConflictIcon className="col-start-1 row-start-1 shrink-0 self-center" size={16} />
         <p className="col-start-2 row-start-1 m-0 min-w-0 leading-[1.45]" data-thread-git-arc-failure-message="true">{message}</p>
         {presentation.userHint ? (
           <p className="col-start-2 row-start-2 m-0 text-[0.78em] italic leading-[1.45] text-[color:color-mix(in_srgb,var(--danger)_78%,var(--text)_22%)]" data-thread-git-arc-failure-hint="true">

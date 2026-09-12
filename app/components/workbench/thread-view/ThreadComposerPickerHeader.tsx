@@ -54,7 +54,7 @@ export default function ThreadComposerPickerHeader({
           label={closeLabel}
           onClick={onClose}
         >
-          <PanelCloseIcon />
+          <PanelCloseIcon size={16} />
         </WorkbenchIconButton>
       </div>
     </div>

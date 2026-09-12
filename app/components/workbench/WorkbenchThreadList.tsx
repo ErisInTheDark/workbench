@@ -367,7 +367,7 @@ export default function WorkbenchThreadList({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
-          <SparkleIcon className="size-4 shrink-0" />
+          <SparkleIcon className="shrink-0" size={16} />
           <span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
       </a>
@@ -444,7 +444,7 @@ export default function WorkbenchThreadList({
         }}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
-          <SparkleIcon className="size-4 shrink-0" />
+          <SparkleIcon className="shrink-0" size={16} />
           <span className={`${workbenchThreadListLabelClassName}${blankThreadSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
       </a>

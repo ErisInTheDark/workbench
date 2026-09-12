@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadFolder: own one editable, status-toned sidebar folder disclosure with tooltip, drag, drop, and hover-open lifecycle. Keywords: thread, folder, disclosure, tooltip, drag.
- * - Local helpers: bound rename errors, rank folder lifecycle tone, and open a selected drag target after one owned delay. Keywords: folder, status, error, timer.
+ * - default WorkbenchThreadFolder: own one editable, status-toned sidebar folder disclosure with tooltip, drag, drop, and hover-open lifecycle.
+ * - Local helpers: bound rename errors, rank folder lifecycle tone, and open a selected drag target after one owned delay.
  */
 "use client";
 
@@ -27,7 +27,7 @@ import {
   getWorkbenchThreadStatusClassName,
   type WorkbenchThreadStatusTone,
 } from "./workbench-thread-status-colors";
-import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, ProposedCommitThreadIcon, StoppedThreadIcon, WorkingThreadIcon } from "./workbench-icons";
+import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, ProposedCommitThreadIcon, StoppedThreadIcon, WorkingThreadIcon, type IconProps } from "./workbench-icons";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import Draggable from "./drag/Draggable";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
@@ -41,7 +41,7 @@ function boundedFolderError(error: unknown) {
 }
 
 type FolderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> | WorkbenchPinnedThreadSummaryEntry;
-type FolderStatusIcon = ComponentType<{ className?: string }>;
+type FolderStatusIcon = ComponentType<IconProps>;
 
 function folderStatusRank(entry: FolderEntry) {
   if (entry.entryKind === "draft") return 5;
@@ -232,12 +232,12 @@ export default function WorkbenchThreadFolder({
     <WorkbenchThreadListFullRowContent
       action={errorLabel}
       eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
-      statusIcon={<StatusIcon className={`size-3.5 ${status.statusClassName}`} />}
+      statusIcon={<StatusIcon className={status.statusClassName} size={14} />}
       statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
       timestamp={<time dateTime={latestTimestamp.toISOString()} title={latestTimestamp.toLocaleString()}>{formatThreadRelativeTimestamp(latestActivityAt / 1000, nowMs)}</time>}
       title={(
         <span className="flex min-w-0 items-center gap-1.5">
-          {open ? <FolderOpenIcon className="size-3.5 shrink-0" /> : <FolderClosedIcon className="size-3.5 shrink-0" />}
+          {open ? <FolderOpenIcon className="shrink-0" size={14} /> : <FolderClosedIcon className="shrink-0" size={14} />}
           {titleInput}
         </span>
       )}
@@ -248,7 +248,7 @@ export default function WorkbenchThreadFolder({
       <div className="min-w-0">
         {project ? fullSummary : open ? (
           <div className="grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-[var(--thread-context-menu-row-padding-right,0.5rem)] pl-2 md:min-h-0">
-            <FolderOpenIcon className="mr-1.5 size-3.5 shrink-0" />
+            <FolderOpenIcon className="mr-1.5 shrink-0" size={14} />
             {titleInput}
             {errorLabel}
           </div>

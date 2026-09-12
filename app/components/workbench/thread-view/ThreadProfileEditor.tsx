@@ -100,7 +100,7 @@ export default function ThreadProfileEditor ({
         `}
         onClick={() => controller.disclose(section, !active)}
       >
-        <ChevronIcon className={`size-4 shrink-0 transition-transform ${active ? "rotate-90" : ""}`} />
+        <ChevronIcon className={`shrink-0 transition-transform ${active ? "" : "-rotate-90"}`} size={16} />
         <span className="shrink-0">{title}</span>
         <span className={`
           ml-auto truncate text-text
@@ -132,7 +132,7 @@ export default function ThreadProfileEditor ({
         actions={refresh ? [{
           label: refresh.label,
           disabled: refresh.loading,
-          icon: <span className={refresh.loading ? "inline-flex animate-spin [animation-direction:reverse]" : "inline-flex"}><ReloadIcon /></span>,
+          icon: <span className={refresh.loading ? "inline-flex animate-spin [animation-direction:reverse]" : "inline-flex"}><ReloadIcon size={20} /></span>,
           onClick: refresh.run,
         }] : []}
       />
@@ -181,7 +181,7 @@ export default function ThreadProfileEditor ({
           aria-pressed={settings.serviceTier === "fast"}
           className={`row-span-2 self-center ml-auto ${settings.serviceTier === "fast" ? "text-text" : ""}`}
           onClick={() => update({ serviceTier: settings.serviceTier === "fast" ? null : "fast" })}
-        ><ZapIcon /></WorkbenchIconButton> : null}
+        ><ZapIcon size={16} /></WorkbenchIconButton> : null}
         {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
           <span className="text-muted">Context</span>
           <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={capability.defaultTokens} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />

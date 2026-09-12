@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGoalControl: render the Codex goal flag, objective card, compact editor, and clear confirmation around an agent-tab row. Keywords: thread, goal, flag, editor, clear.
+ * - default ThreadGoalControl: render the Codex goal flag, objective card, compact editor, and clear confirmation around an agent-tab row.
  */
 "use client";
 
@@ -133,7 +133,7 @@ export default function ThreadGoalControl ({
           title={isOpen ? "Hide thread goal" : "Show thread goal"}
           onClick={() => setIsOpen((current) => !current)}
         >
-          <FlagIcon className="size-4" />
+          <FlagIcon size={16} />
         </button>
         {children ? <span className="text-[0.84em] text-muted" aria-hidden="true">|</span> : null}
         {children}

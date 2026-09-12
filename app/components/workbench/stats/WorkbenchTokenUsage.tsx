@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchTokenUsage: render shared selected categories on independent scales. Keywords: stats, tokens, chart.
+ * - default WorkbenchTokenUsage: render shared selected categories on independent scales.
  */
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { STATS_TOKEN_TYPES, type StatsTokenType } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -30,7 +30,7 @@ export default function WorkbenchTokenUsage({ stats, selected = STATS_TOKEN_TYPE
         series={shown.map(({ colourClassName, label, count, Icon }) => ({
           colourClassName,
           label,
-          icon: <Icon className="size-3.5" />,
+          icon: <Icon size={14} />,
           summary: stats ? compactNumber(count(stats.tokens.totals)) : "",
           values: stats?.tokens.buckets.map(count) ?? [],
         }))}

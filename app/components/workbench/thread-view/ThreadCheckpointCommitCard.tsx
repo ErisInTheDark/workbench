@@ -152,13 +152,13 @@ export default function ThreadCheckpointCommitCard({
           : "mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted"}
           aria-hidden="true"
         >
-          <GitArcIcon action="propose" className="size-5" />
+          <GitArcIcon action="propose" size={20} />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 items-start gap-1">
             {titleWillChange ? (
               <span aria-label="Commit title differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
-                <AsteriskIcon className="size-3.5" />
+                <AsteriskIcon size={14} />
               </span>
             ) : null}
             <div className="min-w-0 flex-1">
@@ -183,7 +183,7 @@ export default function ThreadCheckpointCommitCard({
             <div className="flex min-w-0 items-start gap-1">
               {descriptionWillChange ? (
                 <span aria-label="Commit description differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
-                  <AsteriskIcon className="size-3.5" />
+                  <AsteriskIcon size={14} />
                 </span>
               ) : null}
               <div className="min-w-0 flex-1">
@@ -262,13 +262,13 @@ export default function ThreadCheckpointCommitCard({
                     options={[
                       {
                         ariaLabel: "Amend",
-                        icon: <AsteriskIcon className="size-3.5" />,
+                        icon: <AsteriskIcon size={14} />,
                         label: "Amend",
                         value: "amend",
                       },
                       {
                         ariaLabel: "Commit fresh",
-                        icon: <PlusIcon className="size-3.5" />,
+                        icon: <PlusIcon size={14} />,
                         label: "Commit fresh",
                         value: "commit",
                       },
@@ -282,7 +282,7 @@ export default function ThreadCheckpointCommitCard({
                   </PrimaryButton>
                 ) : proposal?.status === "committed" ? (
                   <span className="inline-flex items-center gap-2 text-[0.78em] text-muted">
-                    <CheckIcon className="size-4 text-[color:var(--success)]" />
+                    <CheckIcon className="text-[color:var(--success)]" size={16} />
                     <span>Committed</span>
                     {proposal.committedSha ? <span className="font-mono text-text">{proposal.committedSha.slice(0, 8)}</span> : null}
                   </span>
@@ -293,7 +293,7 @@ export default function ThreadCheckpointCommitCard({
                     className="inline-flex items-center gap-2 text-[0.78em] text-muted"
                     data-thread-checkpoint-committed-outside-proposal="true"
                   >
-                    <CheckIcon className="size-4 text-[color:var(--success)]" />
+                    <CheckIcon className="text-[color:var(--success)]" size={16} />
                     <span>Committed outside proposal</span>
                   </span>
                 ) : proposal?.status === "unavailable" ? (

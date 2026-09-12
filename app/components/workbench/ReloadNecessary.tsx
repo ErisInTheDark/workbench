@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ReloadNecessary: render runtime reload controls with a separate stale-tab footer action. Keywords: reload, dirt, stale tab, sidebar, footer, hold.
+ * - default ReloadNecessary: render runtime reload controls with a separate stale-tab footer action.
  */
 "use client";
 
@@ -93,7 +93,7 @@ export default function ReloadNecessary ({
               title={collapsed ? "Expand reload controls" : "Collapse reload controls"}
               type="button"
             >
-              <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
+              <ChevronIcon className={`transition-transform ${collapsed ? "rotate-180" : ""}`} size={16} />
             </button>
           ) : <span aria-hidden="true" className="size-8" />}
           <p className="m-0 min-w-0 truncate font-semibold text-text">

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStatusCounts: render compact shared lifecycle counts and own canonical status metadata plus count helpers. Keywords: thread, status, counts, summary, aggregate, pinned.
+ * - default WorkbenchThreadStatusCounts: render compact shared lifecycle counts and own canonical status metadata plus count helpers.
  */
 
 import type { ComponentType } from "react";
@@ -17,9 +17,10 @@ import {
   ProposedCommitThreadIcon,
   StoppedThreadIcon,
   WorkingThreadIcon,
+  type IconProps,
 } from "./workbench-icons";
 
-type StatusIcon = ComponentType<{ className?: string }>;
+type StatusIcon = ComponentType<IconProps>;
 interface WorkbenchThreadStatusItem {
   dashed: boolean;
   Icon: StatusIcon;
@@ -109,7 +110,7 @@ const WorkbenchThreadStatusCounts = Object.assign(function WorkbenchThreadStatus
           key={key}
           title={`${label}: ${counts[key]}`}
         >
-          <Icon className="size-3.5 shrink-0" />
+          <Icon className="shrink-0" size={14} />
           <span>{counts[key]}</span>
         </span>
       )] : [])}

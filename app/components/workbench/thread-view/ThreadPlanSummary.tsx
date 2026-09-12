@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadPlanSummary: render a plan disclosure label with a source-markdown copy action. Keywords: thread, plan, summary, copy, clipboard.
+ * - default ThreadPlanSummary: render a plan disclosure label with a source-markdown copy action.
  */
 "use client";
 
@@ -70,7 +70,7 @@ export default function ThreadPlanSummary ({ markdown }: { markdown: string }) {
         title={copyButtonLabel}
         type="button"
       >
-        {copyState === "copied" ? <CheckIcon className="size-[1.2rem]" /> : <CopyIcon className="size-[1.2rem]" />}
+        {copyState === "copied" ? <CheckIcon size={20} /> : <CopyIcon size={20} />}
       </button>
     </div>
   );

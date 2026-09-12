@@ -123,7 +123,7 @@ export default function ThreadGitArcItem ({
           onClick={proposalRedirect.onActivate}
           type="button"
         >
-          <GitArcIcon action="propose" />
+          <GitArcIcon action="propose" size={16} />
           <span>Proposed</span>
           <span className="min-w-0 truncate font-medium text-text">{proposalRedirect.title.trim() || "Commit proposal"}</span>
           <span className="shrink-0 font-mono text-[0.86em] text-muted">{proposalRedirect.proposalId.slice(0, 8)}</span>
@@ -223,7 +223,7 @@ export default function ThreadGitArcItem ({
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
         defaultOpen={commandIntent.action !== "compare" && commandIntent.action !== "diff"}
-        leading={<GitArcIcon action={commandIntent.action} />}
+        leading={<GitArcIcon action={commandIntent.action} size={16} />}
         leadingLabel={`${commandIntent.action} git arc`}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">

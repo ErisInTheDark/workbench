@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadNotice: render one titled agent-authored notice with Markdown body content. Keywords: thread, markdown, notice, callout, color.
+ * - default ThreadNotice: render one titled agent-authored notice with Markdown body content.
  */
 
 import type { ReactNode } from "react";
@@ -39,7 +39,7 @@ export default function ThreadNotice ({ bodyMarkdown, children, color, source, t
         data-thread-notice-title="true"
       >
         <span className="inline-flex shrink-0" data-thread-notice-icon="alert">
-          <CircleAlertIcon className="size-[1em]" />
+          <CircleAlertIcon size={16} />
         </span>
         <span>{title}</span>
       </div>

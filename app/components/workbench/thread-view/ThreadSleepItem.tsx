@@ -1,5 +1,4 @@
 /*
- * Keywords: generic item, sleep, countdown, clock, cleanup.
  * Exports:
  * - default ThreadSleepItem: render a sleep countdown using existing item lifecycle timing.
  */
@@ -37,7 +36,7 @@ export default function ThreadSleepItem({
 
   return (
     <ThreadDisclosureStaticRow
-      marker={<SnoozedThreadIcon className="size-4" />}
+      marker={<SnoozedThreadIcon size={16} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
       summary={<ThreadSummaryText text={`${display.completed ? "Slept" : "Sleeping"} for ${display.seconds}s`} />}
     />

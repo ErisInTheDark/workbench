@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default ThreadGitArcMoveList: render clickable source-to-destination rows for Git arc move previews and results. Keywords: thread, git, arc, move, file list.
+ * - default ThreadGitArcMoveList: render clickable source-to-destination rows for Git arc move previews and results.
  */
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import ProjectFilePath from "../ProjectFilePath";
+import { ArrowRightIcon } from "../workbench-icons";
 
 export default function ThreadGitArcMoveList({
   mappings,
@@ -27,10 +28,7 @@ export default function ThreadGitArcMoveList({
       {displayMappings.map(({ destination, source }) => (
         <div className="flex min-w-0 items-center gap-1.5 py-0.5 pl-6 text-[0.86em] leading-[1.5] text-muted" key={`${source}\0${destination}`}>
           <ProjectFilePath className="min-w-0 max-w-[45%] shrink align-baseline text-[0.9em]" disambiguationPaths={moveDisambiguationPaths} path={source} projectId={projectId} />
-          <svg aria-hidden="true" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
-            <path d="M5 12h14" />
-            <path d="m12 5 7 7-7 7" />
-          </svg>
+          <ArrowRightIcon className="shrink-0" size={14} />
           <ProjectFilePath className="min-w-0 max-w-[45%] shrink align-baseline text-[0.9em]" disambiguationPaths={moveDisambiguationPaths} path={destination} projectId={projectId} />
         </div>
       ))}

@@ -105,7 +105,7 @@ export default function CodexSandboxNetworkSetting ({
             update(null);
           }}
         >
-          <ReloadIcon />
+          <ReloadIcon size={20} />
         </WorkbenchIconButton>
       ) : null}
       {error ? (

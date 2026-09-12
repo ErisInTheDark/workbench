@@ -32,7 +32,7 @@ export default function WorkbenchZoomButton({
     value={value}
     format={format}
     colour={() => "color-mix(in srgb, var(--text) 22%, var(--bg))"}
-    icon={<ZoomInIcon />}
+    icon={<ZoomInIcon size={20} />}
     side="below"
     onChange={onChange}
     onPreview={onPreview}

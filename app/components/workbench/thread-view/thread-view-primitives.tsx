@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling. Keywords: workbench, thread, text.
- * - ThreadCommandSummary: render the compact command summary label used in thread turns. Keywords: workbench, thread, command.
+ * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling.
+ * - ThreadCommandSummary: render the compact command summary label used in thread turns.
  */
 "use client";
 
@@ -13,6 +13,7 @@ import type {
 } from "../../../workbench/thread/thread-command-matchers";
 
 import ProjectFilePath from "../ProjectFilePath";
+import { ArrowRightIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -132,22 +133,6 @@ export function ThreadTextBlock ({
   );
 }
 
-function ThreadCommandStageArrowIcon () {
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      aria-hidden="true"
-      className="size-5.5 shrink-0 opacity-30"
-    >
-      <path d="M3.75 10H14.25" strokeLinecap="round" />
-      <path d="M10.75 6L14.75 10L10.75 14" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function splitCommandSummaryStages (parts: ThreadCommandDisplayPart[]) {
   const stages: ThreadCommandDisplayPart[][] = [[]];
 
@@ -250,7 +235,7 @@ export function ThreadCommandSummary ({
               key={`stage:${index}`}
               className="inline-flex min-w-0 max-w-full items-center gap-[0.3rem]"
             >
-              <ThreadCommandStageArrowIcon />
+              <ArrowRightIcon className="shrink-0 opacity-30" size={22} />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
                 <ThreadCommandStageParts parts={stage} projectFilePaths={projectFilePaths} projectId={projectId} />
               </span>

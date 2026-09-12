@@ -1,7 +1,6 @@
 /*
- * Keywords: thread, context, last-reported usage, compact.
  * Exports:
- * - default ThreadContextStatus: render context-window usage and Codex compact action beside composer quota stats. Keywords: thread, context, compact, usage.
+ * - default ThreadContextStatus: render context-window usage and Codex compact action beside composer quota stats.
  */
 "use client";
 
@@ -9,6 +8,7 @@ import { useState } from "react";
 
 import type { ThreadPayload } from "workbench-shared/types";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
+import { CompactIcon } from "../workbench-icons";
 
 function formatTokenCount (value: number) {
   return new Intl.NumberFormat([], {
@@ -38,15 +38,6 @@ function formatContextStatusTitle ({
 
 function isThreadActive (thread: ThreadPayload) {
   return thread.status === "active" || thread.status.startsWith("active:");
-}
-
-function CompactIcon () {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-      <path d="M4.25 5.75h11.5M6.5 9.75h7M8.25 13.75h3.5" strokeLinecap="round" />
-      <path d="M5.5 3.5h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" strokeLinejoin="round" />
-    </svg>
-  );
 }
 
 export default function ThreadContextStatus ({
@@ -117,7 +108,7 @@ export default function ThreadContextStatus ({
                 });
             }}
           >
-            <CompactIcon />
+            <CompactIcon size={16} />
             <span>{isCompacting ? "Compacting" : "Compact"}</span>
           </button>
         ) : null}

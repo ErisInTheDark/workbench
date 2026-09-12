@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchSidebarSectionDisclosure: render the canonical icon, title, action, and chevron summary for every top-level Workbench sidebar section. Keywords: sidebar, section, disclosure, chevron, icon.
+ * - default WorkbenchSidebarSectionDisclosure: render the canonical icon, title, action, and chevron summary for every top-level Workbench sidebar section.
  */
 "use client";
 
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import type { IconProps } from "./workbench-icons";
 import {
   useWorkbenchSidebarPreferences,
   type WorkbenchSidebarDisclosurePreferenceKey,
@@ -17,7 +18,7 @@ type WorkbenchSidebarSectionDisclosureProps = Omit<
   "defaultOpen" | "initialOpen" | "leading" | "onToggle" | "open" | "summary"
 > & {
   actions?: ReactNode;
-  icon: ComponentType<{ className?: string }>;
+  icon: ComponentType<IconProps>;
   preferenceKey: WorkbenchSidebarDisclosurePreferenceKey;
   title: ReactNode;
 };
@@ -38,7 +39,7 @@ export default function WorkbenchSidebarSectionDisclosure({
     <ThreadDisclosure
       className={disclosureClassName}
       compactSummary
-      leading={<Icon className="size-4" />}
+      leading={<Icon size={16} />}
       onToggle={(event) => setDisclosureOpen(preferenceKey, event.currentTarget.open)}
       open={preferences[preferenceKey]}
       summary={(

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadClaimedFileList: render static planned, claimed, or attempted Git arc path rows with optional failure tone. Keywords: thread, git, arc, plan, claim, file list, danger.
+ * - default ThreadClaimedFileList: render static planned, claimed, or attempted Git arc path rows with optional failure tone.
  */
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isProjectDirectoryPath } from "../../../workbench/project/project-file-path";
@@ -40,7 +40,7 @@ export default function ThreadClaimedFileList({
             key={filePath}
           >
             <span className="-mt-0.5 inline-flex shrink-0 self-center" aria-hidden="true">
-              {marker === "planned" ? <GitArcPlannedClaimIcon /> : <GitArcClaimIcon />}
+              {marker === "planned" ? <GitArcPlannedClaimIcon size={20} /> : <GitArcClaimIcon size={20} />}
             </span>
             <ThreadSummaryText text={label} />
             <ProjectFilePath className="min-w-0 max-w-full shrink align-baseline text-[0.9em]" disambiguationPaths={projectFilePaths} path={displayPath} projectId={projectId} targetType={targetType} />

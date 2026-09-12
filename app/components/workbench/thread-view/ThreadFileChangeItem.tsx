@@ -1,11 +1,10 @@
 /*
- * Keywords: file change, partial application, observed counts, attempted diff.
  * Exports:
- * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs. Keywords: workbench, thread, file change, diff.
- * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes. Keywords: workbench, thread, file change, diff list.
- * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts. Keywords: workbench, thread, file change, totals.
+ * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs.
+ * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
+ * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
- * - Local helpers: format paths, summary labels, lifecycle rows, and change totals for thread file changes. Keywords: additions, deletions, status, path display.
+ * - Local helpers: format paths, summary labels, lifecycle rows, and change totals for thread file changes.
  */
 "use client";
 
@@ -104,14 +103,14 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
       return {
         completedLabel: "Created",
         failureVerb: "create",
-        icon: <FileAddIcon className="size-5" />,
+        icon: <FileAddIcon size={20} />,
         inProgressLabel: "Creating",
       };
     case "delete":
       return {
         completedLabel: "Deleted",
         failureVerb: "delete",
-        icon: <FileDeleteIcon className="size-5" />,
+        icon: <FileDeleteIcon size={20} />,
         inProgressLabel: "Deleting",
       };
     case "update":
@@ -119,13 +118,13 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
         ? {
           completedLabel: "Moved",
           failureVerb: "move",
-          icon: <FileMoveIcon className="size-5" />,
+          icon: <FileMoveIcon size={20} />,
           inProgressLabel: "Moving",
         }
         : {
           completedLabel: "Edited",
           failureVerb: "edit",
-          icon: <FileUpdateIcon className="size-5" />,
+          icon: <FileUpdateIcon size={20} />,
           inProgressLabel: "Editing",
         };
     default:

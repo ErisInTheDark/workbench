@@ -1263,7 +1263,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     id: `browse-session:${session.name}`,
     items: [
       {
-        icon: <CopyIcon className="size-4" />,
+        icon: <CopyIcon size={16} />,
         id: "copy-session",
         label: "Copy session name",
         onSelect: () => {
@@ -1271,7 +1271,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
       },
       {
-        icon: <StopIcon className="size-4" />,
+        icon: <StopIcon size={16} />,
         id: "stop-session",
         label: "Stop session",
         onSelect: () => {
@@ -1279,7 +1279,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
       },
       {
-        icon: <StopIcon className="size-4" />,
+        icon: <StopIcon size={16} />,
         id: "force-stop-session",
         label: "Force stop session",
         onSelect: () => {
@@ -1288,7 +1288,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         tone: "danger",
       },
       {
-        icon: <ArchiveIcon className="size-4" />,
+        icon: <ArchiveIcon size={16} />,
         id: "forget-session",
         label: "Forget record",
         onSelect: () => {
@@ -2101,7 +2101,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     id: `project-entry:${node.type}:${node.path}`,
     items: [
       {
-        icon: <ExternalLinkIcon className="size-4" />,
+        icon: <ExternalLinkIcon size={16} />,
         id: "reveal",
         label: "Show in File Explorer",
         onSelect: () => {
@@ -2109,7 +2109,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
       },
       ...(node.type === "file" ? [{
-        icon: <BinIcon />,
+        icon: <BinIcon size={20} />,
         id: "delete",
         label: "Delete file",
         onSelect: () => {
@@ -2467,7 +2467,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 resetProjectSettingOverride(key);
               }}
             >
-              <ReloadIcon />
+              <ReloadIcon size={20} />
             </WorkbenchIconButton>
           ) : null}
         </section>
@@ -2494,7 +2494,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 resetProjectSettingOverride(key);
               }}
             >
-              <ReloadIcon />
+              <ReloadIcon size={20} />
             </WorkbenchIconButton>
           ) : null}
         </div>
@@ -2578,7 +2578,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   setSidebarCollapsed(false);
                 }}
               >
-                <SidebarExpandIcon />
+                <SidebarExpandIcon size={20} />
                 <span className="sr-only">Show sidebar</span>
               </WorkbenchIconButton>
               {showMosaicView ? (
@@ -2598,7 +2598,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     });
                   }}
                 >
-                  <SparkleIcon className="size-5" />
+                  <SparkleIcon size={20} />
                   <span className="sr-only">Drag to create a new thread panel</span>
                 </WorkbenchIconButton>
               ) : null}
@@ -2625,7 +2625,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     }}
                     title="Open home"
                   >
-                    <HomeIcon />
+                    <HomeIcon size={20} />
                     <span className="sr-only">Open home</span>
                   </WorkbenchIconButton>
                   <WorkbenchIconButton
@@ -2636,7 +2636,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onClick={(event) => openStatsScopeFromLink(event, activeProjectId)}
                     title="Open statistics"
                   >
-                    <StatsIcon />
+                    <StatsIcon size={20} />
                     <span className="sr-only">Open statistics</span>
                   </WorkbenchIconButton>
                   <WorkbenchIconButton
@@ -2647,7 +2647,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onClick={openSettingsFromLink}
                     title="Open settings"
                   >
-                    <GearIcon />
+                    <GearIcon size={20} />
                     <span className="sr-only">Open settings</span>
                   </WorkbenchIconButton>
                   {usesDesktopSidebarCollapse ? (
@@ -2659,7 +2659,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       title="Hide sidebar"
                       type="button"
                     >
-                      <SidebarCollapseIcon />
+                      <SidebarCollapseIcon size={20} />
                       <span className="sr-only">Hide sidebar</span>
                     </WorkbenchIconButton>
                   ) : null}
@@ -2761,7 +2761,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                               openCreateDialog("");
                             }}
                           >
-                            <NewEntryIcon />
+                            <NewEntryIcon size={16} />
                             <span className="sr-only">Create in project</span>
                           </WorkbenchIconButton>
                         </div>
@@ -2912,7 +2912,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
                       }}
                     >
-                      <BackArrowIcon />
+                      <BackArrowIcon size={20} />
                       <span className="sr-only">Back to file explorer</span>
                     </WorkbenchIconButton>
                     <div className="flex items-center gap-1.5">
@@ -2937,7 +2937,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         display="hover-border"
                         data-invalid="false"
                       >
-                        <SaveIcon />
+                        <SaveIcon size={20} />
                         <span className="sr-only">Save current file</span>
                       </WorkbenchIconButton>
                       <WorkbenchIconButton
@@ -2948,7 +2948,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         label="Discard the current draft"
                         display="hover-border"
                       >
-                        <BinIcon />
+                        <BinIcon size={20} />
                         <span className="sr-only">Discard the current draft</span>
                       </WorkbenchIconButton>
                     </div>

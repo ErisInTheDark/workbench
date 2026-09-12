@@ -42,6 +42,7 @@ import {
   StoppedThreadIcon,
   UnsnoozeThreadIcon,
   WorkingThreadIcon,
+  type IconProps,
 } from "./workbench-icons";
 import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPresenceProvider";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
@@ -51,7 +52,7 @@ import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
 import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions";
 
 type ThreadAction = ThreadRowAction;
-type ThreadStatusIcon = ComponentType<{ className?: string }>;
+type ThreadStatusIcon = ComponentType<IconProps>;
 const THREAD_ACTIONS: Record<ThreadAction, { Icon: ThreadStatusIcon; label: string }> = {
   archive: { Icon: ArchiveIcon, label: "Archive" },
   complete: { Icon: SettleThreadIcon, label: "Completed" },
@@ -106,17 +107,17 @@ function ThreadTooltipContent({
       <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
       {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
       <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-muted">
-        <Icon className={`size-3.5 shrink-0 ${statusClassName}`} />
+        <Icon className={`shrink-0 ${statusClassName}`} size={14} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
         <span className="ml-auto" />
-        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon className="size-3.5" /></span> : null}
+        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon size={14} /></span> : null}
         <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
       </div>
       {extraDetails}
       {claimedPaths.length ? (
         <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2">
           <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
-            <FlagIcon className="size-3.5" />
+            <FlagIcon size={14} />
           </span>
           {claimedPaths.map((filePath) => (
             <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />
@@ -277,7 +278,7 @@ export default function WorkbenchThreadListItem({
       }}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <MoreVerticalIcon className="size-5" />
+      <MoreVerticalIcon size={20} />
     </button>
   ) : null;
   return (
@@ -331,10 +332,10 @@ export default function WorkbenchThreadListItem({
           className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-[var(--thread-context-menu-row-padding-right,0.5rem)] pl-2 md:min-h-0"
           data-thread-context-menu-content={contextMenu ? "true" : undefined}
         >
-          <Icon className={`mr-1.5 size-3.5 ${statusClassName}`} />
+          <Icon className={`mr-1.5 ${statusClassName}`} size={14} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
           <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon className="size-3.5" /></span> : null}
+            {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null}
             <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
           </span>
           {actionButton}
@@ -350,7 +351,7 @@ export default function WorkbenchThreadListItem({
                   data-thread-priority={priority}
                   className={`col-start-2 row-start-1 inline-flex size-4 shrink-0 items-center justify-center self-center${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:hidden group-has-[:focus-visible]/thread-row:hidden" : ""}`}
                 >
-                  <PriorityIcon className="size-3.5" />
+                  <PriorityIcon size={14} />
                 </span>
               ) : null}
               {actionButton}
@@ -361,15 +362,15 @@ export default function WorkbenchThreadListItem({
           metadata={(
             <span className="grid items-center">
               {claimedFileCount ? (
-                <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span>
+                <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon size={14} /><span>{claimedFileCount}</span></span>
               ) : showComposerDraft ? (
                 <span data-role="thread-composer-draft" className="inline-flex size-4 items-center justify-center" title="Unsent draft">
-                  <ComposerDraftIcon className="size-3.5" />
+                  <ComposerDraftIcon size={14} />
                 </span>
               ) : null}
             </span>
           )}
-          statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}
+          statusIcon={<Icon className={statusClassName} size={14} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
           timestamp={<time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
           title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>}

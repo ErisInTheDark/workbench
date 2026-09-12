@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback. Keywords: bubble, copy, clipboard, markdown.
+ * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback.
  */
 "use client";
 
@@ -72,13 +72,13 @@ export default function ThreadBubbleCopyButton({
         title="Copy message"
       >
         <span className="block group-data-[thread-bubble-copy-state=copied]:hidden group-data-[thread-bubble-copy-state=failed]:hidden">
-          <CopyIcon className="size-4" />
+          <CopyIcon size={16} />
         </span>
         <span className="hidden group-data-[thread-bubble-copy-state=copied]:block">
-          <CheckIcon className="size-4" />
+          <CheckIcon size={16} />
         </span>
         <span className="hidden group-data-[thread-bubble-copy-state=failed]:block">
-          <WarningIcon className="size-4" />
+          <WarningIcon size={16} />
         </span>
       </button>
     </div>

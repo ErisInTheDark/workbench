@@ -297,7 +297,8 @@ function renderThreadListItem (
           <span className="min-w-0">{content.length ? content : <br />}</span>
           <ChevronIcon
             data-thread-chevron
-            className="ml-[0.12em] size-[1.2em] transition-transform"
+            className="ml-[0.12em] transition-transform"
+            size={20}
           />
         </summary>
         {childContent}
@@ -623,10 +624,10 @@ function renderThreadBlock (
                 title="Copy code block"
               >
                 <span className="block group-data-[thread-codeblock-copy-state=copied]:hidden" data-thread-codeblock-copy-icon="copy">
-                  <CopyIcon />
+                  <CopyIcon size={16} />
                 </span>
                 <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
-                  <CheckIcon />
+                  <CheckIcon size={16} />
                 </span>
               </WorkbenchIconButton>
               {isSvgCodeBlock ? (
@@ -641,7 +642,7 @@ function renderThreadBlock (
                   data-thread-codeblock-toggle-state="idle"
                   title="Preview SVG code block"
                 >
-                  <PreviewIcon />
+                  <PreviewIcon size={16} />
                 </WorkbenchIconButton>
               ) : null}
               <WorkbenchIconButton
@@ -655,7 +656,7 @@ function renderThreadBlock (
                 data-thread-codeblock-wrap-toggle="true"
                 title="Toggle code block line wrapping"
               >
-                <WrapTextIcon />
+                <WrapTextIcon size={16} />
               </WorkbenchIconButton>
             </div>
           </div>

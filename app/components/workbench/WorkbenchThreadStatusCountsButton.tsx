@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStatusCountsButton: render the canonical full-counts to grey-Working-icon toggle used by sidebar disclosure summaries. Keywords: thread, status, counts, button, collapse, sidebar.
+ * - default WorkbenchThreadStatusCountsButton: render the canonical full-counts to grey-Working-icon toggle used by sidebar disclosure summaries.
  */
 "use client";
 
@@ -37,7 +37,7 @@ export default function WorkbenchThreadStatusCountsButton({
     >
       {showStatuses
         ? <WorkbenchThreadStatusCounts counts={counts} />
-        : <WorkingThreadIcon className="size-3.5 text-muted" />}
+        : <WorkingThreadIcon className="text-muted" size={14} />}
     </button>
   );
 }

@@ -1,5 +1,4 @@
 /*
- * Keywords: stats, token selection, shared checkbox.
  * Exports:
  * - default WorkbenchTokenTypeControls: controlled global usage-category selection.
  */
@@ -19,7 +18,7 @@ export default function WorkbenchTokenTypeControls ({ selected, onChange, disabl
           checked={selected.includes(key)}
           disabled={disabled}
           key={key}
-          label={<span className={`inline-flex items-center gap-1.5 align-middle font-bold [--hue-chroma:50%] ${colourClassName}`}><Icon className="block size-4 shrink-0" />{label}</span>}
+          label={<span className={`inline-flex items-center gap-1.5 align-middle font-bold [--hue-chroma:50%] ${colourClassName}`}><Icon className="block shrink-0" size={16} />{label}</span>}
           onChange={(checked) => onChange(STATS_TOKEN_TYPES.filter((type) => type === key ? checked : selected.includes(type)))}
         />
       ))}

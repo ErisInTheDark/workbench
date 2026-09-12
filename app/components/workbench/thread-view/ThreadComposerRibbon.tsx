@@ -91,7 +91,7 @@ export default function ThreadComposerRibbon({
             title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
             onClick={onFastModeToggle}
           >
-            <ZapIcon className="size-4.5" />
+            <ZapIcon size={18} />
           </button>
         </>
       ) : null}

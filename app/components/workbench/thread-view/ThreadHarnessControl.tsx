@@ -17,7 +17,7 @@ export default function ThreadHarnessControl({ canToggle = false, harness, onTog
 }) {
   const label = formatHarnessLabel(harness);
   const inlineIdentity = inline && !canToggle;
-  const content = <><HarnessIcon className={inlineIdentity ? "size-[1em] shrink-0 self-center" : "size-4"} harness={harness} /><span>{label}</span></>;
+  const content = <><HarnessIcon className={inlineIdentity ? "shrink-0 self-center" : undefined} harness={harness} size={16} /><span>{label}</span></>;
   return canToggle ? (
     <WorkbenchRotatorButton
       ariaLabel={`Current harness: ${label}. Click to use the next harness.`}

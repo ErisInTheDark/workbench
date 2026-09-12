@@ -247,7 +247,7 @@ export default function StickyCollapsibleSurface({
                       title={collapseControlLabel}
                       type="button"
                     >
-                      <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
+                      <ChevronIcon className={`transition-transform ${collapsed ? "rotate-180" : ""}`} size={16} />
                     </button>
                   </div>
                   <div className="min-w-0">{children}</div>
@@ -263,7 +263,7 @@ export default function StickyCollapsibleSurface({
                   tabIndex={0}
                 >
                   <span className="sticky-collapsible-collapsed-chevron" aria-hidden="true">
-                    <ChevronIcon className="size-4 -rotate-90" />
+                    <ChevronIcon className="rotate-180" size={16} />
                   </span>
                   <span className="sticky-collapsible-collapsed-text" data-preview-kind={collapsedPreviewKind}>
                     {collapsedContent}
