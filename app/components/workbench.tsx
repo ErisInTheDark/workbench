@@ -22,29 +22,13 @@ import type {
     WorkbenchProjectOption,
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
-import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
-import { writeTextToClipboard } from "../workbench/dom/clipboard";
-import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
+import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
 import WorkbenchMainLayout, {
     type WorkbenchDropPlacement,
     type WorkbenchMainLayout as WorkbenchMainLayoutState,
     type WorkbenchPanelTarget,
 } from "workbench-shared/workbench/layout/workbench-layout";
-import {
-    applyWorkbenchMosaicDrop,
-    applyWorkbenchMosaicResize,
-    closeWorkbenchMosaicTarget,
-    createWorkbenchMainLayoutFromMosaic,
-    moveWorkbenchMosaicTarget,
-    replaceWorkbenchMosaicTarget,
-    updateWorkbenchMosaicPanelOptions,
-} from "../workbench/layout/workbench-mosaic-layout";
-import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
-import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
-import { useWorkbenchRoute } from "../workbench/navigation/use-workbench-route";
 import {
     createWorkbenchMosaicSplit,
     createWorkbenchMosaicTarget,
@@ -76,7 +60,35 @@ import {
     type WorkbenchSettingsScope
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
+import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
+import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
+import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
+import { writeTextToClipboard } from "../workbench/dom/clipboard";
+import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
+import {
+    applyWorkbenchMosaicDrop,
+    applyWorkbenchMosaicResize,
+    closeWorkbenchMosaicTarget,
+    createWorkbenchMainLayoutFromMosaic,
+    moveWorkbenchMosaicTarget,
+    replaceWorkbenchMosaicTarget,
+    updateWorkbenchMosaicPanelOptions,
+} from "../workbench/layout/workbench-mosaic-layout";
+import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
+import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
+import { useWorkbenchRoute } from "../workbench/navigation/use-workbench-route";
+import {
+    handleWorkbenchActionShortcut,
+    runWorkbenchAction,
+    type WorkbenchActionContext,
+} from "../workbench/search/workbench-action-registry";
+import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
+import {
+    clearComposerDraft, saveComposerDraft, sidebarDraftToInput,
+    type ComposerDraftTarget,
+} from "../workbench/state/draft-persistence";
 import {
     getPreferredMobilePane,
     MOBILE_MEDIA_QUERY,
@@ -99,12 +111,6 @@ import {
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
-import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
-import {
-  clearComposerDraft, saveComposerDraft, sidebarDraftToInput,
-  type ComposerDraftTarget,
-} from "../workbench/state/draft-persistence";
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
 import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
@@ -112,25 +118,29 @@ import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
-import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
-import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
-import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import {
+    useWorkbenchClientMount,
+    useWorkbenchProjectThreadSidebar,
+    useWorkbenchProjectThreadSidebars,
+    useWorkbenchProjectThreadSummaries,
+    useWorkbenchThreads,
+} from "./workbench/use-workbench-client";
+import {
     workbenchFloatingToolbarClassName,
     workbenchFloatingToolbarGroupClassName,
+    workbenchNewEntryButtonClassName,
     workbenchOptionHoverClassName,
     workbenchOptionRowClassName,
     workbenchRevisionActionButtonClassName,
-    workbenchNewEntryButtonClassName,
     workbenchRevisionHoverToolbarClassName
 } from "./workbench/workbench-class-names";
 import {
@@ -170,31 +180,19 @@ import {
 import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
-import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
-import {
-    useWorkbenchClientMount,
-    useWorkbenchProjectThreadSidebar,
-    useWorkbenchProjectThreadSidebars,
-    useWorkbenchProjectThreadSummaries,
-    useWorkbenchThreads,
-} from "./workbench/use-workbench-client";
+import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
-import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
-import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
-import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
-import {
-    handleWorkbenchActionShortcut,
-    runWorkbenchAction,
-    type WorkbenchActionContext,
-} from "../workbench/search/workbench-action-registry";
+import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchReactDevelopmentModeSetting from "./workbench/WorkbenchReactDevelopmentModeSetting";
+import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
+import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
@@ -202,6 +200,7 @@ import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/Workbe
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
+import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
 
@@ -2609,9 +2608,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
             style={mobileTrackStyle}
           >
-            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden py-3 pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
-                <DropTargetBoundary className="explorer-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pr-2">
+                        <DropTargetBoundary className="explorer-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto py-3 pr-2">
                 <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <WorkbenchIconButton
