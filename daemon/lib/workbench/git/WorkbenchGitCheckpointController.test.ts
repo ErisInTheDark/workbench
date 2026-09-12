@@ -1,11 +1,9 @@
-/*
- * Exports: none. Protect arc ownership, scoped drift, proposals and atomic publication with real repositories.
- */
+/* No production exports. Shared-state batteries protect ownership, diagnostics, read purity, acceptance and atomic publication with real Git. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { after, before, test, type TestContext } from "node:test";
+import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
@@ -15,60 +13,76 @@ import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
 import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckpointStore";
-import GitTestFixtureCache, { type GitTestFixtureSpec } from "./GitTestFixtureCache";
-import {
-  CONTROLLER_ADOPT_READY_FIXTURE,
-  CONTROLLER_BASE_FIXTURE,
-  CONTROLLER_FAILED_ADOPT_READY_FIXTURE,
-  CONTROLLER_PARTIAL_READY_FIXTURE,
-  CONTROLLER_PUSHED_AMEND_READY_FIXTURE,
-  CONTROLLER_REPLACEMENT_READY_FIXTURE,
-  CONTROLLER_START_READY_FIXTURE,
-} from "./WorkbenchGitTestFixtures";
+import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
+import { CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./GitArcControllerTestFixtures";
+import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
+type ControllerFixture = GitTestFixtureCopy<ControllerFixtureState>;
+type ControllerBranch<Key extends keyof ControllerFixtureState> = {
+  repository: WorkbenchGitRepository;
+  root: string;
+  source: string;
+  state: ControllerFixtureState[Key];
+};
+const controllerCases = new Map<keyof ControllerFixtureState, {
+  name: string;
+  run: (fixture: ControllerFixture, context: TestContext) => Promise<void>;
+}>();
 
-test("ref-free inspection compares against the exact disown boundary", async (context) => {
-  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(fixture.dispose);
+function controllerTest<Key extends keyof ControllerFixtureState>(
+  key: Key,
+  name: string,
+  run: (fixture: ControllerBranch<Key>, context: TestContext) => Promise<void>,
+) {
+  controllerCases.set(key, {
+    name,
+    run: async (fixture, context) => {
+      const state = fixture.state[key];
+      const source = path.join(fixture.bundleRoot, state.root);
+      await run({ repository: new WorkbenchGitRepository(source), root: fixture.bundleRoot, source, state }, context);
+    },
+  });
+}
+
+async function checkClaimLoss({ source }: ControllerBranch<"workspace">) {
   const controller = new WorkbenchGitCheckpointController();
-  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "claim-loss" };
-  await controller.createAndStartPlan({ ...identity, intentName: "claim loss", paths: ["one.txt"] });
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "boundary\n");
+  const identity = { cwd: source, harness: "codex" as const, threadId: "adopt-thread" };
+  await fs.writeFile(path.join(source, "one.txt"), "boundary\n");
   await controller.releaseArc({ ...identity, disown: true });
   assert.deepEqual((await controller.compare(identity)).changes, []);
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "after boundary\n");
-  await fs.writeFile(path.join(fixture.root, "two.txt"), "unrelated\n");
-  const comparison = await controller.compare(identity);
+  await fs.writeFile(path.join(source, "one.txt"), "after boundary\n");
+  await fs.writeFile(path.join(source, "two.txt"), "unrelated\n");
+  const snapshot = await controller.createInspectionSnapshot(source);
+  const [comparison, diff, explicitDiff] = await Promise.all([
+    controller.compare(identity, snapshot),
+    controller.diff(identity, snapshot),
+    controller.diff({ ...identity, paths: ["one.txt"] }, snapshot),
+  ]);
   assert.deepEqual(comparison.changes.map(({ path }) => path), ["one.txt"]);
-  const diff = await controller.diff(identity);
   assert.match(diff.diff, /-boundary\n\+after boundary/u);
   assert.doesNotMatch(diff.diff, /unrelated/u);
-  assert.equal((await controller.diff({ ...identity, paths: ["one.txt"] })).diff, diff.diff);
-});
+  assert.equal(explicitDiff.diff, diff.diff);
+}
 
-test("status acknowledges acceptance until implementation starts and filters invalid pending proposals", async context => {
-  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(fixture.dispose);
+controllerTest("status", "status and proposal reads preserve pending state, materialisation boundaries and accepted receipts", async (fixture) => {
+  const { repository, source, state } = fixture;
   const controller = new WorkbenchGitCheckpointController();
-  const repository = await WorkbenchGitRepository.open(fixture.root);
-  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "status-proposals" };
-  await controller.createAndStartPlan({ ...identity, intentName: "status", paths: ["one.txt", "two.txt"] });
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "changed\n");
-  const proposal = await controller.createProposal({ ...identity, title: "change one", description: "", paths: ["one.txt"] });
+  const identity = { cwd: source, harness: "codex" as const, threadId: "partial-thread" };
+  const proposal = { proposalId: state.proposalId };
   const before = await repository.listRefsWithValues("refs/worktree");
   const pending = await controller.readStatus(identity);
   assert.deepEqual(pending.pending, [{ proposalId: proposal.proposalId, title: "change one" }]);
   assert.deepEqual(pending.dirtyClaims, ["one.txt"]);
   assert.deepEqual(pending.cleanClaims, ["two.txt"]);
   assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), before);
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "one\n");
+  await fs.writeFile(path.join(source, "one.txt"), "one\n");
   assert.deepEqual((await controller.readStatus(identity)).pending, []);
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "changed\n");
-  await controller.commitProposal({ ...identity, proposalId: proposal.proposalId, title: "change one", description: "", includeNewer: false });
+  await fs.writeFile(path.join(source, "one.txt"), "proposed content\n");
+  await checkProposalReadPurity(fixture);
   const acceptedHead = await repository.currentHead();
   const accepted = await controller.readStatus(identity);
   assert.deepEqual(accepted.accepted, [{ proposalId: proposal.proposalId, title: "change one", commitSha: acceptedHead }]);
@@ -77,44 +91,29 @@ test("status acknowledges acceptance until implementation starts and filters inv
   await controller.createPlan({ ...identity, intentName: "next", paths: ["two.txt"] });
   assert.deepEqual((await controller.readStatus(identity)).accepted, accepted.accepted);
   await controller.startArc(identity);
-  assert.deepEqual((await controller.readStatus(identity)).accepted, []);
-  assert.deepEqual((await controller.readStatus(identity)).recovery, []);
+  const restarted = await controller.readStatus(identity);
+  assert.deepEqual(restarted.accepted, []);
+  assert.deepEqual(restarted.recovery, []);
 });
 
-test("status includes old and deleted unclaimed dirt but excludes other owners", async context => {
-  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(fixture.dispose);
+controllerTest("workspace", "workspace status, recent dirt and claim loss reuse one ownership history", async (fixture) => {
+  const { source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
-  const other = { cwd: fixture.root, harness: "codex" as const, threadId: "other" };
-  await controller.createAndStartPlan({ ...other, intentName: "other", paths: ["one.txt", "nested"] });
-  await fs.writeFile(path.join(fixture.root, "one.txt"), "other work\n");
-  await fs.mkdir(path.join(fixture.root, "nested"));
-  await fs.writeFile(path.join(fixture.root, "nested", "child.txt"), "owned child\n");
-  await fs.rm(path.join(fixture.root, "two.txt"));
-  await fs.writeFile(path.join(fixture.root, "old.txt"), "old\n");
-  await fs.utimes(path.join(fixture.root, "old.txt"), new Date(0), new Date(0));
+  const other = { cwd: source, harness: "codex" as const, threadId: "adopt-thread" };
+  await fs.writeFile(path.join(source, "one.txt"), "other work\n");
+  await fs.mkdir(path.join(source, "nested"));
+  await fs.writeFile(path.join(source, "nested", "child.txt"), "owned child\n");
+  await fs.rm(path.join(source, "two.txt"));
+  await fs.writeFile(path.join(source, "old.txt"), "old\n");
+  await fs.utimes(path.join(source, "old.txt"), new Date(0), new Date(0));
   const status = await controller.readStatus({ ...other, threadId: "no-lifecycle" });
   assert.deepEqual(status.unclaimedDirt, ["old.txt", "two.txt"]);
   assert.deepEqual(status.dirtyClaims, []);
   assert.deepEqual(status.recovery, []);
   assert.deepEqual((await controller.readStatus(other)).dirtyClaims, ["nested", "one.txt"]);
+  await checkRecentWorkspaceDirt(fixture);
+  await checkClaimLoss(fixture);
 });
-
-const isolatedControllerCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
-const sharedControllerCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
-let baseCommit = "";
-let sharedRepository: WorkbenchGitRepository;
-let sharedRoot = "";
-let sharedSource = "";
-let disposeSharedFixture: () => Promise<void> = async () => undefined;
-
-function isolatedControllerTest(name: string, run: (context: TestContext) => Promise<void>) {
-  isolatedControllerCases.push({ name, run });
-}
-
-function sharedControllerTest(name: string, run: (context: TestContext) => Promise<void>) {
-  sharedControllerCases.push({ name, run });
-}
 
 async function git(cwd: string, args: string[]) {
   return (await execFileAsync("git", args, {
@@ -143,48 +142,7 @@ async function advanceHead(repository: WorkbenchGitRepository, message: string) 
   return commit;
 }
 
-async function createRepository(_context: TestContext) {
-  return { repository: sharedRepository, root: sharedRoot, source: sharedSource };
-}
-
-async function copyRepository<State extends object>(context: TestContext, spec: GitTestFixtureSpec<State>) {
-  const fixture = await fixtureCache.copy(spec);
-  context.after(fixture.dispose);
-  return {
-    repository: await WorkbenchGitRepository.open(fixture.root),
-    root: fixture.temporaryRoot,
-    source: fixture.root,
-    state: fixture.state,
-  };
-}
-
-before(async () => {
-  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
-  disposeSharedFixture = fixture.dispose;
-  sharedRoot = fixture.temporaryRoot;
-  sharedSource = fixture.root;
-  sharedRepository = await WorkbenchGitRepository.open(sharedSource);
-  baseCommit = await sharedRepository.currentHead();
-});
-
-async function resetSharedRepository() {
-  await fs.rm(path.join(sharedSource, ".workbench"), { force: true, recursive: true });
-  await git(sharedSource, ["checkout", "--force", "--quiet", "-B", "main", baseCommit]);
-  const entries = await fs.readdir(sharedSource);
-  if (entries.some((entry) => ![".git", "one.txt", "two.txt"].includes(entry))) {
-    await git(sharedSource, ["clean", "-fdx", "--quiet"]);
-  }
-  const refs = await sharedRepository.listRefs("refs/worktree");
-  if (refs.length) await sharedRepository.updateRefs([], refs.map((ref) => ({ ref })));
-}
-
-after(async () => {
-  await disposeSharedFixture();
-});
-
-sharedControllerTest("active arc registry rejects sibling overlap and releases claims without touching the worktree", async (context) => {
-  await resetSharedRepository();
-  const { repository, source } = await createRepository(context);
+controllerTest("registry", "registry ownership preserves overlap, release, idempotence and stale-replacement safeguards", async ({ repository, source }) => {
   const registry = new GitArcRegistry(repository);
   const checkpointCommit = await repository.currentHead();
   const contenders = await Promise.allSettled([
@@ -233,75 +191,72 @@ sharedControllerTest("active arc registry rejects sibling overlap and releases c
   await registry.release({ harness: owner.harness, threadId: owner.threadId });
   assert.equal(await registry.find({ harness: owner.harness, threadId: owner.threadId }), null);
   assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "one\n");
+  await checkRegistryRetries(repository);
 });
 
-sharedControllerTest("active arc registry keeps start idempotent and rejects stale same-thread replacement", async (context) => {
-  await resetSharedRepository();
-  const { repository } = await createRepository(context);
+async function checkRegistryRetries(repository: WorkbenchGitRepository) {
   const registry = new GitArcRegistry(repository);
   const initialCheckpoint = await repository.currentHead();
   const initial = await registry.claim({
     checkpointCommit: initialCheckpoint,
-    claimedPaths: ["one.txt"],
+    claimedPaths: ["two.txt"],
     harness: "codex",
     intentDescription: "",
     intentName: "change one",
     proposalId: null,
-    threadId: "thread-one",
+    threadId: "thread-three",
   });
   assert.deepEqual(await registry.claim({
     checkpointCommit: initialCheckpoint,
-    claimedPaths: ["one.txt"],
+    claimedPaths: ["two.txt"],
     harness: "codex",
     intentDescription: "ignored retry text",
     intentName: "ignored retry name",
     proposalId: null,
-    threadId: "thread-one",
+    threadId: "thread-three",
   }), initial);
   await assert.rejects(registry.claim({
     checkpointCommit: "1".repeat(40),
-    claimedPaths: ["one.txt"],
+    claimedPaths: ["two.txt"],
     harness: "codex",
     intentDescription: "",
     intentName: "different arc",
     proposalId: null,
-    threadId: "thread-one",
+    threadId: "thread-three",
   }), /already owns a different active Git arc/u);
 
   const replacement = await registry.prepareClaim({
     checkpointCommit: "2".repeat(40),
-    claimedPaths: ["one.txt"],
+    claimedPaths: ["two.txt"],
     harness: "codex",
     intentDescription: "",
     intentName: "continued arc",
     proposalId: null,
-    threadId: "thread-one",
+    threadId: "thread-three",
   }, { expectedCheckpointCommit: initialCheckpoint });
   assert.ok(replacement.updates.length);
   await repository.updateRefs(replacement.updates);
   await assert.rejects(registry.prepareClaim({
     checkpointCommit: "3".repeat(40),
-    claimedPaths: ["one.txt"],
+    claimedPaths: ["two.txt"],
     harness: "codex",
     intentDescription: "",
     intentName: "stale continuation",
     proposalId: null,
-    threadId: "thread-one",
+    threadId: "thread-three",
   }, { expectedCheckpointCommit: initialCheckpoint }), /active Git arc changed/u);
-});
+}
 
-isolatedControllerTest("publish state fails closed when a configured remote cannot refresh", async (context) => {
-  const local = await copyRepository(context, CONTROLLER_PUSHED_AMEND_READY_FIXTURE);
+async function checkRemoteFailures(local: ControllerBranch<"remote">) {
   await git(local.source, ["remote", "set-url", "origin", path.join(local.root, "missing.git")]);
   const state = await new GitArcPublishState(local.repository).classifyCurrentHead();
   assert.equal(state.kind, "unknown");
   if (state.kind === "unknown") assert.match(state.reason, /Unable to refresh remote refs/u);
   await git(local.source, ["checkout", "--detach", "--quiet"]);
   assert.deepEqual(await new GitArcPublishState(local.repository).classifyCurrentHead(), { kind: "detached" });
-});
+}
 
-isolatedControllerTest("empty inactive plans remain visible through plan-state reads", async (context) => {
-  const { source } = await copyRepository(context, CONTROLLER_BASE_FIXTURE);
+controllerTest("empty", "empty and ignored plans preserve visibility and no-op boundaries", async ({ source }) => {
   const controller = new WorkbenchGitCheckpointController();
   const plan = await controller.createPlan({
     cwd: source,
@@ -386,8 +341,7 @@ isolatedControllerTest("empty inactive plans remain visible through plan-state r
   assert.deepEqual(mixedPlan.skippedIgnoredPaths, ["ignored/generated.ts"]);
 });
 
-isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legacy arcs into the registry", async (context) => {
-  const { repository, source, state } = await copyRepository(context, CONTROLLER_START_READY_FIXTURE);
+controllerTest("legacy", "v3 plans and legacy activation preserve adoption, drift and ownership", async ({ repository, source, state }) => {
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "duplicate.txt"), "intentional duplicate work\n");
   const duplicate = await controller.createPlan({
@@ -530,28 +484,12 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
   assert.deepEqual(active?.claimedPaths, ["two.txt"]);
 });
 
-isolatedControllerTest("arc start comparison covers complete planned drift without unrelated files or patches", async (context) => {
-  const { source } = await copyRepository(context, CONTROLLER_BASE_FIXTURE);
-  await fs.mkdir(path.join(source, "nested"));
-  await fs.writeFile(path.join(source, "nested/base.txt"), "base\n");
-  await fs.writeFile(path.join(source, "nested/data.bin"), Buffer.from([0, 1]));
-  await git(source, ["add", "nested"]);
-  await git(source, ["commit", "--quiet", "-m", "prepare nested plan"]);
+controllerTest("diagnostics", "activation diagnostics preserve scoped drift, causal history and collision precedence", async (fixture) => {
+  const { source, state } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   const identity = { cwd: source, harness: "codex" as const, threadId: "comparison-thread" };
-  const plan = await controller.createPlan({
-    ...identity, intentName: "inspect scoped drift", paths: ["one.txt", "two.txt", "nested"],
-  });
-  await fs.writeFile(path.join(source, "one.txt"), "committed\npatch-only-secret\n");
-  await fs.writeFile(path.join(source, "unrelated.txt"), "unrelated\n".repeat(3_000));
-  await git(source, ["add", "one.txt", "unrelated.txt"]);
-  await git(source, ["commit", "--quiet", "-m", "planned and unrelated work"]);
-  await fs.appendFile(path.join(source, "one.txt"), "dirty\n");
-  await fs.unlink(path.join(source, "two.txt"));
-  await fs.writeFile(path.join(source, "nested/base.txt"), "changed\n");
-  await fs.writeFile(path.join(source, "nested/data.bin"), Buffer.from([0, 2]));
-  const addedPaths = Array.from({ length: 24 }, (_, index) => `nested/added-${index}.txt`);
-  await Promise.all(addedPaths.map((filePath) => fs.writeFile(path.join(source, filePath), "added\n")));
+  const plan = { checkpointCommit: state.planCheckpoint };
+  const addedPaths = state.addedPaths;
 
   const compared = await controller.compare({ ...identity, ref: plan.checkpointCommit });
   await assert.rejects(controller.startArc(identity), (error: unknown) => {
@@ -569,20 +507,14 @@ isolatedControllerTest("arc start comparison covers complete planned drift witho
     assert.match(error.message, /nested\/data\.bin[^\n]*binary/u);
     return true;
   });
+  await fs.writeFile(path.join(source, "one.txt"), "committed\npatch-only-secret\n");
+  await fs.writeFile(path.join(source, "two.txt"), "two\n");
+  await checkCausalDiagnostics(fixture);
 });
 
-isolatedControllerTest("arc start reports only causal commits, sibling claims, and adoptable workspace dirt", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_BASE_FIXTURE);
+async function checkCausalDiagnostics({ repository, source, state }: ControllerBranch<"diagnostics">) {
   const planPaths = ["claimed-dirty.txt", "one.txt", "three.txt", "two.txt"];
-  const planHead = await repository.currentHead();
-
-  await fs.writeFile(path.join(source, "unrelated.txt"), "unrelated\n");
-  await git(source, ["add", "unrelated.txt"]);
-  await git(source, ["commit", "--quiet", "-m", "unrelated housekeeping"]);
-  await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
-  await git(source, ["add", "one.txt"]);
-  await git(source, ["commit", "--quiet", "-m", "change planned one"]);
-  const relevantCommit = (await git(source, ["rev-parse", "HEAD"])).trim();
+  const { planHead, relevantCommit } = state;
 
   await new GitArcRegistry(repository).claim({
     checkpointCommit: await repository.currentHead(),
@@ -698,10 +630,13 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   await registry.release({ harness: "codex", threadId: "historical-sibling" });
   await assert.rejects(controller.startArc({ ...identity, checkpointCommit: arc.checkpointCommit }), GitArcStartDiagnosticError);
   assert.equal(await registry.find(identity), null);
-});
+}
 
-isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and preserves worktree and index state", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
+controllerTest("adoption", "adoption preserves snapshot, ignored-deletion, index and collision boundaries", async (fixture) => {
+  const { repository, source } = fixture;
+  await checkLiveClaims(source);
+  await checkInspectionSnapshot(source);
+  await fs.writeFile(path.join(source, "one.txt"), "one\n");
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "two.txt"), "modified two\n");
   await fs.rm(path.join(source, "deleted.txt"));
@@ -709,9 +644,10 @@ isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and p
   await fs.writeFile(path.join(source, "staged.txt"), "staged work\n");
   await fs.writeFile(path.join(source, ".gitignore"), "ignored/\nignored-delete/\n", "utf8");
   await git(source, ["add", "staged.txt"]);
-  const stagedBefore = await git(source, ["diff", "--cached", "--binary"]);
-
-  const activeBeforeIgnoredAdopt = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "adopt-thread" });
+  const [stagedBefore, activeBeforeIgnoredAdopt] = await Promise.all([
+    git(source, ["diff", "--cached", "--binary"]),
+    new GitArcRegistry(repository).find({ harness: "codex", threadId: "adopt-thread" }),
+  ]);
   const ignoredAdoption = await controller.adoptIntoArc({
     cwd: source,
     harness: "codex",
@@ -733,14 +669,20 @@ isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and p
   });
   assert.deepEqual(adopted.scopePaths, ["deleted.txt", "one.txt", "two.txt", "untracked.txt"]);
   assert.deepEqual(adopted.skippedIgnoredPaths, ["ignored/generated.ts"]);
-  assert.equal((await new GitArcRegistry(repository).find({ harness: "codex", threadId: "adopt-thread" }))?.checkpointCommit, adopted.checkpointCommit);
-  assert.equal(await repository.readRef(adopted.checkpointRef), adopted.checkpointCommit);
-  assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "modified two\n");
-  assert.equal(await fs.readFile(path.join(source, "untracked.txt"), "utf8"), "new work\n");
-  await assert.rejects(fs.access(path.join(source, "deleted.txt")));
-  assert.equal(await git(source, ["diff", "--cached", "--binary"]), stagedBefore);
-
-  const compared = await controller.compare({ cwd: source, harness: "codex", threadId: "adopt-thread" });
+  const [active, checkpointRef, two, untracked, , stagedAfter, compared] = await Promise.all([
+    new GitArcRegistry(repository).find({ harness: "codex", threadId: "adopt-thread" }),
+    repository.readRef(adopted.checkpointRef),
+    fs.readFile(path.join(source, "two.txt"), "utf8"),
+    fs.readFile(path.join(source, "untracked.txt"), "utf8"),
+    assert.rejects(fs.access(path.join(source, "deleted.txt"))),
+    git(source, ["diff", "--cached", "--binary"]),
+    controller.compare({ cwd: source, harness: "codex", threadId: "adopt-thread" }),
+  ]);
+  assert.equal(active?.checkpointCommit, adopted.checkpointCommit);
+  assert.equal(checkpointRef, adopted.checkpointCommit);
+  assert.equal(two, "modified two\n");
+  assert.equal(untracked, "new work\n");
+  assert.equal(stagedAfter, stagedBefore);
   assert.deepEqual(compared.changes.map((change) => change.path), ["deleted.txt", "two.txt", "untracked.txt"]);
   await assert.rejects(controller.adoptIntoArc({
     cwd: source,
@@ -802,28 +744,11 @@ isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and p
   assert.deepEqual(resolvedIgnoredDeletion?.claimedPaths, []);
   assert.equal(resolvedIgnoredDeletion?.proposalId, ignoredDeletionProposal.proposalId);
   assert.deepEqual(resolvedIgnoredDeletion?.proposalIds, [ignoredDeletionProposal.proposalId]);
+  await checkRejectedAdoption(fixture);
 });
 
-sharedControllerTest("workspace dirt reports only recent files outside every live claim", async (context) => {
-  await resetSharedRepository();
-  const { repository, source } = await createRepository(context);
+async function checkRecentWorkspaceDirt({ source }: ControllerBranch<"workspace">) {
   const controller = new WorkbenchGitCheckpointController();
-  const plan = await controller.createPlan({
-    cwd: source,
-    intentName: "Own one file",
-    paths: ["one.txt"],
-    threadId: "owner-thread",
-  });
-  await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: source, threadId: "owner-thread" });
-  await new GitArcRegistry(repository).claim({
-    checkpointCommit: await repository.currentHead(),
-    claimedPaths: ["sibling.txt"],
-    harness: "codex",
-    intentDescription: "",
-    intentName: "Sibling owner",
-    proposalId: null,
-    threadId: "sibling-thread",
-  });
   const threadCreatedAt = Date.UTC(2026, 7, 30, 12);
   await Promise.all([
     fs.writeFile(path.join(source, "one.txt"), "owned current change\n", "utf8"),
@@ -842,10 +767,9 @@ sharedControllerTest("workspace dirt reports only recent files outside every liv
     await controller.listUnclaimedWorkspaceDirt({ cwd: source, modifiedSince: threadCreatedAt }),
     ["recent.txt"],
   );
-});
+}
 
-isolatedControllerTest("live claim checks distinguish owned and absent claims", async (context) => {
-  const { source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
+async function checkLiveClaims(source: string) {
   const controller = new WorkbenchGitCheckpointController();
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({
     cwd: source, harness: "codex", threadId: "adopt-thread",
@@ -853,10 +777,9 @@ isolatedControllerTest("live claim checks distinguish owned and absent claims", 
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({
     cwd: source, harness: "codex", threadId: "missing-thread",
   }), false);
-});
+}
 
-isolatedControllerTest("one inspection snapshot keeps compare and workspace dirt on the same worktree view", async (context) => {
-  const { source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
+async function checkInspectionSnapshot(source: string) {
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "one.txt"), "captured claimed change\n", "utf8");
   await fs.writeFile(path.join(source, "captured-unclaimed.txt"), "captured unclaimed change\n", "utf8");
@@ -876,50 +799,33 @@ isolatedControllerTest("one inspection snapshot keeps compare and workspace dirt
   assert.match(comparison.changes[0]?.diff ?? "", /captured claimed change/u);
   assert.doesNotMatch(comparison.changes[0]?.diff ?? "", /later claimed change/u);
   assert.deepEqual(unclaimedDirtPaths, ["captured-unclaimed.txt"]);
-});
+}
 
-isolatedControllerTest("failed arc adoption publishes neither a successor ref nor a replacement registry entry", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_FAILED_ADOPT_READY_FIXTURE);
+async function checkRejectedAdoption({ repository, source }: ControllerBranch<"adoption">) {
   const controller = new WorkbenchGitCheckpointController();
   const registry = new GitArcRegistry(repository);
   await fs.writeFile(path.join(source, "collision.txt"), "dirty collision\n");
-  const refsBefore = await repository.listRefs("refs/worktree/agents/codex/adopt-owner/checkpoints");
-  const activeBefore = await registry.find({ harness: "codex", threadId: "adopt-owner" });
+  const refsBefore = await repository.listRefs("refs/worktree/agents/codex/adopt-thread/checkpoints");
+  const activeBefore = await registry.find({ harness: "codex", threadId: "adopt-thread" });
 
   await assert.rejects(controller.adoptIntoArc({
     cwd: source,
     harness: "codex",
     paths: ["collision.txt"],
-    threadId: "adopt-owner",
+    threadId: "adopt-thread",
   }), /overlap active sibling work/u);
-  assert.deepEqual(await repository.listRefs("refs/worktree/agents/codex/adopt-owner/checkpoints"), refsBefore);
-  assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-owner" }), activeBefore);
-});
+  assert.deepEqual(await repository.listRefs("refs/worktree/agents/codex/adopt-thread/checkpoints"), refsBefore);
+  assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-thread" }), activeBefore);
+}
 
-isolatedControllerTest("accepted proposals narrow claims, continue through successors, and resolve after disjoint commits", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+controllerTest("partial", "partial acceptance, local reads and message amendments preserve claims and unrelated state", async (fixture, context) => {
+  const { repository, source, state } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   const registry = new GitArcRegistry(repository);
   const started = await registry.find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(started?.phase, "active");
-  await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
-  await fs.writeFile(path.join(source, "two.txt"), "remaining two\n");
-  const firstProposal = await controller.createProposal({
-    cwd: source,
-    description: "",
-    harness: "codex",
-    paths: ["one.txt"],
-    threadId: "partial-thread",
-    title: "commit one",
-  });
-  const secondProposal = await controller.createProposal({
-    cwd: source,
-    description: "",
-    harness: "codex",
-    paths: ["two.txt"],
-    threadId: "partial-thread",
-    title: "commit two",
-  });
+  const firstProposal = { proposalId: state.firstProposalId };
+  const secondProposal = { proposalId: state.secondProposalId };
   const refsBeforeScope = await repository.listRefsWithValues("refs/worktree");
   const recoveredScope = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(recoveredScope?.proposals, [
@@ -958,13 +864,17 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
     threadId: "partial-thread",
     title: "commit one",
   });
-  const partial = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  const [partial, one, two, compared] = await Promise.all([
+    new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }),
+    fs.readFile(path.join(source, "one.txt"), "utf8"),
+    fs.readFile(path.join(source, "two.txt"), "utf8"),
+    controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" }),
+  ]);
   assert.equal(partial?.phase, "active");
   assert.deepEqual(partial?.claimedPaths, ["one.txt", "two.txt"]);
   assert.notEqual(partial?.checkpointCommit, started?.checkpointCommit);
-  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "newer one\n");
-  assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "remaining two\n");
-  const compared = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.equal(one, "newer one\n");
+  assert.equal(two, "remaining two\n");
   assert.deepEqual(compared.changes.map((change) => change.path), ["one.txt", "two.txt"]);
   const continued = await controller.continueArc({
     checkpointCommit: started!.checkpointCommit,
@@ -1009,20 +919,12 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
   assert.equal(followUp.intentName, completed.intentName);
   const inventory = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(inventory?.claimedPaths, ["planned.txt"]);
+  await checkLocalReadsAndMessageAmendments(fixture, secondProposal.proposalId);
 });
 
-isolatedControllerTest("proposal reads derive rebases and materialize newer content only when requested", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+async function checkProposalReadPurity({ repository, source, state }: ControllerBranch<"status">) {
   const controller = new WorkbenchGitCheckpointController();
-  await fs.writeFile(path.join(source, "one.txt"), "proposed content\n", "utf8");
-  const receipt = await controller.createProposal({
-    cwd: source,
-    description: "",
-    harness: "codex",
-    paths: ["one.txt"],
-    threadId: "partial-thread",
-    title: "pure proposal read",
-  });
+  const receipt = { proposalId: state.proposalId };
   const store = new GitCheckpointStore(repository);
   const stored = await store.readProposal("codex", "partial-thread", receipt.proposalId);
   const proposalRefBefore = await repository.readRef(stored.proposalRef);
@@ -1064,15 +966,15 @@ isolatedControllerTest("proposal reads derive rebases and materialize newer cont
     includeNewer: true,
     proposalId: receipt.proposalId,
     threadId: "partial-thread",
-    title: "pure proposal read",
+    title: "change one",
   });
   assert.equal(committed.status, "committed");
   assert.notEqual(await repository.readRef(stored.proposalRef), proposalRefBefore);
   assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "newer worktree content\n");
-});
+}
 
-isolatedControllerTest("committed proposal reads stay local while amendment mutation refreshes remotes", async (context) => {
-  const { source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+async function checkLocalReadsAndMessageAmendments(fixture: ControllerBranch<"partial">, commitTargetProposalId: string) {
+  const { source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   await git(source, ["remote", "add", "haunted", path.join(source, "missing-remote")]);
 
@@ -1080,7 +982,7 @@ isolatedControllerTest("committed proposal reads stay local while amendment muta
     cwd: source,
     harness: "codex",
     includeNewer: false,
-    proposalId: state.commitTargetProposalId,
+    proposalId: commitTargetProposalId,
     threadId: "partial-thread",
   });
   assert.deepEqual(card.amendability, { status: "available" });
@@ -1093,18 +995,15 @@ isolatedControllerTest("committed proposal reads stay local while amendment muta
     threadId: "partial-thread",
     title: `${card.title} changed`,
   }), /Unable to refresh remote refs/u);
-});
+  await git(source, ["remote", "remove", "haunted"]);
+  await checkMessageAmendments(fixture, card);
+}
 
-isolatedControllerTest("targeted message amendments need no active arc and preserve unrelated worktree and index state", async (context) => {
-  const { repository, source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+async function checkMessageAmendments({ repository, source }: ControllerBranch<"partial">, original: GitCheckpointProposal) {
   const controller = new WorkbenchGitCheckpointController();
   const registry = new GitArcRegistry(repository);
   await registry.release({ harness: "codex", threadId: "partial-thread" });
   assert.equal(await registry.find({ harness: "codex", threadId: "partial-thread" }), null);
-  const original = await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false,
-    proposalId: state.commitTargetProposalId, threadId: "partial-thread",
-  });
   assert.deepEqual(original.amendability, { status: "available" });
   const amendment = await controller.createProposal({
     amendProposalId: original.proposalId,
@@ -1119,11 +1018,13 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
   await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
   await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
   await git(source, ["add", "two.txt"]);
-  const worktreeBefore = await git(source, ["diff", "--binary"]);
-  const indexBefore = await git(source, ["diff", "--cached", "--binary"]);
-  const pending = await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
-  });
+  const [worktreeBefore, indexBefore, pending] = await Promise.all([
+    git(source, ["diff", "--binary"]),
+    git(source, ["diff", "--cached", "--binary"]),
+    controller.getProposal({
+      cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
+    }),
+  ]);
   assert.deepEqual({ mode: pending.mode, status: pending.status, title: pending.title }, {
     mode: "amend", status: "proposed", title: "Replacement title",
   });
@@ -1137,14 +1038,22 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     title: amendment.title,
   });
   assert.equal(accepted.status, "committed");
-  assert.notEqual(await repository.currentHead(), laterHead);
-  assert.equal((await git(source, ["show", "-s", "--format=%s", "HEAD"])).trim(), "advance after message proposal");
-  assert.equal((await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: original.proposalId, threadId: "partial-thread",
-  })).status, "superseded");
-  assert.equal((await git(source, ["show", "-s", "--format=%s", accepted.committedSha!])).trim(), "Replacement title");
-  assert.equal(await git(source, ["diff", "--binary"]), worktreeBefore);
-  assert.equal(await git(source, ["diff", "--cached", "--binary"]), indexBefore);
+  const [head, headTitle, prior, acceptedTitle, worktreeAfter, indexAfter] = await Promise.all([
+    repository.currentHead(),
+    git(source, ["show", "-s", "--format=%s", "HEAD"]),
+    controller.getProposal({
+      cwd: source, harness: "codex", includeNewer: false, proposalId: original.proposalId, threadId: "partial-thread",
+    }),
+    git(source, ["show", "-s", "--format=%s", accepted.committedSha!]),
+    git(source, ["diff", "--binary"]),
+    git(source, ["diff", "--cached", "--binary"]),
+  ]);
+  assert.notEqual(head, laterHead);
+  assert.equal(headTitle.trim(), "advance after message proposal");
+  assert.equal(prior.status, "superseded");
+  assert.equal(acceptedTitle.trim(), "Replacement title");
+  assert.equal(worktreeAfter, worktreeBefore);
+  assert.equal(indexAfter, indexBefore);
 
   const directlyAmended = await controller.commitProposal({
     cwd: source,
@@ -1156,13 +1065,17 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     title: "Card-edited title",
   });
   assert.notEqual(directlyAmended.committedSha, accepted.committedSha);
-  assert.equal((await git(source, ["show", "-s", "--format=%s", directlyAmended.committedSha!])).trim(), "Card-edited title");
-  assert.equal(await git(source, ["diff", "--binary"]), worktreeBefore);
-  assert.equal(await git(source, ["diff", "--cached", "--binary"]), indexBefore);
-});
+  const [directTitle, directWorktree, directIndex] = await Promise.all([
+    git(source, ["show", "-s", "--format=%s", directlyAmended.committedSha!]),
+    git(source, ["diff", "--binary"]),
+    git(source, ["diff", "--cached", "--binary"]),
+  ]);
+  assert.equal(directTitle.trim(), "Card-edited title");
+  assert.equal(directWorktree, worktreeBefore);
+  assert.equal(directIndex, indexBefore);
+}
 
-isolatedControllerTest("replacement plans target prior pending and committed proposals through the thread namespace", async (context) => {
-  const { repository, source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+controllerTest("replacement", "replacement plans target prior pending and committed proposals through the thread namespace", async ({ repository, source, state }) => {
   const controller = new WorkbenchGitCheckpointController();
   const replaceTarget = { proposalId: state.replaceTargetProposalId };
   const rescindTarget = { proposalId: state.rescindTargetProposalId };
@@ -1177,17 +1090,20 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     threadId: "partial-thread",
     title: "replacement",
   });
-  const superseded = await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: replaceTarget.proposalId, threadId: "partial-thread",
-  });
+  const [superseded, currentReplacement] = await Promise.all([
+    controller.getProposal({
+      cwd: source, harness: "codex", includeNewer: false, proposalId: replaceTarget.proposalId, threadId: "partial-thread",
+    }),
+    controller.getProposal({
+      cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
+    }),
+  ]);
   assert.equal(superseded.status, "superseded");
   assert.equal(superseded.supersededByProposalId, replacement.proposalId);
-  assert.equal((await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
-  })).status, "proposed");
+  assert.equal(currentReplacement.status, "proposed");
 
   await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
-  const activeBeforeIgnoredAdd = await new GitArcRegistry(await WorkbenchGitRepository.open(source))
+  const activeBeforeIgnoredAdd = await new GitArcRegistry(repository)
     .find({ harness: "codex", threadId: "partial-thread" });
   const ignoredAdd = await controller.addToArc({
     cwd: source,
@@ -1198,7 +1114,7 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
   assert.equal(ignoredAdd.kind, "noop");
   assert.deepEqual(ignoredAdd.skippedIgnoredPaths, ["ignored/generated.ts"]);
   assert.deepEqual(
-    await new GitArcRegistry(await WorkbenchGitRepository.open(source))
+    await new GitArcRegistry(repository)
       .find({ harness: "codex", threadId: "partial-thread" }),
     activeBeforeIgnoredAdd,
   );
@@ -1290,7 +1206,7 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "one.txt")?.diff ?? "", /replace one/u);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "two.txt")?.diff ?? "", /rescind two/u);
   assert.deepEqual(
-    (await new GitArcRegistry(await WorkbenchGitRepository.open(source)).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
+    (await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
     [continuedReplacement.proposalId, amendment.proposalId],
   );
   const pendingPlan = await controller.createPlan({
@@ -1307,15 +1223,19 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     title: "add committed target correction",
   });
   assert.equal(committedFresh.mode, "commit");
-  assert.equal((await controller.findPlanState({
-    cwd: source, harness: "codex", threadId: "partial-thread",
-  }))?.checkpointCommit, pendingPlan.checkpointCommit);
+  const [retainedPlan, parent, title, originalTarget] = await Promise.all([
+    controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" }),
+    git(source, ["rev-parse", `${committedFresh.committedSha}^`]),
+    git(source, ["show", "-s", "--format=%s", committedFresh.committedSha!]),
+    controller.getProposal({
+      cwd: source, harness: "codex", includeNewer: false, proposalId: commitTarget.proposalId, threadId: "partial-thread",
+    }),
+  ]);
+  assert.equal(retainedPlan?.checkpointCommit, pendingPlan.checkpointCommit);
   assert.equal(committedFresh.amendTargetSha, null);
-  assert.equal((await git(source, ["rev-parse", `${committedFresh.committedSha}^`])).trim(), laterHead);
-  assert.equal((await git(source, ["show", "-s", "--format=%s", committedFresh.committedSha!])).trim(), "add committed target correction");
-  assert.equal((await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: commitTarget.proposalId, threadId: "partial-thread",
-  })).status, "committed");
+  assert.equal(parent.trim(), laterHead);
+  assert.equal(title.trim(), "add committed target correction");
+  assert.equal(originalTarget.status, "committed");
   await assert.rejects(controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: replaceTarget.proposalId, threadId: "foreign-thread",
   }), (error: Error) => {
@@ -1325,8 +1245,8 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
   });
 });
 
-isolatedControllerTest("combined claims validate the final set without releasing dirty retained coverage", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+controllerTest("claims", "combined claims and inactive plan edits preserve dirty coverage and ignored-path boundaries", async (fixture) => {
+  const { repository, source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "one.txt"), "keep this work\n");
   const before = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
@@ -1347,18 +1267,18 @@ isolatedControllerTest("combined claims validate the final set without releasing
     cwd: source, harness: "codex", threadId: "partial-thread", ref: before!.checkpointCommit, paths: ["one.txt"],
   });
   assert.match(historical.diff, /\+keep this work/u);
+  await checkActivePlanEditing(fixture);
 });
 
-isolatedControllerTest("active plan add publishes an inactive successor without claiming new paths", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+async function checkActivePlanEditing({ repository, source }: ControllerBranch<"claims">) {
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "one.txt"), "retained one\n");
 
   await assert.rejects(controller.removeFromPlan({
-    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
+    cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
   }), /legacy operation/u);
   await assert.rejects(controller.adoptIntoPlan({
-    cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
+    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
   }), /legacy operation/u);
   await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
   const activeBeforeIgnoredPlanAdd = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
@@ -1373,7 +1293,7 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
   );
 
   const extended = await controller.addToPlan({
-    cwd: source, harness: "codex", paths: ["ignored/generated.ts", "planned.txt"], threadId: "partial-thread",
+    cwd: source, harness: "codex", paths: ["ignored/generated.ts", "two.txt"], threadId: "partial-thread",
   });
   assert.deepEqual(extended.scopePaths, ["one.txt", "planned.txt", "two.txt"]);
   assert.deepEqual(extended.skippedIgnoredPaths, ["ignored/generated.ts"]);
@@ -1390,7 +1310,7 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
     threadId: "partial-thread",
     updatedAt: registryEntry?.updatedAt,
   });
-  const planBeforeIgnoredAdopt = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  const planBeforeIgnoredAdopt = registryEntry;
   const ignoredPlanAdopt = await controller.adoptIntoPlan({
     cwd: source, harness: "codex", paths: ["ignored/generated.ts"], threadId: "partial-thread",
   });
@@ -1428,16 +1348,11 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
   registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(registryEntry?.phase, "plan");
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt"]);
-});
+}
 
-isolatedControllerTest("replacement plans retain every dirty claim and release claims that became clean", async (context) => {
-  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+controllerTest("retained", "replacement plans retain every dirty claim and release claims that became clean", async ({ repository, source, state }) => {
   const controller = new WorkbenchGitCheckpointController();
-  await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
-  await fs.writeFile(path.join(source, "two.txt"), "retained two\n");
-  const proposal = await controller.createProposal({
-    cwd: source, description: "", harness: "codex", paths: ["one.txt"], threadId: "partial-thread", title: "commit one",
-  });
+  const proposal = { proposalId: state.proposalId };
   const replacement = await controller.createPlan({
     cwd: source, harness: "codex", intentName: "carry retained dirt", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
   });
@@ -1477,8 +1392,8 @@ isolatedControllerTest("replacement plans retain every dirty claim and release c
 });
 
 
-isolatedControllerTest("amend proposal creation rejects HEAD already contained by a refreshed remote ref", async (context) => {
-  const { source } = await copyRepository(context, CONTROLLER_PUSHED_AMEND_READY_FIXTURE);
+controllerTest("remote", "remote boundaries reject published amendments, unavailable refreshes and detached HEAD", async (fixture) => {
+  const { source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "one.txt"), "amend pushed head\n");
   await assert.rejects(controller.createProposal({
@@ -1488,20 +1403,21 @@ isolatedControllerTest("amend proposal creation rejects HEAD already contained b
     freshDescription: "",
     freshTitle: "commit pushed correction separately",
     harness: "codex",
-    threadId: "pushed-thread",
+    threadId: "adopt-thread",
     title: "",
   }), /already present on remote refs/u);
+  await checkRemoteFailures(fixture);
 });
 
-test("Git arc controller operations", { concurrency: 2 }, async (context) => {
-  await Promise.all([
-    context.test("shared-repository operations", async (sharedContext) => {
-      for (const { name, run } of sharedControllerCases) await sharedContext.test(name, run);
-    }),
-    context.test("isolated repository operations", { concurrency: 4 }, async (isolatedContext) => {
-      await Promise.all(isolatedControllerCases.map(async ({ name, run }) => (
-        await isolatedContext.test(name, { concurrency: true }, run)
-      )));
-    }),
-  ]);
+test("Git arc controller operations", { concurrency: 4 }, async (context) => {
+  const fixture = await fixtureCache.copy(CONTROLLER_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
+  const order: Array<keyof ControllerFixtureState> = [
+    "partial", "diagnostics", "replacement", "legacy", "claims", "status",
+    "retained", "adoption", "empty", "workspace", "remote", "registry",
+  ];
+  await Promise.all(order.map(async (key) => {
+    const { name, run } = controllerCases.get(key)!;
+    await context.test(name, { concurrency: true }, (child) => run(fixture, child));
+  }));
 });

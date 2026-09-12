@@ -12,6 +12,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import GitObjectReadSession from "./GitObjectReadSession";
 import parseGitFileChangeOutput from "./git-file-change-output";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
@@ -340,11 +341,15 @@ export default class WorkbenchGitRepository {
   }
 
   async resolveCommit(commit: string) {
-    return (await this.run(["rev-parse", "--verify", `${this.normalizeCommit(commit)}^{commit}`])).trim();
+    const [object] = await GitObjectReadSession.read(this.root, [`${this.normalizeCommit(commit)}^{commit}`], "info");
+    if (!object || object.type !== "commit") throw new Error("Git object does not resolve to a commit.");
+    return object.objectId;
   }
 
   async resolveTree(treeish: string | null) {
-    return (await this.run(["rev-parse", `${await this.contentBase(treeish)}^{tree}`])).trim();
+    const [object] = await GitObjectReadSession.read(this.root, [`${await this.contentBase(treeish)}^{tree}`], "info");
+    if (!object || object.type !== "tree") throw new Error("Git object does not resolve to a tree.");
+    return object.objectId;
   }
 
   async resolveParent(commit: string) {
@@ -469,7 +474,9 @@ export default class WorkbenchGitRepository {
   }
 
   async readBlob(blob: string) {
-    return await this.run(["cat-file", "blob", blob]);
+    const object = await this.readBlobAtRef(blob);
+    if (!object) throw new Error(`Git object ${blob} is missing.`);
+    return object.contents;
   }
 
   async updateRef(ref: string, newValue: string, oldValue?: string) {
@@ -583,17 +590,21 @@ export default class WorkbenchGitRepository {
   }
 
   async writeTreeWithPathsFromSource(baseTreeish: string | null, sourceTreeish: string, paths: string[]) {
-    return await this.withTemporaryIndex(async (indexPath) => {
-      const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", await this.contentBase(baseTreeish)], env);
-      const changedPaths = await this.listChangedPaths(baseTreeish, sourceTreeish, paths);
-      if (changedPaths.length) {
+    return await GitObjectReadSession.run(async () => {
+      const [base, source] = await Promise.all([this.resolveTree(baseTreeish), this.resolveTree(sourceTreeish)]);
+      const allChangedPaths = base === source ? [] : await this.listAllChangedPaths(base, source);
+      const changedPaths = filterPathsByScopes(allChangedPaths, paths);
+      if (!changedPaths.length) return base;
+      if (changedPaths.length === allChangedPaths.length) return source;
+      return await this.withTemporaryIndex(async (indexPath) => {
+        const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+        await this.run(["read-tree", base], env);
         await this.runWithInput([
-          "restore", "--source", sourceTreeish, "--staged",
+          "restore", "--source", source, "--staged",
           "--pathspec-from-file=-", "--pathspec-file-nul",
         ], pathspecInput(changedPaths), env);
-      }
-      return (await this.run(["write-tree"], env)).trim();
+        return (await this.run(["write-tree"], env)).trim();
+      });
     });
   }
 
@@ -869,34 +880,12 @@ export default class WorkbenchGitRepository {
     if (requested.some((value) => !value.trim() || /[\r\n]/u.test(value))) {
       throw new Error("A valid Git object expression is required.");
     }
-    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${requested.join("\n")}\n`);
-    let offset = 0;
-    for (let index = 0; index < requested.length; index += 1) {
-      const key = requested[index]!;
-      const headerEnd = output.indexOf(0x0a, offset);
-      const header = headerEnd < 0 ? "" : output.subarray(offset, headerEnd).toString("utf8");
-      if (headerEnd >= 0 && header === `${key} missing`) {
-        objects.set(key, null);
-        offset = headerEnd + 1;
-        continue;
-      }
-      const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
-      const size = match ? Number(match[3]) : NaN;
-      const start = headerEnd + 1;
-      const end = start + size;
-      const error = headerEnd < 0 ? "Git cat-file batch output ended before its object header."
-        : !match ? `Git cat-file returned an invalid object header: ${header}`
-        : !Number.isSafeInteger(size) || size < 0 || end > output.length ? `Git object ${match[1]} has an invalid size.`
-        : output[end] !== 0x0a ? "Git cat-file batch payload terminator is missing."
-        : null;
-      if (error) {
-        // Framing loss makes every remaining response ambiguous.
-        for (const remaining of requested.slice(index)) errors.set(remaining, error);
-        break;
-      }
-      objects.set(key, { contents: output.subarray(start, end), objectId: match![1]!, type: match![2]! });
-      offset = end + 1;
-    }
+    const results = await GitObjectReadSession.read(this.root, requested);
+    results.forEach((object, index) => {
+      objects.set(requested[index]!, object ? {
+        contents: object.contents!, objectId: object.objectId, type: object.type,
+      } : null);
+    });
     return { objects, errors };
   }
 }

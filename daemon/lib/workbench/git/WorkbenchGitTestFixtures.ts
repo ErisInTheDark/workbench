@@ -13,12 +13,7 @@
  * - HISTORY_PUSHED_READY_FIXTURE: published history.
  * - HISTORY_MERGE_READY_FIXTURE: nonlinear history.
  * - HISTORY_SIGNED_READY_FIXTURE: signed history.
- * - CONTROLLER_START_READY_FIXTURE: activation scenario.
- * - CONTROLLER_ADOPT_READY_FIXTURE: adoption scenario.
- * - CONTROLLER_FAILED_ADOPT_READY_FIXTURE: rejected adoption scenario.
  * - CONTROLLER_PARTIAL_READY_FIXTURE: partial acceptance scenario.
- * - CONTROLLER_REPLACEMENT_READY_FIXTURE: replacement scenario.
- * - CONTROLLER_PUSHED_AMEND_READY_FIXTURE: published amend scenario.
  * - partitionWorkbenchGitTestFiles: group nested Git, ordinary Git and non-Git suites in stable order.
  * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: prepare selected repository copies and clean them after all pools finish.
  */
@@ -28,6 +23,7 @@ import path from "node:path";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
+import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE } from "./GitArcControllerTestFixtures";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
   gitTestFixtureKey,
@@ -56,10 +52,7 @@ const LINEAR_COMMITS = [
   { files: { "later.txt": "later descendant\n" }, message: "descendant" },
 ];
 
-const CONTROLLER_COMMITS = [{
-  files: { "one.txt": "one\n", "two.txt": "two\n" },
-  message: "base",
-}];
+export { CONTROLLER_BASE_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE };
 
 export const UNBORN_FIXTURE = {
   commits: [],
@@ -139,11 +132,6 @@ export const PATH_MOVER_ARC_READY_FIXTURE = {
 export const THREAD_GIT_LINEAR_FIXTURE = {
   commits: LINEAR_COMMITS,
   name: "thread-git-linear",
-} satisfies GitTestFixtureSpec;
-
-export const CONTROLLER_BASE_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "checkpoint-controller-base",
 } satisfies GitTestFixtureSpec;
 
 export const HISTORY_LINEAR_FIXTURE = {
@@ -405,227 +393,6 @@ export const HISTORY_SIGNED_READY_FIXTURE = {
   revision: 1,
 } satisfies GitTestFixtureSpec<{ signedCommit: string }>;
 
-export const CONTROLLER_START_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-start-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const repository = await WorkbenchGitRepository.open(repositoryRoot);
-    const controller = new WorkbenchGitCheckpointController();
-    const freshPlan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "fresh plan",
-      paths: ["one.txt"],
-      threadId: "fresh-thread",
-    });
-    const head = await repository.currentHead();
-    const legacyCommit = await repository.createCommitFromTree(await repository.resolveTree(head), head, [
-      "workbench-git-checkpoint-v1",
-      JSON.stringify({ amendedFrom: null, intentName: "legacy plan", kind: "arc", scopePaths: ["two.txt"], version: 2 }),
-      "",
-    ].join("\n"));
-    await repository.updateRef(`refs/worktree/agents/legacy-thread/checkpoints/legacy-${legacyCommit.slice(0, 7)}`, legacyCommit);
-    return { freshPlanCheckpoint: freshPlan.checkpointCommit, legacyCommit };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{ freshPlanCheckpoint: string; legacyCommit: string }>;
-
-export const CONTROLLER_ADOPT_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-adopt-ready",
-  prepare: async ({ repositoryRoot, runGit }) => {
-    await write(repositoryRoot, "deleted.txt", "delete me\n");
-    await write(repositoryRoot, "ignored-delete/environment.toml", "ignore and delete me\n");
-    await write(repositoryRoot, "staged.txt", "staged base\n");
-    await runGit(["add", "deleted.txt", "ignored-delete/environment.toml", "staged.txt"]);
-    await runGit(["commit", "--quiet", "-m", "add adoption fixtures"]);
-    const controller = new WorkbenchGitCheckpointController();
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "adopt workspace work",
-      paths: ["one.txt"],
-      threadId: "adopt-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "adopt-thread",
-    });
-    await fs.rm(path.join(repositoryRoot, "ignored-delete", "environment.toml"));
-    await runGit(["add", "-u", "--", "ignored-delete/environment.toml"]);
-    await write(repositoryRoot, ".gitignore", "ignored/\nignored-delete/\n");
-    await runGit(["add", "--", ".gitignore"]);
-    const ignoredDeletionPlan = await controller.createPlan({
-      adoptPaths: [".gitignore", "ignored-delete/environment.toml"],
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "ignore and delete tracked file",
-      paths: [".gitignore", "ignored-delete/environment.toml"],
-      threadId: "ignored-deletion-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: ignoredDeletionPlan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "ignored-deletion-thread",
-    });
-    return { planCheckpoint: plan.checkpointCommit };
-  },
-  revision: 3,
-} satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
-
-export const CONTROLLER_FAILED_ADOPT_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-failed-adopt-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const repository = await WorkbenchGitRepository.open(repositoryRoot);
-    const controller = new WorkbenchGitCheckpointController();
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "atomic adoption",
-      paths: ["one.txt"],
-      threadId: "adopt-owner",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "adopt-owner",
-    });
-    await new GitArcRegistry(repository).claim({
-      checkpointCommit: await repository.currentHead(),
-      claimedPaths: ["collision.txt"],
-      harness: "opencode",
-      intentDescription: "",
-      intentName: "sibling collision",
-      proposalId: null,
-      threadId: "sibling-thread",
-    });
-    return { planCheckpoint: plan.checkpointCommit };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
-
-export const CONTROLLER_PARTIAL_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-partial-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const repository = await WorkbenchGitRepository.open(repositoryRoot);
-    const controller = new WorkbenchGitCheckpointController();
-    await createTranscript(repositoryRoot, "codex", "partial-thread");
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "change both files",
-      paths: ["one.txt", "two.txt"],
-      threadId: "partial-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "partial-thread",
-    });
-    return { planCheckpoint: plan.checkpointCommit, repositoryHead: await repository.currentHead() };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{ planCheckpoint: string; repositoryHead: string }>;
-
-export const CONTROLLER_REPLACEMENT_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-replacement-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const controller = new WorkbenchGitCheckpointController();
-    await createTranscript(repositoryRoot, "codex", "partial-thread");
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "change both files",
-      paths: ["one.txt", "two.txt"],
-      threadId: "partial-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "partial-thread",
-    });
-    await controller.addToArc({ cwd: repositoryRoot, harness: "codex", paths: ["three.txt"], threadId: "partial-thread" });
-    await write(repositoryRoot, "one.txt", "replace one\n");
-    await write(repositoryRoot, "two.txt", "rescind two\n");
-    await write(repositoryRoot, "three.txt", "commit three\n");
-    const replaceTarget = await controller.createProposal({
-      cwd: repositoryRoot, description: "", harness: "codex", paths: ["one.txt"], threadId: "partial-thread", title: "replace target",
-    });
-    const rescindTarget = await controller.createProposal({
-      cwd: repositoryRoot, description: "", harness: "codex", paths: ["two.txt"], threadId: "partial-thread", title: "rescind target",
-    });
-    const commitTarget = await controller.createProposal({
-      cwd: repositoryRoot, description: "", harness: "codex", paths: ["three.txt"], threadId: "partial-thread", title: "commit target",
-    });
-    const committed = await controller.commitProposal({
-      cwd: repositoryRoot,
-      description: "",
-      harness: "codex",
-      includeNewer: false,
-      proposalId: commitTarget.proposalId,
-      threadId: "partial-thread",
-      title: "commit target",
-    });
-    const replacementPlan = await controller.createPlan({
-      cwd: repositoryRoot, harness: "codex", intentName: "replace prior proposals", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: replacementPlan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "partial-thread",
-    });
-    return {
-      commitTargetProposalId: commitTarget.proposalId,
-      committedSha: committed.committedSha!,
-      replaceTargetProposalId: replaceTarget.proposalId,
-      rescindTargetProposalId: rescindTarget.proposalId,
-    };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{
-  commitTargetProposalId: string;
-  committedSha: string;
-  replaceTargetProposalId: string;
-  rescindTargetProposalId: string;
-}>;
-
-export const CONTROLLER_PUSHED_AMEND_READY_FIXTURE = {
-  commits: CONTROLLER_COMMITS,
-  name: "controller-pushed-amend-ready",
-  prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
-    const remoteRoot = path.join(bundleRoot, "remote.git");
-    await runGit(["init", "--bare", remoteRoot], { cwd: bundleRoot });
-    await runGit(["remote", "add", "origin", "../remote.git"]);
-    await runGit(["push", "--quiet", "origin", "HEAD:refs/heads/main"]);
-    const controller = new WorkbenchGitCheckpointController();
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "reject pushed amend",
-      paths: ["one.txt"],
-      threadId: "pushed-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "pushed-thread",
-    });
-    return { planCheckpoint: plan.checkpointCommit };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
-
 interface GitFixtureDemand {
   copies: number;
   spec: GitTestFixtureSpec<object>;
@@ -696,13 +463,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(UNBORN_FIXTURE, 3),
   ], nested: true }],
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 7),
-    demand(CONTROLLER_START_READY_FIXTURE, 1),
-    demand(CONTROLLER_ADOPT_READY_FIXTURE, 3),
-    demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),
-    demand(CONTROLLER_PARTIAL_READY_FIXTURE, 5),
-    demand(CONTROLLER_REPLACEMENT_READY_FIXTURE, 3),
-    demand(CONTROLLER_PUSHED_AMEND_READY_FIXTURE, 2),
+    demand(CONTROLLER_OPERATIONS_FIXTURE, 1),
   ], nested: true }],
 ]);
 

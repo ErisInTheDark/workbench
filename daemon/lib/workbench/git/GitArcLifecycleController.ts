@@ -151,8 +151,7 @@ export default class GitArcLifecycleController {
     }
     if (changes) {
       const paths = [...new Set([...existing, ...scopePaths])];
-      const tree = await repository.writeScopedWorktreeTree(paths, head);
-      const dirtyPaths = paths.length ? await repository.listChangedPaths(head, tree, paths) : [];
+      const dirtyPaths = paths.length ? await repository.listWorktreeChangedPaths(head, paths) : [];
       const exposed = dirtyPaths.filter((candidate) => existing.some((scope) => covers(scope, candidate))
         && !scopePaths.some((scope) => covers(scope, candidate)));
       if (exposed.length) throw new GitCheckpointDirtyPathsError(exposed, "Removed claims");

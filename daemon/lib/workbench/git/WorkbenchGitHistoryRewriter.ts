@@ -123,7 +123,7 @@ export default class WorkbenchGitHistoryRewriter {
 
     const livePaths = messageOnly
       ? []
-      : await this.repository.listChangedPaths(head, await this.repository.writeScopedWorktreeTree(paths, head), paths);
+      : await this.repository.listWorktreeChangedPaths(head, paths);
     if (!messageOnly && !livePaths.length) throw new Error("The selected files do not contain any current worktree changes to amend.");
     const targetTree = suppliedTargetTree
       ?? (messageOnly ? commits[0]!.metadata.tree : await this.repository.writeScopedWorktreeTree(paths, resolvedTarget));
@@ -144,7 +144,9 @@ export default class WorkbenchGitHistoryRewriter {
     let newParent = amendedCommit;
     for (const { commit, metadata } of commits.slice(1)) {
       const oldParent = metadata.parents[0]!;
-      const tree = await this.repository.mergeTree(oldParent, newParent, commit);
+      const tree = targetTree === targetMetadata.tree
+        ? metadata.tree
+        : await this.repository.mergeTree(oldParent, newParent, commit);
       const rewritten = await this.repository.createCommitFromTree(tree, newParent, metadata.message, metadata);
       branchCommits.set(commit, rewritten);
       newParent = rewritten;

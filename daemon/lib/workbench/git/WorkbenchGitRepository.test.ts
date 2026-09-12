@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import GitTestFixtureCache from "./GitTestFixtureCache";
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import parseGitFileChangeOutput from "./git-file-change-output";
 import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
@@ -40,6 +41,32 @@ test("unborn snapshots preserve staged and untracked files without creating bran
   }), /reference|exists/u);
   assert.equal(await repository.currentHead(), initial);
   assert.equal(await repository.writeIndexTree(), index);
+  await GitObjectReadSession.run(async () => {
+    const ref = "refs/worktree/object-reader-freshness";
+    assert.equal(await repository.readBlobAtRef(ref), null);
+    const first = await repository.writeBlob("first\n");
+    await repository.updateRef(ref, first);
+    assert.deepEqual(await repository.readBlobAtRef(ref), { blob: first, contents: "first\n" });
+    await repository.run(["pack-refs", "--all"]);
+    const second = await repository.writeBlob("second\n");
+    await repository.updateRef(ref, second);
+    await GitObjectReadSession.run(async () => {
+      assert.deepEqual(await repository.readBlobAtRef(ref), { blob: second, contents: "second\n" });
+      assert.equal(await repository.resolveCommit(initial.slice(0, 12)), initial);
+      assert.equal(await repository.resolveTree(initial), snapshot.tree);
+    });
+    await repository.deleteRef(ref, second);
+    assert.equal(await repository.readBlobAtRef(ref), null);
+    await repository.updateRef(ref, first);
+    assert.deepEqual(await repository.readBlobAtRef(ref), { blob: first, contents: "first\n" });
+  });
+  assert.equal(await repository.currentHead(), initial);
+  const failure = new Error("operation failed");
+  await assert.rejects(GitObjectReadSession.run(async () => {
+    assert.equal(await repository.resolveCommit(initial), initial);
+    throw failure;
+  }), (error) => error === failure);
+  await GitObjectReadSession.run(async () => assert.equal(await repository.resolveTree(initial), snapshot.tree));
 });
 
 test("large ref pattern sets preserve filtering, overlap deduplication, and object types", async (context) => {
@@ -86,27 +113,18 @@ test("repository containment preserves Windows aliases but rejects differently c
   }
 });
 
-test("object reads reject a truncated batch payload terminator", async (context) => {
-  const repository = new WorkbenchGitRepository(process.cwd());
-  context.mock.method(repository, "runBufferWithInput", async () => Buffer.from(`${"a".repeat(40)} blob 4\ntext`));
-  await assert.rejects(repository.readBlobAtRef("refs/test/blob"), /batch|terminator|truncated/u);
-});
-
-test("batch object decoding preserves byte boundaries and isolates missing and wrong-type objects", async (context) => {
+test("batch object decoding isolates missing and wrong-type objects", async (context) => {
   const repository = new WorkbenchGitRepository(process.cwd());
   const contents = Buffer.from("nul\0 and multibyte \u03bb\n");
-  const frame = (id: string, type: string, body: Buffer) => Buffer.concat([
-    Buffer.from(`${id} ${type} ${body.length}\n`), body, Buffer.from("\n"),
-  ]);
   const blobId = "a".repeat(40);
   const commitId = "b".repeat(40);
   const rawCommit = Buffer.from(`tree ${"c".repeat(40)}\nauthor Test <test@example.invalid> 0 +0000\ncommitter Test <test@example.invalid> 0 +0000\n\nmessage\n`);
-  context.mock.method(repository, "runBufferWithInput", async () => Buffer.concat([
-    frame(blobId, "blob", contents),
-    Buffer.from("refs/test/missing missing\n"),
-    frame(commitId, "commit", rawCommit),
-    frame(blobId, "blob", Buffer.from("last\n")),
-  ]));
+  context.mock.method(GitObjectReadSession, "read", async () => [
+    { objectId: blobId, type: "blob", size: contents.length, contents },
+    null,
+    { objectId: commitId, type: "commit", size: rawCommit.length, contents: rawCommit },
+    { objectId: blobId, type: "blob", size: 5, contents: Buffer.from("last\n") },
+  ]);
   const expressions = ["refs/test/blob", "refs/test/missing", "refs/test/commit", "refs/test/last"];
   const blobs = await repository.readBlobs(expressions);
   assert.deepEqual(blobs.blobs.get(expressions[0]!), { blob: blobId, contents: contents.toString("utf8") });
@@ -396,6 +414,10 @@ test("reads objects and preserves exact changes across literal, binary, and larg
   assert.deepEqual(await repository.buildFileChanges(head, tree, ["literal[1].txt"]), [
     changes.find(({ path: filePath }) => filePath === "literal[1].txt"),
   ]);
+  const selectedTree = await repository.writeTreeWithPathsFromSource(head, tree, ["literal[1].txt"]);
+  assert.deepEqual(await repository.listAllChangedPaths(head, selectedTree), ["literal[1].txt"]);
+  assert.notEqual(selectedTree, tree);
+  assert.equal(await repository.writeTreeWithPathsFromSource(selectedTree, tree, ["literal[1].txt"]), selectedTree);
   const gitlinkTree = (await repository.runWithInput(["mktree"], `160000 commit ${head}\tmodule\n`)).trim();
   const linkChanges = await repository.buildFileChanges(head, gitlinkTree, ["module"]);
   assert.deepEqual(linkChanges.map(({ path: filePath, kind }) => ({ path: filePath, kind })), [

@@ -679,8 +679,7 @@ export default class GitArcPlanController {
     const checkpoint = await store.readCheckpoint(harness, threadId, retainedArc.checkpointCommit);
     const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
     const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;
-    const currentTree = await repository.writeScopedWorktreeTree(retainedArc.claimedPaths, baseline);
-    const dirtyPaths = await repository.listChangedPaths(baseline, currentTree, retainedArc.claimedPaths);
+    const dirtyPaths = await repository.listWorktreeChangedPaths(baseline, retainedArc.claimedPaths);
     const uncovered = dirtyPaths.filter((dirtyPath) => !planPaths.some((planPath) => pathIsCoveredBy(dirtyPath, planPath)));
     if (uncovered.length) {
       throw new GitArcRejectionError({ reason: "uncoveredDirtyClaims", paths: uncovered }, `A replacement plan must include every dirty claimed file: ${uncovered.join(", ")}`);

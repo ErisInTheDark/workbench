@@ -1,12 +1,12 @@
 /*
- * Keywords: git, history, checkpoint, proposal, remap, unborn.
  * Exports:
- * - default GitArcHistoryRewriter: rebuild affected Git-backed arc objects and prepare one atomic ref remap. Keywords: git, arc, checkpoint, proposal, rewrite.
- * - GitArcHistoryRewritePlan: prepared ref updates, deletes, commit aliases, and bounded warnings. Keywords: git, transaction, sha, alias.
+ * - default GitArcHistoryRewriter: remap affected arc objects, reusing content when parent trees are unchanged.
+ * - GitArcHistoryRewritePlan: prepared ref updates, deletes, commit aliases and bounded warnings.
  * - GitArcHistoryRewriteOptions: refs excluded from remapping.
  * - COMMIT_REWRITE_MAP_REF: durable commit alias ref.
  */
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import {
   CHECKPOINT_METADATA_MARKER,
@@ -83,7 +83,16 @@ export default class GitArcHistoryRewriter {
     const commitBatch = await this.repository.readCommits([
       ...checkpointRefs.map(({ value }) => value),
       ...proposalRefs.map(({ value }) => value),
+      ...branchCommits.keys(),
+      ...branchCommits.values(),
     ]);
+    // Newly prepared commits are not in the batch; their tree identities are known at creation.
+    const preparedTrees = new Map<string, string>();
+    const treeOf = (commit: string) => {
+      const tree = preparedTrees.get(commit) ?? commitBatch.commits.get(commit)?.tree;
+      if (!tree) throw new Error(commitBatch.errors.get(commit) ?? "Rewrite parent tree is unavailable.");
+      return tree;
+    };
     const pendingCheckpoints: Array<{
       entry: (typeof checkpointRefs)[number];
       metadata: CheckpointMetadata | null;
@@ -120,12 +129,16 @@ export default class GitArcHistoryRewriter {
       if (!newParent && !metadataChanged) continue;
       const parent = newParent ?? oldParent;
       let tree = oldCommit.tree;
-      if (newParent && oldParent && !metadata) {
-        tree = await this.repository.mergeTree(oldParent, newParent, entry.value);
-      } else if (newParent && metadata?.scopePaths.length) {
-        tree = await this.repository.writeTreeWithPathsFromSource(newParent, entry.value, metadata.scopePaths);
-      } else if (newParent) {
-        tree = await this.repository.resolveTree(newParent);
+      if (newParent && oldParent) {
+        const parentContentChanged = treeOf(newParent) !== treeOf(oldParent);
+        if (!metadata) {
+          if (parentContentChanged) tree = await this.repository.mergeTree(oldParent, newParent, entry.value);
+        } else if (!metadata.scopePaths.length) {
+          tree = treeOf(newParent);
+        } else if (parentContentChanged || oldCommit.tree !== treeOf(oldParent)) {
+          // Full checkpoints may capture incidental dirt outside their declared rewrite scope.
+          tree = await this.repository.writeTreeWithPathsFromSource(newParent, entry.value, metadata.scopePaths);
+        }
       }
       const next = await this.repository.createCommitFromTree(
         tree,
@@ -134,6 +147,7 @@ export default class GitArcHistoryRewriter {
         oldCommit,
       );
       commits.set(entry.value, next);
+      preparedTrees.set(next, tree);
       const nextRef = replaceCheckpointSuffix(entry.ref, next.slice(0, 8));
       if (nextRef === entry.ref) updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });
       else {
@@ -160,16 +174,19 @@ export default class GitArcHistoryRewriter {
       const metadataChanged = remapped && proposalMessage(remapped) !== proposalMessage(metadata!);
       if (!newParent && !metadataChanged) continue;
       const parent = newParent ?? oldParent;
-      const tree = newParent && oldParent ? await this.repository.mergeTree(oldParent, newParent, entry.value) : oldCommit.tree;
+      const tree = newParent && oldParent && treeOf(newParent) !== treeOf(oldParent)
+        ? await this.repository.mergeTree(oldParent, newParent, entry.value)
+        : oldCommit.tree;
       const next = await this.repository.createCommitFromTree(tree, parent, remapped ? proposalMessage(remapped) : oldCommit.message, oldCommit);
       commits.set(entry.value, next);
+      preparedTrees.set(next, tree);
       updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });
     }
 
     for (const entry of refs.filter(({ objectType, ref }) => objectType === "blob" && /\/arc-outcomes\//u.test(ref))) {
       const outcome = JSON.parse(await this.repository.readBlob(entry.value)) as ArcOutcome;
       const remapped = remapArcOutcome(outcome, commits);
-      if (JSON.stringify(remapped) === JSON.stringify(outcome)) continue;
+      if (areDeeplyEqual(remapped, outcome)) continue;
       const blob = await this.repository.writeBlob(`${JSON.stringify(remapped)}\n`);
       const nextRef = entry.ref.replace(/\/[^/]+$/u, `/${remapped.sourceCheckpoint}`);
       if (nextRef === entry.ref) updates.push({ newValue: blob, oldValue: entry.value, ref: entry.ref });

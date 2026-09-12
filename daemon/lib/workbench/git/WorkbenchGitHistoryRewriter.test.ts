@@ -1,8 +1,4 @@
-/*
- * Keywords: git, amend, history, planning, snapshot, remapping.
- * Exports:
- * - No production exports; bounded concurrent regression wards cover linear plumbing amendments, conflict rollback, scoped checkpoint snapshots, and SHA remapping. Keywords: git, amend, history, arc, scope, snapshot, concurrency, test.
- */
+/* No production exports. Tests protect linear amendments, unchanged trees, conflict rollback, scoped snapshots and commit remapping. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -85,6 +81,13 @@ historyTest("rewrites only an older commit message without normalizing the workt
   await git(root, ["add", "later.txt"]);
   const worktreeBefore = await git(root, ["diff", "--binary"]);
   const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
+  const oldHead = await repositoryOwner.currentHead();
+  const before = await repositoryOwner.readCommits([target, oldHead]);
+  const controller = new WorkbenchGitCheckpointController();
+  await controller.createPlan({
+    cwd: root, harness: "codex", threadId: "message-plan", intentName: "selected snapshot",
+    paths: ["selected.txt"], adoptPaths: ["selected.txt"],
+  });
 
   const result = await new WorkbenchGitHistoryRewriter(repositoryOwner).amend({
     message: "replacement message",
@@ -97,6 +100,13 @@ historyTest("rewrites only an older commit message without normalizing the workt
   assert.equal((await git(root, ["show", "-s", "--format=%s", "HEAD"])).trim(), "descendant");
   assert.equal(await git(root, ["diff", "--binary"]), worktreeBefore);
   assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
+  const after = await repositoryOwner.readCommits([result.amendedCommit, result.commit]);
+  assert.equal(after.commits.get(result.amendedCommit)?.tree, before.commits.get(target)?.tree);
+  assert.equal(after.commits.get(result.commit)?.tree, before.commits.get(oldHead)?.tree);
+  const remappedPlan = await controller.findPlanState({ cwd: root, harness: "codex", threadId: "message-plan" });
+  assert.ok(remappedPlan);
+  assert.equal(await git(root, ["show", `${remappedPlan.checkpointCommit}:selected.txt`]), "unstaged and unrelated\n");
+  assert.equal(await git(root, ["show", `${remappedPlan.checkpointCommit}:later.txt`]), await git(root, ["show", "HEAD:later.txt"]));
 });
 
 historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
