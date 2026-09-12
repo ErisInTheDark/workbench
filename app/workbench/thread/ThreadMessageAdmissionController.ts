@@ -19,6 +19,7 @@ import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
 import { isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
 import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/codex/thread-state";
 import type { ThreadPayload } from "workbench-shared/types";
+import { isPendingWorkbenchTurn } from "workbench-shared/workbench/thread/thread-admission";
 import type { ThreadDocumentStore as ThreadDocumentStoreApi } from "../state/ThreadDocumentStore";
 import type { ThreadSourceStore } from "../state/ThreadSourceStore";
 import type { ThreadOptimisticInputStore } from "./ThreadOptimisticInputStore";
@@ -49,14 +50,22 @@ export interface ThreadMessageAdmissionTarget {
   readonly threadKey: string;
 }
 
+interface ThreadMessageProjectionContext {
+  clientUserMessageId: string;
+  input: UserInput[];
+  projectContextGeneration: number;
+  threadKey: string;
+}
+
 export interface ThreadMessageAdmissionRequest {
-  projectStartedTurn: (context: {
-    clientUserMessageId: string;
-    input: UserInput[];
-    projectContextGeneration: number;
+  projectFailedTurn: (context: ThreadMessageProjectionContext) => WorkbenchTurnId | null;
+  projectPendingTurn: (context: ThreadMessageProjectionContext) => void;
+  projectStartedTurn: (context: ThreadMessageProjectionContext & {
     sourceRevision: number;
-    threadKey: string;
     turn: Turn;
+  }) => void;
+  projectSteeredTurn: (context: ThreadMessageProjectionContext & {
+    turnId: WorkbenchTurnId;
   }) => void;
   resumeRequest: CodexRequest & { method: "thread/resume"; params: ThreadResumeParams };
   startRequest: CodexRequest & {
@@ -181,7 +190,7 @@ function ThreadMessageAdmissionController({
     request: ThreadMessageAdmissionRequest,
   ): Promise<ThreadMessageAdmissionResult> {
     const activeTurn = getCurrentInProgressTurn(thread);
-    if (!activeTurn) {
+    if (!activeTurn || isPendingWorkbenchTurn(activeTurn)) {
       throw new ThreadMessageNotSentError();
     }
 
@@ -269,7 +278,12 @@ function ThreadMessageAdmissionController({
     request: ThreadMessageAdmissionRequest,
   ): Promise<ThreadMessageAdmissionResult> {
     const clientUserMessageId = optimisticInputs.createClientUserMessageId();
-    const sourceRevision = sources.getRevision(capture.threadKey);
+    const projectionContext = {
+      clientUserMessageId,
+      input,
+      projectContextGeneration: capture.projectContextGeneration,
+      threadKey: capture.threadKey,
+    };
     const startRequest = {
       ...request.startRequest,
       params: {
@@ -279,6 +293,16 @@ function ThreadMessageAdmissionController({
         threadId: capture.threadId,
       },
       workbenchHarness: "codex",
+    };
+    request.projectPendingTurn(projectionContext);
+    const sourceRevision = sources.getRevision(capture.threadKey);
+    const settleFailedProjection = () => {
+      const deliveredTurnId = request.projectFailedTurn(projectionContext);
+      if (!deliveredTurnId) {
+        return null;
+      }
+      reportAccepted(capture, clientUserMessageId, deliveredTurnId, input);
+      return { handle: clientUserMessageId, kind: "admitted" } as const;
     };
     let response: CodexJsonRpcResponse<ManagedMessageAdmissionResponse>;
     try {
@@ -293,24 +317,34 @@ function ThreadMessageAdmissionController({
         workbenchHarness: "codex",
       });
     } catch (error) {
+      const admitted = settleFailedProjection();
+      if (admitted) return admitted;
       if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw error;
     }
     if (isCodexJsonRpcFailure(response)) {
+      const admitted = settleFailedProjection();
+      if (admitted) return admitted;
       if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw new Error(response.error.message);
     }
     if (response.result?.kind === "steered") {
       const turnId = response.result.turnId.trim();
       if (!turnId) {
+        const admitted = settleFailedProjection();
+        if (admitted) return admitted;
         if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
         throw new Error("Managed message admission returned an empty steer turn id.");
       }
-      reportAccepted(capture, clientUserMessageId, WorkbenchTurnIdSchema.parse(turnId), input);
+      const admittedTurnId = WorkbenchTurnIdSchema.parse(turnId);
+      request.projectSteeredTurn({ ...projectionContext, turnId: admittedTurnId });
+      reportAccepted(capture, clientUserMessageId, admittedTurnId, input);
       return { handle: clientUserMessageId, kind: "admitted" };
     }
     const turn = response.result?.kind === "started" ? response.result.turn : null;
     if (!turn || typeof turn.id !== "string" || !turn.id.trim()) {
+      const admitted = settleFailedProjection();
+      if (admitted) return admitted;
       if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw new Error("turn/start returned an empty turn id.");
     }
@@ -346,11 +380,15 @@ function ThreadMessageAdmissionController({
     if (!connectedThread) {
       throw new ThreadMessageNotSentError();
     }
+    const activeTurn = getCurrentInProgressTurn(connectedThread);
     if (
       !connected.startNewTurn
       && isThreadStatusActive(getThreadStatus(connectedThread))
-      && getCurrentInProgressTurn(connectedThread)
+      && activeTurn
     ) {
+      if (isPendingWorkbenchTurn(activeTurn)) {
+        throw new ThreadMessageNotSentError();
+      }
       return await dispatchSteer(connected, connectedThread, input, request);
     }
 

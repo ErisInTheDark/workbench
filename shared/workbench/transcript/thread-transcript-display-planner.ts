@@ -1,7 +1,7 @@
 /*
  * CanonicalTranscriptItem/CanonicalTranscriptVirtualItem: durable indexed and explicit live-tail presentation inputs. Keywords: transcript, item, order.
  * CanonicalTranscriptSegment/CanonicalTranscriptDisplayPlan: validated adjacent-turn display sequence with stable segment ownership. Keywords: transcript, display, grouping, terminal.
- * planCanonicalTranscriptDisplay: validate canonical ancestry, sort once by itemIndex, place empty turns, and isolate virtual tail items. Keywords: transcript, order, validation.
+ * planCanonicalTranscriptDisplay: validate canonical ancestry, sort once by itemIndex, place empty turns, and isolate virtual head/tail items. Keywords: transcript, order, validation.
  */
 export interface CanonicalTranscriptPayload {
   id: string;
@@ -88,6 +88,25 @@ function insertEmptyTurns<Payload extends CanonicalTranscriptPayload>(
   return result;
 }
 
+function insertVirtualHeads<Payload extends CanonicalTranscriptPayload>(
+  groups: readonly DisplayGroup<Payload>[],
+  virtualHead: readonly CanonicalTranscriptVirtualItem<Payload>[],
+) {
+  const itemsByTurnId = new Map<string, Payload[]>();
+  for (const { payload, turnId } of virtualHead) {
+    const items = itemsByTurnId.get(turnId);
+    if (items) items.push(payload);
+    else itemsByTurnId.set(turnId, [payload]);
+  }
+  const insertedTurnIds = new Set<string>();
+  return groups.flatMap((group) => {
+    const items = itemsByTurnId.get(group.turnId);
+    if (!items || insertedTurnIds.has(group.turnId)) return [group];
+    insertedTurnIds.add(group.turnId);
+    return [{ items, kind: "virtual" as const, turnId: group.turnId }, group];
+  });
+}
+
 function finalizeSegments<Payload extends CanonicalTranscriptPayload>(groups: readonly DisplayGroup<Payload>[]) {
   const firstSegmentByTurn = new Map<string, number>();
   const lastSegmentByTurn = new Map<string, number>();
@@ -117,10 +136,12 @@ function finalizeSegments<Payload extends CanonicalTranscriptPayload>(groups: re
 export function planCanonicalTranscriptDisplay<Payload extends CanonicalTranscriptPayload>({
   items,
   turns,
+  virtualHead = [],
   virtualTail = [],
 }: {
   items: readonly CanonicalTranscriptItem<Payload>[];
   turns: readonly CanonicalTranscriptTurn[];
+  virtualHead?: readonly CanonicalTranscriptVirtualItem<Payload>[];
   virtualTail?: readonly CanonicalTranscriptVirtualItem<Payload>[];
 }): CanonicalTranscriptDisplayPlan<Payload> {
   assertUnique(turns.map(({ turnId }) => turnId), "turn id");
@@ -137,13 +158,14 @@ export function planCanonicalTranscriptDisplay<Payload extends CanonicalTranscri
       throw new Error(`Canonical transcript item ${item.itemId} payload id is ${item.payload.id}.`);
     }
   }
-  for (const item of virtualTail) {
+  for (const item of [...virtualHead, ...virtualTail]) {
     if (!turnIds.has(item.turnId)) {
       throw new Error(`Virtual transcript item ${item.payload.id} references missing turn ${item.turnId}.`);
     }
   }
   assertUnique([
     ...items.map(({ itemId }) => itemId),
+    ...virtualHead.map(({ payload }) => payload.id),
     ...virtualTail.map(({ payload }) => payload.id),
   ], "visible item id");
 
@@ -154,9 +176,10 @@ export function planCanonicalTranscriptDisplay<Payload extends CanonicalTranscri
     turns,
     occupiedTurnIds,
   );
+  const groupsWithVirtualHeads = insertVirtualHeads(canonicalGroups, virtualHead);
   const virtualGroups = groupAdjacentItems(virtualTail, "virtual");
   return {
     orderedItems,
-    segments: finalizeSegments([...canonicalGroups, ...virtualGroups]),
+    segments: finalizeSegments([...groupsWithVirtualHeads, ...virtualGroups]),
   };
 }

@@ -74,14 +74,18 @@ test("user message copy Markdown preserves source syntax and excludes attachment
   assert.equal(getUserMessageCopyMarkdown([{ type: "localImage", path: "C:/images/only.png" }]), "");
 });
 
-test("ordinary user messages and pending steers render source-Markdown copy actions", () => {
+test("ordinary user messages and pending inputs render source-Markdown copy actions", () => {
   const html = renderUserItems([
     createUserMessage("prompt", "Original **prompt**"),
     withWorkbenchInputState(createUserMessage("792ed0f9-6f35-441b-abde-39a7a8ddcb67", "Pending *steer*"), { kind: "optimistic", placement: "steer", status: "pending" }),
+    withWorkbenchInputState(createUserMessage("pending-initial", "Pending initial"), { kind: "optimistic", placement: "initial", status: "pending" }),
+    withWorkbenchInputState(createUserMessage("admitted-initial", "Admitted initial"), { kind: "optimistic", placement: "initial", status: "sent" }),
   ]);
 
-  assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 2, html);
+  assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 4, html);
   assert.match(html, /data-thread-user-message-state="pending-steer"/u);
+  assert.equal(html.match(/data-thread-user-message-state="pending-initial"/gu)?.length, 2, html);
+  assert.equal(html.match(/data-workbench-spinning-border="true"/gu)?.length, 3, html);
 });
 
 test("approval-note metadata stays hidden from steer rendering and copy Markdown", () => {

@@ -4,7 +4,9 @@
  * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state.
  * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory and enqueue clock.
  * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message.
+ * - OptimisticInitialInputProjection: read-only initial input evidence for source-specific presentation.
  * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth.
+ * - isUndeliveredInitialOptimisticInputItem: detect visible initial input awaiting canonical transcript delivery.
  * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation.
  * - default ThreadOptimisticInputStore: create the optimistic input owner.
  */
@@ -48,15 +50,22 @@ export interface EnqueueInitialOptimisticInputOptions {
   status?: OptimisticInputStatus;
 }
 
+export interface OptimisticInitialInputProjection {
+  readonly item: UserMessageItem;
+  readonly turnId: string;
+}
+
 export interface ThreadOptimisticInputStore {
   apply: (thread: ThreadPayload, steerHistory: readonly WorkbenchSteerHistoryEntry[]) => ThreadPayload;
   clear: () => void;
   confirmCanonicalUserMessage: (threadKey: string, turnId: string, item: UserMessageItem) => string | null;
   createClientUserMessageId: () => string;
   deleteThread: (threadKey: string) => void;
+  discard: (handle: string) => boolean;
   enqueueInitial: (thread: ThreadPayload, turnId: string, input: UserInput[], options?: EnqueueInitialOptimisticInputOptions) => OptimisticInputEntry;
   enqueueSteer: (thread: ThreadPayload, turnId: string, input: UserInput[], status?: OptimisticInputStatus) => OptimisticInputEntry;
-  movePending: (handle: string, turnId: string) => boolean;
+  getInitialProjections: (threadKey: string) => readonly OptimisticInitialInputProjection[];
+  movePending: (handle: string, turnId: string, placement?: OptimisticInputPlacement) => boolean;
   strip: (thread: ThreadPayload) => ThreadPayload;
   transition: (handle: string, status: Exclude<OptimisticInputStatus, "pending">) => OptimisticInputStatus | null;
   transitionPendingSteers: (threadKey: string, turnId: string, status: "failed" | "interrupted") => boolean;
@@ -85,6 +94,13 @@ function isOptimisticItem(item: ThreadItem) {
 export function isPendingInitialOptimisticInputItem(item: ThreadItem) {
   const input = getWorkbenchInputState(item);
   return input?.kind === "optimistic" && input.placement === "initial" && input.status === "pending";
+}
+
+export function isUndeliveredInitialOptimisticInputItem(item: ThreadItem) {
+  const input = getWorkbenchInputState(item);
+  return input?.kind === "optimistic"
+    && input.placement === "initial"
+    && (input.status === "pending" || input.status === "sent");
 }
 
 function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "clientUserMessageId">): UserMessageItem {
@@ -323,21 +339,38 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
         }
       }
     },
+    discard(handle) {
+      const index = entries.findIndex((entry) => entry.handle === handle);
+      if (index < 0) {
+        return false;
+      }
+      entries.splice(index, 1);
+      return true;
+    },
     enqueueInitial(thread, turnId, input, options = {}) {
       return enqueue(thread, turnId, input, "initial", options.status ?? "pending", options.clientUserMessageId);
     },
     enqueueSteer(thread, turnId, input, status = "pending") {
       return enqueue(thread, turnId, input, "steer", status);
     },
-    movePending(handle, turnId) {
+    getInitialProjections(threadKey) {
+      return entries.flatMap(entry => (
+        entry.threadKey === threadKey
+        && entry.placement === "initial"
+        && (entry.status === "pending" || entry.status === "sent")
+          ? [{ item: entry.item, turnId: entry.turnId }]
+          : []
+      ));
+    },
+    movePending(handle, turnId, placement) {
       const index = entries.findIndex((entry) => entry.handle === handle);
       if (index < 0 || entries[index]?.status !== "pending") {
         return false;
       }
-      if (entries[index]?.turnId === turnId) {
+      if (entries[index]?.turnId === turnId && (!placement || entries[index]?.placement === placement)) {
         return true;
       }
-      replaceEntry(index, { ...entries[index]!, turnId });
+      replaceEntry(index, { ...entries[index]!, placement: placement ?? entries[index]!.placement, turnId });
       return true;
     },
     strip(thread) {

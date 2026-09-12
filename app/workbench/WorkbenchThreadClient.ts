@@ -28,7 +28,7 @@ import type { ThreadGoalSetResponse } from "workbench-shared/codex/generated/app
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadReadResponse as ProviderThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { WorkbenchThreadResponse } from "workbench-shared/workbench/thread/workbench-thread-identity";
-import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
@@ -941,6 +941,7 @@ function WorkbenchThreadClient(
               textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
               if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
             },
+            readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey("codex", thread.id)),
             transcripts: {
               subscribe: (params, listener, streamListener) => transcripts.subscribe(params, listener, streamListener),
               unsubscribe: async params => {
@@ -4735,7 +4736,75 @@ function WorkbenchThreadClient(
     const codexAdmissionThreadKey = prepareCodexMessageAdmission(thread, sendOptions);
     if (codexAdmissionThreadKey) {
       const threadKey = codexAdmissionThreadKey;
+      let pendingProjection: { handle: string; turnId: PendingTurnId } | null = null;
+      const withoutPendingProjection = (source: ThreadPayload) => {
+        if (!pendingProjection) return source;
+        const turns = source.turns.filter((turn) => turn.id !== pendingProjection?.turnId);
+        const turnHistory = source.turnHistory.filter((entry) => entry.turnId !== pendingProjection?.turnId);
+        return turns.length === source.turns.length && turnHistory.length === source.turnHistory.length
+          ? source
+          : { ...source, turnHistory, turns };
+      };
+      const discardPendingProjection = (clientUserMessageId: string) => {
+        const currentSource = threadSources.get(threadKey);
+        const deliveredTurn = currentSource?.turns.find((turn) => turn.items.some((item) => (
+          item.type === "userMessage" && item.clientId === clientUserMessageId
+        ))) ?? null;
+        const nextSource = currentSource ? withoutPendingProjection(currentSource) : null;
+        const didDiscard = optimisticInputs.discard(clientUserMessageId);
+        pendingProjection = null;
+        if (nextSource && nextSource !== currentSource) {
+          commitCanonicalThreadSource(nextSource);
+        }
+        if (didDiscard || nextSource !== currentSource) {
+          bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
+          if (threadDocuments.getSelectedThreadKey() === threadKey) {
+            flushSelectedThreadRendering();
+          }
+        }
+        return deliveredTurn ? WorkbenchTurnIdSchema.parse(deliveredTurn.id) : null;
+      };
       const admission = await messageAdmissionController.admit(thread.id, normalizedInput, {
+        projectFailedTurn: ({ clientUserMessageId }) => discardPendingProjection(clientUserMessageId),
+        projectPendingTurn: ({
+          clientUserMessageId,
+          input: pendingInput,
+          projectContextGeneration: admissionProjectGeneration,
+          threadKey: pendingThreadKey,
+        }) => {
+          if (
+            disposed
+            || admissionProjectGeneration !== projectContextGeneration
+            || pendingThreadKey !== threadKey
+          ) {
+            throw new ThreadMessageNotSentError();
+          }
+          const currentSource = threadSources.get(pendingThreadKey);
+          if (!currentSource) {
+            throw new ThreadMessageNotSentError();
+          }
+          const pendingTurnId = PendingTurnIdSchema.parse(crypto.randomUUID());
+          const pendingTurn = withWorkbenchTurnAdmission(createStreamingTurn(pendingTurnId), "providerPending");
+          const pendingSource = {
+            ...currentSource,
+            turnHistory: mergeThreadTurnHistory([createLoadedTurnHistoryEntry(pendingTurn)], currentSource.turnHistory),
+            turns: [...currentSource.turns, pendingTurn],
+          };
+          const entry = optimisticInputs.enqueueInitial(pendingSource, pendingTurnId, pendingInput, {
+            clientUserMessageId,
+          });
+          pendingProjection = { handle: entry.handle, turnId: pendingTurnId };
+          try {
+            commitCanonicalThreadSource(pendingSource);
+            bumpOverlayRevisionForKey(entry.threadKey, "optimisticRevision");
+            if (threadDocuments.getSelectedThreadKey() === pendingThreadKey) {
+              flushSelectedThreadRendering();
+            }
+          } catch (error) {
+            discardPendingProjection(clientUserMessageId);
+            throw error;
+          }
+        },
         projectStartedTurn: ({
           clientUserMessageId,
           input: startedInput,
@@ -4749,10 +4818,13 @@ function WorkbenchThreadClient(
             || admissionProjectGeneration !== projectContextGeneration
             || startedThreadKey !== threadKey
           ) {
+            discardPendingProjection(clientUserMessageId);
             return;
           }
           const currentSource = threadSources.get(startedThreadKey);
           if (!currentSource) {
+            optimisticInputs.discard(clientUserMessageId);
+            pendingProjection = null;
             return;
           }
           const sourceAdvanced = threadSources.getRevision(startedThreadKey) !== sourceRevision;
@@ -4760,12 +4832,17 @@ function WorkbenchThreadClient(
           const mergedTurn = sourceAdvanced && liveTurn
             ? mergeLiveStreamingTurn(liveTurn, turn)
             : mergeLiveStreamingTurn(turn, liveTurn);
+          const sourceWithoutPending = withoutPendingProjection(currentSource);
           const nextSource = {
-            ...currentSource,
+            ...sourceWithoutPending,
             status: sourceAdvanced ? currentSource.status : "active",
-            turns: currentSource.turns.some((candidate) => candidate.id === turn.id)
-              ? currentSource.turns.map((candidate) => candidate.id === turn.id ? mergedTurn : candidate)
-              : [...currentSource.turns, mergedTurn],
+            turnHistory: mergeThreadTurnHistory(
+              [createLoadedTurnHistoryEntry(mergedTurn)],
+              sourceWithoutPending.turnHistory,
+            ),
+            turns: sourceWithoutPending.turns.some((candidate) => candidate.id === turn.id)
+              ? sourceWithoutPending.turns.map((candidate) => candidate.id === turn.id ? mergedTurn : candidate)
+              : [...sourceWithoutPending.turns, mergedTurn],
           };
           if (!sourceAdvanced) {
             setThreadStatusSource(nextSource, "active");
@@ -4776,14 +4853,65 @@ function WorkbenchThreadClient(
             return;
           }
           sendOptions.onTurnAdmitted?.(turn.id);
-          const entry = optimisticInputs.enqueueInitial(committedSource, turn.id, startedInput, {
-            clientUserMessageId,
-            status: "sent",
-          });
-          bumpOverlayRevisionForKey(entry.threadKey, "optimisticRevision");
+          const movedPending = optimisticInputs.movePending(clientUserMessageId, turn.id);
+          if (movedPending) {
+            optimisticInputs.transition(clientUserMessageId, "sent");
+          } else if (!committedSource.turns.some((candidate) => candidate.items.some((item) => (
+            item.type === "userMessage" && item.clientId === clientUserMessageId
+          )))) {
+            optimisticInputs.enqueueInitial(committedSource, turn.id, startedInput, {
+              clientUserMessageId,
+              status: "sent",
+            });
+          }
+          pendingProjection = null;
+          bumpOverlayRevisionForKey(startedThreadKey, "optimisticRevision");
           if (threadDocuments.getSelectedThreadKey() === startedThreadKey) {
             flushSelectedThreadRendering();
             options.onThreadStarted?.(projectThreadSource(startedThreadKey) ?? committedSource);
+          }
+        },
+        projectSteeredTurn: ({
+          clientUserMessageId,
+          projectContextGeneration: admissionProjectGeneration,
+          threadKey: steeredThreadKey,
+          turnId,
+        }) => {
+          if (
+            disposed
+            || admissionProjectGeneration !== projectContextGeneration
+            || steeredThreadKey !== threadKey
+          ) {
+            discardPendingProjection(clientUserMessageId);
+            return;
+          }
+          const currentSource = threadSources.get(steeredThreadKey);
+          if (!currentSource) {
+            optimisticInputs.discard(clientUserMessageId);
+            pendingProjection = null;
+            return;
+          }
+          const sourceWithoutPending = withoutPendingProjection(currentSource);
+          const steeredTurn = sourceWithoutPending.turns.find((candidate) => candidate.id === turnId)
+            ?? createStreamingTurn(turnId);
+          const nextSource = {
+            ...sourceWithoutPending,
+            status: "active",
+            turnHistory: mergeThreadTurnHistory(
+              [createLoadedTurnHistoryEntry(steeredTurn)],
+              sourceWithoutPending.turnHistory,
+            ),
+            turns: sourceWithoutPending.turns.some((candidate) => candidate.id === turnId)
+              ? sourceWithoutPending.turns
+              : [...sourceWithoutPending.turns, steeredTurn],
+          };
+          setThreadStatusSource(nextSource, "active");
+          commitCanonicalThreadSource(nextSource);
+          optimisticInputs.movePending(clientUserMessageId, turnId, "steer");
+          pendingProjection = null;
+          bumpOverlayRevisionForKey(steeredThreadKey, "optimisticRevision");
+          if (threadDocuments.getSelectedThreadKey() === steeredThreadKey) {
+            flushSelectedThreadRendering();
           }
         },
         resumeRequest: {

@@ -8,7 +8,10 @@ import { test } from "node:test";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
-import ThreadOptimisticInputStore, { isPendingInitialOptimisticInputItem } from "./ThreadOptimisticInputStore.ts";
+import ThreadOptimisticInputStore, {
+  isPendingInitialOptimisticInputItem,
+  isUndeliveredInitialOptimisticInputItem,
+} from "./ThreadOptimisticInputStore.ts";
 import { applySteerHistoryToThread } from "workbench-shared/workbench/thread/thread-steer-history";
 import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
@@ -103,9 +106,11 @@ test("connecting state derives only from pending initial optimistic input", () =
   const store = ThreadOptimisticInputStore();
   const pending = store.enqueueInitial(thread(), "turn", input("initial"));
   assert.equal(isPendingInitialOptimisticInputItem(pending.item), true);
+  assert.equal(isUndeliveredInitialOptimisticInputItem(pending.item), true);
   store.transition(pending.handle, "sent");
   const sent = store.apply(thread(), []).turns[0]?.items[0];
   assert.equal(sent ? isPendingInitialOptimisticInputItem(sent) : null, false);
+  assert.equal(sent ? isUndeliveredInitialOptimisticInputItem(sent) : null, true);
 });
 
 test("native initial identity collapses only its exact canonical alias", () => {
@@ -117,6 +122,13 @@ test("native initial identity collapses only its exact canonical alias", () => {
   store.confirmCanonicalUserMessage("codex:thread", "turn", canonical);
   const projected = store.apply(thread([canonical]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical"]);
+  assert.deepEqual(store.getInitialProjections("codex:thread").map(({ item, turnId }) => ({
+    itemId: item.id,
+    turnId,
+  })), [{
+    itemId: entry.handle,
+    turnId: "turn",
+  }]);
 });
 
 test("identical initial messages with different native identities remain distinct", () => {
@@ -172,6 +184,29 @@ test("clear does not reuse local handles and deleteThread is exact-key scoped", 
   store.deleteThread("codex:thread");
   assert.equal(store.apply(thread(), []).turns[0]?.items.length, 0);
   assert.equal(store.apply(other, []).turns[0]?.items.length, 1);
+});
+
+test("pending relocation can become a steer and exact discard preserves siblings", () => {
+  const store = ThreadOptimisticInputStore({ now: () => 5_000 });
+  const source = thread();
+  const moved = store.enqueueInitial(source, "turn", input("move"));
+  const sibling = store.enqueueInitial(source, "turn", input("stay"));
+
+  assert.equal(store.movePending(moved.handle, "other", "steer"), true);
+  source.turns.push({ ...source.turns[0]!, id: "other", items: [] });
+  const projected = store.apply(source, []);
+  const movedItem = projected.turns.find((turn) => turn.id === "other")?.items[0];
+  assert.deepEqual(movedItem ? getWorkbenchInputState(movedItem) : null, {
+    kind: "optimistic",
+    placement: "steer",
+    status: "pending",
+  });
+  assert.equal(findWorkbenchThreadItemTimelineEntry(moved.handle, projected.turnHistory.find((turn) => turn.turnId === "other")?.itemTimeline)?.firstSeenAt, 5_000);
+  store.transition(moved.handle, "sent");
+  assert.equal(store.movePending(moved.handle, "third", "initial"), false);
+  assert.equal(store.discard(moved.handle), true);
+  assert.equal(store.discard(moved.handle), false);
+  assert.deepEqual(store.apply(source, []).turns[0]?.items.map((item) => item.id), [sibling.handle]);
 });
 
 test("exact terminal history hides only its own correlated local evidence", () => {

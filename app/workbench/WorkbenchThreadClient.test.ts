@@ -426,6 +426,93 @@ test("normal message admission stays independent until transcript capability is 
   release();
 }));
 
+test("new-turn admission projects the submitted message before the provider responds", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(source);
+  let admissionRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "workbench/codex/message/admit") return false;
+    admissionRequest = request;
+    return true;
+  };
+
+  const send = client.sendThreadMessage(source, [{ text: "show me now", text_elements: [], type: "text" }]);
+  await waitForRequest(socket, "workbench/codex/message/admit");
+
+  const pendingTurn = client.getSnapshot().currentThread?.turns.at(-1);
+  assert.ok(pendingTurn);
+  assert.equal(getWorkbenchTurnAdmission(pendingTurn), "providerPending");
+  assert.deepEqual(getWorkbenchInputState(pendingTurn.items[0]!), {
+    kind: "optimistic",
+    placement: "initial",
+    status: "pending",
+  });
+  const pendingMessage = pendingTurn.items[0];
+  assert.equal(pendingMessage?.type, "userMessage");
+  assert.equal(pendingMessage?.type === "userMessage" && pendingMessage.content[0]?.type === "text"
+    ? pendingMessage.content[0].text
+    : null, "show me now");
+
+  const admittedTurn = wireThread("thread", "new-turn").turns[0]!;
+  socket.respond(admissionRequest!.id, { kind: "started", turn: admittedTurn });
+  await send;
+  assert.equal(client.getSnapshot().currentThread?.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "providerPending"), false);
+  assert.equal(client.getSnapshot().currentThread?.turns.at(-1)?.id, "new-turn");
+  assert.deepEqual(getWorkbenchInputState(client.getSnapshot().currentThread!.turns.at(-1)!.items[0]!), {
+    kind: "optimistic",
+    placement: "initial",
+    status: "sent",
+  });
+}));
+
+test("failed new-turn admission removes only its pending projection", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(source);
+  const visibleBeforeSend = client.getSnapshot().currentThread!;
+  let admissionRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "workbench/codex/message/admit") return false;
+    admissionRequest = request;
+    return true;
+  };
+
+  const send = client.sendThreadMessage(source, [{ text: "temporary", text_elements: [], type: "text" }]);
+  await waitForRequest(socket, "workbench/codex/message/admit");
+  assert.equal(getWorkbenchTurnAdmission(client.getSnapshot().currentThread!.turns.at(-1)!), "providerPending");
+  socket.fail(admissionRequest!.id, "admission failed");
+  await assert.rejects(send, /admission failed/u);
+
+  assert.deepEqual(client.getSnapshot().currentThread?.turns.map((turn) => turn.id), visibleBeforeSend.turns.map((turn) => turn.id));
+  assert.deepEqual(client.getSnapshot().currentThread?.turnHistory.map((turn) => turn.turnId), visibleBeforeSend.turnHistory.map((turn) => turn.turnId));
+  assert.equal(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => getWorkbenchInputState(item)?.kind === "optimistic"), false);
+}));
+
+test("daemon-side steer admission moves the pending message onto the admitted active turn", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(source);
+  let admissionRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "workbench/codex/message/admit") return false;
+    admissionRequest = request;
+    return true;
+  };
+
+  const send = client.sendThreadMessage(source, [{ text: "became a steer", text_elements: [], type: "text" }]);
+  await waitForRequest(socket, "workbench/codex/message/admit");
+  socket.respond(admissionRequest!.id, { kind: "steered", turnId: "active-turn" });
+  await send;
+
+  const current = client.getSnapshot().currentThread!;
+  assert.equal(current.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "providerPending"), false);
+  const activeTurn = current.turns.find((turn) => turn.id === "active-turn");
+  assert.ok(activeTurn);
+  assert.deepEqual(getWorkbenchInputState(activeTurn.items[0]!), {
+    kind: "optimistic",
+    placement: "steer",
+    status: "pending",
+  });
+}));
+
 test("SQLite transcript source lifecycle publishes through the thread client and becomes unavailable on disconnect", async () => {
   const publications: Array<{ status: string; threadId: string | null }> = [];
   await withClient(async (client, socket) => {

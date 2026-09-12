@@ -66,6 +66,32 @@ test("canonical display places empty turns by turnIndex and before virtual tail"
   ]);
 });
 
+test("canonical display places virtual heads before their own turn and preserves virtual tails", () => {
+  const plan = planCanonicalTranscriptDisplay({
+    turns: [
+      { turnId: "older", turnIndex: 0 },
+      { turnId: "current", turnIndex: 1 },
+    ],
+    items: [
+      { itemId: "older-item", itemIndex: 0, payload: item("older-item"), turnId: "older" },
+      { itemId: "thinking", itemIndex: 1, payload: item("thinking"), turnId: "current" },
+    ],
+    virtualHead: [{ payload: item("initial"), turnId: "current" }],
+    virtualTail: [{ payload: item("steer"), turnId: "current" }],
+  });
+
+  assert.deepEqual(plan.segments.map(({ items, kind, turnId }) => ({
+    itemIds: items.map(({ id }) => id),
+    kind,
+    turnId,
+  })), [
+    { itemIds: ["older-item"], kind: "canonical", turnId: "older" },
+    { itemIds: ["initial"], kind: "virtual", turnId: "current" },
+    { itemIds: ["thinking"], kind: "canonical", turnId: "current" },
+    { itemIds: ["steer"], kind: "virtual", turnId: "current" },
+  ]);
+});
+
 test("canonical display refuses duplicate identity, missing ancestry, and payload mismatch", () => {
   const turns = [{ turnId: "turn", turnIndex: 0 }];
   assert.throws(() => planCanonicalTranscriptDisplay({

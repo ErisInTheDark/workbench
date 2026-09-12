@@ -22,6 +22,10 @@ import {
   applyTranscriptLayoutPatch, applyTranscriptStructure, readTranscriptText, writeTranscriptText,
   type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import {
+  isUndeliveredInitialOptimisticInputItem,
+  type OptimisticInitialInputProjection,
+} from "../thread/ThreadOptimisticInputStore";
 
 export interface ThreadTranscriptProjectionSelection {
   thread: ThreadPayload;
@@ -35,11 +39,16 @@ export type ThreadTranscriptProjectionState =
   | { status: "absent"; threadId: string }
   | { status: "failed"; threadId: string; message: string };
 
+function isLocallyProjectedTurn(turn: Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">) {
+  const admission = getWorkbenchTurnAdmission(turn);
+  return admission === "connecting" || admission === "providerPending";
+}
+
 function durableTurnIds(
   turns: readonly Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">[] | null | undefined,
 ) {
   return (turns ?? [])
-    .filter((turn) => getWorkbenchTurnAdmission(turn) !== "connecting")
+    .filter((turn) => !isLocallyProjectedTurn(turn))
     .map(({ id }) => id);
 }
 
@@ -65,11 +74,33 @@ function localSteers(thread: ThreadPayload | undefined) {
   });
 }
 
+function localInitials(
+  thread: ThreadPayload | undefined,
+  retained: readonly OptimisticInitialInputProjection[] = [],
+) {
+  return (thread?.turns ?? []).flatMap(turn => {
+    const itemsById = new Map(turn.items
+      .filter(item => item.type === "userMessage" && isUndeliveredInitialOptimisticInputItem(item))
+      .map(item => [item.id, item]));
+    for (const projection of retained) {
+      if (projection.turnId === turn.id) itemsById.set(projection.item.id, projection.item);
+    }
+    const items = [...itemsById.values()];
+    if (!items.length) return [];
+    const ids = new Set(items.map(item => item.id));
+    return [{
+      turnId: turn.id, items,
+      timeline: thread?.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline?.filter(entry => ids.has(entry.itemId)) ?? [],
+    }];
+  });
+}
+
 interface ThreadTranscriptProjectionControllerOptions {
   available?: boolean;
   onError?: (error: Error) => void;
   onStateChange?: (state: ThreadTranscriptProjectionState) => void;
   onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
+  readOptimisticInitials?: (thread: ThreadPayload) => readonly OptimisticInitialInputProjection[];
   transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">;
   turnLimit: number;
 }
@@ -79,6 +110,7 @@ export default class ThreadTranscriptProjectionController {
   readonly #onError: NonNullable<ThreadTranscriptProjectionControllerOptions["onError"]>;
   readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
   readonly #onText: NonNullable<ThreadTranscriptProjectionControllerOptions["onText"]>;
+  readonly #readOptimisticInitials: NonNullable<ThreadTranscriptProjectionControllerOptions["readOptimisticInitials"]>;
   readonly #transcripts: ThreadTranscriptProjectionControllerOptions["transcripts"];
   readonly #turnLimit: number;
   #activeSubscriptionId: string | null = null;
@@ -93,18 +125,21 @@ export default class ThreadTranscriptProjectionController {
   #streamItems = new Map<string, { turnId: string; item: WorkbenchProjectedTranscriptItem }>();
   #patchPreview: { turnId: string; item: Extract<WorkbenchProjectedTranscriptItem, { type: "fileChange" }> } | null = null;
   #incremental = false;
+  #localInitials: ReturnType<typeof localInitials> = [];
 
   constructor({
     available = false,
     onError = (error) => console.error("Workbench transcript projection failed.", error),
     onStateChange = () => undefined,
     onText = () => undefined,
+    readOptimisticInitials = () => [],
     transcripts,
     turnLimit,
   }: ThreadTranscriptProjectionControllerOptions) {
     this.#onError = onError;
     this.#onStateChange = onStateChange;
     this.#onText = onText;
+    this.#readOptimisticInitials = readOptimisticInitials;
     this.#available = available;
     this.#transcripts = transcripts;
     this.#turnLimit = turnLimit;
@@ -114,6 +149,7 @@ export default class ThreadTranscriptProjectionController {
     if (this.#disposed) return this.#lifecycle;
     this.#disposed = true;
     this.#selection = null;
+    this.#localInitials = [];
     this.#projection = null;
     this.#streamItems.clear();
     this.#patchPreview = null;
@@ -154,6 +190,9 @@ export default class ThreadTranscriptProjectionController {
     { publishState = true }: { publishState?: boolean } = {},
   ) {
     if (this.#disposed) return;
+    const nextLocalInitials = selection
+      ? localInitials(selection.thread, this.#readOptimisticInitials(selection.thread))
+      : [];
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
     const previousIds = durableTurnIds(this.#selection?.thread.turns);
@@ -161,12 +200,14 @@ export default class ThreadTranscriptProjectionController {
     const appendedOnly = nextIds.length >= previousIds.length && previousIds.every((id, index) => nextIds[index] === id);
     const loadedTurnsChanged = !sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns)
       && !(this.#incremental && appendedOnly);
-    const connectingChanged = !areDeeplyEqual(
-      this.#selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
-      selection?.thread.turns.filter(turn => getWorkbenchTurnAdmission(turn) === "connecting") ?? [],
+    const localPendingChanged = !areDeeplyEqual(
+      this.#selection?.thread.turns.filter(isLocallyProjectedTurn) ?? [],
+      selection?.thread.turns.filter(isLocallyProjectedTurn) ?? [],
     );
+    const initialsChanged = !areDeeplyEqual(this.#localInitials, nextLocalInitials);
     const steersChanged = !areDeeplyEqual(localSteers(this.#selection?.thread), localSteers(selection?.thread));
     this.#selection = selection;
+    this.#localInitials = nextLocalInitials;
     if (previousThreadId !== nextThreadId) {
       this.#projection = null;
       this.#streamItems.clear();
@@ -198,7 +239,7 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    if (publishState && (!this.#incremental || connectingChanged || steersChanged)) this.#publishProjection();
+    if (publishState && (!this.#incremental || localPendingChanged || initialsChanged || steersChanged)) this.#publishProjection();
   }
 
   #reconcileCurrentProjection() {
@@ -208,19 +249,45 @@ export default class ThreadTranscriptProjectionController {
     const canonicalIds = new Set(canonicalItems.map(item => item.id));
     const previews = this.#patchPreview ? [this.#patchPreview] : [];
     const canonicalClients = new Set(canonicalItems.flatMap(item => item.type === "userMessage" && item.clientId ? [item.clientId] : []));
+    const initials = this.#localInitials.map(entry => ({
+      ...entry,
+      items: entry.items.filter(item => !canonicalIds.has(item.id) && !(
+        item.type === "userMessage" && item.clientId && canonicalClients.has(item.clientId)
+      )),
+    })).filter(entry => entry.items.length > 0);
     const steers = localSteers(this.#selection.thread).map(entry => ({
       ...entry,
       items: entry.items.filter(item => !canonicalIds.has(item.id) && !(item.clientId && canonicalClients.has(item.clientId))),
     })).filter(entry => entry.items.length > 0);
-    // Local connecting input is not provider transcript truth. Keep it visible until admission.
+    // Local pre-admission input is not provider transcript truth. Keep it visible until admission.
     const pending = this.#selection.thread.turns.filter(turn =>
-      getWorkbenchTurnAdmission(turn) === "connecting" && !projection.turns.some(existing => existing.id === turn.id));
-    if (!pending.length && !steers.length && !previews.length) return projection;
+      isLocallyProjectedTurn(turn) && !projection.turns.some(existing => existing.id === turn.id));
+    if (!pending.length && !initials.length && !steers.length && !previews.length) return projection;
     const pendingTurns = pending.map((turn, index) => ({
       ...turn, turnIndex: Math.max(-1, ...projection.turns.map(existing => existing.turnIndex)) + index + 1,
       itemTimeline: this.#selection!.thread.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline ?? [],
     }));
     const turns = [...projection.turns, ...pendingTurns];
+    for (const entry of initials) {
+      const index = turns.findIndex(turn => turn.id === entry.turnId);
+      if (index >= 0) {
+        const turn = turns[index]!;
+        const items = entry.items.filter(item => !turn.items.some(existing => existing.id === item.id));
+        turns[index] = {
+          ...turn, items: [...items, ...turn.items],
+          itemTimeline: [
+            ...entry.timeline.filter(event => items.some(item => item.id === event.itemId)),
+            ...turn.itemTimeline,
+          ],
+        };
+      } else {
+        const source = this.#selection.thread.turns.find(turn => turn.id === entry.turnId)!;
+        turns.push({
+          ...source, items: entry.items, itemTimeline: entry.timeline,
+          turnIndex: Math.max(-1, ...turns.map(turn => turn.turnIndex)) + 1,
+        });
+      }
+    }
     for (const { turnId, item } of previews) {
       const index = turns.findIndex(turn => turn.id === turnId);
       if (index < 0 || turns[index]!.status !== "inProgress") continue;
@@ -244,8 +311,13 @@ export default class ThreadTranscriptProjectionController {
         });
       }
     }
-    const virtualTail = turns.flatMap(turn => turn.items
-      .filter(item => !canonicalIds.has(item.id)).map(payload => ({ turnId: turn.id, payload })));
+    const virtualHead = initials.flatMap(entry => entry.items.map(payload => ({ turnId: entry.turnId, payload })));
+    const virtualTail = [
+      ...previews.flatMap(({ turnId, item }) => turns.some(turn => (
+        turn.id === turnId && turn.items.some(existing => existing.id === item.id)
+      )) ? [{ turnId, payload: item }] : []),
+      ...steers.flatMap(entry => entry.items.map(payload => ({ turnId: entry.turnId, payload }))),
+    ];
     const histories = turns.map(turn => ({
       completedAt: turn.completedAt, durationMs: turn.durationMs,
       itemCount: turn.items.length, itemIds: turn.items.map(item => item.id),
@@ -256,7 +328,10 @@ export default class ThreadTranscriptProjectionController {
       ...projection,
       turns,
       display: planCanonicalTranscriptDisplay({
-        items: projection.display.orderedItems, turns: turns.map(turn => ({ turnId: turn.id, turnIndex: turn.turnIndex })), virtualTail,
+        items: projection.display.orderedItems,
+        turns: turns.map(turn => ({ turnId: turn.id, turnIndex: turn.turnIndex })),
+        virtualHead,
+        virtualTail,
       }),
       turnHistory: [
         ...projection.turnHistory.map(entry => histories.find(history => history.turnId === entry.turnId) ?? entry),

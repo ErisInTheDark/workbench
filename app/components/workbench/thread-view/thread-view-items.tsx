@@ -44,6 +44,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
@@ -506,25 +507,30 @@ function ThreadUserMessageItem ({
   }
 
   const steerState = getSteerUserMessageState(item);
-  const isDecoratedSteer = steerState !== null;
+  const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
+  const isPending = steerState === "pending" || isPendingInitial;
+  const isDecoratedInput = steerState !== null || isPendingInitial;
   const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
   const copyMarkdown = getUserMessageCopyMarkdown(displayContent);
-  const steerMessageClass = steerState === "pending"
+  const inputMessageClass = isPending
     ? " relative isolate overflow-hidden rounded-[1.4rem]"
     : steerState === "unsent"
       ? " thread-unsent-steer-message px-0.5 py-0.5"
       : "";
-  const decoratedSteerSurfaceClass = steerState === "pending"
+  const decoratedInputSurfaceClass = isPending
     ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
-    : isDecoratedSteer
+    : isDecoratedInput
       ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3"
       : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3";
   return (
-    <section className="flex flex-col items-end py-2" data-thread-user-message-state={steerState ? `${steerState}-steer` : undefined}>
+    <section
+      className="flex flex-col items-end py-2"
+      data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
+    >
       <div className="group/thread-bubble relative w-full max-w-[42rem]">
-        <div className={isDecoratedSteer ? steerMessageClass : undefined}>
-          {steerState === "pending" ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
-          <div className={`space-y-2 text-left${decoratedSteerSurfaceClass}`}>
+        <div className={isDecoratedInput ? inputMessageClass : undefined}>
+          {isPending ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
+          <div className={`space-y-2 text-left${decoratedInputSurfaceClass}`}>
             {displayContent.length ? displayContent.map((content, index) => (
               <ThreadUserInputLine
                 key={`${item.id}:content:${index}:${content.type}`}

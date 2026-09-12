@@ -7,7 +7,7 @@ import test from "node:test";
 import type { ThreadPayload } from "workbench-shared/types";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
-import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { getWorkbenchInputState, withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { applySteerHistoryToThread, isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import ThreadOptimisticInputStore from "../thread/ThreadOptimisticInputStore";
 import {
@@ -432,6 +432,118 @@ for (const correlation of ["item", "client"] as const) {
   });
 }
 
+for (const incremental of [false, true]) {
+test(`admitted initial input stays before provider output until canonical delivery with incremental=${incremental}`, async () => {
+  const source = thread("thread");
+  source.status = "active";
+  source.turns[0] = {
+    ...source.turns[0]!,
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress",
+  };
+  const inputs = ThreadOptimisticInputStore({ now: () => 42 });
+  const initial = inputs.enqueueInitial(source, "turn", [{
+    text: "hello",
+    text_elements: [],
+    type: "text",
+  }], {
+    clientUserMessageId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    status: "sent",
+  });
+  const states: ThreadTranscriptProjectionState[] = [];
+  let receive!: (update: TranscriptStreamUpdate) => void;
+  let subscriptions = 0;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onStateChange: state => states.push(state),
+    readOptimisticInitials: () => inputs.getInitialProjections("codex:thread"),
+    transcripts: {
+      subscribe: async (_params, listener, stream) => {
+        subscriptions++;
+        receive = incremental ? stream! : update => {
+          assert.ok(update.kind === "structure");
+          listener(update.snapshot);
+        };
+      },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+  const projection = () => {
+    const state = states.at(-1)!;
+    assert.ok(state.status === "ready");
+    return state.projection;
+  };
+
+  controller.select({ thread: inputs.apply(source, []) });
+  await flush();
+  receive(streamBaseline("thread"));
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "plan:turn"]);
+  assert.deepEqual(
+    projection().display.segments.flatMap(segment => segment.items.map(({ id }) => id)),
+    [initial.handle, "plan:turn"],
+  );
+
+  const nativeInitial = {
+    clientId: initial.handle,
+    content: [{ text: "hello", text_elements: [], type: "text" as const }],
+    id: "native-initial",
+    type: "userMessage" as const,
+  };
+  inputs.confirmCanonicalUserMessage("codex:thread", "turn", nativeInitial);
+  source.turns[0] = {
+    ...source.turns[0]!,
+    items: [nativeInitial, ...source.turns[0]!.items],
+  };
+  const nativeProjected = inputs.apply(source, []);
+  assert.equal(nativeProjected.turns[0]!.items.some(item => item.id === initial.handle), false);
+  controller.select({ thread: nativeProjected });
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "plan:turn"]);
+
+  const delivered = streamBaseline("thread");
+  assert.ok(delivered.kind === "structure");
+  delivered.snapshot.rows.threadItems[0] = {
+    ...delivered.snapshot.rows.threadItems[0]!,
+    item_position: 1,
+  };
+  delivered.snapshot.rows.threadItems.push({
+    ...delivered.snapshot.rows.threadItems[0]!,
+    id: 2,
+    item_position: 0,
+    source_id: "delivered",
+    type: "userMessage",
+  });
+  delivered.snapshot.rows.threadItemUserMessages.push({
+    client_id: initial.handle,
+    delivery_state: "delivered",
+    error_text: null,
+    input_kind: "initial",
+    item_id: 2,
+    item_type: "userMessage",
+  });
+  delivered.snapshot.rows.threadUserMessageParts.push({
+    image_detail: null,
+    item_id: 2,
+    name: null,
+    part_index: 0,
+    part_type: "text",
+    path: null,
+    text: "hello",
+    url: null,
+  });
+  const canonical = projectWorkbenchTranscript(delivered.snapshot);
+  assert.ok(canonical.success);
+  delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
+  receive(delivered);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "plan:turn"]);
+  controller.select({ thread: nativeProjected });
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "plan:turn"]);
+  assert.equal(subscriptions, 1);
+  await controller.dispose();
+});
+}
+
 test("incremental SQL never reconciles provider-live state and text does not republish the tree", async () => {
   const states: ThreadTranscriptProjectionState[] = [];
   const text: string[] = [];
@@ -807,15 +919,19 @@ test("the subscription follows the exact loaded turns and replaces itself when t
   controller.dispose();
 });
 
+for (const admission of ["connecting", "providerPending"] as const) {
 for (const incremental of [false, true]) {
-test(`a connecting turn stays visible outside durable scope with incremental=${incremental}`, async () => {
+test(`a ${admission} turn stays visible outside durable scope with incremental=${incremental}`, async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const subscriptions: WorkbenchTranscriptSubscribeParams[] = [];
+  const readyInputStates: Array<ReturnType<typeof getWorkbenchInputState>> = [];
   const readyTurnIds: string[][] = [];
   const controller = new ThreadTranscriptProjectionController({
     available: true,
     onStateChange: (state) => {
       if ("projection" in state && state.projection) {
+        const latestItem = state.projection.turns.at(-1)?.items[0];
+        readyInputStates.push(latestItem?.type === "userMessage" ? getWorkbenchInputState(latestItem) : null);
         readyTurnIds.push(state.projection.turns.map(({ id }) => id));
       }
     },
@@ -836,27 +952,42 @@ test(`a connecting turn stays visible outside durable scope with incremental=${i
     },
     turnLimit: 4,
   });
-  const connectingId = "af798e44-f0a4-46b7-b249-ae89388806cc";
-  const connecting = thread("thread", [connectingId]);
-  connecting.status = "active";
-  connecting.turns[0] = withWorkbenchTurnAdmission({
-    ...connecting.turns[0]!,
+  const pendingId = "af798e44-f0a4-46b7-b249-ae89388806cc";
+  const pending = thread("thread", [pendingId]);
+  pending.status = "active";
+  pending.turns[0] = withWorkbenchTurnAdmission({
+    ...pending.turns[0]!,
     completedAt: null,
     durationMs: null,
+    items: [withWorkbenchInputState({
+      clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      content: [{ text: "pending", text_elements: [], type: "text" }],
+      id: "pending-message",
+      type: "userMessage",
+    }, {
+      kind: "optimistic",
+      placement: "initial",
+      status: "pending",
+    })],
     status: "inProgress",
-  }, "connecting");
-  connecting.turnHistory[0] = {
-    ...connecting.turnHistory[0]!,
+  }, admission);
+  pending.turnHistory[0] = {
+    ...pending.turnHistory[0]!,
     completedAt: null,
     durationMs: null,
     status: "inProgress",
   };
 
-  controller.select({ thread: connecting });
+  controller.select({ thread: pending });
   await flush();
   assert.deepEqual(subscriptions[0]?.turnIds, []);
   listeners.get(subscriptions[0]!.subscriptionId)?.(emptySnapshot("thread"));
-  assert.deepEqual(readyTurnIds.at(-1), [connectingId]);
+  assert.deepEqual(readyTurnIds.at(-1), [pendingId]);
+  assert.deepEqual(readyInputStates.at(-1), {
+    kind: "optimistic",
+    placement: "initial",
+    status: "pending",
+  });
 
   const admitted = thread("thread", ["provider-turn"]);
   admitted.status = "active";
@@ -872,6 +1003,7 @@ test(`a connecting turn stays visible outside durable scope with incremental=${i
   assert.deepEqual(subscriptions.at(-1)?.turnIds, incremental ? [] : ["provider-turn"]);
   controller.dispose();
 });
+}
 }
 
 test("selection stays inert until capability and reconnect capability creates a fresh subscription", async () => {
