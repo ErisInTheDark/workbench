@@ -45,7 +45,7 @@ export default function WorkbenchThreadTitleHistory({ projectId, harness, thread
             className="flex size-7 shrink-0 items-center justify-center rounded hover:bg-accent-soft hover:text-text focus-visible:outline-accent disabled:opacity-40"
             onClick={() => void apply("reapply", title)}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4" aria-hidden="true">
               <path d="M9 14 4 9l5-5" />
               <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
             </svg>
