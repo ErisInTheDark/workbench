@@ -178,8 +178,24 @@ export default class WorkbenchTranscriptController {
   ) {
     this.#assertActive();
     if (observations.length === 0) return { changedThreadIds: [] };
-    await this.#captureGaps.prepareReferences();
     const identity = observationIdentity(observations);
+    // Retire at activity ingress, not settlement: database work may finish after a newer patch starts.
+    // Window/catalogue observations replay history and must not end an unseen current megapatch.
+    if (context.source !== "compatibility" && observations.some(observation => {
+      switch (observation.kind) {
+        case "item":
+        case "turn":
+        case "questionnaire":
+        case "steer":
+        case "browse":
+          return true;
+        case "turnUsageContext":
+          return observation.modelChanged === true;
+        default:
+          return false;
+      }
+    })) this.#live.acceptActivity(identity.threadId);
+    await this.#captureGaps.prepareReferences();
     if (context.recoveryBoundary) {
       if (context.source !== "provider") {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");

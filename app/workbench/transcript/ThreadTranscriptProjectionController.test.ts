@@ -204,7 +204,7 @@ test("patch previews appear before admission, grow immutably and become one cano
     unrelated.layout = {};
     unrelated.snapshot.rows = emptyRows();
     view.receive(unrelated);
-    assert.deepEqual(fileItems()[0]!.changes, grown.changes, "An unrelated commit cannot erase the preview");
+    assert.deepEqual(fileItems()[0]!.changes, grown.changes, "Historical structure does not withdraw the current preview");
 
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
@@ -226,6 +226,43 @@ test("patch previews appear before admission, grow immutably and become one cano
     assert.ok(retainedSteer?.type === "userMessage");
     assert.equal(getWorkbenchInputState(retainedSteer)?.status, "pending");
     assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === steer.handle).length, 1);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
+
+test("server withdrawal removes only the transient tail and preserves canonical changes and local input", async () => {
+  const view = await patchViewer();
+  try {
+    view.receive(patchBaseline());
+    view.receive(view.patch("+canonical"));
+    const source = thread("thread");
+    source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
+    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
+    const steer = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "keep input", text_elements: [] }]);
+    view.controller.select({ thread: inputs.apply(source, []) });
+    const draft = view.patch("+draft", "preview");
+    view.receive(draft);
+    view.receive({ ...draft, changes: [] });
+    assert.equal(view.projection().turns[0]!.items.some(item => item.id === "preview"), false);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).some(item => item.id === "preview"), false);
+    view.receive({ ...view.patch(""), changes: [] });
+    const canonical = view.projection().turns[0]!.items.find(item => item.id === "patch");
+    assert.ok(canonical?.type === "fileChange");
+    assert.equal(canonical.changes[0]?.diff, "+canonical");
+    assert.ok(view.projection().turns[0]!.items.some(item => item.id === steer.handle));
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
+
+test("replacing the transient tail cannot accumulate orphaned previews", async () => {
+  const view = await patchViewer();
+  try {
+    view.receive(streamBaseline("thread"));
+    view.receive(view.patch("+first", "first"));
+    view.receive(view.patch("+second", "second"));
+    assert.deepEqual(view.projection().turns[0]!.items.filter(item => item.type === "fileChange").map(item => item.id), ["second"]);
+    view.receive({ ...view.patch("", "first"), changes: [] });
+    assert.deepEqual(view.projection().turns[0]!.items.filter(item => item.type === "fileChange").map(item => item.id), ["second"]);
     assert.deepEqual(view.errors, []);
   } finally { await view.controller.dispose(); }
 });

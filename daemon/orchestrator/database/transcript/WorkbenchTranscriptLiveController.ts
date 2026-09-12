@@ -58,7 +58,7 @@ function liveFields(snapshot: WorkbenchTranscriptSnapshot): Map<number, Transcri
 export default class WorkbenchTranscriptLiveController {
   readonly #views = new Map<string, View>();
   readonly #fields = new Map<string, Map<string, TranscriptTextUpdate>>();
-  readonly #patches = new Map<string, Map<string, TranscriptPatchUpdate>>();
+  readonly #patches = new Map<string, TranscriptPatchUpdate>();
   readonly #reportFailure: (error: unknown) => void;
 
   constructor(reportFailure: (error: unknown) => void = error => {
@@ -91,7 +91,8 @@ export default class WorkbenchTranscriptLiveController {
       layout: createTranscriptLayoutPatch(null, layout), hasPreviousTurns: snapshot.hasPreviousTurns,
     });
     for (const update of this.#fields.get(snapshot.thread.id)?.values() ?? []) this.#publishText(view, update);
-    for (const update of this.#patches.get(snapshot.thread.id)?.values() ?? []) this.#publishPatch(view, update);
+    const patch = this.#patches.get(snapshot.thread.id);
+    if (patch) this.#publishPatch(view, patch);
   }
 
   close(id: string) {
@@ -113,15 +114,34 @@ export default class WorkbenchTranscriptLiveController {
       this.acceptText(update);
       return;
     }
-    const patches = this.#patches.get(update.threadId) ?? new Map<string, TranscriptPatchUpdate>();
-    patches.set(update.itemId, update);
-    this.#patches.set(update.threadId, patches);
+    const previous = this.#patches.get(update.threadId);
+    if (!update.changes.length) {
+      if (previous?.itemId === update.itemId && previous.turnId === update.turnId) this.acceptActivity(update.threadId);
+      return;
+    }
+    if (previous && (previous.itemId !== update.itemId || previous.turnId !== update.turnId)) this.acceptActivity(update.threadId);
+    this.#patches.set(update.threadId, update);
     for (const view of this.#views.values()) {
       if (view.projection.thread.id === update.threadId) this.#publishPatch(view, update);
     }
   }
 
+  acceptActivity(threadId: string) {
+    const patch = this.#patches.get(threadId);
+    if (!patch) return;
+    this.#patches.delete(threadId);
+    for (const view of this.#views.values()) {
+      if (view.projection.thread.id !== threadId) continue;
+      try {
+        this.#publishPatch(view, { ...patch, changes: [] });
+      } catch (error) {
+        this.#reportFailure(error);
+      }
+    }
+  }
+
   acceptText(update: TranscriptTextUpdate) {
+    this.acceptActivity(update.threadId);
     const fields = this.#fields.get(update.threadId) ?? new Map<string, TranscriptTextUpdate>();
     const key = fieldKey(update);
     const previous = fields.get(key);
@@ -161,13 +181,9 @@ export default class WorkbenchTranscriptLiveController {
     const terminalTurns = new Set(snapshot.turns
       .filter(turn => turn.state !== "inProgress" && turn.state !== "admitted")
       .map(turn => turn.id));
-    const patches = this.#patches.get(snapshot.thread.id);
-    if (patches) {
-      for (const [id, patch] of patches) {
-        if (removed.includes(id) || completedIds.includes(id) || terminalTurns.has(patch.turnId)
-          || (replaceLiveText && touched.has(id))) patches.delete(id);
-      }
-      if (!patches.size) this.#patches.delete(snapshot.thread.id);
+    const patch = this.#patches.get(snapshot.thread.id);
+    if (patch && (removed.includes(patch.itemId) || completedIds.includes(patch.itemId) || terminalTurns.has(patch.turnId))) {
+      this.acceptActivity(snapshot.thread.id);
     }
     for (const [key, field] of fields) {
       const root = touched.get(field.itemId);
@@ -255,11 +271,16 @@ export default class WorkbenchTranscriptLiveController {
     view.layout = layout;
     view.publish(update);
     for (const field of this.#fields.get(snapshot.thread.id)?.values() ?? []) this.#publishText(view, field);
-    for (const patch of this.#patches.get(snapshot.thread.id)?.values() ?? []) this.#publishPatch(view, patch);
+    const patch = this.#patches.get(snapshot.thread.id);
+    if (patch) this.#publishPatch(view, patch);
   }
 
   #publishPatch(view: View, update: TranscriptPatchUpdate) {
     const turn = view.projection.turns.find(turn => turn.id === update.turnId);
+    if (!update.changes.length) {
+      if (turn) view.publish(update);
+      return;
+    }
     if (turn?.status !== "inProgress") return;
     const item = view.items.get(update.itemId);
     if (item) {

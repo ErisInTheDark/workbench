@@ -15,6 +15,7 @@ import type {
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import type { TranscriptPatchUpdate, TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -72,6 +73,119 @@ function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation
     turnIndex: 0,
   }];
 }
+
+test("recording activity retires previews before persistence, but history and delayed settlement preserve newer accumulation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-preview-activity-"));
+  const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  const controller = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({
+    markerPath: join(directory, "capture-gap.json"),
+  }));
+  const events: TranscriptStreamUpdate[] = [];
+  const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-thread");
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId, turnId, itemId: "orphan",
+    changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+draft" }],
+  };
+  const item: WorkbenchTranscriptAtomicObservation = {
+    kind: "item", threadId, turnId, lifecycle: "completed", observedAt: 3,
+    item: { type: "reasoning", id: "later", summary: ["moved on"], content: [] },
+  };
+  const activities: WorkbenchTranscriptAtomicObservation[] = [
+    observationsFor("thread")[1]!,
+    { ...item, lifecycle: "streaming", item: { ...item.item, id: "started" } },
+    {
+      kind: "questionnaire", observedAt: 4,
+      entry: {
+        threadId, turnId, itemId: "questionnaire", requestKey: "request",
+        insertAfterItemId: null, insertAfterItemIndex: null, resolvedAt: 4,
+        request: { id: "request", title: "", summary: "", submitLabel: "", questions: [] },
+        response: { answers: {} },
+      },
+    },
+    {
+      kind: "steer", observedAt: 5,
+      entry: {
+        threadId, turnId, attemptedAt: 3, canonicalItemId: null, clientUserMessageId: "client",
+        entryKey: "steer", error: null, input: [{ type: "text", text: "later input", text_elements: [] }],
+        requestId: "steer", resolvedAt: 5, status: "interrupted",
+      },
+    },
+    {
+      kind: "browse",
+      entry: {
+        threadId, turnId, action: "snapshot", actionIndex: 0, assetUrl: null, commandItemId: null,
+        detailKind: "text", detailLabel: "snapshot", detailText: "captured", durationMs: 1,
+        entryKey: "browse", recordedAt: 6, session: "session", state: "completed",
+      },
+    },
+  ];
+  const patches = () => events.filter(event => event.kind === "patch");
+  const subscribe = () => controller.subscribe({
+    id: "view", request: { threadId, turnLimit: 1 }, publish: () => {},
+    publishStream: event => events.push(event),
+  });
+  const settle = database.settleTranscript.bind(database);
+  const release = deferred<void>();
+  const entered = deferred<void>();
+  try {
+    await controller.start();
+    await controller.record(observationsFor("thread"), { source: "provider" });
+    controller.acceptLiveUpdate(patch);
+    await controller.record([{
+      kind: "providerTurnScope", threadId, completeTurnIds: [turnId],
+      observations: observationsFor("thread"),
+    }], { source: "provider" });
+    await subscribe();
+    assert.deepEqual(patches().at(-1), patch, "History loading must retain the current megapatch");
+    controller.unsubscribe("view");
+    await controller.record([item], { source: "provider" });
+    events.length = 0;
+    await subscribe();
+    assert.deepEqual(patches(), [], "Activity while unviewed must not be replayed as pending");
+
+    controller.acceptLiveUpdate(patch);
+    await controller.record([item], { source: "provider" });
+    assert.deepEqual(patches().at(-1), { ...patch, changes: [] }, "Unchanged durable rows still represent observed activity");
+
+    for (const activity of activities) {
+      controller.acceptLiveUpdate(patch);
+      await controller.record([activity], { source: "workbench" });
+      assert.deepEqual(patches().at(-1), { ...patch, changes: [] }, `${activity.kind} must retire the preview`);
+    }
+
+    controller.acceptLiveUpdate(patch);
+    database.settleTranscript = async observations => {
+      entered.resolve();
+      await release.promise;
+      return settle(observations);
+    };
+    const recording = controller.record([item], { source: "provider" });
+    const newer = { ...patch, itemId: "newer" };
+    try {
+      await entered.promise;
+      assert.deepEqual(patches().at(-1), { ...patch, changes: [] }, "Retirement must precede asynchronous persistence");
+      controller.acceptLiveUpdate(newer);
+    } finally {
+      release.resolve();
+      await recording;
+    }
+    controller.unsubscribe("view");
+    events.length = 0;
+    await subscribe();
+    assert.deepEqual(patches(), [newer], "The old settlement must not retire newer accumulation");
+
+    database.settleTranscript = async () => { throw new Error("recording unavailable"); };
+    await assert.rejects(controller.record([item], { source: "workbench" }));
+    assert.deepEqual(patches().at(-1), { ...newer, changes: [] }, "Recording failure must not strand the previous preview");
+  } finally {
+    release.resolve();
+    database.settleTranscript = settle;
+    controller.dispose();
+    await database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("the transcript controller records, reads, refreshes, and stops admitting work after disposal", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-"));

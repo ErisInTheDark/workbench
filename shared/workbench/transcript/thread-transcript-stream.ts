@@ -37,6 +37,7 @@ export interface TranscriptPatchUpdate {
   threadId: string;
   turnId: string;
   itemId: string;
+  // Empty changes withdraw this transient preview, never delete or complete its canonical item.
   changes: FileUpdateChange[];
 }
 

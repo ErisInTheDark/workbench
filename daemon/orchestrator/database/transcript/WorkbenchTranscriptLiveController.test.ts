@@ -258,8 +258,8 @@ test(`pre-admission patches stream ${openBeforePatch ? "to an attached viewer" :
     if (!openBeforePatch) open();
     assert.deepEqual(patches().at(-1), grown, "The latest preview must not wait for item/started");
     if (openBeforePatch) assert.deepEqual(patches(), [patch, grown]);
-    record("unrelated commit");
-    assert.deepEqual(patches().at(-1), grown);
+    record("historical baseline refresh");
+    assert.deepEqual(patches().at(-1), grown, "A snapshot is not new activity");
     live.close("view");
     const finalPreview = { ...grown, changes: [{ ...grown.changes[0]!, diff: "+first\n+more" }, grown.changes[1]!] };
     live.acceptLiveUpdate(finalPreview);
@@ -273,6 +273,90 @@ test(`pre-admission patches stream ${openBeforePatch ? "to an attached viewer" :
   }
 });
 }
+
+for (const attached of [false, true]) {
+test(`later text retires the patch ${attached ? "while attached" : "without a viewer"} and reopening cannot revive it`, () => {
+  const { database, repository, live, record, delta } = fixture();
+  const events: TranscriptStreamUpdate[] = [];
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId: "thread", turnId: "turn", itemId: "orphan",
+    changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+draft" }],
+  };
+  const open = () => live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), event => events.push(event));
+  try {
+    record("existing");
+    if (attached) open();
+    live.acceptLiveUpdate(patch);
+    live.acceptText(delta(" later activity"));
+    if (attached) assert.deepEqual(events.filter(event => event.kind === "patch").at(-1), { ...patch, changes: [] });
+    live.close("view");
+    events.length = 0;
+    open();
+    assert.deepEqual(events.filter(event => event.kind === "patch"), []);
+  } finally {
+    live.dispose();
+    database.close();
+  }
+});
+}
+
+test("another patch replaces the accumulation, while another thread's text does not retire it", () => {
+  const { database, repository, live, delta } = fixture();
+  const events: TranscriptStreamUpdate[] = [];
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId: "thread", turnId: "turn", itemId: "first",
+    changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+draft" }],
+  };
+  const next = { ...patch, itemId: "second" };
+  try {
+    live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), event => events.push(event));
+    live.acceptLiveUpdate(patch);
+    live.acceptLiveUpdate(next);
+    assert.deepEqual(events.filter(event => event.kind === "patch"), [patch, { ...patch, changes: [] }, next]);
+    live.acceptText({ ...delta("other activity"), threadId: "other" });
+    live.close("view");
+    events.length = 0;
+    live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), event => events.push(event));
+    assert.deepEqual(events.filter(event => event.kind === "patch"), [next]);
+    live.acceptLiveUpdate({ ...next, changes: [] });
+    events.length = 0;
+    live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), event => events.push(event));
+    assert.deepEqual(events.filter(event => event.kind === "patch"), []);
+  } finally {
+    live.dispose();
+    database.close();
+  }
+});
+
+test("a failed viewer withdrawal is reported without retaining the preview or blocking other viewers", () => {
+  const { database, repository, live } = fixture();
+  const failures: unknown[] = [];
+  const owner = new WorkbenchTranscriptLiveController(error => failures.push(error));
+  const events: TranscriptStreamUpdate[] = [];
+  const failure = new Error("viewer unavailable");
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId: "thread", turnId: "turn", itemId: "orphan",
+    changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+draft" }],
+  };
+  try {
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    owner.open("failed", snapshot, event => {
+      if (event.kind === "patch" && !event.changes.length) throw failure;
+    });
+    owner.open("healthy", snapshot, event => events.push(event));
+    owner.acceptLiveUpdate(patch);
+    owner.acceptActivity("thread");
+    assert.deepEqual(failures, [failure]);
+    assert.deepEqual(events.at(-1), { ...patch, changes: [] });
+    events.length = 0;
+    owner.open("healthy", snapshot, event => events.push(event));
+    assert.deepEqual(events.filter(event => event.kind === "patch"), []);
+  } finally {
+    owner.dispose();
+    live.dispose();
+    database.close();
+  }
+});
 
 test("preview delivery stays in its loaded turn and terminal settlement clears retained previews", () => {
   const { database, repository, live } = fixture();
@@ -309,11 +393,11 @@ test("preview delivery stays in its loaded turn and terminal settlement clears r
 
 test("live patches survive selection changes without durable writes and completion replaces them", () => {
   const { database, repository, live } = fixture();
-  const recordPatch = (completed: boolean) => live.settle(repository.settle([{
+  const recordPatch = (completed: boolean, replaceLiveText = false) => live.settle(repository.settle([{
     kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
     item: { type: "fileChange", id: "patch", status: completed ? "completed" : "inProgress", changes: [] },
     lifecycle: completed ? "completed" : "streaming", observedAt: 2,
-  }]).changes!);
+  }]).changes!, { replaceLiveText });
   try {
     recordPatch(false);
     live.acceptLiveUpdate({
@@ -326,6 +410,10 @@ test("live patches survive selection changes without durable writes and completi
     assert.equal(item.type, "fileChange");
     if (item.type === "fileChange") assert.equal(item.changes.length, 1);
     assert.equal(database.prepare<[], { count: number }>("SELECT count(*) AS count FROM thread_file_changes").get()!.count, 0);
+    recordPatch(false, true);
+    const refreshed = active.read().turns[0]!.items[0]!;
+    assert.ok(refreshed.type === "fileChange");
+    assert.equal(refreshed.changes.length, 1, "A historical refresh must not erase a newer live patch");
     recordPatch(true);
     const final = active.read().turns[0]!.items[0]!;
     if (final.type === "fileChange") assert.deepEqual(final.changes, []);

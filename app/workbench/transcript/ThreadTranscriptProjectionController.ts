@@ -91,6 +91,7 @@ export default class ThreadTranscriptProjectionController {
   #selection: ThreadTranscriptProjectionSelection | null = null;
   #streamLayout: TranscriptLayout | null = null;
   #streamItems = new Map<string, { turnId: string; item: WorkbenchProjectedTranscriptItem }>();
+  #patchPreview: { turnId: string; item: Extract<WorkbenchProjectedTranscriptItem, { type: "fileChange" }> } | null = null;
   #incremental = false;
 
   constructor({
@@ -115,6 +116,7 @@ export default class ThreadTranscriptProjectionController {
     this.#selection = null;
     this.#projection = null;
     this.#streamItems.clear();
+    this.#patchPreview = null;
     this.#streamLayout = null;
     this.#onStateChange({ status: "idle" });
     this.#generation += 1;
@@ -134,6 +136,7 @@ export default class ThreadTranscriptProjectionController {
     if (available) this.#hasBeenAvailable = true;
     this.#projection = null;
     this.#streamItems.clear();
+    this.#patchPreview = null;
     this.#streamLayout = null;
     this.#incremental = false;
     if (!available) {
@@ -167,6 +170,7 @@ export default class ThreadTranscriptProjectionController {
     if (previousThreadId !== nextThreadId) {
       this.#projection = null;
       this.#streamItems.clear();
+      this.#patchPreview = null;
       this.#streamLayout = null;
       if (!selection) {
         this.#onStateChange({ status: "idle" });
@@ -202,7 +206,7 @@ export default class ThreadTranscriptProjectionController {
     const projection = this.#projection.value;
     const canonicalItems = projection.turns.flatMap(turn => turn.items);
     const canonicalIds = new Set(canonicalItems.map(item => item.id));
-    const previews = [...this.#streamItems.values()].filter(({ item }) => item.type === "fileChange" && !canonicalIds.has(item.id));
+    const previews = this.#patchPreview ? [this.#patchPreview] : [];
     const canonicalClients = new Set(canonicalItems.flatMap(item => item.type === "userMessage" && item.clientId ? [item.clientId] : []));
     const steers = localSteers(this.#selection.thread).map(entry => ({
       ...entry,
@@ -304,6 +308,7 @@ export default class ThreadTranscriptProjectionController {
     if (snapshot === null) {
       this.#projection = { value: null, generation };
       this.#streamItems.clear();
+      this.#patchPreview = null;
       this.#streamLayout = null;
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
@@ -338,21 +343,30 @@ export default class ThreadTranscriptProjectionController {
     const threadId = update.kind === "structure" ? update.snapshot.thread.id : update.threadId;
     if (threadId !== this.#selection?.thread.id) return;
     if (update.kind === "patch") {
+      if (!update.changes.length) {
+        if (this.#patchPreview?.item.id === update.itemId && this.#patchPreview.turnId === update.turnId) {
+          this.#patchPreview = null;
+          this.#publishProjection();
+        }
+        return;
+      }
       const projection = this.#projection?.value;
       const turn = projection?.turns.find(turn => turn.id === update.turnId);
-      const entry = this.#streamItems.get(update.itemId);
+      const canonical = this.#streamItems.get(update.itemId);
+      const entry = canonical ?? (this.#patchPreview?.item.id === update.itemId ? this.#patchPreview : null);
       if (!projection || !turn || (entry && (entry.turnId !== update.turnId || entry.item.type !== "fileChange"))) {
         this.#onError(new Error("SQLite patch update arrived without its turn or with a conflicting item."));
         return;
       }
       if (turn.status !== "inProgress" || (entry?.item.type === "fileChange" && entry.item.status !== "inProgress")) return;
       if (entry?.item.type === "fileChange" && areDeeplyEqual(entry.item.changes, update.changes)) return;
-      const item: WorkbenchProjectedTranscriptItem = {
+      const item: Extract<WorkbenchProjectedTranscriptItem, { type: "fileChange" }> = {
         ...(entry?.item.type === "fileChange" ? entry.item : { type: "fileChange", id: update.itemId, status: "inProgress" }),
         changes: update.changes,
       };
-      this.#streamItems.set(update.itemId, { turnId: update.turnId, item });
-      if (turn.items.some(existing => existing.id === item.id)) {
+      this.#patchPreview = canonical ? null : { turnId: update.turnId, item };
+      if (canonical) {
+        this.#streamItems.set(update.itemId, { turnId: update.turnId, item });
         // All published paths must point at the replacement, never mutate a subscriber's old snapshot.
         this.#projection = { generation, value: {
           ...projection,
@@ -388,14 +402,10 @@ export default class ThreadTranscriptProjectionController {
       const layout = applyTranscriptLayoutPatch(update.reset ? null : this.#streamLayout, update.layout);
       const projection = applyTranscriptStructure(this.#projection?.value ?? null, update, layout);
       const streamItems = new Map(projection.turns.flatMap(turn => turn.items.map(item => [item.id, { turnId: turn.id, item }] as const)));
-      if (!update.reset) {
-        const previousCanonicalIds = new Set(this.#streamLayout?.items.map(item => item.itemId));
-        const removed = new Set(update.removedItemIds);
-        const activeTurns = new Set(projection.turns.filter(turn => turn.status === "inProgress").map(turn => turn.id));
-        for (const [id, entry] of this.#streamItems) {
-          if (entry.item.type === "fileChange" && !previousCanonicalIds.has(id) && !streamItems.has(id)
-            && !removed.has(id) && activeTurns.has(entry.turnId)) streamItems.set(id, entry);
-        }
+      const preview = this.#patchPreview;
+      if (preview && (update.reset || streamItems.has(preview.item.id) || update.removedItemIds.includes(preview.item.id)
+        || !projection.turns.some(turn => turn.id === preview.turnId && turn.status === "inProgress"))) {
+        this.#patchPreview = null;
       }
       this.#streamLayout = layout;
       this.#streamItems = streamItems;
