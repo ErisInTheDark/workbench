@@ -33,7 +33,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 }
 
 const baseClassName = [
-  "relative isolate inline-flex items-center justify-center overflow-visible bg-transparent font-medium [color:var(--text)]",
+  "relative isolate inline-flex enabled:cursor-pointer items-center justify-center overflow-visible bg-transparent font-medium [color:var(--text)]",
   "transition duration-150 ease-out",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
   "disabled:cursor-not-allowed",

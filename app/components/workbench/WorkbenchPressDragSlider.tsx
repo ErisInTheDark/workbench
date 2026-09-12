@@ -14,7 +14,7 @@ import WorkbenchRangeInput from "./WorkbenchRangeInput";
 function SliderTrigger ({ icon, label, children, ...props }: ComponentPropsWithRef<"button"> & { icon?: ReactNode; label: string }) {
   return icon
     ? <WorkbenchIconButton {...props} label={label} display="hover-border">{icon}</WorkbenchIconButton>
-    : <button {...props}>{children}</button>;
+    : <button {...props} className={`enabled:cursor-pointer ${props.className ?? ""}`}>{children}</button>;
 }
 
 export default function WorkbenchPressDragSlider ({

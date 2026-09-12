@@ -142,7 +142,7 @@ export default function WorkbenchContextMenuSurface({
                     disabled={control.disabled}
                     data-checked={control.checked}
                     data-tone={control.tone ?? "default"}
-                    className={`${controlClassName} ${getControlToneClassName(control.tone)}`}
+                    className={`enabled:cursor-pointer ${controlClassName} ${getControlToneClassName(control.tone)}`}
                     onClick={() => select(control.disabled, control.onSelect)}
                   >
                     <span className="inline-flex size-4 items-center justify-center">{control.icon}</span>
@@ -160,7 +160,7 @@ export default function WorkbenchContextMenuSurface({
             role="menuitem"
             disabled={item.disabled}
             data-tone={item.tone ?? "default"}
-            className={actionClassName}
+            className={`enabled:cursor-pointer ${actionClassName}`}
             onClick={() => select(item.disabled, item.onSelect)}
           >
             {item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span> : null}

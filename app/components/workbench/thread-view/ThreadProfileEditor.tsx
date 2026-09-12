@@ -95,7 +95,7 @@ export default function ThreadProfileEditor ({
         aria-expanded={active}
         aria-controls={`${sectionId}-${section}-content`}
         className={`
-          flex min-w-0 items-center gap-2 px-4 py-1.5 text-left text-sm text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
+          enabled:cursor-pointer flex min-w-0 items-center gap-2 px-4 py-1.5 text-left text-sm text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
           ${active ? "border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
         `}
         onClick={() => controller.disclose(section, !active)}

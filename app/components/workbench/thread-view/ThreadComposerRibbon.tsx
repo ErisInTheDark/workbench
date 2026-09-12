@@ -62,6 +62,7 @@ export default function ThreadComposerRibbon({
         aria-label={`Composer profile: ${profileLabel}`}
         aria-pressed={isProfilePanelOpen}
         className={joinClasses(
+          "enabled:cursor-pointer",
           "relative isolate inline-flex min-w-0 items-center justify-center gap-2 bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
           isProfilePanelOpen ? "text-text" : "text-muted hover:text-text",
         )}
@@ -75,7 +76,7 @@ export default function ThreadComposerRibbon({
       {!selectedProfileLabel ? <>
       <button
         type="button"
-        className="relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+        className="enabled:cursor-pointer relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
         title={modelLabel}
         onClick={(event) => { if (ribbon.current) onModelOpen(event.currentTarget, ribbon.current); }}
       >
@@ -99,6 +100,7 @@ export default function ThreadComposerRibbon({
             aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
             aria-pressed={isFastModeEnabled}
             className={joinClasses(
+              "enabled:cursor-pointer",
               "relative isolate inline-flex shrink-0 items-center justify-center bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
               isFastModeEnabled
                 ? "text-text"
@@ -114,7 +116,7 @@ export default function ThreadComposerRibbon({
       <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
       <button
         type="button"
-        className="relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+        className="enabled:cursor-pointer relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
         title={agentLabel}
         onClick={(event) => { if (ribbon.current) onAgentOpen(event.currentTarget, ribbon.current); }}
       >
