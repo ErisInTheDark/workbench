@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, questionnaire waits, and steer cancellation.
- */
+/* No exports. Tests cover typed MCP inventory, trusted identity, dispatch, waits, and cancellation. */
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -17,6 +14,7 @@ import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-
 import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./WorkbenchShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 test("MCP preserves typed Git rejections before and after dispatch", async () => {
   let dispatches = 0;
@@ -70,7 +68,7 @@ for (const failResolution of [false, true]) test(`shell resolves caller identity
       assert.equal(nativeThreadId, "native-session");
       assert.equal(cwd, "C:/authoritative");
       if (failResolution) throw new Error("identity unavailable");
-      return "workbench-thread";
+      return WorkbenchThreadIdSchema.parse("workbench-thread");
     },
     shell: {
       execute: async (_input, _meta, _signal, identity) => {
@@ -581,11 +579,16 @@ test("thread steer interruption ends declared waits but preserves questionnaires
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const allStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const workbenchThreadId = WorkbenchThreadIdSchema.parse("97d84a45-0d43-4d20-a996-e6b8bd8ad149");
+  const waitStates: Array<{ threadId: string; toolNames: string[] }> = [];
+  const stopWaitObservation = requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
+    waitStates.push({ threadId, toolNames });
+  });
   const controller = new WorkbenchAgentMcpController({
     resolveThreadId: async (nativeId, cwd) => {
       assert.equal(nativeId, "thread-1");
       assert.equal(cwd, "C:/authoritative");
-      return "97d84a45-0d43-4d20-a996-e6b8bd8ad149";
+      return workbenchThreadId;
     },
     executeCommand: async (request, signal) => await new Promise<Response>((resolve) => {
       assert.equal(request.body?.callerThreadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
@@ -624,7 +627,8 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     });
     await allStarted.promise;
 
-    assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 1);
+    assert.deepEqual(waitStates, [{ threadId: workbenchThreadId, toolNames: ["subagent_wait"] }]);
+    assert.equal(requestRegistry.interruptThreadWaits(workbenchThreadId), 1);
     const subagentResult = await subagentCall;
     assert.equal(subagentResult.isError, true);
     assert.equal(responseText(subagentResult), "");
@@ -640,6 +644,7 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     assert.equal(questionnaireResult.isError, false);
     assert.match(responseText(questionnaireResult), /still waiting/u);
   } finally {
+    stopWaitObservation();
     requestRegistry.dispose();
     await client.close();
     await server.close();

@@ -1,15 +1,71 @@
 /*
- * Keywords: MCP, reload, executor, restoration, cancellation.
- * No exports. Tests exercise the real MCP node's command-generation lifecycle.
+ * No exports. Tests exercise MCP node command generation, wait projection, reload, and cancellation.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import ReloadableNode, { defineReloadableNodeGraph } from "./ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+
+test("node replay maps a live pre-reload native wait to its Workbench thread", async () => {
+  const registry = getProcessWorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const clientScope = `legacy-wait-${process.pid}-${Date.now()}`;
+  const nativeThreadId = NativeThreadIdSchema.parse("native-waiting-thread");
+  const workbenchThreadId = WorkbenchThreadIdSchema.parse("workbench-waiting-thread");
+  const wait = registry.register(clientScope, 1, {
+    owner,
+    steerInterruptible: true,
+    toolName: "git_arc_wait",
+  });
+  // Model a live registration created by the pre-patch module generation.
+  const state = Reflect.get(registry, "state") as {
+    requestsByClient: Map<string, Map<number, { threadId?: string }>>;
+  };
+  state.requestsByClient.get(clientScope)!.get(1)!.threadId = nativeThreadId;
+  const waitStates: Array<{ threadId: string; toolNames: readonly string[] }> = [];
+  const registrations = {
+    agentCommand: { executeStructuredRequest: async () => new Response("unused") },
+    codexMcpGeneration: { bump() {} },
+    threadIdentity: {
+      knownNativeBinding: (_harness: string, candidate: string) => {
+        assert.equal(candidate, nativeThreadId);
+        return { harness: "codex", nativeLocation: "C:/repo", nativeThreadId };
+      },
+      workbenchIdForNative: () => workbenchThreadId,
+    },
+    threadState: {
+      controller: {
+        setThreadWaitState: (_harness: string, threadId: string, toolNames: readonly string[]) => {
+          waitStates.push({ threadId, toolNames });
+        },
+      },
+    },
+  } as unknown as OrchestratorRuntimeObjects;
+  const instance = WorkbenchMcpNode.create({
+    legacyMigrationProjectRoot: process.cwd(),
+    localOrchestratorOrigin: "http://127.0.0.1:4500",
+  } as OrchestratorProcessContext, {
+    get: key => registrations[key],
+    handoffState: undefined,
+    isReplacing: () => false,
+    lease: { isCurrent: () => true },
+    mode: "initial",
+  });
+  try {
+    instance.afterCommit?.();
+    assert.deepEqual(waitStates, [{ threadId: workbenchThreadId, toolNames: ["git_arc_wait"] }]);
+    wait.unregister();
+    assert.deepEqual(waitStates.at(-1), { threadId: workbenchThreadId, toolNames: [] });
+  } finally {
+    wait.unregister();
+    await instance.dispose();
+  }
+});
 
 test("restoring the MCP node installs a usable executor without bumping freshness", async () => {
   let bumps = 0;

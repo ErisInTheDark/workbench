@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/workbench-agent-command-definition";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
@@ -49,42 +50,39 @@ test("thread steers interrupt only declared waits for the matching thread across
   const registry = new WorkbenchAgentMcpRequestRegistry();
   const firstOwner = {};
   const secondOwner = {};
+  const parentThreadId = WorkbenchThreadIdSchema.parse("parent-thread");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other-thread");
   const subagentWait = registry.register("client-1", 1, {
     owner: firstOwner,
     steerInterruptible: true,
-    threadId: "parent-thread",
     toolName: "subagent_wait",
   });
+  subagentWait.setWorkbenchThreadId(parentThreadId);
   const secondWait = registry.register("client-2", 1, {
     owner: secondOwner,
     steerInterruptible: true,
-    threadId: "parent-thread",
     toolName: "subagent_wait",
   });
+  secondWait.setWorkbenchThreadId(parentThreadId);
   const otherThreadWait = registry.register("client-1", 2, {
     owner: firstOwner,
     steerInterruptible: true,
-    threadId: "other-thread",
     toolName: "subagent_wait",
   });
+  otherThreadWait.setWorkbenchThreadId(otherThreadId);
   const ordinaryCall = registry.register("client-2", 2, {
     owner: secondOwner,
-    threadId: "parent-thread",
     toolName: "task_get",
   });
 
-  assert.equal(registry.interruptThreadWaits("parent-thread"), 2);
+  assert.equal(registry.interruptThreadWaits(parentThreadId), 2);
   assert.equal(subagentWait.signal.aborted, true);
   assert.equal(isWorkbenchAgentMcpSteerInterruption(subagentWait.signal.reason), true);
   assert.equal(secondWait.signal.aborted, true);
   assert.equal(otherThreadWait.signal.aborted, false);
   assert.equal(ordinaryCall.signal.aborted, false);
-  assert.equal(registry.interruptThreadWaits("parent-thread"), 0);
-  assert.throws(() => registry.register("client-3", 1, {
-    owner: {},
-    steerInterruptible: true,
-    toolName: "subagent_wait",
-  }), /requires a thread id/u);
+  assert.equal(registry.interruptThreadWaits(parentThreadId), 0);
+  assert.throws(() => subagentWait.setWorkbenchThreadId(otherThreadId), /cannot change/u);
 
   subagentWait.unregister();
   secondWait.unregister();
@@ -94,22 +92,27 @@ test("thread steers interrupt only declared waits for the matching thread across
 
 test("thread wait observation derives every active interruptible tool from live registrations", () => {
   const registry = new WorkbenchAgentMcpRequestRegistry();
-  const states: Array<{ threadId: string; toolNames: string[] }> = [];
+  const threadId = WorkbenchThreadIdSchema.parse("parent-thread");
+  const states: Array<{ identityKind: "workbench"; threadId: typeof threadId; toolNames: string[] }> = [];
   const stop = registry.subscribeThreadWaits((state) => states.push(state));
   const owner = {};
   const subagent = registry.register("client-1", 1, {
-    owner, steerInterruptible: true, threadId: "parent-thread", toolName: "subagent_wait",
+    owner, steerInterruptible: true, toolName: "subagent_wait",
   });
+  subagent.setWorkbenchThreadId(threadId);
   const arc = registry.register("client-2", 1, {
-    owner, steerInterruptible: true, threadId: "parent-thread", toolName: "git_arc_wait",
+    owner, steerInterruptible: true, toolName: "git_arc_wait",
   });
+  arc.setWorkbenchThreadId(threadId);
   const ordinary = registry.register("client-1", 2, {
-    owner, threadId: "parent-thread", toolName: "task_get",
+    owner, toolName: "task_get",
   });
-  const replayed: Array<{ threadId: string; toolNames: string[] }> = [];
+  ordinary.setWorkbenchThreadId(threadId);
+  const replayed: typeof states = [];
   const stopReplay = registry.subscribeThreadWaits((state) => replayed.push(state));
   assert.deepEqual(replayed, [{
-    threadId: "parent-thread",
+    identityKind: "workbench",
+    threadId,
     toolNames: ["git_arc_wait", "subagent_wait"],
   }]);
   stopReplay();
@@ -118,10 +121,10 @@ test("thread wait observation derives every active interruptible tool from live 
   ordinary.unregister();
   stop();
   assert.deepEqual(states, [
-    { threadId: "parent-thread", toolNames: ["subagent_wait"] },
-    { threadId: "parent-thread", toolNames: ["git_arc_wait", "subagent_wait"] },
-    { threadId: "parent-thread", toolNames: ["subagent_wait"] },
-    { threadId: "parent-thread", toolNames: [] },
+    { identityKind: "workbench", threadId, toolNames: ["subagent_wait"] },
+    { identityKind: "workbench", threadId, toolNames: ["git_arc_wait", "subagent_wait"] },
+    { identityKind: "workbench", threadId, toolNames: ["subagent_wait"] },
+    { identityKind: "workbench", threadId, toolNames: [] },
   ]);
 });
 

@@ -96,7 +96,6 @@ import {
   updatePendingSteerEntriesForInterruptedTurn,
   updateSteerEntryStatus,
 } from "./codex-transcript-steer-history.ts";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
 import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-event-routing";
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
@@ -167,7 +166,7 @@ export type CodexStdioBridgeOptions = {
   initialState?: CodexStdioBridgeReloadState;
   instructions?: WorkbenchCodexInstructionPort;
   identities?: NativeTranscriptIdentityOwners;
-  onAcceptedTurnSteer?: (threadId: string) => void;
+  onAcceptedTurnSteer?: (threadId: NativeThreadId) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   onTranscriptLiveUpdate?: (update: TranscriptLiveUpdate) => void;
   onInitialized?: () => void;
@@ -897,7 +896,7 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
@@ -1987,7 +1986,7 @@ export default class CodexStdioBridge {
     if (!isPendingInternalResponse(pending) && pending.method === "turn/steer" && !message.error) {
       const turnId = asString(asRecord(message.result)?.turnId)?.trim();
       const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
-      if (turnId && threadId) this.onAcceptedTurnSteer(threadId);
+      if (turnId && threadId) this.onAcceptedTurnSteer(NativeThreadIdSchema.parse(threadId));
     }
     const hydratedMessage = message;
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
@@ -3515,7 +3514,7 @@ export default class CodexStdioBridge {
     if (!turnId) {
       return { id: requestId, error: { code: -32000, message: "Managed Codex steer returned no turn id." } };
     }
-    this.onAcceptedTurnSteer(threadId);
+    this.onAcceptedTurnSteer(NativeThreadIdSchema.parse(threadId));
     return { id: requestId, result: { kind: "steered", turnId } };
   }
 

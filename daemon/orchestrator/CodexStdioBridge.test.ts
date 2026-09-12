@@ -1,6 +1,5 @@
 /*
- * Exports:
- * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, usage hydration, reload recovery, approvals, turn-start preflight, context reads, and MCP config.
+ * No exports. Tests cover Codex bridge requests, lifecycle, transcript projection, and reload recovery.
  */
 
 import assert from "node:assert/strict";
@@ -3157,7 +3156,10 @@ test("successful external send remaps the response id and detaches with settled 
     onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient(_client, message) { clientMessages.push(message); },
+    sendToClient(_client, message) {
+      assert.deepEqual(acceptedSteers, ["thread"], "accepted steer handling must finish before its response is published");
+      clientMessages.push(message);
+    },
     storageRoot: root,
   });
   try {

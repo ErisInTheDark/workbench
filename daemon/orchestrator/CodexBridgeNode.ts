@@ -15,6 +15,7 @@ import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -88,8 +89,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const projectCatalog = build.get("projectCatalog");
     const questionnaires = build.get("questionnaires");
     const transcript = build.get("transcript");
+    const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     const turnRecovery = build.get("turnRecovery");
+    const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
     let recovery: { controller: AbortController; completion: Promise<void> } | null = null;
     let generation = new AbortController();
@@ -193,6 +196,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      onAcceptedTurnSteer: nativeThreadId => requestRegistry.interruptThreadWaits(
+        threadIdentity.workbenchIdForNative(
+          threadIdentity.knownNativeBinding("codex", nativeThreadId),
+        ),
+      ),
       onInitialized: build.mode === "initial" ? startRecovery : undefined,
       instructions: codexInstructions,
       createThread: async (request, create, signal) => {

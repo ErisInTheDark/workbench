@@ -1,13 +1,18 @@
 /*
- * Keywords: MCP, caller identity, shell, cancellation, lifecycle.
  * Exports:
- * - WorkbenchAgentMcpControllerOptions: inject trusted Codex identity resolution, cancellation, and structured command execution ports. Keywords: workbench, MCP, options, identity.
- * - default WorkbenchAgentMcpController: serve typed wb tools with client identity, request cancellation, and generation-scoped drain policy. Keywords: workbench, MCP, HTTP, tools, lifecycle, drain.
+ * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, and command execution ports.
+ * - default WorkbenchAgentMcpController: serve typed wb tools with caller identity and generation-scoped cancellation.
  */
 import type http from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import {
+  NativeThreadIdSchema,
+  WorkbenchThreadIdSchema,
+  type NativeThreadId,
+  type WorkbenchThreadId,
+} from "workbench-shared/workbench/identity";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -43,7 +48,7 @@ const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
-  resolveThreadId?: (nativeThreadId: string, cwd: string) => Promise<string>;
+  resolveThreadId?: (nativeThreadId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   lifecycleLogError?: (name: string, message: string) => void;
@@ -119,7 +124,7 @@ function readThreadCwd(response: JsonRpcResponse) {
 function readThreadId(meta: Record<string, unknown> | undefined) {
   const value = meta?.threadId;
   if (typeof value !== "string" || !value.trim()) throw new Error("Codex did not provide trusted MCP thread identity.");
-  return value.trim();
+  return NativeThreadIdSchema.parse(value.trim());
 }
 
 export default class WorkbenchAgentMcpController {
@@ -143,7 +148,7 @@ export default class WorkbenchAgentMcpController {
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
     shell,
-    resolveThreadId = async (threadId) => threadId,
+    resolveThreadId = async (threadId) => WorkbenchThreadIdSchema.parse(threadId),
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
@@ -300,7 +305,6 @@ export default class WorkbenchAgentMcpController {
         owner: this.runtimeOwner,
         policy: undefined,
         steerInterruptible: false,
-        threadId: callerThreadId,
         toolName: "shell",
       });
       unregister = registration.unregister;
@@ -356,7 +360,6 @@ export default class WorkbenchAgentMcpController {
         owner: this.runtimeOwner,
         policy: definition.mcpRuntimeDrainPolicy,
         steerInterruptible: definition.mcpSteerInterruptible,
-        threadId: callerThreadId,
         toolName,
       });
       unregister = registration.unregister;
@@ -368,9 +371,12 @@ export default class WorkbenchAgentMcpController {
       });
       if (signal.aborted) throw signal.reason;
       const cwd = readThreadCwd(threadResponse);
+      const workbenchThreadId = await this.resolveThreadId(callerThreadId, cwd);
+      if (signal.aborted) throw signal.reason;
+      registration.setWorkbenchThreadId(workbenchThreadId);
       const request = await definition.buildRequestFromJson(input, {
         callerHarness: "codex",
-        callerThreadId: await this.resolveThreadId(callerThreadId, cwd),
+        callerThreadId: workbenchThreadId,
         cwd,
         workbenchOrigin: this.orchestratorOrigin,
       });

@@ -1,10 +1,17 @@
 /*
  * Exports:
- * - WorkbenchAgentMcpPendingRequest: bounded active-request detail for runtime-drain diagnostics. Keywords: workbench, MCP, drain, diagnostics.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, and reload-safe command generation re-entry. Keywords: workbench, MCP, cancellation, steer, registry, reload.
- * - getProcessWorkbenchAgentMcpRequestRegistry: wrap reload-stable process state without retaining stale module methods. Keywords: workbench, MCP, reload, process.
- * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across reloadable MCP module generations. Keywords: workbench, MCP, steer, cancellation, error.
+ * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
+ * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, and reload-safe command re-entry.
+ * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
+ * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  */
+import {
+  NativeThreadIdSchema,
+  WorkbenchThreadIdSchema,
+  type NativeThreadId,
+  type WorkbenchThreadId,
+} from "workbench-shared/workbench/identity";
 import {
   createWorkbenchAgentMcpRuntimeReloadInterruption,
   isWorkbenchAgentMcpRuntimeReloadInterruption,
@@ -34,7 +41,9 @@ interface WorkbenchAgentMcpRequestEntry {
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
   startedAt: number;
   steerInterruptible?: boolean;
+  /** Pre-patch process state retained only until its live request unregisters. */
   threadId?: string;
+  workbenchThreadId?: WorkbenchThreadId;
   toolName: string;
 }
 
@@ -47,7 +56,7 @@ interface WorkbenchAgentMcpRequestRegistryState {
   commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
   disposed: boolean;
   exitHookInstalled: boolean;
-  threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState) => void>;
+  threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
 }
@@ -56,7 +65,6 @@ interface WorkbenchAgentMcpRequestRegistrationOptions {
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   steerInterruptible?: boolean;
-  threadId?: string;
   toolName: string;
 }
 
@@ -67,6 +75,12 @@ export interface WorkbenchAgentMcpPendingRequest {
 }
 
 export interface WorkbenchAgentMcpThreadWaitState {
+  identityKind: "workbench";
+  threadId: WorkbenchThreadId;
+  toolNames: string[];
+}
+
+interface WorkbenchAgentMcpLegacyThreadWaitState {
   threadId: string;
   toolNames: string[];
 }
@@ -143,8 +157,6 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
     const ownerState = this.state.ownerStates.get(options.owner) ?? { phase: "active", released: false };
     if (ownerState.released) throw new Error("Workbench MCP runtime owner is disposed.");
-    const threadId = options.threadId?.trim();
-    if (options.steerInterruptible && !threadId) throw new Error("A steer-interruptible Workbench MCP request requires a thread id.");
     this.state.ownerStates.set(options.owner, ownerState);
     const requests = this.state.requestsByClient.get(clientScope) ?? new Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>();
     if (requests.has(requestId)) throw new Error(`Workbench MCP request ID is already active for client ${clientScope}: ${requestId}`);
@@ -155,17 +167,22 @@ export class WorkbenchAgentMcpRequestRegistry {
       policy: options.policy ?? null,
       startedAt: this.now(),
       steerInterruptible: options.steerInterruptible,
-      threadId,
       toolName: options.toolName,
     };
     requests.set(requestId, entry);
     this.state.requestsByClient.set(clientScope, requests);
-    if (entry.steerInterruptible && entry.threadId) this.notifyThreadWaits(entry.threadId);
     if (ownerState.phase !== "active" && phaseCancels(entry.policy, ownerState.phase)) {
       entry.controller.abort(new Error("Workbench MCP tool call was cancelled for runtime reload."));
     }
     return {
       markDrainIndependent: () => { entry.drainIndependent = true; },
+      setWorkbenchThreadId: (threadId: WorkbenchThreadId) => {
+        const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
+        if (entry.workbenchThreadId === workbenchThreadId) return;
+        if (entry.workbenchThreadId) throw new Error("Workbench MCP request thread identity cannot change.");
+        entry.workbenchThreadId = workbenchThreadId;
+        if (entry.steerInterruptible) this.notifyThreadWaits(workbenchThreadId);
+      },
       signal: entry.controller.signal,
       unregister: () => {
         if (requests.get(requestId) !== entry) return;
@@ -173,7 +190,7 @@ export class WorkbenchAgentMcpRequestRegistry {
         if (requests.size === 0 && this.state.requestsByClient.get(clientScope) === requests) {
           this.state.requestsByClient.delete(clientScope);
         }
-        if (entry.steerInterruptible && entry.threadId) this.notifyThreadWaits(entry.threadId);
+        if (entry.steerInterruptible && entry.workbenchThreadId) this.notifyThreadWaits(entry.workbenchThreadId);
       },
     };
   }
@@ -224,39 +241,78 @@ export class WorkbenchAgentMcpRequestRegistry {
     }
   }
 
-  subscribeThreadWaits(listener: (state: WorkbenchAgentMcpThreadWaitState) => void) {
-    this.state.threadWaitListeners.add(listener);
+  subscribeThreadWaits(
+    listener: (state: WorkbenchAgentMcpThreadWaitState) => void,
+    resolveLegacyThreadId?: (nativeThreadId: NativeThreadId) => WorkbenchThreadId,
+  ) {
+    this.associateLegacyThreadWaits(resolveLegacyThreadId);
+    const compatibleListener = (state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => {
+      if ("identityKind" in state) {
+        listener(state);
+        return;
+      }
+      if (!resolveLegacyThreadId) throw new Error("A live pre-reload MCP wait requires native thread identity resolution.");
+      const nativeThreadId = NativeThreadIdSchema.parse(state.threadId);
+      const workbenchThreadId = resolveLegacyThreadId(nativeThreadId);
+      this.associateLegacyThreadWaits(resolveLegacyThreadId, nativeThreadId);
+      listener(this.threadWaitState(workbenchThreadId));
+    };
+    this.state.threadWaitListeners.add(compatibleListener);
     for (const state of this.listThreadWaitStates()) listener(state);
-    return () => this.state.threadWaitListeners.delete(listener);
+    return () => this.state.threadWaitListeners.delete(compatibleListener);
   }
 
   private listThreadWaitStates() {
     const toolNamesByThreadId = new Map<string, Set<string>>();
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (!entry.steerInterruptible || !entry.threadId) continue;
-        const toolNames = toolNamesByThreadId.get(entry.threadId) ?? new Set<string>();
+        if (!entry.steerInterruptible || !entry.workbenchThreadId) continue;
+        const toolNames = toolNamesByThreadId.get(entry.workbenchThreadId) ?? new Set<string>();
         toolNames.add(entry.toolName);
-        toolNamesByThreadId.set(entry.threadId, toolNames);
+        toolNamesByThreadId.set(entry.workbenchThreadId, toolNames);
       }
     }
     return [...toolNamesByThreadId]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([threadId, toolNames]) => ({
-        threadId,
+        identityKind: "workbench" as const,
+        threadId: WorkbenchThreadIdSchema.parse(threadId),
         toolNames: [...toolNames].sort((left, right) => left.localeCompare(right)),
       }));
   }
 
-  private notifyThreadWaits(threadId: string) {
+  private notifyThreadWaits(threadId: WorkbenchThreadId) {
+    const state = this.threadWaitState(threadId);
+    for (const listener of this.state.threadWaitListeners) listener(state);
+  }
+
+  private threadWaitState(threadId: WorkbenchThreadId): WorkbenchAgentMcpThreadWaitState {
     const toolNames = new Set<string>();
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (entry.steerInterruptible && entry.threadId === threadId) toolNames.add(entry.toolName);
+        if (entry.steerInterruptible && entry.workbenchThreadId === threadId) toolNames.add(entry.toolName);
       }
     }
-    const state = { threadId, toolNames: [...toolNames].sort((left, right) => left.localeCompare(right)) };
-    for (const listener of this.state.threadWaitListeners) listener(state);
+    return {
+      identityKind: "workbench",
+      threadId,
+      toolNames: [...toolNames].sort((left, right) => left.localeCompare(right)),
+    };
+  }
+
+  private associateLegacyThreadWaits(
+    resolveLegacyThreadId: ((nativeThreadId: NativeThreadId) => WorkbenchThreadId) | undefined,
+    matchingNativeThreadId?: NativeThreadId,
+  ) {
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (!entry.steerInterruptible || entry.workbenchThreadId || !entry.threadId) continue;
+        const nativeThreadId = NativeThreadIdSchema.parse(entry.threadId);
+        if (matchingNativeThreadId && nativeThreadId !== matchingNativeThreadId) continue;
+        if (!resolveLegacyThreadId) throw new Error("A live pre-reload MCP wait requires native thread identity resolution.");
+        entry.workbenchThreadId = resolveLegacyThreadId(nativeThreadId);
+      }
+    }
   }
 
   beginRuntimeDrain(owner: WorkbenchAgentMcpRuntimeOwner, phase: WorkbenchAgentMcpRuntimeDrainPhase, reason: string) {
@@ -282,13 +338,12 @@ export class WorkbenchAgentMcpRequestRegistry {
     return true;
   }
 
-  interruptThreadWaits(threadId: string, reason = "Workbench MCP wait was interrupted by a user steer.") {
-    const canonicalThreadId = threadId.trim();
-    if (!canonicalThreadId) return 0;
+  interruptThreadWaits(threadId: WorkbenchThreadId, reason = "Workbench MCP wait was interrupted by a user steer.") {
+    const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
     let interrupted = 0;
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (!entry.steerInterruptible || entry.threadId !== canonicalThreadId || entry.controller.signal.aborted) continue;
+        if (!entry.steerInterruptible || entry.workbenchThreadId !== workbenchThreadId || entry.controller.signal.aborted) continue;
         entry.controller.abort(createWorkbenchAgentMcpSteerInterruption(reason));
         interrupted += 1;
       }

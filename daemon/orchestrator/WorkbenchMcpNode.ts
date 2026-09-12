@@ -33,6 +33,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const agentCommand = build.get("agentCommand");
     const harnesses = build.get("harnesses");
     const codexMcpGeneration = build.get("codexMcpGeneration");
+    const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     build.get("reloadController");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
@@ -50,7 +51,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const mcp = new WorkbenchAgentMcpController({
       resolveThreadId: async (threadId, cwd) => {
         const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench MCP" });
-        const identity = await build.get("threadIdentity").resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness: "codex" });
+        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness: "codex" });
         if (!identity) throw new Error("The managed Codex thread has no Workbench identity.");
         return identity.threadId;
       },
@@ -77,9 +78,14 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     return {
       afterCommit: () => {
         activateCommandExecutor();
-        stopWaitObservation ??= requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
-          threadState.controller.setThreadWaitState("codex", threadId, toolNames);
-        });
+        stopWaitObservation ??= requestRegistry.subscribeThreadWaits(
+          ({ threadId, toolNames }) => {
+            threadState.controller.setThreadWaitState("codex", threadId, toolNames);
+          },
+          nativeThreadId => threadIdentity.workbenchIdForNative(
+            threadIdentity.knownNativeBinding("codex", nativeThreadId),
+          ),
+        );
         if (build.mode === "replacement") codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },

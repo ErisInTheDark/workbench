@@ -1,20 +1,96 @@
 /*
- * Keywords: Codex, startup, reload, transcript recovery, cancellation.
- * No production exports. Tests exercise recovery through the real bridge node lifecycle.
+ * No exports. Tests exercise accepted-steer mapping and recovery through the real bridge node lifecycle.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import CodexBridgeNode from "./CodexBridgeNode";
 import type CodexStdioBridge from "./CodexStdioBridge";
-import type { JsonRpcRequest } from "./bridge-types";
+import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test("accepted Codex steers cancel the mapped Workbench thread wait before publishing the response", async () => {
+  const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
+  const workbenchThreadId = WorkbenchThreadIdSchema.parse("workbench-thread");
+  const registry = getProcessWorkbenchAgentMcpRequestRegistry();
+  const wait = registry.register(`codex-bridge-${process.pid}-${Date.now()}`, 1, {
+    owner: {},
+    steerInterruptible: true,
+    toolName: "git_arc_wait",
+  });
+  wait.setWorkbenchThreadId(workbenchThreadId);
+  let bridge!: CodexStdioBridge;
+  let upstreamRequest!: JsonRpcRequest;
+  const responses: unknown[] = [];
+  const parent = {
+    appServer: {
+      async retirePrevious() {},
+      send(request: JsonRpcRequest) { upstreamRequest = request; },
+    },
+    attachBridge(value: CodexStdioBridge) { bridge = value; },
+    deactivateBridge() {},
+  };
+  const registrations = {
+    codexAppServer: parent,
+    codexMcpGeneration: { bump() {} },
+    harnesses: { recoverAvailable: async () => undefined },
+    threadIdentity: {
+      knownNativeBinding: (_harness: string, threadId: string) => {
+        assert.equal(threadId, nativeThreadId);
+        return { harness: "codex", nativeLocation: "C:/repo", nativeThreadId };
+      },
+      workbenchIdForNative: () => workbenchThreadId,
+    },
+    transcript: { cutoverFailure: null, pendingRecoveryThreadIds: [], record: async () => undefined },
+  } as unknown as OrchestratorRuntimeObjects;
+  const instance = CodexBridgeNode.create({
+    createCodexBridgeOptions: () => ({
+      appServer: parent.appServer,
+      bridgeUrl: "ws://127.0.0.1:1",
+      handleWorkbenchRequest: async () => { throw new Error("unexpected Workbench request"); },
+      onNotification() {},
+      resolveProjectFromCwd: async () => null,
+      sendToClient(_client, response) {
+        assert.equal(wait.signal.aborted, true);
+        responses.push(response);
+      },
+      storageRoot: ".",
+    }),
+    onCodexBridgeReady: async () => undefined,
+    onCodexBridgeUnavailable() {},
+  } as unknown as OrchestratorProcessContext, {
+    get: key => registrations[key],
+    handoffState: undefined,
+    isReplacing: () => false,
+    lease: { isCurrent: () => true },
+    mode: "initial",
+  });
+  bridge = instance.registrations.codexBridge!;
+  const client = { OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {} } as BridgeClient;
+  try {
+    await bridge.forwardRequest({
+      id: 7,
+      method: "turn/steer",
+      params: { threadId: nativeThreadId },
+    }, client, 7);
+    assert.equal(wait.signal.aborted, false);
+    await bridge.handleUpstreamMessage({ id: upstreamRequest.id ?? null, result: { turnId: "native-turn" } });
+    assert.equal(wait.signal.aborted, true);
+    assert.deepEqual(responses, [{ id: 7, result: { turnId: "native-turn" } }]);
+  } finally {
+    wait.unregister();
+    await instance.dispose();
+    await bridge.disposeImmediately();
+  }
+});
 
 for (const mode of ["initial", "replacement"] as const) {
   test(`${mode} bridge recovery runs without holding readiness and cancels on retirement`, async (t) => {
