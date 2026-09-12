@@ -19,8 +19,8 @@ import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getGitArcMatcherAction,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
-  isWorkbenchThreadStatusMatcherClaim, isWorkbenchThreadTitleSetMatcherClaim,
-  parseWorkbenchSubagentCommand, parseWorkbenchThreadStatusCommand, parseWorkbenchThreadTitleCommand,
+  isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
+  parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
   type CommandShell,
 } from "../../../workbench/thread/thread-command-matchers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
@@ -51,8 +51,8 @@ export function isHiddenCommandExecution(command: string) {
   const display = getThreadCommandDisplay({ command, commandActions: [], cwd: "" });
   const dedicated = getGitArcMatcherAction(display.claimedBy)
     || isThreadContextMatcherClaim(display.claimedBy)
-    || isWorkbenchThreadStatusMatcherClaim(display.claimedBy)
-    || isWorkbenchThreadTitleSetMatcherClaim(display.claimedBy)
+    || isWorkbenchTaskStatusMatcherClaim(display.claimedBy)
+    || isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy)
     || display.claimedBy?.split(",").includes("workbench-cli.subagent");
   return display.omitFromDisplay && !dedicated;
 }
@@ -163,8 +163,8 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     }
     const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
     const display = getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell, ...context });
-    const title = isWorkbenchThreadTitleSetMatcherClaim(display.claimedBy) ? parseWorkbenchThreadTitleCommand(display.unwrappedCommand, item.commandActions) : null;
-    const status = isWorkbenchThreadStatusMatcherClaim(display.claimedBy) ? parseWorkbenchThreadStatusCommand(display.unwrappedCommand, item.commandActions) : null;
+    const title = isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy) ? parseWorkbenchTaskTitleCommand(display.unwrappedCommand, item.commandActions) : null;
+    const status = isWorkbenchTaskStatusMatcherClaim(display.claimedBy) ? parseWorkbenchTaskStatusCommand(display.unwrappedCommand, item.commandActions) : null;
     if (isThreadContextMatcherClaim(display.claimedBy) && (outcome === "completed" || outcome === "inProgress")) {
       flushCommands(); flushWaits(); segments.push({ kind: "threadContext", item }); continue;
     }

@@ -30,8 +30,8 @@ export async function listWorkbenchInstructionMechanics(context: WorkbenchPrompt
     available.add("thread-git");
     available.add("thread-recall");
     available.add("thread-refresh");
-    available.add("thread-status");
-    if (!context.subagentName?.trim()) available.add("thread-title");
+    available.add("task-status");
+    if (!context.subagentName?.trim()) available.add("task-title");
   }
   return available;
 }

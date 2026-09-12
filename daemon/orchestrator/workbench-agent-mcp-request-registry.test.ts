@@ -9,7 +9,7 @@ import {
   WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 
-function registrationOptions(owner: object, toolName = "thread_title_get") {
+function registrationOptions(owner: object, toolName = "task_get") {
   return { owner, toolName };
 }
 
@@ -70,7 +70,7 @@ test("thread steers interrupt only declared waits for the matching thread across
   const ordinaryCall = registry.register("client-2", 2, {
     owner: secondOwner,
     threadId: "parent-thread",
-    toolName: "thread_title_get",
+    toolName: "task_get",
   });
 
   assert.equal(registry.interruptThreadWaits("parent-thread"), 2);
@@ -104,7 +104,7 @@ test("thread wait observation derives every active interruptible tool from live 
     owner, steerInterruptible: true, threadId: "parent-thread", toolName: "git_arc_wait",
   });
   const ordinary = registry.register("client-1", 2, {
-    owner, threadId: "parent-thread", toolName: "thread_title_get",
+    owner, threadId: "parent-thread", toolName: "task_get",
   });
   const replayed: Array<{ threadId: string; toolNames: string[] }> = [];
   const stopReplay = registry.subscribeThreadWaits((state) => replayed.push(state));

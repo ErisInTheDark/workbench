@@ -296,7 +296,7 @@ test("Git arc waits use live intersections while running and the start card afte
 
 test("title and subagent MCP operations use their dedicated renderers", () => {
   const titleHtml = renderSpecialized(makeItem(
-    "thread_title",
+    "task_set",
     { title: "Render wb MCP" },
     "Render wb MCP",
     "completed",

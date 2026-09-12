@@ -10,13 +10,13 @@ test("installed managed capabilities do not depend on a native identity or calle
   for (const subagentName of [null, "Akari"]) {
     const promptContext = { managedThread: true, threadId: null, subagentName };
     const available = await listWorkbenchInstructionMechanics(promptContext);
-    for (const mechanic of ["browse", "long-waits", "subagents", "thread-status", "thread-git", "thread-recall", "thread-refresh"]) {
+    for (const mechanic of ["browse", "long-waits", "subagents", "task-status", "thread-git", "thread-recall", "thread-refresh"]) {
       assert.equal(available.has(mechanic), true, mechanic);
     }
-    assert.equal(available.has("thread-title"), subagentName === null);
+    assert.equal(available.has("task-title"), subagentName === null);
     assert.equal(available.has("browse-raw"), false);
   }
-  assert.equal((await listWorkbenchInstructionMechanics({})).has("thread-title"), false);
+  assert.equal((await listWorkbenchInstructionMechanics({})).has("task-title"), false);
 });
 
 test("managed top-level threads expose current-thread mechanics before and after materialization", async (context) => {
@@ -28,7 +28,7 @@ test("managed top-level threads expose current-thread mechanics before and after
   for (const threadId of ["new", "draft:123", "thread-1"]) {
     const promptContext = { harness: "codex" as const, threadId, workbenchOrigin: "http://localhost" };
     const available = await listWorkbenchInstructionMechanics(promptContext);
-    for (const mechanic of ["long-waits", "thread-title", "thread-status", "thread-git", "thread-recall", "thread-refresh"]) {
+    for (const mechanic of ["long-waits", "task-title", "task-status", "thread-git", "thread-recall", "thread-refresh"]) {
       assert.equal(available.has(mechanic), true, `${threadId} should expose ${mechanic}`);
     }
     assert.equal(available.has("browse-raw"), false);
@@ -36,8 +36,8 @@ test("managed top-level threads expose current-thread mechanics before and after
 
   const subagentContext = { harness: "codex" as const, subagentName: "Akari", threadId: "draft:child", workbenchOrigin: "http://localhost" };
   const subagent = await listWorkbenchInstructionMechanics(subagentContext);
-  assert.equal(subagent.has("thread-title"), false);
-  assert.equal(subagent.has("thread-status"), true);
+  assert.equal(subagent.has("task-title"), false);
+  assert.equal(subagent.has("task-status"), true);
   assert.equal(subagent.has("thread-git"), true);
   assert.equal(subagent.has("thread-recall"), true);
   assert.equal(subagent.has("thread-refresh"), true);

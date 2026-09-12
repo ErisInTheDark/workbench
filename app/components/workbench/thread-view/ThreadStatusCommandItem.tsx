@@ -1,10 +1,10 @@
 /*
  * Default export:
- * - ThreadStatusCommandItem: render one successful or in-progress managed task status update. Keywords: thread, task, status, completed, blocked.
+ * - ThreadStatusCommandItem: render one successful or in-progress managed task status update.
  */
 import { useContext } from "react";
 
-import type { WorkbenchThreadStatusCommand } from "../../../workbench/thread/thread-command-matchers";
+import type { WorkbenchTaskStatusCommand } from "../../../workbench/thread/thread-command-matchers";
 import { getNeedsAttentionThreadStatusTone, getWorkbenchThreadStatusClassName } from "../workbench-thread-status-colors";
 import { CompletedThreadIcon, NeedsAttentionThreadIcon } from "../workbench-icons";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -14,7 +14,7 @@ export default function ThreadStatusCommandItem({
   status,
 }: {
   outcome: "completed" | "inProgress";
-  status: WorkbenchThreadStatusCommand["status"];
+  status: WorkbenchTaskStatusCommand["status"];
 }) {
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
   const completed = status === "completed";

@@ -16,11 +16,11 @@ Sending preference:
 
 Allow your workflow and your user message to override this preference.
 
-<available:thread-status>
-Before using the final channel, confirm that the requested work is truly complete and call `mcp__wbex__thread_status` with `status: "completed"`. Do not use the final channel while work remains.
+<available:task-status>
+Before using the final channel, confirm that the requested work is truly complete and call `mcp__wbex__task_completed`. Do not use the final channel while work remains.
 
-If user input or an external change blocks progress, call `mcp__wbex__thread_status` with `status: "blocked"` and continue through commentary or a questionnaire.
-</available:thread-status>
+If user input or an external change blocks progress, call `mcp__wbex__task_blocked` and continue through commentary or a questionnaire.
+</available:task-status>
 
 When you finish, report:
 - outcome

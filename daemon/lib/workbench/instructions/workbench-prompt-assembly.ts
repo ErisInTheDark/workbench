@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts. Keywords: prompt, context, instructions.
- * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
- * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots. Keywords: prompt, project, imports, runtime, app-server.
- * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
- * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions. Keywords: thread, utilities, MCP.
- * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability. Keywords: selector, mechanics.
- * - default WorkbenchPromptFiles: prompt-file assembly owner namespace. Keywords: prompt, owner, generated files.
+ * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts.
+ * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders.
+ * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots.
+ * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills.
+ * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions.
+ * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability.
+ * - default WorkbenchPromptFiles: prompt-file assembly owner namespace.
  */
 import path from "node:path";
 
@@ -301,8 +301,8 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     "subagents",
     "thread-recall",
     "thread-refresh",
-    "thread-status",
-    "thread-title",
+    "task-status",
+    "task-title",
   ]);
   return joinInstructionSections(
     instructionFiles

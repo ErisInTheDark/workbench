@@ -1,7 +1,6 @@
 /*
- * Keywords: MCP, caller identity, shell, dispatch, cancellation, tests.
  * Exports:
- * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, questionnaire waits, and steer cancellation. Keywords: workbench, MCP, HTTP, git, tools, questionnaire, steer, cancellation, test.
+ * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, questionnaire waits, and steer cancellation.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -218,11 +217,17 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");
     assert.ok(refresh);
     assert.deepEqual(refresh.inputSchema.properties, {});
-    const title = inventory.tools.find(({ name }) => name === "thread_title");
+    const title = inventory.tools.find(({ name }) => name === "task_set");
     assert.ok(title);
     assert.deepEqual(Object.keys(title.inputSchema.properties ?? {}).sort(), ["currentTitle", "title"]);
     assert.equal(title.inputSchema.required?.includes("title") ?? false, true);
     assert.equal(title.inputSchema.required?.includes("currentTitle") ?? false, false);
+    for (const name of ["task_completed", "task_blocked"]) {
+      const status = inventory.tools.find((tool) => tool.name === name);
+      assert.ok(status);
+      assert.deepEqual(status.inputSchema.properties, {});
+    }
+    assert.equal(inventory.tools.some(({ name }) => name === "thread_title" || name === "thread_title_get" || name === "thread_status"), false);
     const ripgrep = inventory.tools.find(({ name }) => name === "rg");
     assert.ok(ripgrep);
     assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);
@@ -362,10 +367,10 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const result = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "thread_title_get",
+      name: "task_get",
     });
     assert.equal(result.isError, false);
-    assert.match(responseText(result), /Thread title: Typed Workbench/u);
+    assert.match(responseText(result), /Task title: Typed Workbench/u);
     assert.deepEqual(codexRequests.at(-1), {
       id: 0,
       method: "thread/read",
@@ -380,7 +385,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const titleSet = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: { currentTitle: "Typed Workbench", title: "Preserve overarching titles" },
-      name: "thread_title",
+      name: "task_set",
     });
     assert.equal(titleSet.isError, false);
     assert.deepEqual(executed.at(-1), {
@@ -395,6 +400,20 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       path: "/api/thread-title",
       responseKind: "thread-title",
     });
+    for (const status of ["completed", "blocked"] as const) {
+      const statusResult = await client.callTool({
+        _meta: { threadId: "thread-1" },
+        arguments: {},
+        name: `task_${status}`,
+      });
+      assert.equal(statusResult.isError, false);
+      assert.deepEqual(executed.at(-1), {
+        body: { callerThreadId: "thread-1", cwd: "C:/authoritative", status },
+        method: "POST",
+        path: "/api/thread-status",
+        responseKind: "thread-status",
+      });
+    }
     assert.ok(server.getReleasedRequestCount() >= 3);
   } finally {
     await projectClient.close();
@@ -422,7 +441,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
   const server = await startController(controller);
   const client = await connectClient(server.url);
   try {
-    const missingIdentity = await client.callTool({ arguments: {}, name: "thread_title_get" });
+    const missingIdentity = await client.callTool({ arguments: {}, name: "task_get" });
     assert.equal(missingIdentity.isError, true);
     assert.match(responseText(missingIdentity), /trusted MCP thread identity/u);
     assert.equal(codexReadCount, 0);
@@ -442,7 +461,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     const sanitized = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "thread_title_get",
+      name: "task_get",
     });
     assert.equal(sanitized.isError, true);
     assert.doesNotMatch(responseText(sanitized), /super-secret|Users/u);
@@ -485,12 +504,12 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
     const firstCall = firstClient.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "thread_title_get",
+      name: "task_get",
     }, undefined, { signal: firstAbort.signal });
     const secondCall = secondClient.callTool({
       _meta: { threadId: "thread-2" },
       arguments: {},
-      name: "thread_title_get",
+      name: "task_get",
     });
     await bothStarted.promise;
     assert.equal(executions.get("thread-1")?.signal.aborted, false);
@@ -594,7 +613,7 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     const titleCall = client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
-      name: "thread_title_get",
+      name: "task_get",
     });
     const questionnaireCall = client.callTool({
       _meta: { threadId: "thread-1" },

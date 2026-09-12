@@ -1,25 +1,25 @@
 /*
  * Exports:
- * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts. Keywords: thread, command, matcher, builder.
- * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels. Keywords: thread, command, summary, aggregate.
- * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
- * - ThreadCommandDetailRow/ThreadCommandDetailTarget: structured detail rows rendered inside command disclosures. Keywords: thread, command, details, sequence.
- * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
- * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
- * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
- * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
- * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialized rendering. Keywords: thread, command, git, arc, compare, diff, commit.
- * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
- * - parseWorkbenchSubagentCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse semantic wb subagent/title actions and identify standalone title sets. Keywords: workbench, subagent, title, command, parse.
- * - parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays. Keywords: workbench, thread, status, task, command, parse.
- * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output. Keywords: git, arc, checkpoint, compare, proposal.
- * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
- * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
- * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns. Keywords: thread, command, matcher, cache, shell.
- * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
- * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar. Keywords: command, timeout, failure, tense.
- * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations. Keywords: workbench, MCP, command, rendering.
- * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries. Keywords: command, lifecycle, outcome.
+ * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts.
+ * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels.
+ * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
+ * - ThreadCommandDetailRow/ThreadCommandDetailTarget: structured detail rows rendered inside command disclosures.
+ * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels.
+ * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering.
+ * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
+ * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
+ * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering.
+ * - parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb subagent/task-title actions and identify standalone title sets.
+ * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
+ * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.
+ * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id.
+ * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries.
+ * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns.
+ * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label.
+ * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar.
+ * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations.
+ * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
 
 import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
@@ -85,12 +85,12 @@ import type {
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
 import {
-    isWorkbenchThreadStatusMatcherClaim,
-    isWorkbenchThreadTitleSetMatcherClaim,
+    isWorkbenchTaskStatusMatcherClaim,
+    isWorkbenchTaskTitleSetMatcherClaim,
     parseWorkbenchSubagentCommand,
-    parseWorkbenchThreadStatusCommand,
-    parseWorkbenchThreadTitleCommand,
-    type WorkbenchThreadStatusCommand,
+    parseWorkbenchTaskStatusCommand,
+    parseWorkbenchTaskTitleCommand,
+    type WorkbenchTaskStatusCommand,
     WORKBENCH_CLI_COMMAND_MATCHERS,
 } from "./command-matchers/workbench-cli";
 import {
@@ -272,13 +272,13 @@ export {
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
     isThreadContextMatcherClaim,
-    isWorkbenchThreadStatusMatcherClaim,
-    isWorkbenchThreadTitleSetMatcherClaim,
+    isWorkbenchTaskStatusMatcherClaim,
+    isWorkbenchTaskTitleSetMatcherClaim,
     parseBrowseSequenceCommandOutput,
     parseGitArcCommand,
     parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
-    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchThreadStatusCommand, parseWorkbenchThreadTitleCommand
+    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand
 };
 export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay } from "./command-matchers/workbench-command-rendering";
@@ -294,7 +294,7 @@ export type {
     ThreadCommandDisplayPart,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
-    WorkbenchThreadStatusCommand,
+    WorkbenchTaskStatusCommand,
 };
 
 export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";

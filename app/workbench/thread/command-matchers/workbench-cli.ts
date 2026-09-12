@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, target, message.
- * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
- * - WorkbenchThreadStatusCommand/parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse completed/blocked task status actions and identify standalone successful displays. Keywords: workbench, cli, thread, status, task, matcher.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, title, status, token, subagent, and reload commands. Keywords: workbench, cli, toc, title, tokens, subagent, reload.
+ * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands.
+ * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
+ * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, task, token, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
 
@@ -28,11 +28,11 @@ export interface WorkbenchSubagentCommand {
   toParent: boolean;
 }
 
-export type WorkbenchThreadTitleCommand =
+export type WorkbenchTaskTitleCommand =
   | { action: "get" }
   | { action: "set"; title: string };
 
-export interface WorkbenchThreadStatusCommand {
+export interface WorkbenchTaskStatusCommand {
   status: "blocked" | "completed";
 }
 
@@ -159,49 +159,48 @@ export function parseWorkbenchSubagentCommand(
   return parseSingleWorkbenchSubagentCommand(command);
 }
 
-function parseSingleWorkbenchThreadTitleCommand(command: string): WorkbenchThreadTitleCommand | null {
+function parseSingleWorkbenchTaskTitleCommand(command: string): WorkbenchTaskTitleCommand | null {
   const normalized = command.trim();
-  if (/^wb(?:\.cmd)?\s+thread\s+title\s+get(?:\s|$)/iu.test(normalized)) return { action: "get" };
-  if (!/^wb(?:\.cmd)?\s+thread\s+title(?:\s|$)/iu.test(normalized)) return null;
+  if (/^wb(?:\.cmd)?\s+task\s+get\s*$/iu.test(normalized)) return { action: "get" };
+  if (!/^wb(?:\.cmd)?\s+task\s+set(?:\s|$)/iu.test(normalized)) return null;
   const title = readFlagValue(normalized, "title");
   return title ? { action: "set", title } : null;
 }
 
-export function parseWorkbenchThreadTitleCommand(
+export function parseWorkbenchTaskTitleCommand(
   command: string,
   commandActions: readonly CommandAction[] = [],
-): WorkbenchThreadTitleCommand | null {
+): WorkbenchTaskTitleCommand | null {
   for (const action of commandActions) {
-    const parsedAction = parseSingleWorkbenchThreadTitleCommand(action.command);
+    const parsedAction = parseSingleWorkbenchTaskTitleCommand(action.command);
     if (parsedAction) return parsedAction;
   }
-  return parseSingleWorkbenchThreadTitleCommand(command);
+  return parseSingleWorkbenchTaskTitleCommand(command);
 }
 
-export function isWorkbenchThreadTitleSetMatcherClaim(claimedBy: string | null | undefined) {
-  return claimedBy?.split(",").includes("workbench-cli.thread-title-set") ?? false;
+export function isWorkbenchTaskTitleSetMatcherClaim(claimedBy: string | null | undefined) {
+  return claimedBy?.split(",").includes("workbench-cli.task-title-set") ?? false;
 }
 
-function parseSingleWorkbenchThreadStatusCommand(command: string): WorkbenchThreadStatusCommand | null {
+function parseSingleWorkbenchTaskStatusCommand(command: string): WorkbenchTaskStatusCommand | null {
   const normalized = command.trim();
-  if (!/^wb(?:\.cmd)?\s+thread\s+status(?:\s|$)/iu.test(normalized)) return null;
-  const status = readFlagValue(normalized, "status");
-  return status === "completed" || status === "blocked" ? { status } : null;
+  const match = /^wb(?:\.cmd)?\s+task\s+(completed|blocked)\s*$/iu.exec(normalized);
+  return match ? { status: match[1]!.toLowerCase() as WorkbenchTaskStatusCommand["status"] } : null;
 }
 
-export function parseWorkbenchThreadStatusCommand(
+export function parseWorkbenchTaskStatusCommand(
   command: string,
   commandActions: readonly CommandAction[] = [],
-): WorkbenchThreadStatusCommand | null {
+): WorkbenchTaskStatusCommand | null {
   for (const action of commandActions) {
-    const parsedAction = parseSingleWorkbenchThreadStatusCommand(action.command);
+    const parsedAction = parseSingleWorkbenchTaskStatusCommand(action.command);
     if (parsedAction) return parsedAction;
   }
-  return parseSingleWorkbenchThreadStatusCommand(command);
+  return parseSingleWorkbenchTaskStatusCommand(command);
 }
 
-export function isWorkbenchThreadStatusMatcherClaim(claimedBy: string | null | undefined) {
-  return claimedBy?.split(",").includes("workbench-cli.thread-status") ?? false;
+export function isWorkbenchTaskStatusMatcherClaim(claimedBy: string | null | undefined) {
+  return claimedBy?.split(",").includes("workbench-cli.task-status") ?? false;
 }
 
 function semanticMatcherResult(ongoing: string, completed: string) {
@@ -276,9 +275,9 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
-    id: "workbench-cli.thread-status",
+    id: "workbench-cli.task-status",
     match: ({ stage, summaryParts }) => {
-      const command = parseSingleWorkbenchThreadStatusCommand(stage.text);
+      const command = parseSingleWorkbenchTaskStatusCommand(stage.text);
       if (summaryParts.length || !command) return null;
       return command.status === "completed"
         ? semanticMatcherResult("Marking task completed", "Task completed")
@@ -286,19 +285,19 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
-    id: "workbench-cli.thread-title-set",
+    id: "workbench-cli.task-title-set",
     match: ({ stage, summaryParts }) => {
-      const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
+      const command = parseSingleWorkbenchTaskTitleCommand(stage.text);
       if (summaryParts.length || command?.action !== "set") return null;
-      return getWorkbenchCommandRendering("thread_title", { title: command.title })?.result ?? null;
+      return getWorkbenchCommandRendering("task_set", { title: command.title })?.result ?? null;
     },
   }),
   CommandMatcher({
-    id: "workbench-cli.thread-title-get",
+    id: "workbench-cli.task-title-get",
     match: ({ stage, summaryParts }) => {
-      const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
+      const command = parseSingleWorkbenchTaskTitleCommand(stage.text);
       if (summaryParts.length || command?.action !== "get") return null;
-      return getWorkbenchCommandRendering("thread_title_get", {})?.result ?? null;
+      return getWorkbenchCommandRendering("task_get", {})?.result ?? null;
     },
   }),
   CommandMatcher({

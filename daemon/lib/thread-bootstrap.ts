@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value. Keywords: thread title, normalize, truncate.
- * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
- * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. Keywords: thread markdown, file links, paths.
- * - buildThreadTitleBootstrapInstructions: create managed-thread CLI instructions for setting and reading a thread title through wb. Keywords: thread title, instructions, cli, bootstrap.
- * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
+ * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value.
+ * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes.
+ * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links.
+ * - buildThreadTitleBootstrapInstructions: create managed-task CLI instructions for setting and reading its title through wb.
+ * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content with shared title bootstrap instructions.
  */
 import type { WorkbenchAgentDefinition, WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
@@ -98,11 +98,11 @@ export function normalizeThreadTitle(value: string | null | undefined) {
 
 export function buildThreadTitleBootstrapInstructions() {
   return `
-## Workbench Thread Title CLI
+## Workbench Task Title CLI
 
-\`wb thread title --title "<short title>" [--current-title "<exact current title>"]\`
+\`wb task set --title "<short title>" [--current-title "<exact current title>"]\`
 
-\`wb thread title get\`
+\`wb task get\`
 
 `.trimStart();
 }

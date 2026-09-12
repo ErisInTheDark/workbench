@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - CompletedThreadWorkPartition: one completed turn split into collapsible work and always-mounted terminal output. Keywords: thread, completed, worked, terminal, status.
- * - partitionCompletedThreadWork: use the last successful CLI or MCP task-status operation as the terminal boundary, with a legacy final-message fallback. Keywords: thread, completed, status, partition, duration.
+ * - CompletedThreadWorkPartition: one completed turn split into collapsible work and always-mounted terminal output.
+ * - partitionCompletedThreadWork: use the last successful CLI or MCP task-status operation as the terminal boundary, with a legacy final-message fallback.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import {
@@ -11,7 +11,7 @@ import {
 import {
   getThreadCommandExecutionOutcome,
   getWorkbenchMcpCommandRoute,
-  parseWorkbenchThreadStatusCommand,
+  parseWorkbenchTaskStatusCommand,
 } from "../../../workbench/thread/thread-command-matchers";
 import { unwrapShellCommand } from "../../../workbench/thread/command-matchers/shells";
 
@@ -31,7 +31,7 @@ function isSuccessfulThreadStatusItem(item: ThreadItem) {
   if (item.type !== "commandExecution") return false;
   if (getThreadCommandExecutionOutcome(item.status, item.exitCode) !== "completed") return false;
   const unwrappedCommand = unwrapShellCommand(item.command).command;
-  return Boolean(parseWorkbenchThreadStatusCommand(unwrappedCommand, item.commandActions));
+  return Boolean(parseWorkbenchTaskStatusCommand(unwrappedCommand, item.commandActions));
 }
 
 export function partitionCompletedThreadWork({

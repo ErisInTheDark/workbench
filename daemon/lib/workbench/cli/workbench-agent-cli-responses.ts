@@ -1,8 +1,7 @@
 /*
- * Keywords: CLI, response, output, transport, errors.
  * Exports:
- * - WorkbenchAgentCliAdaptedResponse: semantic stdout, stderr, and exit status for one Workbench response. Keywords: workbench, cli, response, output.
- * - adaptWorkbenchAgentCliResponse: convert known server envelopes into command-oriented output. Keywords: workbench, cli, json, stdout, errors.
+ * - WorkbenchAgentCliAdaptedResponse: semantic stdout, stderr, and exit status for one Workbench response.
+ * - adaptWorkbenchAgentCliResponse: convert known server envelopes into command-oriented output.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
 import { renderGitArcOutput } from "./git-arc-output";
@@ -45,12 +44,12 @@ export function adaptWorkbenchAgentCliResponse({
     }
     case "thread-title-get": {
       const title = readString(payload, "title");
-      return succeeded(title ? `Thread title: ${title}` : "No thread title is set.");
+      return succeeded(title ? `Task title: ${title}` : "No task title is set.");
     }
     case "thread-title":
-      return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
+      return succeeded(`Task title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":
-      return succeeded(`Thread status set: ${readString(payload, "agentStatus") || "unknown"}`);
+      return succeeded(`Task marked ${readString(payload, "agentStatus") || "unknown"}.`);
     case "thread-refresh":
       return succeeded("Thread refresh scheduled.");
     case "subagent-create":

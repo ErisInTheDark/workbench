@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_COMMANDS: typed thread title, status, refresh, recall, and Code Mode exposure definitions shared by CLI and MCP. Keywords: workbench, thread, commands, recall, Code Mode.
+ * - WORKBENCH_THREAD_COMMANDS: typed task actions plus thread refresh, recall, and Code Mode exposure definitions shared by CLI and MCP.
  */
 import { z } from "zod";
 
@@ -13,8 +13,6 @@ import {
 } from "./workbench-agent-command-definition";
 
 const requiredText = z.string().trim().min(1);
-const threadStatus = z.enum(["completed", "blocked"]);
-
 function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
   return callerThreadId;
@@ -24,13 +22,13 @@ function targetThreadId(explicitThreadId: string | undefined, callerThreadId: st
   return explicitThreadId ?? requireCallerThreadId(callerThreadId);
 }
 
-const titleGet = defineWorkbenchAgentCommand({
-  description: "Get the current title for a managed thread.",
+const taskGet = defineWorkbenchAgentCommand({
+  description: "Get the current title for this managed task.",
   effects: { idempotent: true, readOnly: true },
-  helpGroups: ["thread"],
+  helpGroups: ["task"],
   mcpCodeModeEligible: true,
-  words: ["thread", "title", "get"],
-  usage: "wb thread title get",
+  words: ["task", "get"],
+  usage: "wb task get",
   inputSchema: z.object({}).strict(),
   parseCliArgs(args) { new WorkbenchAgentCommandFlags(args, {}); return {}; },
   buildRequest(_input, { callerThreadId, cwd }) {
@@ -38,14 +36,14 @@ const titleGet = defineWorkbenchAgentCommand({
   },
 });
 
-const title = defineWorkbenchAgentCommand({
-  description: "Set a concise title for a managed thread only when the supplied current title matches.",
-  helpGroups: ["thread"],
+const taskSet = defineWorkbenchAgentCommand({
+  description: "Set a concise title for this managed task only when the supplied current title matches.",
+  helpGroups: ["task"],
   mcpCodeModeEligible: true,
-  words: ["thread", "title"],
-  usage: "wb thread title --title <text> [--current-title <text>]",
+  words: ["task", "set"],
+  usage: "wb task set --title <text> [--current-title <text>]",
   inputSchema: z.object({
-    currentTitle: z.string().min(1).optional().describe("Exact current thread title. Omit only when no title is set."),
+    currentTitle: z.string().min(1).optional().describe("Exact current task title. Omit only when no title is set."),
     title: requiredText,
   }).strict(),
   parseCliArgs(args) {
@@ -61,20 +59,28 @@ const title = defineWorkbenchAgentCommand({
   },
 });
 
-const status = defineWorkbenchAgentCommand({
-  description: "Set the exact current turn status for this managed thread.",
-  helpGroups: ["thread"],
-  words: ["thread", "status"],
-  usage: "wb thread status --status <completed|blocked>",
-  inputSchema: z.object({ status: threadStatus }).strict(),
-  parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--status"] });
-    return { status: threadStatus.parse(flags.required("--status")) };
-  },
-  buildRequest(input, { callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/thread-status", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, status: input.status }, "thread-status");
-  },
-});
+function taskStatus(status: "blocked" | "completed") {
+  return defineWorkbenchAgentCommand({
+    description: status === "completed"
+      ? "Mark this managed task completed."
+      : "Mark this managed task blocked.",
+    helpGroups: ["task"],
+    words: ["task", status],
+    usage: `wb task ${status}`,
+    inputSchema: z.object({}).strict(),
+    parseCliArgs(args) { new WorkbenchAgentCommandFlags(args, {}); return {}; },
+    buildRequest(_input, { callerThreadId, cwd }) {
+      return postWorkbenchAgentCommand("/api/thread-status", {
+        callerThreadId: requireCallerThreadId(callerThreadId),
+        cwd,
+        status,
+      }, "thread-status");
+    },
+  });
+}
+
+const taskCompleted = taskStatus("completed");
+const taskBlocked = taskStatus("blocked");
 
 const refresh = defineWorkbenchAgentCommand({
   description: "Refresh this managed thread by interrupting the current turn and starting its lifecycle-owned replacement.",
@@ -165,4 +171,4 @@ const recall = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_THREAD_COMMANDS = [titleGet, title, status, refresh, recallSearch, recallExpand, recall] as const;
+export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, recallSearch, recallExpand, recall] as const;

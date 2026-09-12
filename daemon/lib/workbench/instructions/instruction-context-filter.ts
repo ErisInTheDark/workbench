@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings. Keywords: instructions, selector, warning.
- * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure. Keywords: instructions, comments, fences, source.
- * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly. Keywords: filter, tolerant parser, final payload.
+ * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
+ * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
+ * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly.
  */
 
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -40,8 +40,8 @@ const KNOWN_AVAILABLE_VALUES = new Set([
   "thread-git",
   "thread-recall",
   "thread-refresh",
-  "thread-status",
-  "thread-title",
+  "task-status",
+  "task-title",
 ]);
 
 function findLastMatchingIndex<T>(values: readonly T[], predicate: (value: T) => boolean) {

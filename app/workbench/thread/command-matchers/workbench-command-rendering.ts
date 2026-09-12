@@ -41,9 +41,10 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "subagent_stop",
   "subagent_settle",
   "subagent_message",
-  "thread_title_get",
-  "thread_title",
-  "thread_status",
+  "task_get",
+  "task_set",
+  "task_completed",
+  "task_blocked",
   "thread_refresh",
   "thread_recall_search",
   "thread_recall_expand",
@@ -553,18 +554,16 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.tokens", actionTarget("Counting ", "instruction tokens"), actionTarget("Counted ", "instruction tokens"));
     case "tokens_project":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
-    case "thread_title_get":
-      return simple("workbench-cli.thread-title-get", actionTarget("Checking ", "thread title"), actionTarget("Checked ", "thread title"));
-    case "thread_title": {
+    case "task_get":
+      return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));
+    case "task_set": {
       const title = readString(args.title);
-      return title ? specialized("workbench-cli.thread-title-set", { kind: "threadTitle", title }) : null;
+      return title ? specialized("workbench-cli.task-title-set", { kind: "threadTitle", title }) : null;
     }
-    case "thread_status": {
-      const status = readString(args.status);
-      return status === "completed" || status === "blocked"
-        ? specialized("workbench-cli.thread-status", { kind: "threadStatus", status })
-        : null;
-    }
+    case "task_completed":
+      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "completed" });
+    case "task_blocked":
+      return specialized("workbench-cli.task-status", { kind: "threadStatus", status: "blocked" });
     case "thread_refresh":
       return simple("workbench-cli.thread-refresh", actionTarget("Refreshing ", "thread"), actionTarget("Refreshed ", "thread"));
     case "thread_recall_search":

@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: exact hidden continuation contracts. Keywords: thread, recovery, unfinished, message.
- * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers. Keywords: thread, recovery, unfinished, questionnaire, id.
- * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize exact hidden Workbench content by text. Keywords: thread, recovery, unfinished, questionnaire, hidden.
- * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state. Keywords: thread, recovery, composer, lifecycle.
+ * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: exact hidden continuation contracts.
+ * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
+ * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize exact hidden Workbench content by text.
+ * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
@@ -19,7 +19,7 @@ export const WORKBENCH_UNFINISHED_TURN_MESSAGE = `<wb:resume>
 You inappropriately ended the turn without finishing the task. The correct next action could be: 
 1. continuing your work or
 2. sending a questionnaire or
-3. setting the thread status to blocked or completed before ending.
+3. marking the task blocked or completed before ending.
 Determine the correct action. Do not commentate on this resumption. Do not repeat this mistake.
 </wb:resume>`;
 export const WORKBENCH_THREAD_RECOVERY_ID_PREFIX = "workbench:thread-recovery:";

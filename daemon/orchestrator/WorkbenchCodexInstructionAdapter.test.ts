@@ -42,7 +42,7 @@ test("configured creation, resume and fork retain installed mechanics in the fin
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", process.cwd());
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");
   const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
-  const mechanics = ["thread-title", "thread-status", "thread-git", "thread-recall", "thread-refresh", "long-waits"];
+  const mechanics = ["task-title", "task-status", "thread-git", "thread-recall", "thread-refresh", "long-waits"];
   await fs.writeFile(override, mechanics.map(mechanic => `<available:${mechanic}>\nfixture ${mechanic}\n</available:${mechanic}>`).join("\n"));
   try {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
@@ -54,7 +54,7 @@ test("configured creation, resume and fork retain installed mechanics in the fin
         });
         const packet = readPromptInstructions(await adapter.augment(configured, method)).baseInstructions ?? "";
         for (const mechanic of mechanics) {
-          assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "thread-title" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
+          assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "task-title" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
         }
       }
     }

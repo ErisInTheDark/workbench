@@ -22,11 +22,11 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
-<available:thread-status>
-Before completed status or final, apply Workbench Thread Status to the current request and unresolved steers. Call `mcp__wbex__thread_status` with `status: "completed"` only when that outcome is delivered. Do not end while work remains.
+<available:task-status>
+Before final, apply Workbench Task Completion to the current request and unresolved steers. Call `mcp__wbex__task_completed` only when that outcome is delivered. Do not end while work remains.
 
-If user input or an external change blocks progress, call `mcp__wbex__thread_status` with `status: "blocked"` and continue through commentary or a questionnaire.
-</available:thread-status>
+If user input or an external change blocks progress, call `mcp__wbex__task_blocked` and continue through commentary or a questionnaire.
+</available:task-status>
 
 ## Workflow Integrity
 
@@ -222,7 +222,7 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 - Inspect complete `git_arc_diff`; follow every page. Apply universal change-review checks.
 - Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
-- Only after checks pass, call `mcp__wbex__thread_status` with `status: "completed"`, then enter Review.
+- Only after checks pass, call `mcp__wbex__task_completed`, then enter Review.
 
 ## Review Mode
 

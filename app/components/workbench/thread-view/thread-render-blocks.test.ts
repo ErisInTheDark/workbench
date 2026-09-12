@@ -29,12 +29,12 @@ test("merged commands and reasoning count once each and hidden calls count zero"
   assert.deepEqual(partitionWorkedRows(rows(items)).map(group => group.length), [3]);
 });
 
-test("standalone Git rows count separately while CLI title and status split runs", () => {
+test("standalone Git rows count separately while CLI task actions split runs", () => {
   const result = rows([
     command("one"), command("two"),
     command("git", "wb git arc scope"),
-    command("title", 'wb thread title --title "new title"'),
-    command("status", "wb thread status --status completed"),
+    command("title", 'wb task set --title "new title"'),
+    command("status", "wb task completed"),
     command("three"),
   ]);
   assert.equal(result.length, 5);
@@ -42,11 +42,11 @@ test("standalone Git rows count separately while CLI title and status split runs
   assert.deepEqual(partitionWorkedRows(result).map(group => group.length), [2, 1, 1, 1]);
 });
 
-test("MCP title, status and outgoing subagent messages remain boundaries", () => {
+test("MCP task actions and outgoing subagent messages remain boundaries", () => {
   const result = rows([
     command("before"),
-    mcp("title", "thread_title", { title: "new" }),
-    mcp("status", "thread_status", { status: "completed" }),
+    mcp("title", "task_set", { title: "new" }),
+    mcp("status", "task_completed", {}),
     mcp("message", "subagent_message", { name: "luna", message: "hello" }),
     command("after"),
   ]);

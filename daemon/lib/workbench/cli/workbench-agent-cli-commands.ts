@@ -88,7 +88,8 @@ const ROOT_HELP_COMMAND_ORDER = [
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
-  "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
+  "task set", "task get", "task completed", "task blocked",
+  "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
@@ -152,7 +153,11 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "subagent", usage: "wb subagent <command> [options]", words: ["subagent"],
   },
   {
-    commandOrder: ["thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand"],
+    commandOrder: ["task set", "task get", "task completed", "task blocked"],
+    key: "task", usage: "wb task <command> [options]", words: ["task"],
+  },
+  {
+    commandOrder: ["thread recall", "thread recall search", "thread recall expand"],
     key: "thread", usage: "wb thread <command> [options]", words: ["thread"],
   },
   {

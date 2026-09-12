@@ -123,7 +123,7 @@ await new Promise((resolve, reject) => {
     controller.select(transcriptSelection);
     await initialSubscription;
     const healthy = () => { assert.deepEqual(errors, [], "Projection errors must fail the diagnostic"); };
-    const prompt = "This is an authorised Workbench diagnostic. First report the prefix proof required by project instructions in commentary. Use the Workbench MCP thread_title_get tool to read this thread's title. Then run `wb thread title get && node .workbench/transcript-gate.mjs` through Codex's native exec_command shell tool, not the Workbench MCP shell tool. The diagnostic releases that command after checking live transcript resubscription. Wait for it to finish, without changing or bypassing the gate. Do not edit files, spawn agents, ask questions, or create plans. Report the title and prefix proof in commentary again after the command completes. After both title checks succeed, call the Workbench thread_status tool with status completed for this diagnostic thread, then finish with an empty final response. That status change is authorised and required so Workbench does not automatically resume unfinished work.";
+    const prompt = "This is an authorised Workbench diagnostic. First report the prefix proof required by project instructions in commentary. Use the Workbench MCP task_get tool to read this task's title. Then run `wb task get && node .workbench/transcript-gate.mjs` through Codex's native exec_command shell tool, not the Workbench MCP shell tool. The diagnostic releases that command after checking live transcript resubscription. Wait for it to finish, without changing or bypassing the gate. Do not edit files, spawn agents, ask questions, or create plans. Report the title and prefix proof in commentary again after the command completes. After both title checks succeed, call the Workbench task_completed tool for this diagnostic thread, then finish with an empty final response. That completion is authorised and required so Workbench does not automatically resume unfinished work.";
     console.log("starting paid luna.low turn");
     const response = await runtime.request<{ turn: Turn }>("turn/start", {
       threadId, cwd: runtime.project, input: [{ type: "text", text: prompt, text_elements: [] }],
@@ -195,7 +195,7 @@ await new Promise((resolve, reject) => {
     assert.ok(answer.includes(prefixProof), "Project instructions must survive admission");
     assert.ok(answer.includes(title), "Agent must successfully use its managed tool identity");
     assert.ok(items.some((item) => item.type === "mcpToolCall" && item.status === "completed"), "A real MCP call must complete");
-    assert.ok(items.some((item) => item.type === "mcpToolCall" && item.tool === "thread_status" && item.status === "completed"), "The agent must finish through Workbench's managed completion gate");
+    assert.ok(items.some((item) => item.type === "mcpToolCall" && item.tool === "task_completed" && item.status === "completed"), "The agent must finish through Workbench's managed completion gate");
     assert.ok(items.some((item) => item.type === "commandExecution" && item.exitCode === 0), "A real agent CLI command must complete");
     await controller.dispose();
     controller = null;

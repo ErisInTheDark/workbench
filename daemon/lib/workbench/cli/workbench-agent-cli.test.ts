@@ -478,7 +478,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" })).kind, "error");
 
   const title = await parseWorkbenchAgentCliCommand([
-    "thread", "title", "--title", "A title", "--current-title", "Current title",
+    "task", "set", "--title", "A title", "--current-title", "Current title",
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(title.kind, "request");
   assert.deepEqual(title.request, {
@@ -489,7 +489,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
 
   const titleGet = await parseWorkbenchAgentCliCommand([
-    "thread", "title", "get",
+    "task", "get",
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(titleGet.kind, "request");
   assert.deepEqual(titleGet.request, {
@@ -498,6 +498,20 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     path: "/api/thread-title",
     responseKind: "thread-title-get",
   });
+
+  for (const status of ["completed", "blocked"] as const) {
+    const taskStatus = await parseWorkbenchAgentCliCommand(["task", status], {
+      callerThreadId: "thread/1",
+      cwd: "C:/workspace",
+    });
+    assert.equal(taskStatus.kind, "request");
+    assert.deepEqual(taskStatus.request, {
+      body: { callerThreadId: "thread/1", cwd: "C:/workspace", status },
+      method: "POST",
+      path: "/api/thread-status",
+      responseKind: "thread-status",
+    });
+  }
 
   const refresh = await parseWorkbenchAgentCliCommand(["thread", "refresh"], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(refresh.kind, "request");
@@ -1401,17 +1415,17 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.deepEqual(adapt("thread-title", { title: "Clean output" }), {
     exitCode: 0,
     stderr: "",
-    stdout: "Thread title set: Clean output\n",
+    stdout: "Task title set: Clean output\n",
   });
   assert.deepEqual(adapt("thread-title-get", { title: "Current task" }), {
     exitCode: 0,
     stderr: "",
-    stdout: "Thread title: Current task\n",
+    stdout: "Task title: Current task\n",
   });
   assert.deepEqual(adapt("thread-title-get", { title: "" }), {
     exitCode: 0,
     stderr: "",
-    stdout: "No thread title is set.\n",
+    stdout: "No task title is set.\n",
   });
   assert.equal(adapt("thread-refresh", { accepted: true }).stdout, "Thread refresh scheduled.\n");
   const planRef = "a".repeat(40);

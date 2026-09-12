@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect CLI/MCP completed-turn status boundaries, terminal output, legacy fallback, and worked timing. Keywords: thread, completed, worked, terminal, status, MCP, test.
+ * - No production exports; Node tests protect CLI/MCP completed-turn status boundaries, terminal output, legacy fallback, and worked timing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -47,16 +47,16 @@ function mcpStatusItem({
 }): Extract<ThreadItem, { type: "mcpToolCall" }> {
   return {
     appContext: null,
-    arguments: { status: agentStatus },
+    arguments: {},
     durationMs: 12,
     error: status === "failed" ? { message: "status failed" } : null,
     id,
     pluginId: null,
     readOnlyHint: false,
-    result: status === "completed" ? { _meta: null, content: [{ type: "text", text: `Thread status set: ${agentStatus}` }], structuredContent: null } : null,
-    server: "wb",
+    result: status === "completed" ? { _meta: null, content: [{ type: "text", text: `Task marked ${agentStatus}` }], structuredContent: null } : null,
+    server: "wbex",
     status,
-    tool: "thread_status",
+    tool: `task_${agentStatus}`,
     type: "mcpToolCall",
   };
 }
@@ -78,10 +78,10 @@ const finalItem = {
 } as const satisfies ThreadItem;
 
 test("the last successful task status starts always-mounted terminal output", () => {
-  const firstStatus = commandItem({ command: "wb thread status --status completed", id: "first-status" });
+  const firstStatus = commandItem({ command: "wb task completed", id: "first-status" });
   const correction = commandItem({ command: "pnpm test", id: "correction" });
   const lastStatus = commandItem({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb thread status --status blocked'`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb task blocked'`,
     id: "last-status",
   });
   const proposal = commandItem({ command: "wb git arc propose --title Done", id: "proposal" });
@@ -121,8 +121,8 @@ test("a successful wb MCP task status starts always-mounted terminal output", ()
 });
 
 test("failed and in-progress task status commands do not create a terminal boundary", () => {
-  const failed = commandItem({ command: "wb thread status --status completed", exitCode: 1, id: "failed", status: "failed" });
-  const running = commandItem({ command: "wb thread status --status blocked", exitCode: null, id: "running", status: "inProgress" });
+  const failed = commandItem({ command: "wb task completed", exitCode: 1, id: "failed", status: "failed" });
+  const running = commandItem({ command: "wb task blocked", exitCode: null, id: "running", status: "inProgress" });
   const partition = partitionCompletedThreadWork({
     finalAgentMessageId: finalItem.id,
     items: [userItem, failed, running, mcpStatusItem({ id: "mcp-failed", status: "failed" }), mcpStatusItem({ id: "mcp-running", status: "inProgress" }), finalItem],

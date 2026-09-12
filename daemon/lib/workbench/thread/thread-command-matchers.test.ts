@@ -31,8 +31,8 @@ import {
   parseGitCheckpointProposalId,
   parseGitArcCommand,
   parseWorkbenchSubagentCommand,
-  parseWorkbenchThreadStatusCommand,
-  parseWorkbenchThreadTitleCommand,
+  parseWorkbenchTaskStatusCommand,
+  parseWorkbenchTaskTitleCommand,
 } from "../../../../app/workbench/thread/thread-command-matchers.ts";
 
 const PROJECT_ROOT = "C:/git/web/workbench";
@@ -103,8 +103,9 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
     case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
-    case "thread_title": return { title: "Render typed wb tools" };
-    case "thread_status": return { status: "completed" };
+    case "task_set": return { title: "Render typed wb tools" };
+    case "task_completed":
+    case "task_blocked": return {};
     case "subagent_wait":
     case "subagent_stop":
     case "subagent_settle": return { names: ["Lumi"] };
@@ -166,7 +167,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
     ["wb tokens instructions", "tokens_instructions", {}],
     ["wb tokens project", "tokens_project", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
-    ["wb thread title get", "thread_title_get", {}],
+    ["wb task get", "task_get", {}],
     ["wb subagent list", "subagent_list", {}],
     ['wb browse run --thread thread-one --session rendering --summary "Check page" --command "snapshot --compact"', "browse_run", { commands: ["snapshot --compact"], session: "rendering", summary: "Check page" }],
   ] satisfies Array<[string, string, JsonValue]>;
@@ -190,7 +191,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
 test("every valid simple typed wb MCP route emphasizes its important target", () => {
   const cases = [
     ["rg", { args: ["-n", "needle", "webapp"] }, ["plain", "pattern", "plain", "path"]],
-    ["thread_title_get", {}, ["plain", "primary"]],
+    ["task_get", {}, ["plain", "primary"]],
     ["thread_refresh", {}, ["plain", "primary"]],
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
@@ -250,8 +251,8 @@ test("reload help remains a read-only command instead of rendering reload activi
 
 test("specialized typed wb MCP calls share CLI claims without duplicate summaries", () => {
   const cases = [
-    ["wb thread status --status blocked", "thread_status", { status: "blocked" }],
-    ['wb thread title --title "Render typed wb tools"', "thread_title", { title: "Render typed wb tools" }],
+    ["wb task blocked", "task_blocked", {}],
+    ['wb task set --title "Render typed wb tools"', "task_set", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
     ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
     ["wb git arc wait", "git_arc_wait", {}],
@@ -368,7 +369,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
-  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wbex", tool: "thread_status" });
+  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "task_blocked" });
   const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wbex", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(subagentRoute, true), false);
@@ -602,53 +603,56 @@ test("Workbench subagent parser preserves valid PowerShell here-string messages"
   }
 });
 
-test("Workbench thread title commands distinguish standalone sets from grouped reads", () => {
-  assert.deepEqual(parseWorkbenchThreadTitleCommand('wb thread title --title "Trace cache invalidation"'), {
+test("Workbench task title commands distinguish standalone sets from grouped reads", () => {
+  assert.deepEqual(parseWorkbenchTaskTitleCommand('wb task set --title "Trace cache invalidation"'), {
     action: "set",
     title: "Trace cache invalidation",
   });
-  assert.deepEqual(parseWorkbenchThreadTitleCommand("wb thread title get"), { action: "get" });
+  assert.deepEqual(parseWorkbenchTaskTitleCommand("wb task get"), { action: "get" });
+  assert.equal(parseWorkbenchTaskTitleCommand("wb thread title get"), null);
+  assert.equal(parseWorkbenchTaskTitleCommand("wb task get unexpected"), null);
 
   const titleSet = getThreadCommandDisplay({
-    command: 'wb thread title --title "Trace cache invalidation"',
+    command: 'wb task set --title "Trace cache invalidation"',
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(titleSet.claimedBy, "workbench-cli.thread-title-set");
+  assert.equal(titleSet.claimedBy, "workbench-cli.task-title-set");
   assert.equal(titleSet.omitFromDisplay, true);
   assert.deepEqual(titleSet.summaryParts, []);
 
   const titleGet = getThreadCommandDisplay({
-    command: "wb thread title get",
+    command: "wb task get",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(titleGet.claimedBy, "workbench-cli.thread-title-get");
+  assert.equal(titleGet.claimedBy, "workbench-cli.task-title-get");
 });
 
-test("Workbench thread status commands match task completion and blocking across command shapes", () => {
+test("Workbench task completion commands match across command shapes", () => {
   const completed = getThreadCommandDisplay({
-    command: "wb thread status --status completed",
+    command: "wb task completed",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(completed.claimedBy, "workbench-cli.thread-status");
+  assert.equal(completed.claimedBy, "workbench-cli.task-status");
 
   const wrapped = getThreadCommandDisplay({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb thread status --status blocked'`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb task blocked'`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(wrapped.claimedBy, "workbench-cli.thread-status");
+  assert.equal(wrapped.claimedBy, "workbench-cli.task-status");
 
-  assert.deepEqual(parseWorkbenchThreadStatusCommand("escaped wrapper", [
-    { type: "unknown", command: "wb thread status --status completed" },
+  assert.deepEqual(parseWorkbenchTaskStatusCommand("escaped wrapper", [
+    { type: "unknown", command: "wb task completed" },
   ]), { status: "completed" });
-  assert.equal(parseWorkbenchThreadStatusCommand("wb thread status --status waiting"), null);
+  assert.equal(parseWorkbenchTaskStatusCommand("wb thread status --status completed"), null);
+  assert.equal(parseWorkbenchTaskStatusCommand("wb task completed unexpected"), null);
 });
 
 test("Workbench subagent create commands expose metadata through PowerShell wrappers", () => {
