@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptLiveController: retain active text independently of viewers and publish commit-scoped presentation.
+ * - default WorkbenchTranscriptLiveController: retain active text and patch previews independently of viewers and publish commit-scoped presentation.
  */
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import {
@@ -259,9 +259,15 @@ export default class WorkbenchTranscriptLiveController {
   }
 
   #publishPatch(view: View, update: TranscriptPatchUpdate) {
+    const turn = view.projection.turns.find(turn => turn.id === update.turnId);
+    if (turn?.status !== "inProgress") return;
     const item = view.items.get(update.itemId);
-    if (!item || item.type !== "fileChange") return;
-    item.changes = update.changes;
+    if (item) {
+      if (item.type !== "fileChange" || item.status !== "inProgress"
+        || view.roots.get(update.itemId)?.turn_id !== update.turnId) return;
+      item.changes = update.changes;
+    }
+    // Patch generation precedes item/started. Its preview needs the turn, not a durable item body.
     view.publish(update);
   }
 

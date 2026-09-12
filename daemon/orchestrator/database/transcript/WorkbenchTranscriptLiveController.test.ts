@@ -14,7 +14,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import {
   applyTranscriptLayoutPatch, applyTranscriptStructure, writeTranscriptText,
-  type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate,
+  type TranscriptLayout, type TranscriptPatchUpdate, type TranscriptStreamUpdate, type TranscriptTextUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import { projectWorkbenchTranscript, type WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
@@ -235,6 +235,73 @@ test("a fresh live owner seeds its prefix from the baseline before later deltas 
     if (item.type === "reasoning") assert.deepEqual(item.summary, ["durable prefix suffix"]);
   } finally {
     restarted.dispose();
+    live.dispose();
+    database.close();
+  }
+});
+
+for (const openBeforePatch of [true, false]) {
+test(`pre-admission patches stream ${openBeforePatch ? "to an attached viewer" : "on first opening mid-patch"} without durable bodies`, () => {
+  const { database, repository, live, record } = fixture();
+  const events: TranscriptStreamUpdate[] = [];
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId: "thread", turnId: "turn", itemId: "preview",
+    changes: [{ path: "first.ts", kind: { type: "add" }, diff: "+first" }],
+  };
+  const open = () => live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), event => events.push(event));
+  const patches = () => events.filter(event => event.kind === "patch");
+  try {
+    if (openBeforePatch) open();
+    live.acceptLiveUpdate(patch);
+    const grown = { ...patch, changes: [...patch.changes, { path: "second.ts", kind: { type: "add" as const }, diff: "+second" }] };
+    live.acceptLiveUpdate(grown);
+    if (!openBeforePatch) open();
+    assert.deepEqual(patches().at(-1), grown, "The latest preview must not wait for item/started");
+    if (openBeforePatch) assert.deepEqual(patches(), [patch, grown]);
+    record("unrelated commit");
+    assert.deepEqual(patches().at(-1), grown);
+    live.close("view");
+    const finalPreview = { ...grown, changes: [{ ...grown.changes[0]!, diff: "+first\n+more" }, grown.changes[1]!] };
+    live.acceptLiveUpdate(finalPreview);
+    open();
+    assert.deepEqual(patches().at(-1), finalPreview, "Reopening must replay the full latest preview");
+    assert.equal(database.prepare<[], { count: number }>("SELECT count(*) AS count FROM thread_item_file_changes").get()!.count, 0);
+    assert.equal(database.prepare<[], { count: number }>("SELECT count(*) AS count FROM thread_file_changes").get()!.count, 0);
+  } finally {
+    live.dispose();
+    database.close();
+  }
+});
+}
+
+test("preview delivery stays in its loaded turn and terminal settlement clears retained previews", () => {
+  const { database, repository, live } = fixture();
+  const selected: TranscriptStreamUpdate[] = [];
+  const unloaded: TranscriptStreamUpdate[] = [];
+  const patch: TranscriptPatchUpdate = {
+    kind: "patch", threadId: "thread", turnId: "turn", itemId: "preview",
+    changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+first" }],
+  };
+  try {
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    live.open("selected", snapshot, event => selected.push(event));
+    live.open("unloaded", { ...snapshot, loadedTurnIds: [] }, event => unloaded.push(event));
+    live.acceptLiveUpdate({ ...patch, threadId: "another-thread" });
+    live.acceptLiveUpdate({ ...patch, turnId: "another-turn" });
+    live.acceptLiveUpdate(patch);
+    assert.deepEqual(selected.filter(event => event.kind === "patch"), [patch]);
+    assert.deepEqual(unloaded.filter(event => event.kind === "patch"), []);
+    live.settle(repository.settle([{
+      kind: "turn", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
+      harnessId: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse("native"),
+      nativeTurnId: NativeTurnIdSchema.parse("native-turn"), state: "interrupted",
+      createdAt: 1, startedAt: 1, endedAt: 3, durationMs: 2,
+    }]).changes!);
+    selected.length = 0;
+    live.acceptLiveUpdate(patch);
+    live.open("selected", repository.read({ threadId: "thread", turnLimit: 1 }), event => selected.push(event));
+    assert.deepEqual(selected.filter(event => event.kind === "patch"), [], "Late or retained previews must not revive an interrupted turn");
+  } finally {
     live.dispose();
     database.close();
   }

@@ -20,7 +20,7 @@ import ThreadTranscriptProjectionController from "./ThreadTranscriptProjectionCo
 import type { ThreadTranscriptProjectionState } from "./ThreadTranscriptProjectionController";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import {
-  createTranscriptLayout, createTranscriptLayoutPatch, type TranscriptStreamUpdate,
+  createTranscriptLayout, createTranscriptLayoutPatch, type TranscriptPatchUpdate, type TranscriptStreamUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 function flush() {
@@ -121,6 +121,175 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
     kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: false,
     layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)),
   };
+}
+
+function patchBaseline(
+  status: "inProgress" | "completed" | "failed" = "inProgress",
+  previous?: WorkbenchTranscriptSnapshot,
+) {
+  const update = streamBaseline("thread");
+  assert.ok(update.kind === "structure");
+  update.snapshot.rows.threadItems.push({
+    ...update.snapshot.rows.threadItems[0]!, id: 2, source_id: "patch", item_position: 1, type: "fileChange",
+  });
+  update.snapshot.rows.threadItemFileChanges.push({
+    item_id: 2, item_type: "fileChange", state: status, error_text: null,
+    workbench_failure_kind: null, workbench_policy: null, recovery_state: null, recovery_detail: null,
+  });
+  const projection = projectWorkbenchTranscript(update.snapshot);
+  assert.ok(projection.success);
+  const previousProjection = previous ? projectWorkbenchTranscript(previous) : null;
+  if (previousProjection) assert.ok(previousProjection.success);
+  update.reset = !previous;
+  update.layout = createTranscriptLayoutPatch(
+    previousProjection ? createTranscriptLayout(previousProjection.data) : null,
+    createTranscriptLayout(projection.data),
+  );
+  return update;
+}
+
+async function patchViewer() {
+  const states: ThreadTranscriptProjectionState[] = [];
+  const errors: Error[] = [];
+  let receive!: (update: TranscriptStreamUpdate) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 4,
+    onStateChange: state => states.push(state), onError: error => errors.push(error),
+    transcripts: {
+      unsubscribe: async () => {},
+      subscribe: async (_params, _snapshot, stream) => { receive = stream!; },
+    },
+  });
+  controller.select({ thread: thread("thread") });
+  await flush();
+  return {
+    controller, states, errors,
+    receive: (update: TranscriptStreamUpdate) => receive(update),
+    projection: () => {
+      const state = states.at(-1)!;
+      assert.ok(state.status === "ready");
+      return state.projection;
+    },
+    patch: (diff: string, itemId = "patch"): TranscriptPatchUpdate => ({
+      kind: "patch", threadId: "thread", turnId: "turn", itemId,
+      changes: [{ path: "file.ts", kind: { type: "add" }, diff }],
+    }),
+  };
+}
+
+test("patch previews appear before admission, grow immutably and become one canonical item", async () => {
+  const view = await patchViewer();
+  const fileItems = () => view.projection().turns[0]!.items.filter(item => item.type === "fileChange");
+  try {
+    const baseline = streamBaseline("thread");
+    assert.ok(baseline.kind === "structure");
+    view.receive(baseline);
+    view.receive(view.patch("+first"));
+    assert.deepEqual(fileItems().map(item => item.changes[0]?.diff), ["+first"]);
+    assert.deepEqual(view.errors, []);
+    const first = view.projection();
+    const grown = view.patch("+first\n+second");
+    grown.changes.push({ path: "second.ts", kind: { type: "add" }, diff: "+another file" });
+    view.receive(grown);
+    assert.deepEqual(fileItems()[0]!.changes, grown.changes);
+    const previous = first.turns[0]!.items.find(item => item.type === "fileChange");
+    assert.ok(previous?.type === "fileChange");
+    assert.deepEqual(previous.changes.map(change => change.diff), ["+first"], "Previously published snapshots must not change under subscribers");
+    assert.equal(view.projection().display.orderedItems.some(item => item.itemId === "patch"), false);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === "patch").length, 1);
+
+    const unrelated = streamBaseline("thread");
+    assert.ok(unrelated.kind === "structure");
+    unrelated.reset = false;
+    unrelated.layout = {};
+    unrelated.snapshot.rows = emptyRows();
+    view.receive(unrelated);
+    assert.deepEqual(fileItems()[0]!.changes, grown.changes, "An unrelated commit cannot erase the preview");
+
+    const source = thread("thread");
+    source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
+    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
+    const steer = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "keep this input", text_elements: [] }]);
+    view.controller.select({ thread: inputs.apply(source, []) });
+    assert.deepEqual(fileItems()[0]!.changes, grown.changes);
+    const admitted = patchBaseline("inProgress", baseline.snapshot);
+    view.receive(admitted);
+    view.receive(grown);
+    assert.equal(fileItems().length, 1);
+    assert.equal(view.projection().display.orderedItems.filter(item => item.itemId === "patch").length, 1);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === "patch").length, 1);
+    view.receive(patchBaseline("completed", admitted.snapshot));
+    assert.equal(fileItems().length, 1);
+    assert.equal(fileItems()[0]!.status, "completed");
+    assert.deepEqual(fileItems()[0]!.changes, []);
+    const retainedSteer = view.projection().turns[0]!.items.find(item => item.id === steer.handle);
+    assert.ok(retainedSteer?.type === "userMessage");
+    assert.equal(getWorkbenchInputState(retainedSteer)?.status, "pending");
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === steer.handle).length, 1);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
+
+test("patches to admitted items notify with fresh snapshots and preserve final failures", async () => {
+  const view = await patchViewer();
+  try {
+    view.receive(patchBaseline());
+    const before = view.projection();
+    view.receive(view.patch("+first"));
+    assert.notDeepEqual(view.projection(), before, "The thread owner's equality guard must see the patch");
+    const item = before.turns[0]!.items.find(item => item.type === "fileChange");
+    assert.ok(item?.type === "fileChange");
+    assert.deepEqual(item.changes, []);
+    const first = view.projection();
+    view.receive(view.patch("+first\n+second"));
+    assert.notDeepEqual(view.projection(), first);
+    view.receive(patchBaseline("failed"));
+    const failed = view.projection().turns[0]!.items.find(item => item.type === "fileChange");
+    assert.ok(failed?.type === "fileChange");
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.changes, []);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
+
+for (const boundary of ["completed", "interrupted", "failed", "removed", "reset", "selection", "disconnect", "dispose"] as const) {
+test(`unadmitted previews are cleared on ${boundary}`, async () => {
+  const view = await patchViewer();
+  try {
+    view.receive(streamBaseline("thread"));
+    view.receive(view.patch("+preview"));
+    assert.ok(view.projection().turns[0]!.items.some(item => item.id === "patch"));
+    if (boundary === "selection") {
+      view.controller.select({ thread: thread("other") });
+      await flush();
+      view.receive(streamBaseline("other"));
+    } else if (boundary === "disconnect") {
+      view.controller.setAvailable(false);
+      view.controller.setAvailable(true);
+      await flush();
+      view.receive(streamBaseline("thread"));
+    } else if (boundary === "dispose") {
+      await view.controller.dispose();
+      view.receive(view.patch("+late"));
+      assert.equal(view.states.at(-1)?.status, "idle");
+      return;
+    } else {
+      const update = streamBaseline("thread");
+      assert.ok(update.kind === "structure");
+      if (boundary !== "reset") {
+        update.reset = false;
+        update.layout = {};
+        update.snapshot.rows = emptyRows();
+        if (boundary === "removed") update.removedItemIds = ["patch"];
+        else update.snapshot.turns[0] = { ...update.snapshot.turns[0]!, state: boundary };
+      }
+      view.receive(update);
+    }
+    assert.equal(view.projection().turns.flatMap(turn => turn.items).some(item => item.id === "patch"), false);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).some(item => item.id === "patch"), false);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
 }
 
 for (const correlation of ["item", "client"] as const) {

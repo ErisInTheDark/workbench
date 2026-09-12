@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTranscriptProjectionSelection: selected window and locally owned input presentation.
  * - ThreadTranscriptProjectionState: SQLite source presentation lifecycle.
- * - default ThreadTranscriptProjectionController: own incremental publication, local input presentation and subscriptions.
+ * - default ThreadTranscriptProjectionController: own incremental publication, transient patch previews, local input presentation and subscriptions.
  */
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -90,7 +90,7 @@ export default class ThreadTranscriptProjectionController {
   #projection: { value: WorkbenchTranscriptProjection | null; generation: number } | null = null;
   #selection: ThreadTranscriptProjectionSelection | null = null;
   #streamLayout: TranscriptLayout | null = null;
-  #streamItems = new Map<string, WorkbenchProjectedTranscriptItem>();
+  #streamItems = new Map<string, { turnId: string; item: WorkbenchProjectedTranscriptItem }>();
   #incremental = false;
 
   constructor({
@@ -202,6 +202,7 @@ export default class ThreadTranscriptProjectionController {
     const projection = this.#projection.value;
     const canonicalItems = projection.turns.flatMap(turn => turn.items);
     const canonicalIds = new Set(canonicalItems.map(item => item.id));
+    const previews = [...this.#streamItems.values()].filter(({ item }) => item.type === "fileChange" && !canonicalIds.has(item.id));
     const canonicalClients = new Set(canonicalItems.flatMap(item => item.type === "userMessage" && item.clientId ? [item.clientId] : []));
     const steers = localSteers(this.#selection.thread).map(entry => ({
       ...entry,
@@ -210,12 +211,18 @@ export default class ThreadTranscriptProjectionController {
     // Local connecting input is not provider transcript truth. Keep it visible until admission.
     const pending = this.#selection.thread.turns.filter(turn =>
       getWorkbenchTurnAdmission(turn) === "connecting" && !projection.turns.some(existing => existing.id === turn.id));
-    if (!pending.length && !steers.length) return projection;
+    if (!pending.length && !steers.length && !previews.length) return projection;
     const pendingTurns = pending.map((turn, index) => ({
       ...turn, turnIndex: Math.max(-1, ...projection.turns.map(existing => existing.turnIndex)) + index + 1,
       itemTimeline: this.#selection!.thread.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline ?? [],
     }));
     const turns = [...projection.turns, ...pendingTurns];
+    for (const { turnId, item } of previews) {
+      const index = turns.findIndex(turn => turn.id === turnId);
+      if (index < 0 || turns[index]!.status !== "inProgress") continue;
+      const turn = turns[index]!;
+      turns[index] = { ...turn, items: [...turn.items, item] };
+    }
     for (const entry of steers) {
       const index = turns.findIndex(turn => turn.id === entry.turnId);
       if (index >= 0) {
@@ -296,6 +303,8 @@ export default class ThreadTranscriptProjectionController {
     if (generation !== this.#generation && (this.#projection || !snapshot)) return;
     if (snapshot === null) {
       this.#projection = { value: null, generation };
+      this.#streamItems.clear();
+      this.#streamLayout = null;
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
         ? { status: "absent", threadId }
@@ -329,17 +338,41 @@ export default class ThreadTranscriptProjectionController {
     const threadId = update.kind === "structure" ? update.snapshot.thread.id : update.threadId;
     if (threadId !== this.#selection?.thread.id) return;
     if (update.kind === "patch") {
-      const item = this.#streamItems.get(update.itemId);
-      if (item?.type === "fileChange") {
-        item.changes = update.changes;
-        this.#publishProjection();
-      } else {
-        this.#onError(new Error("SQLite patch update arrived without its file-change baseline."));
+      const projection = this.#projection?.value;
+      const turn = projection?.turns.find(turn => turn.id === update.turnId);
+      const entry = this.#streamItems.get(update.itemId);
+      if (!projection || !turn || (entry && (entry.turnId !== update.turnId || entry.item.type !== "fileChange"))) {
+        this.#onError(new Error("SQLite patch update arrived without its turn or with a conflicting item."));
+        return;
       }
+      if (turn.status !== "inProgress" || (entry?.item.type === "fileChange" && entry.item.status !== "inProgress")) return;
+      if (entry?.item.type === "fileChange" && areDeeplyEqual(entry.item.changes, update.changes)) return;
+      const item: WorkbenchProjectedTranscriptItem = {
+        ...(entry?.item.type === "fileChange" ? entry.item : { type: "fileChange", id: update.itemId, status: "inProgress" }),
+        changes: update.changes,
+      };
+      this.#streamItems.set(update.itemId, { turnId: update.turnId, item });
+      if (turn.items.some(existing => existing.id === item.id)) {
+        // All published paths must point at the replacement, never mutate a subscriber's old snapshot.
+        this.#projection = { generation, value: {
+          ...projection,
+          turns: projection.turns.map(existing => existing === turn
+            ? { ...turn, items: turn.items.map(previous => previous.id === item.id ? item : previous) }
+            : existing),
+          display: {
+            orderedItems: projection.display.orderedItems.map(previous => previous.itemId === item.id
+              ? { ...previous, payload: item } : previous),
+            segments: projection.display.segments.map(segment => segment.items.some(previous => previous.id === item.id)
+              ? { ...segment, items: segment.items.map(previous => previous.id === item.id ? item : previous) }
+              : segment),
+          },
+        } };
+      }
+      this.#publishProjection();
       return;
     }
     if (update.kind === "text") {
-      const item = this.#streamItems.get(update.itemId);
+      const item = this.#streamItems.get(update.itemId)?.item;
       if (!item) {
         this.#onError(new Error("SQLite text update arrived without its item baseline."));
         return;
@@ -354,8 +387,18 @@ export default class ThreadTranscriptProjectionController {
     try {
       const layout = applyTranscriptLayoutPatch(update.reset ? null : this.#streamLayout, update.layout);
       const projection = applyTranscriptStructure(this.#projection?.value ?? null, update, layout);
+      const streamItems = new Map(projection.turns.flatMap(turn => turn.items.map(item => [item.id, { turnId: turn.id, item }] as const)));
+      if (!update.reset) {
+        const previousCanonicalIds = new Set(this.#streamLayout?.items.map(item => item.itemId));
+        const removed = new Set(update.removedItemIds);
+        const activeTurns = new Set(projection.turns.filter(turn => turn.status === "inProgress").map(turn => turn.id));
+        for (const [id, entry] of this.#streamItems) {
+          if (entry.item.type === "fileChange" && !previousCanonicalIds.has(id) && !streamItems.has(id)
+            && !removed.has(id) && activeTurns.has(entry.turnId)) streamItems.set(id, entry);
+        }
+      }
       this.#streamLayout = layout;
-      this.#streamItems = new Map(projection.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const)));
+      this.#streamItems = streamItems;
       this.#projection = { value: projection, generation };
       this.#publishProjection();
     } catch (error) {
