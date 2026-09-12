@@ -25,7 +25,8 @@
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
  * - AsteriskIcon/PlusIcon: amend and fresh-commit choices.
  * - SparkleIcon: creation glyph.
- * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: file-change aliases.
+ * - FileAddIcon/FileDeleteIcon/FileMoveIcon: file-change glyphs.
+ * - FileUpdateIcon: file-change alias.
  * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: token input, cache and output glyphs.
  * - SendHorizontalIcon: outlined send glyph.
  * - SquareIcon: outlined square.
@@ -483,6 +484,14 @@ export function FilePlusIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
+export function FileAddIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M13 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-8" />
+    <path d="M12 7 13.28 10.72 17 12 13.28 13.28 12 17 10.72 13.28 7 12 10.72 10.72 12 7Z" />
+    <path d="M19.5 2 20.15 3.85 22 4.5 20.15 5.15 19.5 7 18.85 5.15 17 4.5 18.85 3.85 19.5 2Z" />
+  </OutlinedIcon>;
+}
+
 export function FileDeleteIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" />
@@ -645,5 +654,4 @@ export const SnoozedThreadIcon = ZzzIcon;
 export const OpenThreadIcon = ArrowRightIcon;
 export const PreviewIcon = EyeIcon;
 export const StatsIcon = ChartNoAxesCombinedIcon;
-export const FileAddIcon = FilePlusIcon;
 export const FileUpdateIcon = SquarePenIcon;
