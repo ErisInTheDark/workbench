@@ -52,7 +52,7 @@ export default function ThreadRenderSurface({
 
   return (
     <div
-      className={`mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden px-5 py-8 text-text md:px-6 ${className}`}
+      className={`mx-auto w-full min-w-0 max-w-content overflow-x-hidden px-5 py-8 text-text md:px-6 ${className}`}
       data-standalone-thread-render-surface="true"
       style={style}
     >

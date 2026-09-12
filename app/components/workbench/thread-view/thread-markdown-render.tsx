@@ -65,6 +65,7 @@ const DIFF_CODE_BLOCK_LINE_CLASS_NAMES = {
   deletion: "bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
   note: "",
 } satisfies Record<UnifiedDiffDisplayLine["type"], string>;
+const THREAD_TABLE_CELL_CLASS = "min-w-0 max-w-[60cqw] [overflow-wrap:anywhere]";
 
 interface ThreadCodeBlockHeader {
   fileLink: Extract<ParsedInlineNode, { type: "projectFileLink" }> | null;
@@ -425,13 +426,13 @@ function renderThreadTableBlock (
       className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
       key={keyPrefix}
     >
-      <div className="max-w-full overflow-x-auto">
+      <div className="max-w-full overflow-x-auto [container-type:inline-size]">
         <table className="w-max min-w-full border-collapse font-sans text-[0.92em] leading-[1.45]">
           <thead>
             <tr className="border-b-2 border-[color-mix(in_srgb,var(--text)_16%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]">
               {block.header.map((cell, index) => (
                 <th
-                  className={`${getThreadTableCellAlignClassName(block.alignments[index] ?? null)} px-[0.65rem] py-[0.48rem] text-[0.82em] font-semibold text-text align-top`}
+                  className={`${getThreadTableCellAlignClassName(block.alignments[index] ?? null)} ${THREAD_TABLE_CELL_CLASS} px-[0.65rem] py-[0.48rem] text-[0.82em] font-semibold text-text align-top`}
                   key={`${keyPrefix}-header-${index}`}
                   scope="col"
                 >
@@ -450,7 +451,7 @@ function renderThreadTableBlock (
                   const cell = row[columnIndex] ?? { text: "" };
                   return (
                     <td
-                      className={`${getThreadTableCellAlignClassName(block.alignments[columnIndex] ?? null)} px-[0.85rem] py-[0.5rem] align-top text-text`}
+                      className={`${getThreadTableCellAlignClassName(block.alignments[columnIndex] ?? null)} ${THREAD_TABLE_CELL_CLASS} px-[0.85rem] py-[0.5rem] align-top text-text`}
                       key={`${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`}
                     >
                       {renderThreadTableCellContent(cell, options, `${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`)}

@@ -27,7 +27,7 @@ export default function ThreadLoadingSkeleton ({
       aria-live="polite"
       role="status"
       className={joinClasses(
-        "mx-auto flex w-full min-w-0 max-w-[56rem] flex-col justify-end overflow-hidden",
+        "mx-auto flex w-full min-w-0 max-w-content flex-col justify-end overflow-hidden",
         contained ? "min-h-full pb-8" : fillAvailableHeight ? "min-h-full pb-16" : "min-h-[calc(100dvh-8rem)] pb-16",
       )}
     >

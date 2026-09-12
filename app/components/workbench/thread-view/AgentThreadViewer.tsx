@@ -75,7 +75,7 @@ function SqlThreadViewer({ threadId }: { threadId: string }) {
   return (
     <ThreadTextPresentationContext value={controller?.text ?? null}>
       {error ? (
-        <div role="alert" className="mx-auto max-w-[56rem] px-5 pt-5 text-danger md:px-6">
+        <div role="alert" className="mx-auto max-w-content px-5 pt-5 text-danger md:px-6">
           <p>{error}</p>
           <button type="button" className="rounded px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" onClick={() => void controller?.refresh()}>Retry</button>
         </div>
@@ -190,7 +190,7 @@ export default function AgentThreadViewer({
       ) : (
         <>
           {status === "failed" ? (
-            <div className="mx-auto max-w-[56rem] px-5 pt-5 md:px-6">
+            <div className="mx-auto max-w-content px-5 pt-5 md:px-6">
               <p className="m-0 rounded-[0.9rem] bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] px-4 py-3 text-[0.86rem] leading-6 text-danger">
                 {error || "Unable to read thread."}
               </p>

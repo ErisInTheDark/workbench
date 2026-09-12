@@ -3001,7 +3001,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     />
                 ) : null}
                 {showSettingsView && !shouldRenderMainLayout ? (
-                  <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
+                  <div className="mx-auto flex w-full max-w-content flex-col gap-8 py-8">
                     <section className="space-y-6">
                       <div className="flex flex-wrap items-end justify-between gap-4">
                         <div className="space-y-2">
@@ -3069,7 +3069,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   />
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
@@ -3077,7 +3077,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </div>
                   </div>
                 ) : showEmptyState && !shouldRenderMainLayout ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="flex w-full max-w-[42rem] flex-col gap-8">
                       <button
                         type="button"
@@ -3247,7 +3247,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       }
 
                       return (
-                        <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                        <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                           <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                             <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Workbench</p>
                             <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
@@ -3269,7 +3269,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   />
                 ) : null}
                 {showFileView && selectionError ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
@@ -3278,7 +3278,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </div>
                 ) : null}
                 {showFileView && !selectionError && !isFileViewReady ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>

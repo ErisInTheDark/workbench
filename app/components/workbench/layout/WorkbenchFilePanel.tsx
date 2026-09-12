@@ -320,7 +320,7 @@ export default function WorkbenchFilePanel ({
       </header>
 
       <div className="relative min-h-0 flex-1" hidden={isMinimized}>
-        <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem_minmax(0,1fr)] gap-[0.53rem] md:max-w-[calc(56rem+2.5rem)] md:grid-cols-[1.25rem_minmax(0,56rem)] md:gap-3 -ml-5 md:ml-auto">
+        <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem_minmax(0,1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem_minmax(0,var(--container-content))] md:gap-3 -ml-5 md:ml-auto">
           <div
             ref={diffGutterRef}
             className={workbenchDiffGutterClassName}

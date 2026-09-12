@@ -169,6 +169,7 @@
 
 @theme {
   --color-button-hover: color-mix(in srgb, white 20%, var(--shell-fade-bg) 80%);
+  --container-content: 56rem;
 }
 
 @theme inline {

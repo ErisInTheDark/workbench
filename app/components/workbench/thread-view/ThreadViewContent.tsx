@@ -1078,7 +1078,7 @@ export default memo(function ThreadViewContent ({
         data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
         data-thread-project-file-link-boundary="true"
         className={joinClasses(
-          "mx-auto flex min-h-full w-full min-w-0 max-w-[56rem] flex-col overflow-x-clip md:overflow-x-visible",
+          "mx-auto flex min-h-full w-full min-w-0 max-w-content flex-col overflow-x-clip md:overflow-x-visible",
           mobileFullBleed ? "px-5 pb-0" : contained ? "pb-8" : "pb-16",
           !isDraftThreadView && "justify-end",
         )}
