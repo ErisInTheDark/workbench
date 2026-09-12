@@ -1,9 +1,10 @@
 /*
- * Exports: none. Tests protect the shared thread surface through controlled adapter ports.
+ * Exports: none. Tests protect shared thread admission, proposal observation, source lifecycles, and child hydration through controlled adapter ports.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadPayload } from "workbench-shared/types";
+import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { WorkbenchThreadObservationSnapshot, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadTranscriptProjectionState } from "./transcript/ThreadTranscriptProjectionController";
 import WorkbenchThreadController, { type ThreadControllerPorts } from "./WorkbenchThreadController";
@@ -48,6 +49,12 @@ function fixture() {
   const listeners = new Set<() => void>();
   const reads: Array<{ admit: () => Promise<void>; resolve: (value: ThreadPayload | null) => void }> = [];
   const errors: string[] = [];
+  const proposalReads: Array<{
+    proposalId: string;
+    reject: (error: Error) => void;
+    resolve: (proposal: GitCheckpointProposal) => void;
+  }> = [];
+  const proposalRefreshListeners = new Set<() => void>();
   let publishTranscript!: (state: ThreadTranscriptProjectionState) => void;
   const ports: ThreadControllerPorts = {
     controls: {
@@ -61,6 +68,13 @@ function fixture() {
     getChild: () => { throw new Error("Unexpected child."); },
     readNative: () => ({ document: native, pendingQuestionnaire: null, rateLimits: null }),
     subscribeNative: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    readGitArcProposal: ({ proposalId }) => new Promise<GitCheckpointProposal>((resolve, reject) => {
+      proposalReads.push({ proposalId, reject, resolve });
+    }),
+    subscribeGitArcProposalRefresh: listener => {
+      proposalRefreshListeners.add(listener);
+      return () => { proposalRefreshListeners.delete(listener); };
+    },
     read: (_options, admit) => new Promise(resolve => reads.push({ admit, resolve })),
     createTranscript: publish => {
       publishTranscript = publish;
@@ -77,11 +91,16 @@ function fixture() {
     reportError: message => { errors.push(message); },
   };
   const owner = new WorkbenchThreadController("project", target, ports);
-  function admit(index = 0, children: WorkbenchThreadSidebarEntry[] = []) {
+  function admit(
+    index = 0,
+    children: WorkbenchThreadSidebarEntry[] = [],
+    gitArc?: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["gitArc"],
+  ) {
     const snapshot: WorkbenchThreadObservationSnapshot = {
       projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: requests[index]!.subscriptionId, target,
       entries: [{
         activityAt: 1, title: "thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+        ...(gitArc ? { gitArc } : {}),
         metadata: { archived: false, pinned: true, snoozed: false },
         lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       }, ...children],
@@ -94,8 +113,41 @@ function fixture() {
     native = value;
     for (const listener of listeners) listener();
   }
-  return { owner, observations, document, requests, releases, reads, errors, admit, publish, ports,
+  return { owner, observations, document, requests, releases, reads, errors, proposalReads, proposalRefreshListeners, admit, publish, ports,
     publishTranscript: (state: ThreadTranscriptProjectionState) => publishTranscript(state) };
+}
+
+function proposal(proposalId: string, status: GitCheckpointProposal["status"]): GitCheckpointProposal {
+  return {
+    amendTargetMessage: null,
+    amendTargetSha: null,
+    baseCommit: "a".repeat(40),
+    changes: [],
+    committedSha: status === "committed" ? "b".repeat(40) : null,
+    description: "",
+    freshChanges: null,
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/one.ts"],
+    proposalId,
+    status,
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Proposal",
+    unavailableReason: status === "unavailable" ? "Proposal is no longer valid." : null,
+  };
+}
+
+function gitArc(proposalId = "proposal") {
+  return {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: [],
+    intentDescription: "",
+    intentName: "test",
+    phase: "resolved" as const,
+    proposals: [{ proposalId, status: "proposed" as const }],
+    updatedAt: "2026-09-13T00:00:00.000Z",
+  };
 }
 
 test("summary consumers share admission without loading a transcript", () => {
@@ -110,6 +162,70 @@ test("summary consumers share admission without loading a transcript", () => {
   assert.equal(f.releases.length, 0);
   second();
   assert.equal(f.releases.length, 1);
+  f.owner.dispose();
+});
+
+test("proposal observation hydrates beside a ready thread and fences stale refreshes", async () => {
+  const f = fixture();
+  f.publish(f.document);
+  const release = f.owner.acquire("view");
+  f.admit(0, [], gitArc());
+
+  assert.equal(f.owner.getSnapshot().status, "ready");
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, { proposal: { status: "loading" } });
+  assert.equal(f.proposalReads.length, 1);
+  assert.equal(f.proposalRefreshListeners.size, 1);
+
+  [...f.proposalRefreshListeners][0]!();
+  assert.equal(f.proposalReads.length, 2);
+  f.proposalReads[0]!.resolve(proposal("proposal", "proposed"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, { proposal: { status: "loading" } });
+
+  const refreshed = proposal("proposal", "proposed");
+  f.proposalReads[1]!.resolve(refreshed);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
+    proposal: { proposal: refreshed, status: "loaded" },
+  });
+  assert.equal(f.owner.getSnapshot().status, "ready");
+
+  [...f.proposalRefreshListeners][0]!();
+  assert.equal(f.proposalReads.length, 3);
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
+    proposal: { proposal: refreshed, refreshing: true, status: "loaded" },
+  });
+  const unavailable = proposal("proposal", "unavailable");
+  f.proposalReads[2]!.resolve(unavailable);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
+    proposal: { proposal: unavailable, status: "loaded" },
+  });
+
+  [...f.proposalRefreshListeners][0]!();
+  assert.equal(f.proposalReads.length, 4);
+  release();
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {});
+  assert.equal(f.proposalRefreshListeners.size, 0);
+  f.proposalReads[3]!.resolve(proposal("proposal", "proposed"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {});
+  f.owner.dispose();
+});
+
+test("proposal observation failures stay source-local", async () => {
+  const f = fixture();
+  f.publish(f.document);
+  const release = f.owner.acquire("view");
+  f.admit(0, [], gitArc());
+  f.proposalReads[0]!.reject(new Error("proposal read failed"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  assert.equal(f.owner.getSnapshot().status, "ready");
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
+    proposal: { error: "proposal read failed", status: "failed" },
+  });
+  release();
   f.owner.dispose();
 });
 

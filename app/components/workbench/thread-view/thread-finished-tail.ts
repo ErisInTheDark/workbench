@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default getFinishedThreadTailHiddenItemIds: derive order-independent terminal reasoning and hoisted proposal visibility. Keywords: thread, completed, reasoning, Git arc, proposal, tail.
+ * - default getFinishedThreadTailHiddenItemIds: derive order-independent terminal reasoning and hoisted proposal visibility.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -10,7 +10,7 @@ import { getThreadCommandDisplay } from "../../../workbench/thread/thread-comman
 import {
   readThreadGitArcMcpProposalTranscriptItem,
   readThreadGitArcProposalTranscriptItem,
-} from "./thread-git-arc-proposal-intents";
+} from "./thread-git-arc-presentation";
 
 function getGitArcProposalId({
   item,

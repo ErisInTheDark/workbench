@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadCheckpointCommitItem: load, edit, and commit durable proposals with frozen file sets.
+ * - default ThreadCheckpointCommitItem: render observed or fallback-loaded proposals and own their edit and commit actions.
  */
 "use client";
 
@@ -8,6 +8,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
@@ -20,9 +21,11 @@ import ThreadCheckpointCommitCard, {
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
-import { proposalIntentOwnsMessage } from "./thread-git-arc-proposal-intents";
+import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
 
 interface ThreadCheckpointCommitItemProps {
   commandOutcome: ThreadCommandExecutionOutcome;
@@ -55,7 +58,14 @@ function ThreadCheckpointCommitController({
   sourceItemId,
   threadId,
   workspaceRoots,
-}: ThreadCheckpointCommitItemProps & { cwd: string; harness: WorkbenchHarness }) {
+  isProposalObserved,
+  proposalObservation,
+}: ThreadCheckpointCommitItemProps & {
+  cwd: string;
+  harness: WorkbenchHarness;
+  isProposalObserved: boolean;
+  proposalObservation: ThreadGitArcProposalObservation | null;
+}) {
   const daemon = useWorkbenchDaemonClient();
   const [includeNewer, setIncludeNewer] = useState(false);
   const initialMode = intent?.amend ? "amend" : "commit";
@@ -70,7 +80,13 @@ function ThreadCheckpointCommitController({
     (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
   );
   const [committing, setCommitting] = useState(false);
-  const [state, setState] = useState<CheckpointCommitCardState>({ status: proposalId ? "pending" : "idle" });
+  const [state, setState] = useState<CheckpointCommitCardState>(() => proposalObservation
+    ? proposalObservation.status === "loaded"
+      ? { proposal: proposalObservation.proposal, status: "loaded" }
+      : proposalObservation.status === "failed"
+        ? { error: proposalObservation.error, failure: proposalObservation.failure, retryable: true, status: "error" }
+        : { status: "pending" }
+    : { status: proposalId ? "pending" : "idle" });
   const intentOwnsMessage = proposalIntentOwnsMessage(intent);
   const amendTitleHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
   const amendDescriptionHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
@@ -111,6 +127,23 @@ function ThreadCheckpointCommitController({
     }
   }, [intent]);
 
+  const acceptProposal = useCallback((proposal: GitCheckpointProposal) => {
+    if (proposal.mode === "amend") {
+      if (!amendTitleHydrated.current || proposal.status !== "proposed") setAmendTitle(proposal.title);
+      if (!amendDescriptionHydrated.current || proposal.status !== "proposed") setAmendDescription(proposal.description);
+      amendTitleHydrated.current = true;
+      amendDescriptionHydrated.current = true;
+    } else {
+      if (!commitTitleHydrated.current || proposal.status !== "proposed") setCommitTitle(proposal.title);
+      if (!commitDescriptionHydrated.current || proposal.status !== "proposed") setCommitDescription(proposal.description);
+      commitTitleHydrated.current = true;
+      commitDescriptionHydrated.current = true;
+    }
+    if (proposal.status !== "proposed") setCommitMode(proposal.mode);
+    if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
+    setState({ proposal, status: "loaded" });
+  }, [includeNewer]);
+
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
     setState((current) => current.status === "loaded" ? current : { status: "pending" });
@@ -120,20 +153,7 @@ function ThreadCheckpointCommitController({
         { cwd, harness, includeNewer, proposalId, threadId },
       );
       if (signal?.aborted) return;
-      if (proposal.mode === "amend") {
-        if (!amendTitleHydrated.current || proposal.status !== "proposed") setAmendTitle(proposal.title);
-        if (!amendDescriptionHydrated.current || proposal.status !== "proposed") setAmendDescription(proposal.description);
-        amendTitleHydrated.current = true;
-        amendDescriptionHydrated.current = true;
-      } else {
-        if (!commitTitleHydrated.current || proposal.status !== "proposed") setCommitTitle(proposal.title);
-        if (!commitDescriptionHydrated.current || proposal.status !== "proposed") setCommitDescription(proposal.description);
-        commitTitleHydrated.current = true;
-        commitDescriptionHydrated.current = true;
-      }
-      if (proposal.status !== "proposed") setCommitMode(proposal.mode);
-      if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
-      setState({ proposal, status: "loaded" });
+      acceptProposal(proposal);
     } catch (error) {
       if (signal?.aborted) return;
       const failure = error instanceof GitArcFailureException
@@ -146,9 +166,32 @@ function ThreadCheckpointCommitController({
         status: "error",
       });
     }
-  }, [cwd, daemon, harness, includeNewer, proposalId, threadId]);
+  }, [acceptProposal, cwd, daemon, harness, includeNewer, proposalId, threadId]);
 
   useEffect(() => {
+    if (!isProposalObserved || includeNewer) return;
+    if (!proposalId) {
+      setState({ status: "idle" });
+      return;
+    }
+    if (!proposalObservation || proposalObservation.status === "loading") {
+      setState({ status: "pending" });
+      return;
+    }
+    if (proposalObservation.status === "failed") {
+      setState({
+        error: proposalObservation.error,
+        failure: proposalObservation.failure,
+        retryable: true,
+        status: "error",
+      });
+      return;
+    }
+    acceptProposal(proposalObservation.proposal);
+  }, [acceptProposal, includeNewer, isProposalObserved, proposalId, proposalObservation]);
+
+  useEffect(() => {
+    if (isProposalObserved && !includeNewer) return;
     if (!proposalId) {
       setState({ status: "idle" });
       return;
@@ -161,7 +204,7 @@ function ThreadCheckpointCommitController({
       controller.abort();
       window.removeEventListener("focus", refreshOnFocus);
     };
-  }, [loadProposal, proposalId]);
+  }, [includeNewer, isProposalObserved, loadProposal, proposalId]);
 
   const commit = async () => {
     if (!proposalId || !title.trim() || committing) return;
@@ -258,6 +301,7 @@ function ThreadCheckpointCommitController({
 
 export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommitItemProps) {
   const presentation = useContext(ThreadGitArcPresentationContext);
+  const proposalObservation = useThreadGitArcProposalObservation(props.proposalId);
   const harness = props.harness ?? presentation?.harness ?? "codex";
   const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
@@ -322,7 +366,16 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
       />
     );
   }
-  const controller = <ThreadCheckpointCommitController {...props} cwd={props.cwd} harness={harness} intent={resolvedIntent} />;
+  const controller = (
+    <ThreadCheckpointCommitController
+      {...props}
+      cwd={props.cwd}
+      harness={harness}
+      intent={resolvedIntent}
+      isProposalObserved={proposalObservation.isObserved}
+      proposalObservation={proposalObservation.state}
+    />
+  );
   return props.hoisted && hoistedTargetId
     ? <div className="scroll-mt-6" id={hoistedTargetId}>{controller}</div>
     : controller;

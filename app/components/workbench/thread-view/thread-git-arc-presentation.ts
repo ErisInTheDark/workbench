@@ -1,14 +1,18 @@
 /*
  * Exports:
- * - ThreadGitArcProposalTranscriptItem: associate one rendered proposal command with its receipt and editable message intent. Keywords: thread, git, arc, proposal, transcript.
- * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent. Keywords: thread, command, MCP, proposal, intent.
- * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message. Keywords: proposal, intent, message, inheritance.
- * - default getThreadGitArcProposalIntents: index proposal message intents from the currently loaded transcript turns. Keywords: thread, git, arc, proposal, visible, intent.
+ * - ThreadGitArcProposalTranscriptItem: associate one rendered proposal command with its receipt and editable message intent.
+ * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent.
+ * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message.
+ * - ThreadGitArcProposalPresentation: index proposal message intents and latest source turns from loaded transcript turns.
+ * - getHoistedThreadGitArc: select useful terminal Git arc work without duplicating Git validity.
+ * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   getGitArcMatcherAction,
@@ -29,6 +33,11 @@ export interface ThreadGitArcProposalTranscriptItem {
   intent: GitCheckpointCommitCommandIntent | null;
   proposalId: string | null;
   receipt: GitArcReceipt | null;
+}
+
+export interface ThreadGitArcProposalPresentation {
+  intents: Map<string, GitCheckpointCommitCommandIntent>;
+  proposalTurnIds: Map<string, string>;
 }
 
 export function proposalIntentOwnsMessage(intent: GitCheckpointCommitCommandIntent | null) {
@@ -80,7 +89,36 @@ export function readThreadGitArcMcpProposalTranscriptItem(
   };
 }
 
-export default function getThreadGitArcProposalIntents({
+export function getHoistedThreadGitArc({
+  currentTurn,
+  gitArc,
+  proposalObservations,
+  proposalTurnIds,
+}: {
+  currentTurn: Pick<ThreadPayload["turns"][number], "id" | "status"> | null;
+  gitArc: WorkbenchGitArcLifecycleState | null;
+  proposalObservations: Readonly<Record<string, ThreadGitArcProposalObservation>>;
+  proposalTurnIds: ReadonlyMap<string, string>;
+}) {
+  if (!gitArc || currentTurn?.status === "inProgress") return null;
+  const proposals = gitArc.proposals.flatMap(({ proposalId }) => {
+    const observation = proposalObservations[proposalId];
+    const status = observation?.status === "loaded" ? observation.proposal.status : null;
+    return status === "proposed" || status === "committed" ? [{ proposalId, status }] : [];
+  });
+  const visibleGitArc = proposals.length === gitArc.proposals.length
+    && proposals.every((proposal, index) => proposal.status === gitArc.proposals[index]?.status)
+    ? gitArc
+    : { ...gitArc, proposals };
+  if (gitArc.claimedPaths.length) return visibleGitArc;
+  if (!proposals.length) return null;
+  if (proposals.some(({ status }) => status === "proposed")) return visibleGitArc;
+  return currentTurn && proposals.some(({ proposalId }) => (
+    proposalTurnIds.get(proposalId) === currentTurn.id
+  )) ? visibleGitArc : null;
+}
+
+export default function getThreadGitArcProposalPresentation({
   knownSkills,
   projectRootPath,
   turns,
@@ -90,8 +128,9 @@ export default function getThreadGitArcProposalIntents({
   projectRootPath?: string;
   turns: ThreadPayload["turns"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+}): ThreadGitArcProposalPresentation {
   const intents = new Map<string, GitCheckpointCommitCommandIntent>();
+  const proposalTurnIds = new Map<string, string>();
   for (const turn of turns) {
     for (const item of turn.items) {
       const proposal = item.type === "commandExecution"
@@ -104,8 +143,10 @@ export default function getThreadGitArcProposalIntents({
           workspaceRoots,
         }))
         : item.type === "mcpToolCall" ? readThreadGitArcMcpProposalTranscriptItem(item) : null;
-      if (proposal?.proposalId && proposal.intent) intents.set(proposal.proposalId, proposal.intent);
+      if (!proposal?.proposalId) continue;
+      proposalTurnIds.set(proposal.proposalId, turn.id);
+      if (proposal.intent) intents.set(proposal.proposalId, proposal.intent);
     }
   }
-  return intents;
+  return { intents, proposalTurnIds };
 }

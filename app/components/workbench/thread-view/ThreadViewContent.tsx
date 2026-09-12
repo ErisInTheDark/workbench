@@ -66,7 +66,8 @@ import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./Thre
 import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import projectThreadRenderTurns from "./thread-render-turns";
-import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
+import getThreadGitArcProposalPresentation, { getHoistedThreadGitArc } from "./thread-git-arc-presentation";
+import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import {
   getThreadWebSearchLiveLabel,
@@ -567,7 +568,7 @@ export default memo(function ThreadViewContent ({
     projectFilePaths,
     projectFileIndexId,
   );
-  const visibleGitArcProposalIntents = useMemo(() => getThreadGitArcProposalIntents({
+  const visibleGitArcProposalPresentation = useMemo(() => getThreadGitArcProposalPresentation({
     knownSkills: workbenchSkills,
     projectRootPath,
     turns: activeThread?.turns ?? [],
@@ -1044,9 +1045,12 @@ export default memo(function ThreadViewContent ({
       })}
     />
   ) : null;
-  const terminalGitArc = activeGitArcSelection && currentTurn?.status !== "inProgress"
-    ? activeGitArcSelection.gitArc
-    : null;
+  const terminalGitArc = getHoistedThreadGitArc({
+    currentTurn,
+    gitArc: activeGitArcSelection?.gitArc ?? null,
+    proposalObservations: activeThreadController.state.gitArcProposals,
+    proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
+  });
   const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
@@ -1065,13 +1069,14 @@ export default memo(function ThreadViewContent ({
       disambiguationKey={projectFileIndexId}
       disambiguationPaths={projectFilePaths}
     >
+      <ThreadGitArcObservationProvider proposals={activeThreadController.state.gitArcProposals}>
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
         hoistedProposalIds: terminalGitArcProposalIds,
         onOpenThread,
         projectId,
-        proposalIntents: visibleGitArcProposalIntents,
+        proposalIntents: visibleGitArcProposalPresentation.intents,
       }}>
       <div
         ref={threadViewRef}
@@ -1247,6 +1252,7 @@ export default memo(function ThreadViewContent ({
         <div aria-hidden="true" className="h-px w-full" />
       </div>
       </ThreadGitArcPresentationContext.Provider>
+      </ThreadGitArcObservationProvider>
     </ProjectFilePathDisplayProvider>
   );
 });

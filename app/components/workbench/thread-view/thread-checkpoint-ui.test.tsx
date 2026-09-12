@@ -1,6 +1,5 @@
 /*
- * Keywords: checkpoint, proposal, claim release, terminal output.
- * No production exports. Tests protect proposal resolution, claim-release choice, and terminal thread-tail cleanup.
+ * No production exports. Tests protect observed proposal resolution, claim-release choice, and terminal thread-tail cleanup.
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -10,6 +9,8 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import { ThreadTurnDetails } from "./thread-view-items";
@@ -198,6 +199,44 @@ test("proposals committed through another path render as resolved rather than fa
     renderUnavailableProposal(),
     /data-thread-checkpoint-committed-outside-proposal/u,
   );
+});
+
+test("proposal cards consume loaded validity from thread observation", () => {
+  const proposal: GitCheckpointProposal = {
+    amendTargetMessage: null,
+    amendTargetSha: null,
+    baseCommit: "abcdef1",
+    changes: [],
+    committedSha: null,
+    description: "",
+    freshChanges: null,
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/one.ts"],
+    proposalId: "proposal-observed",
+    status: "unavailable",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Observed proposal",
+    unavailableReason: "Proposal is no longer valid.",
+  };
+  const html = renderToStaticMarkup(createElement(ThreadGitArcObservationProvider, {
+    proposals: {
+      [proposal.proposalId]: { proposal, status: "loaded" },
+    },
+    children: createElement(ThreadCheckpointCommitItem, {
+      commandOutcome: "completed",
+      cwd: "C:/workspace",
+      harness: "codex",
+      intent: null,
+      proposalId: proposal.proposalId,
+      sourceItemId: "proposal-item",
+      threadId: "thread-one",
+    }),
+  }));
+
+  assert.match(html, /Proposal is no longer valid\./u);
+  assert.doesNotMatch(html, /aria-busy="true"/u);
 });
 
 test("content amend proposals expose an amend-default fresh commit choice", () => {

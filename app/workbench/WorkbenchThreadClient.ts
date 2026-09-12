@@ -3,7 +3,7 @@
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks.
- * - default WorkbenchThreadClient: own provider thread state, observation leases, live questionnaire reconciliation, durable answer recovery, and notifications.
+ * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, live questionnaire reconciliation, durable answer recovery, and notifications.
  */
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
@@ -895,6 +895,10 @@ function WorkbenchThreadClient(
           },
         },
         observations: threadObservations,
+        readGitArcProposal: async input => await daemon.requestGitArc("git/arc/proposal/read", {
+          ...input,
+          includeNewer: false,
+        }),
         getChild: subagent => getThreadController(projectId, {
           kind: "subagent", harness: subagent.harness, parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
         }),
@@ -907,6 +911,10 @@ function WorkbenchThreadClient(
           };
         },
         subscribeNative: listener => subscribe(listener),
+        subscribeGitArcProposalRefresh: listener => {
+          window.addEventListener("focus", listener);
+          return () => window.removeEventListener("focus", listener);
+        },
         read: async (readOptions, beforeCommit, selectionBound) => {
           await beforeCommit();
           const observed = target.kind === "draft" ? null : threadObservations.getSnapshot(getThreadObservationKey(projectId, target))

@@ -86,7 +86,7 @@ import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
-import { readThreadGitArcProposalTranscriptItem } from "./thread-git-arc-proposal-intents";
+import { readThreadGitArcProposalTranscriptItem } from "./thread-git-arc-presentation";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";

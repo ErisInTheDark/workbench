@@ -11,7 +11,7 @@ import type { ThreadControllerSnapshot } from "../../workbench/WorkbenchThreadCo
 import { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 const empty: ThreadControllerSnapshot = {
   status: "loading", error: null, document: null, entry: null,
-  pendingQuestionnaire: null, rateLimits: null, subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
+  gitArcProposals: {}, pendingQuestionnaire: null, rateLimits: null, subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
 };
 function unavailable(): never { throw new Error("The thread owner is not ready."); }
 const unavailableActions: WorkbenchThreadController["actions"] = {
