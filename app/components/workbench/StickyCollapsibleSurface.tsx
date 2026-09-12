@@ -234,7 +234,7 @@ export default function StickyCollapsibleSurface({
           >
             <div className="sticky-collapsible-shell">
               <div
-                className="sticky-collapsible-surface"
+                className="sticky-collapsible-surface in-[.sticky-collapsible-sticky-slot]:pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]"
                 data-collapsed={collapsed ? "true" : "false"}
               >
                 <div className="sticky-collapsible-expanded">

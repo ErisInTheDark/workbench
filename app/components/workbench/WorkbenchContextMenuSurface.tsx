@@ -116,7 +116,7 @@ export default function WorkbenchContextMenuSurface({
       <WorkbenchMenuSurface
         ref={menuRef}
         aria-label={menu.label}
-        className="min-w-48 max-w-[min(18rem,calc(100vw-1rem))]"
+        className="min-w-48 max-w-[min(18rem,calc(100vw-1rem))] pb-[calc(0.25rem+env(safe-area-inset-bottom,0px))]"
         data-workbench-context-menu="true"
         style={{ left: position.left, top: position.top }}
       >

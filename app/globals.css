@@ -1233,10 +1233,6 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       border-bottom-right-radius: 0;
     }
 
-    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
-      padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
-    }
-
     [data-thread-context-menu-trigger="true"] {
       display: inline-flex;
     }
@@ -1260,7 +1256,6 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       max-width: none !important;
       overflow-y: auto !important;
       overscroll-behavior: contain !important;
-      padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px)) !important;
       border-bottom-left-radius: 0 !important;
       border-bottom-right-radius: 0 !important;
     }

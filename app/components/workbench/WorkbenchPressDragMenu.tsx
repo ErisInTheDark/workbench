@@ -168,28 +168,21 @@ export default function WorkbenchPressDragMenu({
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
       className={`
-        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center justify-center gap-2 rounded-lg touch-auto select-none bg-transparent px-2.5 py-2 text-fg/muted outline-none transition hover:text-text
+        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center justify-center gap-2 rounded-lg touch-none select-none bg-transparent px-2.5 py-2 text-fg/muted outline-none transition hover:text-text
         before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover
         ${menu.interaction.kind === "dragging" ? "" : "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"}
       `}
       onPointerDown={event => {
-        if (event.pointerType === "touch" || event.button !== 0 || menu.interaction.kind === "dragging") return;
+        if (event.button !== 0 || menu.interaction.kind === "dragging") return;
         event.preventDefault();
         begin({ kind: "press", pointerId: event.pointerId, x: event.clientX, y: event.clientY });
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={event => {
-        if (event.pointerType === "touch" || menu.interaction.kind !== "dragging") return;
+        if (menu.interaction.kind !== "dragging") return;
         dispatch({ kind: "move", pointerId: event.pointerId, x: event.clientX, y: event.clientY, id: hit(event.clientX, event.clientY) });
       }}
       onPointerUp={event => {
-        if (event.pointerType === "touch") {
-          if (menu.interaction.kind === "dragging") return;
-          event.preventDefault();
-          dispatch({ kind: "cancel" });
-          onActivate(event.currentTarget);
-          return;
-        }
         const box = event.currentTarget.getBoundingClientRect();
         dispatch({
           kind: "release", pointerId: event.pointerId, x: event.clientX, y: event.clientY, id: hit(event.clientX, event.clientY),
