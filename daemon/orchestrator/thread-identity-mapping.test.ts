@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -571,7 +572,9 @@ test("pending questionnaire lists use the same public identity as the durable si
   } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
 
-test("repeated provider catalogues admit only new identity evidence without hiding conflicts", async () => {
+test("repeated provider catalogues admit only new identity evidence without hiding conflicts", async (context) => {
+  const warnings = captureTestOutput(context, process.stderr, text => text.startsWith("[workbench-transcript] conflicting aliases retained"));
+  context.after(() => assert.equal(warnings.length, 1));
   const fixture = await setup();
   const { database, owners, native, parent, turn } = fixture;
   try {

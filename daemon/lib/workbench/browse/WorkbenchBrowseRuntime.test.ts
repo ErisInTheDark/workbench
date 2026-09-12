@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { captureTestOutput } from "../../../../test/capture-test-output.mts";
 
 import WorkbenchBrowseRuntime, { type WorkbenchBrowseDaemonTransport } from "./WorkbenchBrowseRuntime.ts";
 import type { WorkbenchBrowseAgentCommand } from "./actions/session-actions.ts";
@@ -275,7 +276,9 @@ test("run keeps its session lease through retirement while other sessions procee
   assert.deepEqual(client.cleaned, ["research"]);
 });
 
-test("failed retirement retains runtime records and propagates failure", async () => {
+test("failed retirement retains runtime records and propagates failure", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const client = new FakeBrowseTransport();
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
   const runtime = new WorkbenchBrowseRuntime({
@@ -309,7 +312,9 @@ test("a cooperative stop response still requires process retirement before recor
   assert.deepEqual(events, ["retired", "cleanup"]);
 });
 
-test("force stop propagates retirement failure without silently retrying it", async () => {
+test("force stop propagates retirement failure without silently retrying it", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const client = new FakeBrowseTransport();
   let attempts = 0;
   const runtime = new WorkbenchBrowseRuntime({
@@ -321,7 +326,9 @@ test("force stop propagates retirement failure without silently retrying it", as
   assert.deepEqual(client.cleaned, []);
 });
 
-test("an unresponsive recorded process retires before replacement preparation and retains records on failure", async () => {
+test("an unresponsive recorded process retires before replacement preparation and retains records on failure", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+  context.after(() => assert.equal(diagnostics.length, 1));
   for (const fails of [false, true]) {
     const client = new FakeBrowseTransport();
     const events: string[] = [];
@@ -359,7 +366,9 @@ test("an unresponsive recorded process retires before replacement preparation an
   }
 });
 
-test("cancellation during failed retirement cannot trigger another retirement attempt", async () => {
+test("cancellation during failed retirement cannot trigger another retirement attempt", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+  context.after(() => assert.equal(diagnostics.length, 2));
   for (const route of ["stop", "run"] as const) {
     const client = new FakeBrowseTransport();
     const abort = new AbortController();

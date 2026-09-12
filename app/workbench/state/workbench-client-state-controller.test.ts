@@ -64,6 +64,7 @@ function response(
     oldestAvailableRevision: 0,
     revision,
     rows,
+    schemaVersion: 0,
   };
 }
 
@@ -122,8 +123,10 @@ test("app-state conformance repairs compatible browser/server table skew", () =>
   };
   delete rows.projectPreferences;
   delete rows.modelPreferences;
+  const legacyResponse = response("snapshot", 1, emptyRows());
+  delete legacyResponse.schemaVersion;
   const result = conformWorkbenchClientStateResponse({
-    ...response("snapshot", 1, emptyRows()),
+    ...legacyResponse,
     futureRoot: true,
     rows,
   });

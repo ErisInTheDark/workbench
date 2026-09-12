@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { captureTestOutput } from "../../../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 
@@ -83,7 +84,9 @@ test("item identity is durable before any body or timeline exists", () => {
   }
 });
 
-test("stable evidence follows one provider while provisional IDs remain turn-scoped", () => {
+test("stable evidence follows one provider while provisional IDs remain turn-scoped", (context) => {
+  const warnings = captureTestOutput(context, process.stderr, text => text.startsWith("[workbench-transcript] conflicting aliases retained"));
+  context.after(() => assert.equal(warnings.length, 2));
   const { database, identity, threadId, otherThreadId } = setup();
   try {
     const admit = (owner: string, turnId: string, kind: "stable" | "provisional") => identity.admit({

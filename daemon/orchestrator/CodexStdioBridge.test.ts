@@ -8,7 +8,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { after, before, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 
@@ -58,6 +59,13 @@ const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
 let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
+
+beforeEach(context => {
+  assert.ok("mock" in context);
+  captureTestOutput(context, process.stdout, text =>
+    text.startsWith("[orchestrator] WS codex:thread/start phase (")
+    || /^\[codex-transcript\] capture recovery (?:started|completed) thread=/u.test(text));
+});
 
 before(async () => {
   testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
@@ -428,7 +436,11 @@ test("database replacement preserves ordered live events and usage without repla
 });
 
 for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload", "restart", "ended-before-delivery"] as const) {
-  test(`automatic patch recovery settles ${settlement} through the pending response owner`, async () => {
+  test(`automatic patch recovery settles ${settlement} through the pending response owner`, async (context) => {
+    const diagnostics = captureTestOutput(context, process.stderr, text =>
+      text === "[codex-tool-context] injection rejected\n"
+      || text === "[codex-tool-context] Codex app-server restarted before the upstream response arrived.\n");
+    context.after(() => assert.equal(diagnostics.length, settlement === "failed" || settlement === "restart" ? 1 : 0));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
     const sql = await recordingFixture(root);
     await fs.writeFile(path.join(root, "target.txt"), "new\n");
@@ -543,7 +555,12 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
 }
 
 for (const origin of ["active", "idle", "changed", "failed"] as const) {
-  test(`passive screenshot context handles ${origin} origin without user input or a new turn`, async () => {
+  test(`passive screenshot context handles ${origin} origin without user input or a new turn`, async (context) => {
+    const diagnostics = captureTestOutput(context, process.stderr, text =>
+      text === "[codex-tool-context] Passive context requires an active originating turn; no turn was started.\n"
+      || text === "[codex-tool-context] The originating turn is no longer active; passive context was not sent.\n"
+      || text === "[codex-tool-context] rejected\n");
+    context.after(() => assert.equal(diagnostics.length, origin === "active" ? 0 : 1));
     const sql = await recordingFixture();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-passive-context-"));
     const requests: JsonRpcRequest[] = [];
@@ -624,7 +641,10 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
   });
 }
 
-test("stopping before passive-context preparation dispatches no provider work", async () => {
+test("stopping before passive-context preparation dispatches no provider work", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text === "[codex-tool-context] Codex bridge stopped before the upstream response arrived.\n");
+  context.after(() => assert.equal(diagnostics.length, 1));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-stop-context-"));
   const requests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
@@ -1790,7 +1810,10 @@ test("SQLite recovery rejects unknown WB identity before contacting the provider
 });
 
 for (const interruption of ["none", "recorder failure", "cancellation"] as const) {
-  test(`paged recovery settles real WB identities and preserves the marker after ${interruption}`, async () => {
+  test(`paged recovery settles real WB identities and preserves the marker after ${interruption}`, async (context) => {
+    const diagnostics = captureTestOutput(context, process.stderr, text =>
+      text.startsWith("[codex-transcript] capture failed sqlite-recovery-page:") && text.includes("cause=page recording failed"));
+    context.after(() => assert.equal(diagnostics.length, interruption === "recorder failure" ? 1 : 0));
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
     const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
     const gaps = new WorkbenchTranscriptCaptureGapController({ markerPath: path.join(root, "gap.json") });
@@ -2077,7 +2100,10 @@ test("SQLite recording cannot bypass canonical admission when the identity owner
   }
 });
 
-test("ordinary page reads restore context without activity and isolate context read failures", async () => {
+test("ordinary page reads restore context without activity and isolate context read failures", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text === "[codex-context-usage] Unable to restore context usage; thread content remains available.\n");
+  context.after(() => assert.equal(diagnostics.length, 1));
   const sql = await recordingFixture();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-context-page-"));
   const usage = {
@@ -2231,7 +2257,10 @@ test("Workbench questionnaires share native listing, response, and transcript hi
   }
 });
 
-test("SQLite transcript failure does not block steer or questionnaire side effects", async () => {
+test("SQLite transcript failure does not block steer or questionnaire side effects", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("[codex-transcript] capture failed client-request:") && text.includes("cause=SQLite transcript failed"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-failed-"));
   const upstreamMessages: unknown[] = [];
@@ -2397,8 +2426,7 @@ test("detached questionnaire history records directly without answering a provid
 test("repeated provider misses report one SQLite capture failure with a bounded sanitised root cause", async (t) => {
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-report-"));
-  const records: string[] = [];
-  t.mock.method(process.stderr, "write", (chunk: string | Uint8Array) => { records.push(String(chunk)); return true; });
+  const records = captureTestOutput(t, process.stderr, text => text.startsWith("[codex-transcript] capture failed"));
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
@@ -2540,8 +2568,17 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   }
 });
 
-test("SQLite transcript failure does not block Browse settlement", async () => {
-  const fixtureIdentities = await recordingIdentities();
+test("SQLite transcript failure does not block Browse settlement", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("[codex-transcript] capture failed workbench-browse-settlement:") && text.includes("cause=SQLite transcript failed"));
+  context.after(() => assert.equal(diagnostics.length, 1));
+  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
+  const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
+  const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
+  const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
+  await fixtureIdentities.items.admit([{
+    threadId, sources: [{ turnId, kind: "stable", sourceId: "command" }], legacyAliases: [],
+  }]);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-sqlite-failure-"));
   const notifications: object[] = [];
   const bridge = new CodexStdioBridge({
@@ -4312,7 +4349,10 @@ test("exact transcript windows await ordered provider recording and Thread Recal
   }
 });
 
-test("durable transcript and recall materialisation propagate SQLite failure and can retry after recovery", async () => {
+test("durable transcript and recall materialisation propagate SQLite failure and can retry after recovery", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("[codex-transcript] capture failed provider-turn-window:") && text.includes("cause=SQL page recording failure"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const sql = await recordingFixture();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-materialisation-failure-"));
   const failure = new Error("SQL page recording failure");
@@ -4554,6 +4594,7 @@ test("turn start responses admit the live turn before materialisation reads SQL"
       params: {
         threadId: "thread",
         tokenUsage: {
+          modelContextWindow: null,
           last: {
             cacheWriteInputTokens: 5,
             cachedInputTokens: 20,

@@ -7,6 +7,7 @@ import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { captureTestOutput } from "../../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 
@@ -91,8 +92,9 @@ test("stored transcript queries cross the worker boundary and preserve invalid-i
   } finally { await controller.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("worker migration waits for its owner to retain the rollback checkpoint", async () => {
+test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.nativeIdentityLookupIndexes.version;
   const old = new Database(databasePath);
@@ -114,8 +116,9 @@ test("worker migration waits for its owner to retain the rollback checkpoint", a
   }
 });
 
-test("worker startup retains its old-schema backup even when closed during opening", async () => {
+test("worker startup retains its old-schema backup even when closed during opening", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.nativeIdentityLookupIndexes.version;
   const old = new Database(databasePath);
@@ -147,8 +150,9 @@ test("worker startup retains its old-schema backup even when closed during openi
   }
 });
 
-test("a completed relational database upgrades without losing its saved profile", async () => {
+test("a completed relational database upgrades without losing its saved profile", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-profile-upgrade-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: databaseReleases.relationalThreadState.version });
@@ -282,8 +286,9 @@ test("retirement releases suspended callers before dependant disposal closes the
   }
 });
 
-test("the retained worker restores both schema and data before releasing queued callers", async () => {
+test("the retained worker restores both schema and data before releasing queued callers", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-worker-schema-rollback-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
   const controller = new WorkbenchDatabaseController({ databasePath });
   try {

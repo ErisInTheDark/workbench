@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import type { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 import {
@@ -133,7 +134,10 @@ test("standalone discards disconnected pages and allows scoped failure retry", a
   } finally { f.owner.dispose(); }
 });
 
-test("standalone refresh retries a failed SQL subscription without recreating its socket", async () => {
+test("standalone refresh retries a failed SQL subscription without recreating its socket", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("Workbench transcript projection failed.") && text.includes("subscription unavailable"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const f = fixture();
   try {
     f.failSubscription = true;

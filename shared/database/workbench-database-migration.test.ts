@@ -1,5 +1,5 @@
 /*
- * No production exports. Keywords: SQLite, WAL, complete backup, failed migration, retention, isolation.
+ * No exports. Tests protect complete migration backups, rollback and retention.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 import { defineTable, integer, text } from "./schema/schema-definition.ts";
@@ -35,6 +36,7 @@ const day = 86_400_000;
 
 async function fixture(context: TestContext, targetVersion = 1) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-migration-backup-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const database = new Database(path.join(directory, "source.sqlite3"));
   context.after(async () => {
     if (database.open) database.close();

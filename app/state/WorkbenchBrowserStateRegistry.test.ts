@@ -1,11 +1,12 @@
 /*
- * No production exports. Real SQLite wards protect browser database cloning, isolation, seed refresh, failure cleanup, and disposal. Keywords: browser, state, registry, SQLite.
+ * No exports. Tests protect browser database cloning, isolation, seed refresh, failure cleanup and disposal.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 
 import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
@@ -83,6 +84,7 @@ async function fixture(context: TestContext) {
 
 test("opening an existing browser database backs it up before upgrading", async (context) => {
   const { directory, registry } = await fixture(context);
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const browserDirectory = path.join(directory, "browser-state");
   await fs.mkdir(browserDirectory);
   const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);

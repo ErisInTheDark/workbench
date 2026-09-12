@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureTestOutput } from "../test/capture-test-output.mts";
 
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
@@ -488,7 +489,9 @@ test("thread-state open repairs a missing project summary during a mixed reload"
   assert.equal(result.sidebar.projectId, "project");
 });
 
-test("thread-state open drops an old project-summary row without rejecting valid sidebar display state", async () => {
+test("thread-state open drops an old project-summary row without rejecting valid sidebar display state", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Repaired Workbench thread-state open response: projectThreads.projects.0."));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,

@@ -1,7 +1,6 @@
 /*
- * Keywords: tests, reporter, failures, stderr, slow, summary.
  * Exports:
- * - default conciseTestReporter: render failures, bounded process noise, slow tests, and one final summary.
+ * - default conciseTestReporter: report failures and slow tests; fail the run on uncaptured output.
  */
 import { inspect } from "node:util";
 
@@ -65,6 +64,7 @@ export default async function* conciseTestReporter(source) {
   let omittedNoiseCharacters = 0;
   let omittedNoiseEntries = 0;
   let noiseCharacters = 0;
+  let hasOutput = false;
 
   for await (const event of source) {
     const data = event.data ?? {};
@@ -83,6 +83,7 @@ export default async function* conciseTestReporter(source) {
       if (activeByFile.get(location(data)) === testName(data)) activeByFile.delete(location(data));
     }
     if (event.type === "test:stdout" || event.type === "test:stderr") {
+      if (String(data.message ?? "").length > 0) hasOutput = true;
       const file = location(data);
       const remaining = NOISE_TOTAL_LIMIT - noiseCharacters;
       if (remaining <= 0) {
@@ -127,4 +128,8 @@ export default async function* conciseTestReporter(source) {
     for (const entry of selectedSlow) yield `${entry.elapsed.toFixed(1)}ms ${entry.file} :: ${entry.name}\n`;
   }
   yield `\n${summaryLine(counts, performance.now() - startedAt)}\n`;
+  if (hasOutput) {
+    process.exitCode ||= 1;
+    yield "Run failed: uncaptured test output. Capture expected output in its owning test.\n";
+  }
 }

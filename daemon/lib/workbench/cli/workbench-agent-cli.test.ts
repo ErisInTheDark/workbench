@@ -9,6 +9,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import WorkbenchAgentCommandLogger from "../../../orchestrator/WorkbenchAgentCommandLogger";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -362,7 +363,7 @@ before(async () => {
       return Response.json({ method: request.method, ok: true, url: request.path });
     },
     getReloadScopeCatalog: () => reloadCatalog,
-  });
+  }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
 });
 

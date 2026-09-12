@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { captureTestOutput } from "../../../test/capture-test-output.mts";
 
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
@@ -22,7 +23,9 @@ test("profile recency defaults for old servers and rejects malformed values", as
   assert.ok(logged.every(message => message.length < 1200 && !message.includes("private-recency-marker")));
 });
 
-test("model capabilities reject invalid bounds at the daemon response boundary", async () => {
+test("model capabilities reject invalid bounds at the daemon response boundary", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected models/context/read response:"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const valid = { data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] };
   const client = new WorkbenchDaemonClient({ request: async <TResponse>() => valid as TResponse });
   assert.deepEqual(await client.request("models/context/read", {}), valid);
@@ -58,7 +61,9 @@ test("transport failures never fall back to app HTTP", async () => {
   }
 });
 
-test("Codex sandbox network responses require the complete server-owned settings snapshot", async () => {
+test("Codex sandbox network responses require the complete server-owned settings snapshot", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected codex-sandbox-network/read response:"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const snapshot = {
     codexSandboxNetwork: {
       effectiveEnabled: false,
@@ -184,7 +189,9 @@ test("detailed stats retain category costs and reject malformed remote values wi
   assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-write-marker")));
 });
 
-test("search responses require the complete discriminated result contract", async () => {
+test("search responses require the complete discriminated result contract", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected search/query response:"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const response = {
     results: [{
       actionId: "home",

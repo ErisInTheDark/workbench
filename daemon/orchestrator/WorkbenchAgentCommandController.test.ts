@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
+import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const reloadCatalog = [
@@ -90,6 +91,7 @@ test("dispatches token counting and scopes only managed-thread help by cwd", asy
       },
       workbenchProjectRoot: "C:/workbench",
     },
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const counted = await controller.executeStructuredRequest({
     body: { cwd: "C:/other", kind: "text", model: "gpt-5-test", text: "hello" },
@@ -139,6 +141,7 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
         return Response.json({ checkpointCommit: "a".repeat(40), collisions: [], scopePaths: ["src/a.ts"] });
       },
     },
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const cancellation = new AbortController();
   const response = await controller.executeStructuredRequest({
@@ -158,7 +161,7 @@ test("transcript CLI dispatch keeps Workbench target ids and rejects outside-roo
     workbenchProjectRoot: "C:/workbench",
     resolveCaller: async () => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("wb-caller"), nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-caller"), harness: "codex" }),
     executeTranscriptQuery: async (body) => { bodies.push(body); return new Response("stored results"); },
-  });
+  }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   const server = await startController(controller);
   try {
     for (const [cwd, expected] of [["C:/other", 400], ["C:/workbench", 200]] as const) {
@@ -182,7 +185,7 @@ test("claim stats CLI dispatch preserves cwd and cancellation without an HTTP fa
       assert.deepEqual(body, { cwd: "C:/repo", range: "all", page: 2, file: "root:src/file.ts" });
       return new Response("managed-id  title");
     },
-  });
+  }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   const response = await controller.executeStructuredRequest({
     body: { cwd: "C:/repo", range: "all", page: 2, file: "root:src/file.ts" },
     method: "POST", path: "/internal/stats/claims", responseKind: "native",
@@ -201,6 +204,7 @@ test("direct questionnaire dispatch receives the caller cancellation signal", as
         return Response.json({ answers: { details: { answers: ["answer"] } } });
       },
     },
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const cancellation = new AbortController();
   const response = await controller.executeStructuredRequest({
@@ -229,6 +233,7 @@ test("dispatches thread Git directly and fails closed without a direct owner", a
       fetchCount += 1;
       throw new Error("unexpected Next fetch");
     },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const signal = new AbortController().signal;
   const response = await controller.executeStructuredRequest({
@@ -271,6 +276,7 @@ test("answers the private apply_patch hook from the active claim owner", async (
       },
     },
     async () => { throw new Error("claim denial must not wait on marker transport"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -330,6 +336,7 @@ test("returns Codex deny decisions for mismatched identity, malformed input, and
         nativeThreadId: NativeThreadIdSchema.parse("parent-thread"),
       }),
     },
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -372,6 +379,7 @@ test("dispatches Browse commands directly without an internal fetch and preserve
       });
     }),
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -393,6 +401,7 @@ test("renders complete help without an internal capability request", async () =>
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -420,6 +429,7 @@ test("dispatches ripgrep directly with one argument-vector request", async () =>
         return new Response("one match\n");
       },
     },
+    new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -453,6 +463,7 @@ test("dispatches Markdown toc directly with exact heading ranges", async () => {
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -486,6 +497,7 @@ test("dispatches native subagent commands directly without waiting on Next fetch
       },
     },
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -520,6 +532,7 @@ test("dispatches thread refresh through the direct managed-thread transport", as
       },
     },
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -564,6 +577,7 @@ test("cancels the exact direct subagent waiter when the native caller disconnect
       },
     },
     async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -601,6 +615,7 @@ test("aborts direct Browse execution when the native caller disconnects", async 
         }, { once: true });
       });
     }),
+    undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -641,6 +656,7 @@ test("dispatches Thread Recall directly and preserves caller cancellation", asyn
       },
     },
     async () => { throw new Error("unexpected Next fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -680,6 +696,7 @@ test("reload admission releases the handler before terminal polling completes", 
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     fetchRequest,
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller, () => handled.resolve());
   try {
@@ -724,6 +741,7 @@ test("caller metadata cannot convert a user reload into managed admission", asyn
         queuedScopes: [], requestedScopes: ["server:mcp", "server:topology"], startedAt: 1, state: "succeeded",
       });
     },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -767,6 +785,7 @@ test("dirt and all share the live dirt snapshot while unsafe remains explicit", 
         queuedScopes: [], requestedScopes: scopes, startedAt: 1, state: "succeeded",
       });
     },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   const run = async (args: string[]) => await fetch(`${server.origin}/orchestrator/agent-command`, {
@@ -809,6 +828,7 @@ test("managed hard reloads bypass the direct coordinator", async () => {
       getReloadScopeCatalog: () => reloadCatalog,
     },
     fetchRequest,
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
@@ -859,6 +879,7 @@ test("disconnecting after reload admission aborts terminal polling", async () =>
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     fetchRequest,
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller, () => handled.resolve());
   try {

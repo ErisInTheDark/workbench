@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { OpenCodeBridge } from "./opencode-bridge";
@@ -10,7 +11,10 @@ import type OpenCodeAppServer from "./OpenCodeAppServer";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
-test("OpenCode applies a captured profile only to accepted inactive turns", async () => {
+test("OpenCode applies a captured profile only to accepted inactive turns", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text === "[opencode-bridge] Native rejected\n" || text === "[opencode-bridge] session status read failed: Status unavailable\n");
+  context.after(() => assert.equal(diagnostics.length, 2));
   for (const mode of ["fresh", "continuation", "active", "active-race", "rejected", "status-failure"]) {
     const calls: string[] = [];
     const settings = { harness: "opencode" as const, model: "provider/fresh", agentPath: "fresh-agent", agentSource: "project" as const, reasoningEffort: "high", serviceTier: null };
@@ -77,7 +81,9 @@ test("OpenCode applies a captured profile only to accepted inactive turns", asyn
   }
 });
 
-test("OpenCode SDK rejection is not reported as an accepted turn", async () => {
+test("OpenCode SDK rejection is not reported as an accepted turn", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text === "[opencode-bridge] Native prompt rejected\n");
+  context.after(() => assert.equal(diagnostics.length, 1));
   const bridge = new OpenCodeBridge({
     appServer: {} as OpenCodeAppServer, projectRoot: "C:/repo", onNotification() {},
     getReloadableModules: () => ({

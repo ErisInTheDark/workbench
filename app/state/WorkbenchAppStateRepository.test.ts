@@ -1,9 +1,10 @@
-/* No production exports. Keywords: app state, SQLite, registration, migration backup, lifecycle. */
+/* No exports. Tests protect app-state persistence and migration backup lifecycle. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 import {
@@ -19,6 +20,7 @@ import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workb
 
 async function temporaryDatabase(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   context.after(() => fs.rm(directory, { force: true, recursive: true }));
   return path.join(directory, "state.sqlite3");
 }

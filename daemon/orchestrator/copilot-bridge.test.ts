@@ -7,6 +7,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
+import { captureTestOutput } from "../../test/capture-test-output.mts";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { CopilotBridge } from "./copilot-bridge";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
@@ -118,7 +119,9 @@ test("session publication waits for structural admission and stop drains queued 
   ]);
 });
 
-test("failed session identity publication surfaces the affected thread and does not stall the next batch", async () => {
+test("failed session identity publication surfaces the affected thread and does not stall the next batch", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[copilot-bridge] event admission failed: Identity write failed"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const emitted: JsonRpcNotification[] = [];
   let listener!: (event: SessionEvent) => void;
   let rejectAdmission = true;
