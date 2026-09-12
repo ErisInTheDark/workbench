@@ -288,7 +288,6 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     --sticky-collapsible-motion-duration: 220ms;
     --sticky-collapsible-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
     min-width: 0;
-    overflow-anchor: none;
   }
 
   .sticky-collapsible-inline-slot > .sticky-collapsible-portal-host {
@@ -1158,6 +1157,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   [data-thread-scroll-target="true"] {
     --thread-scroll-inline-padding: 1.25rem;
+    overflow-anchor: none;
   }
 
   @media (min-width: 48rem) {

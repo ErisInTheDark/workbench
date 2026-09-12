@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - ThreadScrollMode/ThreadScrollMetrics: the viewport layout modes and measured scroll dimensions used for atomic coordinate conversion. Keywords: thread, scroll, reverse flex, reading.
- * - default ThreadScrollMode: convert between reverse and top-origin offsets and identify the actual bottom boundary. Keywords: thread, scroll, coordinate conversion, bottom.
+ * - ThreadScrollMode: name the viewport's bottom-following and reading layouts.
+ * - ThreadScrollMetrics: capture the dimensions and offset needed to classify or convert scroll state.
+ * - default ThreadScrollMode: classify reader movement, convert coordinates, and identify the bottom boundary.
  */
 
 export type ThreadScrollMode = "bottom-following" | "reading";
@@ -23,6 +24,20 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 const ThreadScrollMode = {
+  didMoveAwayFromBottom(
+    mode: ThreadScrollMode,
+    previousMetrics: ThreadScrollMetrics,
+    currentMetrics: ThreadScrollMetrics,
+  ) {
+    if (
+      previousMetrics.clientHeight !== currentMetrics.clientHeight
+      || previousMetrics.scrollHeight !== currentMetrics.scrollHeight
+    ) {
+      return false;
+    }
+    return ThreadScrollMode.toTopOriginOffset(mode, currentMetrics)
+      < ThreadScrollMode.toTopOriginOffset(mode, previousMetrics);
+  },
   isAtBottom(mode: ThreadScrollMode, metrics: ThreadScrollMetrics, tolerancePx = THREAD_SCROLL_BOTTOM_TOLERANCE_PX) {
     const maximumScrollTop = getMaximumScrollTop(metrics);
     return maximumScrollTop - ThreadScrollMode.toTopOriginOffset(mode, metrics) <= tolerancePx;

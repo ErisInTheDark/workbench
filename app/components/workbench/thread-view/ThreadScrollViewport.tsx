@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own atomic reverse-at-bottom and normal-while-reading thread scroll modes. Keywords: thread, scroll, viewport, reverse flex, reading.
- * - Local state owner and helpers: convert scroll coordinates before paint, receive composer arming, and answer bottom-distance queries. Keywords: thread, scroll mode, composer, atomic transition.
+ * - default ThreadScrollViewport: own atomic bottom-following and reading scroll layouts.
  */
 "use client";
 
@@ -82,11 +81,13 @@ function ActiveThreadScrollViewport ({
   const modeRef = useRef<ThreadScrollModeValue>("bottom-following");
   const pendingReadingModeRef = useRef(false);
   const pendingTransitionRef = useRef<PendingScrollModeTransition | null>(null);
+  const previousMetricsRef = useRef<ThreadScrollMetrics | null>(null);
   const scrollQuietPeriodTimeoutRef = useRef<number | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport;
+    previousMetricsRef.current = viewport ? readScrollMetrics(viewport) : null;
     assignRef(forwardedRef, viewport);
   }, [forwardedRef]);
 
@@ -100,6 +101,7 @@ function ActiveThreadScrollViewport ({
     };
     viewport.addEventListener("wheel", preventWheel, { passive: false });
     const metrics = readScrollMetrics(viewport);
+    previousMetricsRef.current = metrics;
     pendingTransitionRef.current = {
       mode: nextMode,
       preventWheel,
@@ -151,26 +153,15 @@ function ActiveThreadScrollViewport ({
   const reportComposerArmed = useCallback((armed: boolean) => {
     const viewport = viewportRef.current;
     composerArmedRef.current = armed;
-    if (!viewport || modeRef.current !== "bottom-following" || pendingTransitionRef.current) return;
+    if (!viewport) return;
 
     const metrics = readScrollMetrics(viewport);
-    if (ThreadScrollMode.isAtBottom("bottom-following", metrics)) {
+    previousMetricsRef.current = metrics;
+    if (!armed || modeRef.current !== "bottom-following" || pendingTransitionRef.current) {
       pendingReadingModeRef.current = false;
       cancelReadingTransition();
-      return;
     }
-    if (!armed) {
-      pendingReadingModeRef.current = false;
-      cancelReadingTransition();
-      return;
-    }
-
-    pendingReadingModeRef.current = true;
-    scheduleReadingTransition();
-  }, [
-    cancelReadingTransition,
-    scheduleReadingTransition,
-  ]);
+  }, [cancelReadingTransition]);
 
   const isWithinBottomDistance = useCallback((tolerancePx: number) => {
     const viewport = viewportRef.current;
@@ -194,6 +185,7 @@ function ActiveThreadScrollViewport ({
         viewport.scrollTop = previousMode === "bottom-following"
           ? previousTop
           : previousTop + viewport.scrollHeight - previousHeight;
+        previousMetricsRef.current = readScrollMetrics(viewport);
       };
     },
     isWithinBottomDistance,
@@ -215,6 +207,7 @@ function ActiveThreadScrollViewport ({
             pendingTransition.topOriginOffset,
             readScrollMetrics(viewport),
           );
+        previousMetricsRef.current = readScrollMetrics(viewport);
       }
     } finally {
       pendingTransitionRef.current = null;
@@ -230,6 +223,8 @@ function ActiveThreadScrollViewport ({
       if (pendingTransitionRef.current) return;
       const currentMode = modeRef.current;
       const metrics = readScrollMetrics(viewport);
+      const previousMetrics = previousMetricsRef.current;
+      previousMetricsRef.current = metrics;
       if (currentMode === "reading") {
         if (ThreadScrollMode.isAtBottom("reading", metrics)) {
           pendingReadingModeRef.current = false;
@@ -244,26 +239,27 @@ function ActiveThreadScrollViewport ({
         cancelReadingTransition();
         return;
       }
-      if (composerArmedRef.current) {
+      if (
+        composerArmedRef.current
+        && previousMetrics
+        && ThreadScrollMode.didMoveAwayFromBottom("bottom-following", previousMetrics, metrics)
+      ) {
         pendingReadingModeRef.current = true;
+        scheduleReadingTransition();
+      } else if (pendingReadingModeRef.current) {
         scheduleReadingTransition();
       }
     };
-    const handleWheel = () => {
-      if (
-        pendingTransitionRef.current
-        || modeRef.current !== "bottom-following"
-        || !composerArmedRef.current
-      ) {
-        return;
-      }
-
-      pendingReadingModeRef.current = true;
-      scheduleReadingTransition();
+    const refreshMetrics = () => {
+      previousMetricsRef.current = readScrollMetrics(viewport);
     };
+    const resizeObserver = new ResizeObserver(refreshMetrics);
+    resizeObserver.observe(viewport);
+    const content = viewport.firstElementChild;
+    if (content) resizeObserver.observe(content);
 
     viewport.addEventListener("scroll", handleScroll, { passive: true });
-    viewport.addEventListener("wheel", handleWheel, { passive: true });
+    refreshMetrics();
     return () => {
       cancelReadingTransition();
       const pendingTransition = pendingTransitionRef.current;
@@ -271,8 +267,8 @@ function ActiveThreadScrollViewport ({
         pendingTransitionRef.current = null;
         releaseScrollModeTransition(pendingTransition);
       }
+      resizeObserver.disconnect();
       viewport.removeEventListener("scroll", handleScroll);
-      viewport.removeEventListener("wheel", handleWheel);
     };
   }, [
     cancelReadingTransition,

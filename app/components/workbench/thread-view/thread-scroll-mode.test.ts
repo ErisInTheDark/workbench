@@ -1,4 +1,4 @@
-/* No production exports. Tests protect atomic reverse/normal thread-scroll coordinate conversion and bottom detection. */
+/* No production exports. Tests protect scroll intent, atomic coordinate conversion and bottom detection. */
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -45,4 +45,42 @@ test("thread scroll bottom detection keeps a one-pixel transition tolerance", ()
   assert.equal(ThreadScrollMode.isAtBottom("reading", { ...SCROLL_METRICS, scrollTop: 1198.9 }), false);
   assert.equal(ThreadScrollMode.isAtBottom("bottom-following", { ...SCROLL_METRICS, scrollTop: -1 }), true);
   assert.equal(ThreadScrollMode.isAtBottom("bottom-following", { ...SCROLL_METRICS, scrollTop: -1.1 }), false);
+});
+
+test("passive geometry changes do not impersonate movement away from bottom", () => {
+  const atBottom: ThreadScrollMetrics = {
+    clientHeight: 600,
+    scrollHeight: 600,
+    scrollTop: 0,
+  };
+
+  assert.equal(ThreadScrollMode.didMoveAwayFromBottom("bottom-following", atBottom, {
+    clientHeight: 600,
+    scrollHeight: 900,
+    scrollTop: -300,
+  }), false, "content growth");
+  assert.equal(ThreadScrollMode.didMoveAwayFromBottom("bottom-following", SCROLL_METRICS, {
+    clientHeight: 600,
+    scrollHeight: 1_200,
+    scrollTop: -50,
+  }), false, "content shrinkage");
+  assert.equal(ThreadScrollMode.didMoveAwayFromBottom("bottom-following", SCROLL_METRICS, {
+    clientHeight: 700,
+    scrollHeight: 1_800,
+    scrollTop: -250,
+  }), false, "viewport resize");
+});
+
+test("only stable-geometry movement farther from bottom counts as reading intent", () => {
+  assert.equal(ThreadScrollMode.didMoveAwayFromBottom("bottom-following", {
+    ...SCROLL_METRICS,
+    scrollTop: 0,
+  }, {
+    ...SCROLL_METRICS,
+    scrollTop: -120,
+  }), true);
+  assert.equal(ThreadScrollMode.didMoveAwayFromBottom("bottom-following", SCROLL_METRICS, {
+    ...SCROLL_METRICS,
+    scrollTop: -200,
+  }), false, "movement toward bottom");
 });
