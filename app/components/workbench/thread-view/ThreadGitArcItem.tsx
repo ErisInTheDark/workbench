@@ -234,7 +234,7 @@ export default function ThreadGitArcItem ({
                   : `Moved ${moveMappings.length} ${moveMappings.length === 1 ? "path" : "paths"}`
                 : labels[state]}
             </span>
-            {commandIntent.action === "rescind" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
+            {commandIntent.action === "rescind" || commandIntent.action === "status" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
             {commandIntent.action === "rescind" && commandIntent.proposalId ? (
               <span className="font-mono text-[0.86em] text-muted">{commandIntent.proposalId.slice(0, 8)}</span>
             ) : null}

@@ -6,11 +6,12 @@ import { useEffect, useMemo } from "react";
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import ThreadClaimedFileList from "./ThreadClaimedFileList";
+import { CheckIcon } from "../workbench-icons";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
+import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 
-export default function ThreadGitArcStatusDetails({ output, projectFilePaths, projectId, projectRootPath, workspaceRoots }: {
+export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, projectId, projectRootPath, workspaceRoots }: {
   output: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -29,8 +30,23 @@ export default function ThreadGitArcStatusDetails({ output, projectFilePaths, pr
     : paths.length ? <ThreadClaimedFileList key={label} label={label} paths={paths} {...context} /> : null;
   return (
     <div className="min-w-0 py-1">
-      {status.pending.map(proposal => <p className="m-0 break-words" key={proposal.proposalId}>Pending {proposal.proposalId} {proposal.title}</p>)}
-      {status.accepted.map(proposal => <p className="m-0 break-words" key={proposal.proposalId}>Accepted {proposal.proposalId} {proposal.title} <span className="font-mono text-muted">{proposal.commitSha.slice(0, 8)}</span></p>)}
+      {status.pending.map(proposal => (
+        <div className="flex min-w-0 items-start gap-2 py-0.5" key={proposal.proposalId}>
+          <span className="sr-only">Pending</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mt-1.5 size-4 shrink-0 text-muted">
+            <circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" />
+          </svg>
+          <span className="min-w-0 break-words">{proposal.title}</span>
+        </div>
+      ))}
+      {status.accepted.map(proposal => (
+        <div className="flex min-w-0 items-baseline gap-2 py-0.5" key={proposal.proposalId}>
+          <span className="sr-only">Accepted</span>
+          <CheckIcon className="mt-1.5 size-4 shrink-0 self-start text-[color:var(--success)]" />
+          <span className="shrink-0 font-mono text-muted">{proposal.commitSha.slice(0, 8)}</span>
+          <span className="min-w-0 break-words">{proposal.title}</span>
+        </div>
+      ))}
       {group("Dirty claims", status.dirtyClaims)}
       {group("Clean claims", status.cleanClaims)}
       {group("Unclaimed dirt", status.unclaimedDirt)}
