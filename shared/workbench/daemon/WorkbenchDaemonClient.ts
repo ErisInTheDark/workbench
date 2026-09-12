@@ -98,7 +98,9 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "browse/sessions/stop": return recordSchema;
     case "profiles/delete":
     case "profiles/read":
-    case "profiles/upsert": return z.object({ profiles: z.array(recordSchema) }).passthrough();
+    case "profiles/upsert": return z.object({ profiles: z.array(z.object({
+      lastUsedAt: z.number().int().nonnegative().nullable().default(null),
+    }).passthrough()) }).passthrough();
     case "profiles/target/read": return z.object({ selection: WorkbenchComposerProfileSelectionSchema.nullable() }).strict();
     case "profiles/target/set": return z.object({ ok: z.literal(true) }).strict();
     case "git/arc/compare": return GitCheckpointCompareResultSchema;
@@ -139,6 +141,9 @@ export class WorkbenchDaemonClient {
     if (!parsed.success) {
       reportClientSchemaError(`Rejected ${method} response`, parsed.error);
       throw new Error(`The ${method} response was invalid.`);
+    }
+    if (method === "profiles/read" || method === "profiles/upsert" || method === "profiles/delete") {
+      return parsed.data as WorkbenchDaemonResult<TMethod>;
     }
     return result;
   }

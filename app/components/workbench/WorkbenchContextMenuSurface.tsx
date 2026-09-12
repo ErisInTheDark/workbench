@@ -9,6 +9,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
 import type { WorkbenchContextMenuControl, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import WorkbenchMenuSurface from "./WorkbenchMenuSurface";
+import WorkbenchMenuAction from "./WorkbenchMenuAction";
 
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 
@@ -27,7 +29,6 @@ function clampMenuPosition(value: number, size: number, viewportSize: number) {
   );
 }
 
-const actionClassName = "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted data-[tone=danger]:text-danger data-[tone=danger]:hover:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:hover:text-danger data-[tone=danger]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:focus-visible:text-danger";
 const controlClassName = "relative inline-flex h-12 md:h-9 min-w-0 flex-1 items-center justify-center rounded-xl border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition-[background-color,border-color,color,opacity] hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:!text-muted disabled:hover:!text-muted data-[checked=true]:border-[color-mix(in_srgb,currentColor_55%,transparent)] data-[checked=true]:bg-[color-mix(in_srgb,currentColor_12%,transparent)] data-[checked=true]:text-accent data-[checked=true]:hover:bg-[color-mix(in_srgb,currentColor_16%,transparent)] data-[checked=true]:focus-visible:bg-[color-mix(in_srgb,currentColor_16%,transparent)]";
 
 function getControlToneClassName(tone: WorkbenchContextMenuControl["tone"]) {
@@ -112,11 +113,10 @@ export default function WorkbenchContextMenuSurface({
         }}
         onPointerDown={(event) => event.stopPropagation()}
       />
-      <div
+      <WorkbenchMenuSurface
         ref={menuRef}
-        role="menu"
         aria-label={menu.label}
-        className="fixed z-[51] min-w-48 max-w-[min(18rem,calc(100vw-1rem))] rounded-[1.25rem] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] p-1 text-sm shadow-float backdrop-blur-xl"
+        className="min-w-48 max-w-[min(18rem,calc(100vw-1rem))]"
         data-workbench-context-menu="true"
         style={{ left: position.left, top: position.top }}
       >
@@ -154,21 +154,18 @@ export default function WorkbenchContextMenuSurface({
         }
 
         return (
-          <button
+          <WorkbenchMenuAction
             key={item.id}
-            type="button"
-            role="menuitem"
             disabled={item.disabled}
             data-tone={item.tone ?? "default"}
-            className={`enabled:cursor-pointer ${actionClassName}`}
             onClick={() => select(item.disabled, item.onSelect)}
           >
             {item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span> : null}
             <span className="min-w-0 truncate">{item.label}</span>
-          </button>
+          </WorkbenchMenuAction>
         );
       })}
-      </div>
+      </WorkbenchMenuSurface>
     </>
   );
 }

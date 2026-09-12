@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadHarnessControl: render a mutable harness rotator or immutable harness identity. Keywords: thread, composer, harness, control.
+ * - default ThreadHarnessControl: render a harness rotator or immutable ribbon/inline identity.
  */
 "use client";
 
@@ -9,13 +9,15 @@ import { HarnessIcon } from "../workbench-icons";
 import WorkbenchRotatorButton from "../WorkbenchRotatorButton";
 import { formatHarnessLabel } from "./harness-label";
 
-export default function ThreadHarnessControl({ canToggle = false, harness, onToggle }: {
+export default function ThreadHarnessControl({ canToggle = false, harness, onToggle, inline = false }: {
   canToggle?: boolean;
   harness: WorkbenchHarness;
   onToggle?: () => void;
+  inline?: boolean;
 }) {
   const label = formatHarnessLabel(harness);
-  const content = <><HarnessIcon className="size-4" harness={harness} /><span>{label}</span></>;
+  const inlineIdentity = inline && !canToggle;
+  const content = <><HarnessIcon className={inlineIdentity ? "size-[1em] shrink-0 self-center" : "size-4"} harness={harness} /><span>{label}</span></>;
   return canToggle ? (
     <WorkbenchRotatorButton
       ariaLabel={`Current harness: ${label}. Click to use the next harness.`}
@@ -24,5 +26,8 @@ export default function ThreadHarnessControl({ canToggle = false, harness, onTog
     >
       {content}
     </WorkbenchRotatorButton>
-  ) : <span className="inline-flex items-center gap-2 font-semibold text-text">{content}</span>;
+  ) : <span className={`
+    inline-flex font-semibold
+    ${inlineIdentity ? "items-baseline gap-0.5 align-baseline" : "items-center gap-2 text-text"}
+  `}>{content}</span>;
 }

@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchComposerProfile } from "workbench-shared/types";
-import { deleteRows, insertRow, selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
+import { deleteRows, insertRow, selectRows, updateRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 import type { SelectRow } from "workbench-shared/database/schema/schema-definition";
 import { applyComposerProfileMutation, normalizeComposerProfile, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
 import { composerProfileImports, composerProfiles } from "../lib/workbench/database/schema/composer-profile-schema";
@@ -24,6 +24,7 @@ function row(profile: WorkbenchComposerProfile): SelectRow<typeof composerProfil
     context_window_tokens: profile.contextWindowTokens ?? null,
     scope_kind: profile.scope.kind, scope_project_id: profile.scope.kind === "project" ? profile.scope.projectId : null,
     created_at: profile.createdAt, updated_at: profile.updatedAt,
+    last_used_at: profile.lastUsedAt ?? null,
   };
 }
 
@@ -37,7 +38,7 @@ function fromRow(value: SelectRow<typeof composerProfiles>): WorkbenchComposerPr
     createdAt: value.created_at, updatedAt: value.updated_at,
   });
   if (!profile) throw new Error("Stored composer profile is invalid.");
-  return profile;
+  return value.last_used_at === null ? profile : { ...profile, lastUsedAt: value.last_used_at };
 }
 
 export default class WorkbenchComposerProfileStore {
@@ -74,7 +75,7 @@ export default class WorkbenchComposerProfileStore {
       const profiles = applyComposerProfileMutation(previous, mutation).map((profile) => {
         const stored = previous.find((entry) => entry.id === profile.id);
         // The upsert deliberately preserves the original creation time.
-        return stored ? { ...profile, createdAt: stored.createdAt } : profile;
+        return stored ? { ...profile, createdAt: stored.createdAt, ...(stored.lastUsedAt != null ? { lastUsedAt: stored.lastUsedAt } : {}) } : profile;
       }).sort((left, right) => left.createdAt - right.createdAt || Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
       const profile = mutation.kind === "upsert" ? profiles.find((entry) => entry.id === mutation.profile.id) : null;
       if (profile && validate) await validate(profile, previous.find((entry) => entry.id === profile.id) ?? null);
@@ -94,6 +95,20 @@ export default class WorkbenchComposerProfileStore {
   async dispose() {
     this.closed = true;
     await this.pendingWrite;
+  }
+
+  recordUsage(profileId: string, at: number) {
+    if (!Number.isSafeInteger(at) || at < 0) return Promise.reject(new Error("Profile usage requires a valid timestamp."));
+    const ready = this.start();
+    const result = this.enqueue(async () => {
+      await ready;
+      const [profile] = await this.database.query(selectRows(composerProfiles, { where: { id: profileId } }));
+      this.assertOpen();
+      if (!profile || (profile.last_used_at !== null && profile.last_used_at >= at)) return;
+      // Compare-and-set also fences another store instance without resurrecting deletions.
+      await this.write([updateRows(composerProfiles, { last_used_at: at }, { id: profileId, last_used_at: profile.last_used_at })]);
+    });
+    return Promise.all([ready, result]).then(() => undefined);
   }
 
   private async readProfiles() {

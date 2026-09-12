@@ -68,6 +68,7 @@ function legacyGitArc(claim: WorkbenchGitArcActiveClaim) {
 export interface WorkbenchThreadStateFeatureContext {
   identities: NativeTranscriptIdentityOwners;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
+  recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null>;
@@ -277,6 +278,7 @@ export default class WorkbenchThreadStateFeature {
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
       readComposerProfiles: context.readComposerProfiles,
+      recordComposerProfileUsage: context.recordComposerProfileUsage,
       ...(context.reloadDirt ? {
         getReloadDirt: () => context.reloadDirt!.getSnapshot(),
         subscribeReloadDirt: (listener: () => void) => context.reloadDirt!.subscribe(listener),

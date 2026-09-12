@@ -781,6 +781,7 @@ export type WorkbenchComposerProfileScope =
 
 export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   createdAt: number;
+  lastUsedAt?: number | null;
   description?: string;
   id: string;
   name: string;
@@ -788,7 +789,7 @@ export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   updatedAt: number;
 }
 
-export type WorkbenchComposerProfileChanges = Partial<Omit<WorkbenchComposerProfile, "id" | "harness" | "createdAt" | "updatedAt">>;
+export type WorkbenchComposerProfileChanges = Partial<Omit<WorkbenchComposerProfile, "id" | "harness" | "createdAt" | "updatedAt" | "lastUsedAt">>;
 
 export type WorkbenchComposerProfileMutation =
   | { kind: "delete"; profileId: string }

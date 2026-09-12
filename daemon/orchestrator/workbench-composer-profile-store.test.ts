@@ -45,6 +45,23 @@ function profile(id: string, updatedAt: number): WorkbenchComposerProfile {
   };
 }
 
+test("turn usage survives stale edits and reopening without resurrecting deleted profiles", async (context) => {
+  const { create } = await fixture(context);
+  const store = create();
+  const original = profile("used", 2);
+  await store.mutate({ kind: "upsert", profile: original });
+  await store.recordUsage(original.id, 500);
+  await store.recordUsage(original.id, 200);
+  await store.mutate({ kind: "upsert", profile: { ...original, name: "Edited" } });
+  const saved = (await create().read()).profiles[0];
+  assert.equal(saved?.lastUsedAt, 500);
+  assert.equal(saved?.name, "Edited");
+  assert.equal(saved?.updatedAt, original.updatedAt);
+  await store.mutate({ kind: "delete", profileId: original.id });
+  await store.recordUsage(original.id, 600);
+  assert.deepEqual((await create().read()).profiles, []);
+});
+
 test("retired legacy profile reads cannot initiate an import write", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-retired-"));
   context.after(() => rm(root, { recursive: true, force: true }));

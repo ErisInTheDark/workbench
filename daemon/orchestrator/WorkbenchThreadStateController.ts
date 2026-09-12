@@ -180,6 +180,7 @@ function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: Workb
 
 export interface WorkbenchThreadStateControllerOptions {
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
+  recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
   getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
   hasLiveGitArcClaims: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
@@ -776,11 +777,19 @@ export default class WorkbenchThreadStateController {
       const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
       const outcome = await admit({ selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null });
       if (!outcome.accepted) return { ...outcome, profilePersistenceError: null };
+      const acceptedAt = this.now();
       // Native acceptance is irreversible. A failed snapshot write must never turn it into an unsent message.
       try {
-        if (!await this.persistComposerProfileTarget(state, slot, selection)) {
-          throw new Error("The accepted turn's composer profile target no longer exists.");
-        }
+        const [snapshot, usage] = await Promise.allSettled([
+          this.persistComposerProfileTarget(state, slot, selection),
+          selection.kind === "profile" ? this.options.recordComposerProfileUsage?.(selection.profileId, acceptedAt) : undefined,
+        ] as const);
+        const failures = [
+          snapshot.status === "rejected" ? sanitizeError(snapshot.reason)
+            : !snapshot.value ? "The accepted turn's composer profile target no longer exists." : null,
+          usage.status === "rejected" ? sanitizeError(usage.reason) : null,
+        ].filter((message): message is string => message !== null);
+        if (failures.length) throw new Error(failures.join(" / "));
         return { ...outcome, profilePersistenceError: null };
       } catch (error) {
         const profilePersistenceError = `Turn accepted, but its profile could not be saved: ${sanitizeError(error)}`;

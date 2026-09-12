@@ -4,8 +4,8 @@
  */
 "use client";
 
-import { useRef } from "react";
-import { BotIcon, ZapIcon } from "../workbench-icons";
+import { useRef, type ReactNode } from "react";
+import { ZapIcon } from "../workbench-icons";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import { formatProfileContext, profileContextColour, profileEffortColour } from "./ThreadProfileEditor";
 
@@ -17,18 +17,16 @@ export default function ThreadComposerRibbon({
   agentLabel,
   currentReasoningEffort,
   isFastModeEnabled,
-  isProfilePanelOpen,
   modelLabel,
   modelId,
   onAgentOpen,
   onFastModeToggle,
   onModelOpen,
-  onProfileOpen,
   onReasoningEffortChange,
   supportedReasoningEfforts,
   context,
   onContextChange,
-  profileLabel,
+  profileControl,
   selectedProfileLabel = null,
   showsFastModeControl,
   showsProfileControl = true,
@@ -37,18 +35,16 @@ export default function ThreadComposerRibbon({
   agentLabel: string;
   currentReasoningEffort: string | null;
   isFastModeEnabled: boolean;
-  isProfilePanelOpen: boolean;
   modelLabel: string;
   modelId: string | null;
   onAgentOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
   onFastModeToggle: () => void;
   onModelOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
-  onProfileOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
   onReasoningEffortChange: (effort: string) => void;
   supportedReasoningEfforts: string[];
   context: { value: number; defaultTokens: number; maximumTokens: number } | null;
   onContextChange: (tokens: number) => void;
-  profileLabel: string;
+  profileControl?: ReactNode;
   selectedProfileLabel?: string | null;
   showsFastModeControl: boolean;
   showsProfileControl?: boolean;
@@ -57,21 +53,7 @@ export default function ThreadComposerRibbon({
   const ribbon = useRef<HTMLDivElement>(null);
   return (
     <div ref={ribbon} className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
-      {showsProfileControl ? <><button
-        type="button"
-        aria-label={`Composer profile: ${profileLabel}`}
-        aria-pressed={isProfilePanelOpen}
-        className={joinClasses(
-          "enabled:cursor-pointer",
-          "relative isolate inline-flex min-w-0 items-center justify-center gap-2 bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
-          isProfilePanelOpen ? "text-text" : "text-muted hover:text-text",
-        )}
-        title={`Composer profile: ${profileLabel}`}
-        onClick={(event) => { if (ribbon.current) onProfileOpen(event.currentTarget, ribbon.current); }}
-      >
-        <BotIcon className="size-4.5 shrink-0" />
-        {selectedProfileLabel ? <span className="truncate font-semibold">{selectedProfileLabel}</span> : null}
-      </button>
+      {showsProfileControl && profileControl ? <>{profileControl}
       {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
       {!selectedProfileLabel ? <>
       <button

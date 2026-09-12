@@ -1,4 +1,5 @@
 /*
+ * Exports: none.
  * Tests:
  * - WorkbenchComposerProfileController keeps daemon-owned definitions and target snapshots acknowledged without stale-read rollback.
  */
@@ -98,6 +99,29 @@ async function createController(initialProfiles: WorkbenchComposerProfile[] = []
   await controller.initializePersistence(persistence);
   return { controller, persistence, targets };
 }
+
+test("catalogue refresh coalesces without overwriting edits or surviving disconnect", async (context) => {
+  const { controller, persistence } = await createController([profile()]);
+  context.after(() => controller.dispose());
+  let release!: (payload: { profiles: WorkbenchComposerProfile[] }) => void;
+  let reads = 0;
+  persistence.read = () => {
+    reads++;
+    return new Promise(resolve => { release = resolve; });
+  };
+  const first = controller.refreshProfiles();
+  const second = controller.refreshProfiles();
+  assert.equal(reads, 1);
+  await controller.updateProfile("profile-a", { name: "New name" });
+  release({ profiles: [profile({ lastUsedAt: 40 })] });
+  await Promise.all([first, second]);
+  assert.equal(controller.getProfile("profile-a")?.name, "New name");
+  const disconnected = controller.refreshProfiles();
+  controller.disconnectPersistence();
+  release({ profiles: [profile({ name: "Stale" })] });
+  await disconnected;
+  assert.equal(controller.getProfile("profile-a")?.name, "New name");
+});
 
 test("missing daemon selection never resolves settings from a raw thread", async () => {
   const { controller } = await createController();

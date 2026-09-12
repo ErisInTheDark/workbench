@@ -9,6 +9,19 @@ import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
+test("profile recency defaults for old servers and rejects malformed values", async (context) => {
+  const logged: string[] = [];
+  context.mock.method(console, "error", (message: string) => { logged.push(message); });
+  const legacy = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ profiles: [{ id: "profile" }] }) as TResponse });
+  assert.equal((await legacy.request("profiles/read", {})).profiles[0]?.lastUsedAt, null);
+  const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
+    profiles: [{ id: "profile", lastUsedAt: "private-recency-marker" }],
+  }) as TResponse });
+  await assert.rejects(malformed.request("profiles/read", {}), /response was invalid/);
+  assert.ok(logged.length > 0);
+  assert.ok(logged.every(message => message.length < 1200 && !message.includes("private-recency-marker")));
+});
+
 test("model capabilities reject invalid bounds at the daemon response boundary", async () => {
   const valid = { data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] };
   const client = new WorkbenchDaemonClient({ request: async <TResponse>() => valid as TResponse });

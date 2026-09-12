@@ -3468,12 +3468,15 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
 
 test("profile admission publishes only accepted candidates and orders later edits without blocking lifecycle writes", async (context) => {
   const persistence = new MemoryThreadStatePersistence();
+  const usage: Array<{ id: string; at: number }> = [];
   const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
   const latest = { ...original.settings, model: "new" };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "profile-admission", threadStateStore: persistence,
     getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
     reconcileProject: async () => [],
+    now: () => 1234,
+    recordComposerProfileUsage: async (id: string, at: number) => { usage.push({ id, at }); },
     readComposerProfiles: async () => ({ profiles: [{ ...latest, id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] }),
   });
   context.after(() => controller.dispose());
@@ -3493,8 +3496,10 @@ test("profile admission publishes only accepted candidates and orders later edit
   }, signal), /Native start failed/);
   assert.deepEqual(await controller.readComposerProfileSnapshot(slot), original);
   assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
+  assert.deepEqual(usage, []);
   const accepted = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "sent" }), signal);
   assert.equal(accepted.profilePersistenceError, null);
+  assert.deepEqual(usage, [{ id: "named", at: 1234 }]);
   assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
 
   let enter!: () => void;
@@ -3514,6 +3519,39 @@ test("profile admission publishes only accepted candidates and orders later edit
   release();
   await Promise.all([admission, edit]);
   assert.deepEqual(await controller.readComposerProfileTarget(slot), edited);
+});
+
+test("usage failure retains accepted success and still saves the applied profile", async (context) => {
+  const persistence = new MemoryThreadStatePersistence();
+  const logs: string[] = [];
+  let usages = 0;
+  const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "profile-usage-failure", threadStateStore: persistence,
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [], log: message => logs.push(message),
+    readComposerProfiles: async () => ({ profiles: [{ ...original.settings, model: "new", id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] }),
+    recordComposerProfileUsage: async () => { usages++; throw new Error("Usage unavailable"); },
+  });
+  context.after(() => controller.dispose());
+  const slot = { kind: "thread" as const, projectId: fixtureProjectIds["project"], harness: "codex" as const, threadId: fixtureThreadIds["existing"] };
+  await controller.ensureProviderEntry(slot.projectId, pinnedRecord("existing", "Existing"));
+  await controller.setComposerProfileTarget(slot, original);
+  const outcome = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "native" }), new AbortController().signal);
+  assert.equal(outcome.accepted, true);
+  assert.equal(outcome.result, "native");
+  assert.ok(outcome.profilePersistenceError);
+  assert.ok(logs.length);
+  assert.equal((await controller.readComposerProfileSnapshot(slot))?.settings.model, "new");
+  await controller.setComposerProfileTarget(slot, { kind: "custom", settings: original.settings });
+  await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "custom" }), new AbortController().signal);
+  assert.equal(usages, 1);
+  await controller.setComposerProfileTarget(slot, original);
+  persistence.writeChanges = async () => { throw new Error("Snapshot unavailable"); };
+  const bothFailed = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "native-again" }), new AbortController().signal);
+  assert.equal(bothFailed.accepted, true);
+  assert.match(bothFailed.profilePersistenceError ?? "", /Snapshot unavailable/);
+  assert.match(bothFailed.profilePersistenceError ?? "", /Usage unavailable/);
 });
 
 test("profile persistence failure after native acceptance retains success and exposes the failed snapshot write", async (context) => {

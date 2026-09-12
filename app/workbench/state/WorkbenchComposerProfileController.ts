@@ -5,6 +5,7 @@
  */
 import type {
   WorkbenchComposerProfile,
+  WorkbenchComposerProfileChanges,
   WorkbenchComposerProfileMutation,
   WorkbenchComposerProfileSelection,
   WorkbenchComposerProfileSlot,
@@ -59,6 +60,7 @@ export default class WorkbenchComposerProfileController {
   private targetPersistence: ComposerProfileTargetPersistence | null = null;
   private readonly selectionWrites = new Map<string, Promise<boolean>>();
   private readonly profileWrites = new Map<string, Promise<boolean>>();
+  private catalogueRefresh: Promise<void> | null = null;
 
   constructor() {
     this.snapshot = this.createSnapshot();
@@ -85,10 +87,35 @@ export default class WorkbenchComposerProfileController {
     await Promise.all([...this.slots.values()].map((slot) => this.loadSelection(slot)));
   }
 
+  refreshProfiles = (): Promise<void> => {
+    if (this.catalogueRefresh) return this.catalogueRefresh;
+    const persistence = this.persistence;
+    if (!persistence || this.profileWrites.size > 0) return Promise.resolve();
+    const generation = ++this.profileGeneration;
+    const refresh = (async () => {
+      try {
+        const payload = await persistence.read();
+        if (generation !== this.profileGeneration || persistence !== this.persistence) return;
+        this.profiles = [...payload.profiles];
+        this.stableProfiles = this.profiles;
+        this.stableProfileGeneration = generation;
+        this.publish();
+      } catch (error) {
+        if (generation === this.profileGeneration && persistence === this.persistence) {
+          this.fail(error instanceof Error ? error.message : "Unable to refresh composer profiles.");
+        }
+      }
+    })();
+    const pending = refresh.finally(() => { if (this.catalogueRefresh === pending) this.catalogueRefresh = null; });
+    this.catalogueRefresh = pending;
+    return pending;
+  };
+
   disconnectPersistence() {
     this.persistence = null;
     this.targetPersistence = null;
     this.profileGeneration++;
+    this.catalogueRefresh = null;
     for (const [key, generation] of this.selectionGenerations) {
       this.selectionGenerations.set(key, generation + 1);
     }
@@ -143,14 +170,14 @@ export default class WorkbenchComposerProfileController {
       ? this.getProfile(profile.id) : null;
   }
 
-  async updateProfile(profileId: string, update: Partial<Omit<WorkbenchComposerProfile, "createdAt" | "harness" | "id">>) {
+  async updateProfile(profileId: string, update: WorkbenchComposerProfileChanges) {
     const existing = this.getProfile(profileId);
     if (!existing) return null;
-    const profile = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, harness: existing.harness, id: existing.id, updatedAt: Date.now() });
+    const normalized = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, harness: existing.harness, id: existing.id, updatedAt: Date.now() });
+    const profile = normalized ? { ...normalized, ...(existing.lastUsedAt != null ? { lastUsedAt: existing.lastUsedAt } : {}) } : null;
     if (!profile) return this.fail("Profile name and model are required.");
     if (profile.scope.kind === "global" && profile.agentSource === "project") return this.fail("Profiles using a project agent cannot be global.");
-    const { updatedAt: _updatedAt, ...changes } = update;
-    return await this.persistProfileMutation({ kind: "upsert", profile, changes }, this.profiles.map((entry) => entry.id === profileId ? profile : entry))
+    return await this.persistProfileMutation({ kind: "upsert", profile, changes: update }, this.profiles.map((entry) => entry.id === profileId ? profile : entry))
       ? this.getProfile(profileId) : null;
   }
 

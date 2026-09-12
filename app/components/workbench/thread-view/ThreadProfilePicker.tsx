@@ -13,6 +13,7 @@ import PlaintextEditable from "./PlaintextEditable";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
+import { orderComposerProfiles } from "./composer-profile-order";
 
 function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
   const editableRef = useRef<HTMLSpanElement>(null);
@@ -77,7 +78,7 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
   const selection = controller.getSelection(slot);
   const selectedProfile = selection.kind === "profile" ? controller.getProfile(selection.profileId) : null;
   const visible = controller.getVisibleProfiles(projectId, slot.kind !== "new-thread" ? slot.harness : null);
-  const profiles = selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible;
+  const profiles = orderComposerProfiles(selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible, "newest");
   const globals = profiles.filter(({ scope }) => scope.kind === "global");
   const projects = profiles.filter(({ scope }) => scope.kind === "project");
   void snapshot;

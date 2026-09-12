@@ -34,13 +34,18 @@ const imports = defineTable("workbench_composer_profile_imports", {
   id: enumText("legacy-json").primaryKey(),
 });
 const contextProfiles = evolveTable(profiles, { add: { context_window_tokens: integer().nonNegative() } });
+const usageProfiles = evolveTable(contextProfiles, { add: { last_used_at: integer().nonNegative() } });
 const profileHistory = defineTableHistory({
-  current: contextProfiles,
+  current: usageProfiles,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: profiles, migration: createTable(profiles) }),
     tableVersion({
       schemaVersion: databaseReleases.profileContextWindows.version, table: contextProfiles,
       migration: addColumns({ from: profiles, to: contextProfiles, columns: ["context_window_tokens"] }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.profileTurnUsage.version, table: usageProfiles,
+      migration: addColumns({ from: contextProfiles, to: usageProfiles, columns: ["last_used_at"] }),
     }),
   ],
 });

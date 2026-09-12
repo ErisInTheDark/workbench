@@ -288,6 +288,7 @@ function createWorkbenchCoreFeature(
     interruptRetainingQuestionnaire: (threadId, requestKey, interrupt) => questionnaires.interruptRetainingQuestionnaire(threadId, requestKey, interrupt),
     identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
+    recordComposerProfileUsage: (profileId, at) => profileStore.recordUsage(profileId, at),
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
@@ -455,6 +456,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   scope: "server:core",
   sources: [
     "daemon/orchestrator/WorkbenchCoreNode.ts",
+    "daemon/orchestrator/WorkbenchComposerProfileStore.ts",
+    "shared/workbench/state/composer-profile-state.ts",
     "daemon/orchestrator/CodexModelCatalog.ts",
     "daemon/lib/codex/codex-home.ts",
     "shared/workbench/thread/thread-profile.ts",

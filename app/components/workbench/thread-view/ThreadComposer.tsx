@@ -43,6 +43,7 @@ import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
+import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -269,6 +270,7 @@ export default function ThreadComposer ({
   const openProfileEditor = (section: ProfileEditorSection, trigger: HTMLElement, ribbon: HTMLElement) => {
     setEditorAnchor({ trigger, ribbon });
     profileEditor.toggle(section);
+    void composerProfileController.refreshProfiles();
   };
   const loadAvailableAgents = useCallback(() => profileEditor.loadAgents(async () => {
     const payload = await daemon.request("agents/list", { projectId });
@@ -646,9 +648,21 @@ export default function ThreadComposer ({
                       agentLabel={agentButtonLabel}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
-                      isProfilePanelOpen={isProfilePickerOpen}
                       modelLabel={modelButtonLabel}
-                      profileLabel={profileButtonLabel}
+                      profileControl={profileSlot ? <ThreadProfileQuickPicker
+                        slot={profileSlot}
+                        fallbackSettings={currentComposerSettings}
+                        agents={availableAgents}
+                        models={availableModels}
+                        label={profileButtonLabel}
+                        selectedLabel={selectedProfile ? profileButtonLabel : null}
+                        onOpen={profileEditor.close}
+                        onEdit={(trigger, ribbon) => {
+                          setEditorAnchor({ trigger, ribbon });
+                          profileEditor.open("profile");
+                          void composerProfileController.refreshProfiles();
+                        }}
+                      /> : null}
                       selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
@@ -661,7 +675,6 @@ export default function ThreadComposer ({
                         );
                       }}
                       onModelOpen={(trigger, ribbon) => openProfileEditor("model", trigger, ribbon)}
-                      onProfileOpen={(trigger, ribbon) => openProfileEditor("profile", trigger, ribbon)}
                       onReasoningEffortChange={changeReasoningEffort}
                       supportedReasoningEfforts={supportedReasoningEfforts}
                       context={thread.harness === "codex" && modelOptionForControls?.contextWindow ? {
