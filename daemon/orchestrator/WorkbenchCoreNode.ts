@@ -479,7 +479,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateController.ts",
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
     "daemon/orchestrator/WorkbenchQuestionnaireController.ts",
-    "daemon/orchestrator/codex-questionnaire-timeout.ts",
     "shared/workbench/thread/thread-stop.ts",
     "daemon/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "daemon/orchestrator/CodexHealthMonitor.ts",

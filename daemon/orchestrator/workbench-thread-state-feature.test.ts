@@ -187,28 +187,8 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     complete: () => feature.controller.handleRequest("observer", {
       identity: provider.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), status: "completed",
     }),
-    timeout: () => feature.observeProviderNotification("codex", {
-      method: "item/completed",
-      params: {
-        threadId: "native:thread", turnId: "native:turn",
-        item: { type: "mcpToolCall", id: "call", server: "wb", tool: "request_user_input", status: "failed", error: { message: "tool call error: tool call failed for `wb/request_user_input`\n\nCaused by:\n    timed out awaiting tools/call after 21600s" } },
-      },
-    }),
   };
 }
-
-test("questionnaire timeout releases the live wait and stops only its owning sidebar turn", async () => {
-  const h = await questionnaireHarness();
-  try {
-    await h.timeout();
-    assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
-    assert.deepEqual(h.requests.map((request) => request.method), ["thread/turns/list", "thread/goal/clear", "turn/interrupt"]);
-    assert.deepEqual(h.requests.at(-1)?.params, { cwd: "C:/workspace", threadId: "native:thread", turnId: "native:turn" });
-    const entry = await h.read();
-    assert.ok(entry && entry.entryKind === "thread");
-    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
-  } finally { await h.feature.dispose(); }
-});
 
 test("manual questionnaire completion preserves its question and survives a late interrupted notification", async () => {
   const h = await questionnaireHarness();
@@ -334,21 +314,6 @@ test("unrecognised provider turn status cannot release a question or report comp
     await assert.rejects(h.complete(), /turn metadata/u);
     assert.deepEqual(h.releases, []);
     assert.equal((await h.read())?.lifecycle.kind, "needsAttention");
-  } finally { await h.feature.dispose(); }
-});
-
-test("questionnaire timeout leaves subagent turns and waiters under their existing owner", async () => {
-  const h = await questionnaireHarness();
-  try {
-    const { metadata: _metadata, ...common } = h.provider;
-    await h.feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], {
-      ...common, entryKind: "subagent", createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
-      name: "child", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"), pinned: false, profileId: "profile", profileName: "profile", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    });
-    h.requests.length = 0;
-    await h.timeout();
-    assert.deepEqual(h.requests, []);
-    assert.deepEqual(h.releases, []);
   } finally { await h.feature.dispose(); }
 });
 

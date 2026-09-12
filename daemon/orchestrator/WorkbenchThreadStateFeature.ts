@@ -19,7 +19,6 @@ import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "
 import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { stopWorkbenchThread } from "workbench-shared/workbench/thread/thread-stop";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import { getCodexQuestionnaireTimeout } from "./codex-questionnaire-timeout";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -343,14 +342,6 @@ export default class WorkbenchThreadStateFeature {
       projectId = (await owners.threads.resolveNative(native))?.projectId;
       await admitProviderNotifications(owners, native, [notification as ServerNotification]);
       notification = mapProviderNotification(owners, native, notification as ServerNotification);
-    }
-    const timeout = harness === "codex" ? getCodexQuestionnaireTimeout(notification) : null;
-    if (timeout) {
-      const pending = await this.findPendingQuestionnaire(harness, timeout.threadId);
-      if (pending && pending.questionnaire.turnId === timeout.turnId) {
-        await this.interruptQuestionnaire(pending.projectId, harness, timeout.threadId, pending.questionnaire);
-      }
-      return null;
     }
     const mapped = mapProviderLifecycleNotification(notification, owners.threads);
     let observation: WorkbenchProviderLifecycleObservation | null = null;
