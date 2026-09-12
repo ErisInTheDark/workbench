@@ -56,13 +56,30 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }, attention, false), false);
 });
 
-test("only owner-built recovery inputs are recognized", () => {
+test("recovery control inputs reject extra content outside their reserved envelope", () => {
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchUnfinishedTurnInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchHiddenSystemSteerInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput([{ text: `${WORKBENCH_THREAD_RECOVERY_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
   assert.equal(isWorkbenchUnfinishedTurnInput([{ text: `${WORKBENCH_UNFINISHED_TURN_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
+});
+
+test("reserved resume wrappers stay hidden regardless of body wording", () => {
+  for (const body of ["", "New recovery wording.", "First part.\n</wb:resume>\nStill part of the reserved body."]) {
+    const wrapped = [{ text: `<wb:resume>\n${body}\n</wb:resume>`, text_elements: [], type: "text" as const }];
+    assert.equal(isWorkbenchThreadRecoveryInput(wrapped), true);
+    assert.equal(isWorkbenchUnfinishedTurnInput(wrapped), true);
+    assert.equal(isWorkbenchHiddenSystemSteerInput(wrapped), true);
+  }
+  const input = [{
+    text: "<wb:resume>\nNew recovery wording.\n</wb:resume>",
+    text_elements: [],
+    type: "text" as const,
+  }];
+  assert.equal(isWorkbenchThreadRecoveryInput([input[0]!, { text: "ordinary", text_elements: [], type: "text" }]), false);
+  assert.equal(isWorkbenchThreadRecoveryInput([{ ...input[0]!, text: `before\n${input[0]!.text}` }]), false);
+  assert.equal(isWorkbenchThreadRecoveryInput([{ ...input[0]!, text: input[0]!.text.replace(/<\/wb:resume>$/u, "") }]), false);
 });
 
 test("user messages hide exact recovery content regardless of provider identity", () => {

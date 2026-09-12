@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: exact hidden continuation contracts.
+ * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: reserved hidden continuation contracts.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
- * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize exact hidden Workbench content by text.
+ * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content by text.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
 
@@ -14,18 +14,26 @@ import { defineTagWrapper } from "./tag-wrapper.ts";
 import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import type { WorkbenchThreadLifecycle } from "./thread-state.ts";
 
+const WORKBENCH_RESUME_TAG_WRAPPER = defineTagWrapper("wb:resume", {
+  attributes: [],
+});
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
-export const WORKBENCH_UNFINISHED_TURN_MESSAGE = `<wb:resume>
-You inappropriately ended the turn without finishing the task. The correct next action could be: 
+export const WORKBENCH_UNFINISHED_TURN_MESSAGE = WORKBENCH_RESUME_TAG_WRAPPER.wrap(
+  `You inappropriately ended the turn without finishing the task. The correct next action could be: 
 1. continuing your work or
 2. sending a questionnaire or
 3. marking the task blocked or completed before ending.
-Determine the correct action. Do not commentate on this resumption. Do not repeat this mistake.
-</wb:resume>`;
+Determine the correct action. Do not commentate on this resumption. Do not repeat this mistake.`,
+  {},
+);
 export const WORKBENCH_THREAD_RECOVERY_ID_PREFIX = "workbench:thread-recovery:";
 const WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER = defineTagWrapper("wb:questionnaire-response", {
   attributes: [],
 });
+
+function isWorkbenchResumeWrapper(value: string) {
+  return WORKBENCH_RESUME_TAG_WRAPPER.read(value) !== null;
+}
 
 function hashSeed(seed: string) {
   let left = 0x811c9dc5;
@@ -68,14 +76,14 @@ export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
     && input[0]?.type === "text"
     && (
       input[0].text === WORKBENCH_THREAD_RECOVERY_MESSAGE
-      || input[0].text === WORKBENCH_UNFINISHED_TURN_MESSAGE
+      || isWorkbenchResumeWrapper(input[0].text)
     );
 }
 
 export function isWorkbenchUnfinishedTurnInput(input: readonly UserInput[]) {
   return input.length === 1
     && input[0]?.type === "text"
-    && input[0].text === WORKBENCH_UNFINISHED_TURN_MESSAGE;
+    && isWorkbenchResumeWrapper(input[0].text);
 }
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {
