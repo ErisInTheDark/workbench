@@ -519,6 +519,7 @@ export default function ThreadComposer ({
                 <ThreadUserInputRequest
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   actions={stopButton}
+                  contentClassName="in-[.sticky-collapsible-sticky-slot]:pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
                   knownSkills={knownSkills}
@@ -548,7 +549,7 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className="thread-composer-mode-panel thread-composer-sticky-form-content"
+              className="thread-composer-mode-panel thread-composer-sticky-form-content in-[.sticky-collapsible-sticky-slot]:pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >

@@ -75,7 +75,7 @@ export default function ReloadNecessary ({
   const affectedScopes = getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
-    <section className="sticky bottom-0 z-20 mt-auto mb-[env(safe-area-inset-bottom,0px)] ml-3">
+    <section className="sticky bottom-0 z-20 mt-auto ml-3">
       <div
         className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
         data-reload-necessary="true"
