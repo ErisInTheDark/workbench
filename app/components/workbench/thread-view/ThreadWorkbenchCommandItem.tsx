@@ -1,7 +1,6 @@
 /*
- * Keywords: MCP, transcript, Git arc, failures, command routing.
  * Exports:
- * - default ThreadWorkbenchCommandItem: route one typed wb MCP operation through the existing dedicated Workbench renderers. Keywords: workbench, MCP, Git arc, Thread Recall, subagent.
+ * - default ThreadWorkbenchCommandItem: route typed wb MCP operations through dedicated Workbench renderers.
  */
 "use client";
 
@@ -204,6 +203,7 @@ export default function ThreadWorkbenchCommandItem({
         projectId={projectId}
         projectRootPath={projectRootPath}
         receipt={receipt}
+        statusOutput={intent.action === "status" ? output : undefined}
         workspaceRoots={workspaceRoots}
       />
     );

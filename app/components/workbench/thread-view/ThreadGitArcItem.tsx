@@ -1,7 +1,6 @@
 /*
- * Keywords: git, card, scope, lifecycle, planning drift, receipts.
  * Exports:
- * - default ThreadGitArcItem: render one compact dedicated Git arc lifecycle card with claims, operation details, and failures. Keywords: thread, git, arc, card, lifecycle.
+ * - default ThreadGitArcItem: render shared Git arc lifecycle, status and recovery cards.
  */
 import type { ReactNode } from "react";
 
@@ -19,10 +18,12 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
+import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
 
 const ACTION_LABELS = {
   claims: { completed: "Updated claims", failed: "Failed to update claims", inProgress: "Updating claims", timedOut: "Timed out updating claims" },
   scope: { completed: "Read scope", failed: "Failed to read scope", inProgress: "Reading scope", timedOut: "Timed out reading scope" },
+  status: { completed: "Read status", failed: "Failed to read status", inProgress: "Reading status", timedOut: "Timed out reading status" },
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing", timedOut: "Timed out comparing" },
   continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing", timedOut: "Timed out continuing" },
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing", timedOut: "Timed out diffing" },
@@ -45,6 +46,7 @@ function failureAction (action: GitArcCommandAction): GitArcFailureAction {
   const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
     claims: "arcClaims",
     scope: "arcScope",
+    status: "arcStatus",
     compare: "compare",
     continue: "arcContinue",
     diff: "diff",
@@ -96,6 +98,7 @@ export default function ThreadGitArcItem ({
   projectRootPath,
   proposalRedirect,
   receipt,
+  statusOutput,
   workspaceRoots,
 }: {
   commandIntent: GitArcCommandIntent;
@@ -109,6 +112,7 @@ export default function ThreadGitArcItem ({
   projectRootPath?: string;
   proposalRedirect?: { onActivate: () => void; proposalId: string; title: string };
   receipt: GitArcReceipt | null;
+  statusOutput?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (commandIntent.action === "propose" && proposalRedirect) {
@@ -259,6 +263,9 @@ export default function ThreadGitArcItem ({
           />
         ) : null}
         {operationDetails && !ignoredFailure ? <div>{operationDetails}</div> : null}
+        {commandIntent.action === "status" && state === "completed" && statusOutput !== undefined ? (
+          <ThreadGitArcStatusDetails output={statusOutput} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+        ) : null}
         {memberRefs.length > 1 ? (
           <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-muted" data-thread-git-arc-members="true">
             {memberRefs.map((member) => (

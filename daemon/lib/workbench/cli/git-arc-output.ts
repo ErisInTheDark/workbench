@@ -1,12 +1,12 @@
 /*
- * Keywords: git, arc, CLI, scope, drift, pagination, receipts.
  * Exports:
- * - renderGitArcOutput: render compact changes and recovery facts, reserving full inventory for scope reads.
+ * - renderGitArcOutput: render status, compact lifecycle receipts and inspection details.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
 import { escapeGitArcValue, formatGitArcTextReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { normalizeOrchestratorReloadScopes } from "workbench-shared/workbench/orchestrator-reload";
+import { formatGitArcStatus, GitArcStatusFullSchema, GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-status";
 
 type Payload = Record<string, unknown>;
 const record = (value: unknown): value is Payload => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -16,6 +16,9 @@ const rows = (value: Payload | null | undefined, key: string) => Array.isArray(v
 const number = (value: Payload | null | undefined, key: string) => typeof value?.[key] === "number" ? value[key] as number : undefined;
 
 export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: Payload | null) {
+  if (request.responseKind === "git-arc-status") {
+    return formatGitArcStatus(GitArcStatusSchema.parse(payload), paths(request.body, "full").map(value => GitArcStatusFullSchema.parse(value)));
+  }
   if (!payload) return "No registered Git arc.";
   const action = (request.responseKind === "git-arc-wait" ? "start" : request.responseKind.replace("git-arc-", "")) as GitArcAction;
   const members = rows(payload, "members");
@@ -23,7 +26,9 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   const phase = payload.phase === "resolved" ? "resolved"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
   const fullScope = action === "scope";
-  const claimedPaths = phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
+  const claimedPaths = action === "compare" || action === "diff"
+    ? sources.flatMap(member => member.phase === "resolved" ? [] : paths(member, "scopePaths"))
+    : phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
   const plannedPaths = phase === "plan" ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths") : undefined;
   const additions = action === "start" ? paths(payload, "acquiredClaims")
     : Array.isArray(payload.addedClaims) ? paths(payload, "addedClaims") : paths(payload, "additionalClaims");

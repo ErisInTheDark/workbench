@@ -13,6 +13,7 @@ import ProjectFileLinkList from "../ProjectFileLinkList";
 import { GitArcConflictIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 import ThreadInlineCode from "./ThreadInlineCode";
+import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
@@ -106,17 +107,7 @@ export default function ThreadGitArcFailure({
             </div>
           ) : null}
           {failure.code === "planDrift" && failure.commits.length ? (
-            <div className="space-y-1 py-1 text-[0.9em] text-muted">
-              {failure.commits.map(({ commit, paths, subject }) => (
-                <div key={commit}>
-                  <div className="flex min-w-0 items-baseline gap-2">
-                    <span className="shrink-0 font-mono">{commit.slice(0, 8)}</span>
-                    <span className="min-w-0 truncate text-text">{subject || "No commit subject"}</span>
-                  </div>
-                  <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
-                </div>
-              ))}
-            </div>
+            <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
           ) : null}
           {failure.code === "acceptedProposals" ? (
             <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]" data-thread-git-arc-accepted-proposals="true">

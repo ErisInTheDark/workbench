@@ -303,7 +303,7 @@ Treat unexpected edits as user or agent work. Path overlap alone does not affect
 
 Before editing after pause, approval, questionnaire, wait, compaction, or interruption:
 
-- Diff against touched files
+- Keep mutation safety checks; inspect reported drift, not every previously touched file by default
 - If approval boundary unchanged, preserve edits; continue
 - If edits affect approval boundary, return to Brief
 - Never revert unexpected edits without exact user request
@@ -312,11 +312,13 @@ Before editing after pause, approval, questionnaire, wait, compaction, or interr
 
 Restore current request, approval boundary, and file state before risky work.
 
-- After compaction, use Thread Recall through complete approval boundary; inspect files
-- After other resume or delay, verify newest request and file state
+On follow-ups, call `git_arc_status` before rereading prior work. Retained claims: reuse known context. Lost claims: inspect reported changes with ref-free `git_arc_diff`; reread affected files only when needed or the loss baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
+
+- After compaction, use Thread Recall through complete approval boundary
+- After other resume or delay, verify newest request
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief
-- Use registered lifecycle defaults rather than copied refs; `git_arc_scope` recovers inventory when needed
+- Use registered lifecycle defaults rather than copied refs; `git_arc_scope` provides full inventory only when needed
 - Require explicit approval for degraded arc safety
 
 ### Report rollbacks

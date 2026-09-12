@@ -1,15 +1,14 @@
 /*
- * Keywords: git, arc, facade, inspection, move, restore.
  * Exports:
  * - default WorkbenchGitCheckpointController: route plan, lifecycle and proposal owners; orchestrate inspection, moves and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
  * - GitArcReleaseResult: released ownership result.
- * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
- * - GitArcInspectionSnapshot: one repository, HEAD, worktree tree, and registry view shared by one inspection request. Keywords: git, arc, inspection, snapshot, registry.
- * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
- * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
+ * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: active, planned and proposal state.
+ * - GitArcInspectionSnapshot: one shared repository, HEAD, tree and registry view per inspection.
+ * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected ownership paths.
+ * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: controller results.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -48,6 +47,9 @@ import GitArcProposalController, {
 } from "./GitArcProposalController";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitCheckpointStore from "./GitCheckpointStore";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
+import { collectGitArcDrift } from "./git-arc-drift";
+import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
   type ArcOutcome,
@@ -364,7 +366,7 @@ export default class WorkbenchGitCheckpointController {
     });
     await repository.updateRefs([
       outcomeUpdate,
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     return {
       checkpointCommit: checkpoint.checkpointCommit,
@@ -444,7 +446,7 @@ export default class WorkbenchGitCheckpointController {
       ...proposalUpdates,
       { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
       outcomeUpdate,
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     if (withPublish) await withPublish(publish);
     else await publish();
@@ -527,7 +529,7 @@ export default class WorkbenchGitCheckpointController {
       { harness, threadId },
       { expectedCheckpointCommit: active.checkpointCommit },
     );
-    if (mutation) await repository.updateRefs([mutation.update]);
+    if (mutation) await repository.updateRefs(mutation.updates);
   }
 
   async releaseArc({ cwd, disown, harness: rawHarness, threadId }: ControllerInput & { disown: boolean }): Promise<GitArcReleaseResult> {
@@ -593,6 +595,38 @@ export default class WorkbenchGitCheckpointController {
 
   async readScope(input: ControllerInput) {
     return await this.lifecycle.scope(input);
+  }
+
+  async readStatus(input: ControllerInput, existingInspection?: GitArcInspectionSnapshot): Promise<GitArcStatus> {
+    const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
+    const { repository, entries, head, tree } = inspection;
+    const harness = normalizeHarness(input.harness);
+    const current = entries.find(entry => entry.harness === harness && entry.threadId === normalizeThreadId(input.threadId));
+    const claims = current ? getGitArcLiveClaimPaths(current) : [];
+    const dirt = await repository.listAllChangedPaths(head, tree);
+    const allClaims = entries.flatMap(getGitArcLiveClaimPaths);
+    const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
+    const proposals = await this.proposals.readStatusProposals(input,
+      lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
+    const status: GitArcStatus = {
+      ...proposals,
+      dirtyClaims: claims.filter(claim => dirt.some(file => gitArcPathsOverlap(claim, file))),
+      cleanClaims: claims.filter(claim => !dirt.some(file => gitArcPathsOverlap(claim, file))),
+      unclaimedDirt: dirt.filter(file => !allClaims.some(claim => gitArcPathsOverlap(claim, file))),
+      recovery: [], unavailableRecovery: [],
+    };
+    if (!claims.length) {
+      const lost = await new GitArcClaimLossStore(repository).read({ harness, threadId: input.threadId });
+      if (lost) {
+        const drift = await collectGitArcDrift({
+          repository, baseline: lost.commit, baseHead: lost.head, head, tree, paths: lost.paths,
+        });
+        status.recovery.push({ ...drift, paths: lost.paths, commits: drift.commits.slice(0, 8), omittedCommits: Math.max(0, drift.commits.length - 8) });
+      } else if (lifecycle?.phase === "resolved") {
+        status.unavailableRecovery.push(repository.root);
+      }
+    }
+    return status;
   }
 
   async addToArc(input: ControllerInput & { paths: string[] }) {
@@ -706,6 +740,21 @@ export default class WorkbenchGitCheckpointController {
     if (!input.ref) {
       const current = inspection.entries.find((entry) => entry.harness === normalizeHarness(input.harness)
         && entry.threadId === normalizeThreadId(input.threadId));
+      if (!current || !getGitArcLiveClaimPaths(current).length) {
+        const lost = await new GitArcClaimLossStore(repository).read({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+        if (lost) {
+          const paths = input.paths?.length ? repository.normalizePaths(input.paths) : lost.paths;
+          return {
+            checkpointCommit: lost.commit, checkpointRef: lost.ref, phase: "resolved",
+            changes: await repository.buildFileChanges(lost.commit, inspection.tree, paths),
+            scopePaths: paths, hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
+            intentName: current?.intentName ?? null, repoRoot: repository.root,
+          };
+        }
+        if (current?.phase === "resolved" || current?.retainedArc?.phase === "resolved") {
+          throw new Error("The claim-loss baseline is unavailable. Inspect affected files or select an explicit arc ref.");
+        }
+      }
       if (current?.phase === "plan") input = { ...input, ref: current.checkpointCommit };
       if (current?.phase === "resolved") {
         if (input.paths?.length) {
@@ -1028,7 +1077,7 @@ export default class WorkbenchGitCheckpointController {
       await releasingArc.repository.updateRefs([
         ...proposalUpdates,
         outcomeUpdate,
-        ...(registryMutation.update ? [registryMutation.update] : []),
+        ...registryMutation.updates,
       ]);
     }
     return {

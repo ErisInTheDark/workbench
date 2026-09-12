@@ -25,6 +25,7 @@ import {
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 
 const execFileAsync = promisify(execFile);
@@ -44,6 +45,28 @@ function execFileWithInput(command: string, args: string[], input: string, optio
   });
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
+
+test("status selectors preserve equivalent CLI and MCP inputs", async () => {
+  const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc status");
+  assert.ok(definition, "status must be registered for CLI and MCP");
+  const mcp = await definition.buildRequestFromJson({ full: ["dirty", "unclaimed-dirt"] }, {
+    ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null,
+  });
+  for (const flags of [["--full=dirty,unclaimed-dirt"], ["--full", "dirty,unclaimed-dirt"]]) {
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "status", ...flags], gitArcOptions);
+    assert.equal(parsed.kind, "request");
+    if (parsed.kind !== "request") assert.fail("Expected status request.");
+    assert.deepEqual(parsed.request.body?.full, ["dirty", "unclaimed-dirt"]);
+    assert.deepEqual(parsed.request.body, mcp.body);
+    const status = { pending: [], accepted: [], dirtyClaims: ["a", "b", "c", "d", "e", "f"], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [] };
+    const output = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify(status) });
+    assert.deepEqual(parseGitArcStatus(output.stdout).data, status);
+    const empty = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify({ ...status, dirtyClaims: [] }) });
+    assert.equal(empty.stdout, "");
+  }
+  const invalid = await parseWorkbenchAgentCliCommand(["git", "arc", "status", "--full=everything"], gitArcOptions);
+  assert.equal(invalid.kind, "error");
+});
 
 test("claim updates return only net changes while retaining counts and recovery facts", async () => {
   for (const kind of ["plan", "arc"]) {

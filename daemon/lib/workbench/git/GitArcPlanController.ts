@@ -1,11 +1,10 @@
 /*
- * Keywords: git, planning, drift, snapshots, claims, activation.
  * Exports:
- * - default GitArcPlanController: own inactive plan creation, revision, adoption, current-plan resolution, and atomic activation. Keywords: git, arc, plan, start, retained claims.
- * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify dirty or ignored paths rejected by operations that cannot skip them. Keywords: git, plan, dirty paths, ignored paths, adoption.
- * - partitionIgnoredGitArcPaths/rejectIgnoredGitArcPaths: skip ignored ownership paths or reject them for operations with filesystem effects. Keywords: git, arc, ignored paths, validation.
- * - createGitArcNoopResult/GitArcNoopResult: report ignored ownership requests that changed no refs or registry state. Keywords: git, arc, ignored paths, no-op.
- * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: typed immutable plan, current-plan projection, and visible claim-transition receipts. Keywords: git, plan, start, claims.
+ * - default GitArcPlanController: own inactive planning and atomic activation.
+ * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected dirty or ignored paths.
+ * - partitionIgnoredGitArcPaths/rejectIgnoredGitArcPaths: ignored ownership validation.
+ * - createGitArcNoopResult/GitArcNoopResult: ignored requests that changed no refs.
+ * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: plan and activation results.
  */
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
@@ -368,7 +367,7 @@ export default class GitArcPlanController {
     await repository.updateRefs([
       plan.prepared.update,
       active.update,
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     return {
       acquiredClaims: plan.paths,
@@ -512,7 +511,7 @@ export default class GitArcPlanController {
       retainedArc: undefined,
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
-    await repository.updateRefs([prepared.update, ...(registryMutation.update ? [registryMutation.update] : [])]);
+    await repository.updateRefs([prepared.update, ...registryMutation.updates]);
     const activeTree = await repository.writeScopedWorktreeTree(paths, head);
     return {
       acquiredClaims: paths,
@@ -570,7 +569,7 @@ export default class GitArcPlanController {
       retainedArc: retainedArc ?? undefined,
       threadId,
     }, expectedCheckpointCommit);
-    await repository.updateRefs([plan.prepared.update, ...(registryMutation.update ? [registryMutation.update] : [])]);
+    await repository.updateRefs([plan.prepared.update, ...registryMutation.updates]);
     return {
       checkpointCommit: plan.prepared.checkpointCommit,
       checkpointRef: plan.prepared.checkpointRef,

@@ -1,11 +1,10 @@
 /*
- * Keywords: git, glyph, claims, scope, lifecycle.
  * Exports:
  * - default GitArcIcon: render the matching square action glyph for one Git arc command.
- * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
- * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
- * - GitArcConflictIcon: render the square-x marker used for conflicting planned and active claims. Keywords: git, arc, icon, conflict, overlap.
- * - GitArcWaitIcon: render the hourglass marker used while a Git arc waits on active sibling claims. Keywords: git, arc, icon, wait, hourglass.
+ * - GitArcClaimIcon: claimed-file flag.
+ * - GitArcPlannedClaimIcon: planned-file dashed flag.
+ * - GitArcConflictIcon: ownership-conflict glyph.
+ * - GitArcWaitIcon: sibling-claim wait glyph.
  */
 import type { ReactNode } from "react";
 
@@ -63,7 +62,7 @@ export function GitArcWaitIcon({ className = "size-4" }: { className?: string })
 }
 
 export default function GitArcIcon({ action, className = "size-4" }: { action: GitArcCommandAction; className?: string }) {
-  if (action === "plan" || action === "scope") {
+  if (action === "plan" || action === "scope" || action === "status") {
     return (
       <SvgFrame className={className}>
         <path d="M14 21h1" /><path d="M14 3h1" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 14v1" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M3 9v1" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M5 3a2 2 0 0 0-2 2" /><path d="M7 12h10" /><path d="M7 16h6" /><path d="M7 8h8" /><path d="M9 21h1" /><path d="M9 3h1" />

@@ -1,10 +1,9 @@
 /*
- * Keywords: git, proposals, acceptance, outcomes, amendments.
  * Exports:
- * - default GitArcProposalController: own proposal creation, replacement, rescission, acceptance, receipts, and lifecycle projection. Keywords: git, arc, proposal, acceptance, lifecycle, rebase, branch replacement.
- * - GitArcLifecycleState: durable active or resolved arc projection with ordered visible proposal summaries. Keywords: git, arc, lifecycle, sidebar, proposals.
- * - GitArcAcceptedProposalsError: preserve accepted proposal receipts and remaining claims when continuation must stop. Keywords: git, arc, proposal, accepted, error.
- * - GitCheckpointProposalReceipt: durable proposal identity returned after proposal publication. Keywords: git, proposal, receipt, commit.
+ * - default GitArcProposalController: own proposal validity, publication, acceptance and lifecycle projection.
+ * - GitArcLifecycleState: active or resolved arc with ordered proposal summaries.
+ * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
+ * - GitCheckpointProposalReceipt: published proposal identity.
  */
 import { randomUUID } from "node:crypto";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -256,8 +255,8 @@ async function prepareAcceptedClaimTransition({
     ...active,
     ...nextLifecycle,
     retainedArc: null,
-  }, { commitRemaps, expectedCheckpointCommit: active.checkpointCommit });
-  if (registryMutation.update) updates.push(registryMutation.update);
+  }, { commitRemaps, expectedCheckpointCommit: active.checkpointCommit, claimLossSnapshot: { head: acceptedHead, tree: currentTree } });
+  updates.push(...registryMutation.updates);
   return {
     claimedPaths,
     sourceCheckpoint,
@@ -392,7 +391,7 @@ async function resolveProposalState(
   harness: GitArcHarness,
   threadId: string,
   proposalId: string,
-  options: { includeNewer: boolean; persistTransitions: boolean },
+  options: { includeNewer: boolean; persistTransitions: boolean; snapshot?: { head: string | null; tree: string } },
 ) {
   const store = new GitCheckpointStore(repository);
   let proposal = await store.readProposal(harness, threadId, proposalId);
@@ -407,7 +406,7 @@ async function resolveProposalState(
   const branchChangeUnavailable = proposal.metadata.status === "unavailable"
     && proposal.metadata.unavailableReason === BRANCH_CHANGED_UNAVAILABLE_REASON;
   if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason || branchChangeUnavailable) {
-    const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths);
+    const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths, proposal.metadata.liveBaseCommit, options.snapshot?.head);
     const replayableBranchReplacement = headMovement.kind === "incompatible"
       && proposal.metadata.mode === "commit"
       && !(await repository.listChangedPaths(
@@ -462,8 +461,12 @@ async function resolveProposalState(
     let changedFromProposal: string[] = [];
     if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
       const [changedFromBase, changedSinceProposal] = await Promise.all([
-        repository.listWorktreeChangedPaths(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths),
-        repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths),
+        options.snapshot
+          ? repository.listChangedPaths(proposal.metadata.liveBaseCommit, options.snapshot.tree, proposal.metadata.livePaths)
+          : repository.listWorktreeChangedPaths(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths),
+        options.snapshot
+          ? repository.listChangedPaths(proposal.tree, options.snapshot.tree, proposal.metadata.livePaths)
+          : repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths),
       ]);
       const changedNow = new Set(changedFromBase);
       changedFromProposal = changedSinceProposal;
@@ -497,6 +500,27 @@ async function resolveProposalState(
 }
 
 export default class GitArcProposalController {
+  async readStatusProposals(
+    input: ArcIdentityInput,
+    proposalIds: string[],
+    repository: WorkbenchGitRepository,
+    snapshot: { head: string | null; tree: string },
+  ) {
+    const pending: Array<{ proposalId: string; title: string }> = [];
+    const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
+    for (const proposalId of proposalIds) {
+      const { proposal } = await resolveProposalState(repository, normalizeHarness(input.harness), input.threadId, proposalId, {
+        includeNewer: false, persistTransitions: false, snapshot,
+      });
+      const metadata = proposal.metadata;
+      if (metadata.status === "proposed") pending.push({ proposalId, title: metadata.title });
+      if (metadata.status === "committed" && metadata.committedSha) {
+        accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
+      }
+    }
+    return { pending, accepted };
+  }
+
   async listLifecycleStates({ cwd }: { cwd: string }): Promise<GitArcLifecycleState[]> {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return [];
@@ -649,7 +673,7 @@ export default class GitArcProposalController {
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([
       { newValue: proposalCommit, oldValue: "0".repeat(40), ref: `${proposalNamespace(harness, threadId)}/${proposalId}` },
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     return {
       baseCommit: metadata.baseCommit,
@@ -807,7 +831,7 @@ export default class GitArcProposalController {
     await repository.updateRefs([
       ...(supersededProposalUpdate ? [supersededProposalUpdate] : []),
       { newValue: proposalCommit, oldValue: "0".repeat(40), ref: `${proposalNamespace(harness, threadId)}/${proposalId}` },
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     return {
       baseCommit,

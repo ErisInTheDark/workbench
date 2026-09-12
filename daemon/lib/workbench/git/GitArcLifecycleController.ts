@@ -1,5 +1,4 @@
 /*
- * Keywords: git, arc, lifecycle, claims, continuation, atomic publication.
  * Exports:
  * - default GitArcLifecycleController: own current lifecycle reads and combined active scope transitions.
  */
@@ -185,7 +184,7 @@ export default class GitArcLifecycleController {
       ...proposalUpdates,
       ...(prepared ? [prepared.update] : []),
       outcomeUpdate,
-      ...(registryMutation.update ? [registryMutation.update] : []),
+      ...registryMutation.updates,
     ]);
     return {
       ...result, checkpointCommit, checkpointRef: prepared?.checkpointRef ?? checkpoint.checkpointRef,

@@ -1400,6 +1400,7 @@ function ThreadCommandExecutionDetails ({
     return (
       <ThreadGitArcItem
         commandIntent={gitArcCommandIntent}
+        statusOutput={gitArcCommandIntent.action === "status" ? item.aggregatedOutput ?? "" : undefined}
         durationMs={item.durationMs}
         failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut"
           ? item.aggregatedOutput

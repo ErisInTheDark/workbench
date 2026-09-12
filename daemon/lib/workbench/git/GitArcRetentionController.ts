@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default GitArcRetentionController: remove one continuously settled thread's expired Git arc history without touching live work. Keywords: git, arc, retention, settled, refs.
- * - GitArcRetentionResult: report the exact namespace cleanup performed for one thread. Keywords: prune, refs, registry, count.
+ * - default GitArcRetentionController: expire one settled thread's refs, including claim-loss snapshots, without touching live work.
+ * - GitArcRetentionResult: exact thread-namespace cleanup result.
  */
 import GitArcRegistry from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -48,12 +48,12 @@ export default class GitArcRetentionController {
       entry ? { expectedCheckpointCommit: entry.checkpointCommit } : undefined,
     );
     await repository.updateRefs(
-      registryMutation?.update ? [registryMutation.update] : [],
+      registryMutation?.updates ?? [],
       refs.map(({ ref, value }) => ({ oldValue: value, ref })),
     );
     return {
       prunedRefCount: refs.length,
-      registryEntryRemoved: Boolean(registryMutation?.update),
+      registryEntryRemoved: Boolean(registryMutation?.updates.length),
     };
   }
 }

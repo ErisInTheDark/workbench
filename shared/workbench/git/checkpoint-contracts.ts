@@ -1,20 +1,20 @@
 /*
- * Keywords: git, arc, contracts, claims, roots, proposals, inspection.
  * Exports:
  * - GitArcClaimRootSchema: root-qualified literal claim edits.
  * - GitArcClaimsSchema: inherited active scope edits.
  * - GitArcPlanClaimsSchema: replacement or inherited planning scope.
- * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: validate root-qualified path selections. Keywords: git, arc, root, paths, plan.
- * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: validate lifecycle SHA refs and broader inspection refs. Keywords: git, arc, ref, proposal, workspace.
- * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
- * - GitArcMoveMapping/GitArcMoveRequest: expose validated move request types. Keywords: git, arc, move, type.
- * - GitCheckpointRequestSchema/GitCheckpointRequest: validate every stateless checkpoint route action, including unscoped diff pages. Keywords: git, checkpoint, request, diff, page, Zod.
- * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: shared per-file compare and diff presentation. Keywords: git, checkpoint, file change.
- * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: validate repo-local and workspace inspection results. Keywords: git, checkpoint, compare, proposal.
- * - GitCheckpointProposalSchema/GitCheckpointProposal: shared durable proposal state shown in thread UI. Keywords: git, checkpoint, proposal, commit.
+ * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: root-qualified path selections.
+ * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: lifecycle and inspection refs.
+ * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: bounded explicit and regex moves.
+ * - GitArcMoveMapping/GitArcMoveRequest: validated move requests.
+ * - GitCheckpointRequestSchema/GitCheckpointRequest: stateless checkpoint requests.
+ * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: per-file inspection changes.
+ * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
+ * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  */
 import { z } from "zod";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
+import { GitArcStatusFullSchema } from "./git-arc-status";
 
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
@@ -101,6 +101,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
   GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
   z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcStatus"), full: z.array(GitArcStatusFullSchema).default([]), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("plan"),
     adoptPaths: optionalCheckpointPaths.default([]),

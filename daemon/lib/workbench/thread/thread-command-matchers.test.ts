@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover shell command summary matching, typed wb inventory, questionnaire waits, and argument semantics. Keywords: thread, command, matcher, questionnaire, powershell, ripgrep, test.
+ * - No production exports; protect shell/MCP routing and argument semantics.
  */
 
 import assert from "node:assert/strict";
@@ -258,6 +258,7 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc compare", "git_arc_compare", { paths: [] }],
+    ["wb git arc status --full=dirty,clean", "git_arc_status", { full: ["dirty", "clean"] }],
     ["wb thread recall", "thread_recall", {}],
   ] satisfies Array<[string, string, JsonValue]>;
 

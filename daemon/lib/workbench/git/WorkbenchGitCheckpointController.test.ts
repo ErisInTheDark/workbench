@@ -30,6 +30,76 @@ import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
+
+test("ref-free inspection compares against the exact disown boundary", async (context) => {
+  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "claim-loss" };
+  await controller.createAndStartPlan({ ...identity, intentName: "claim loss", paths: ["one.txt"] });
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "boundary\n");
+  await controller.releaseArc({ ...identity, disown: true });
+  assert.deepEqual((await controller.compare(identity)).changes, []);
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "after boundary\n");
+  await fs.writeFile(path.join(fixture.root, "two.txt"), "unrelated\n");
+  const comparison = await controller.compare(identity);
+  assert.deepEqual(comparison.changes.map(({ path }) => path), ["one.txt"]);
+  const diff = await controller.diff(identity);
+  assert.match(diff.diff, /-boundary\n\+after boundary/u);
+  assert.doesNotMatch(diff.diff, /unrelated/u);
+  assert.equal((await controller.diff({ ...identity, paths: ["one.txt"] })).diff, diff.diff);
+});
+
+test("status acknowledges acceptance until implementation starts and filters invalid pending proposals", async context => {
+  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "status-proposals" };
+  await controller.createAndStartPlan({ ...identity, intentName: "status", paths: ["one.txt", "two.txt"] });
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "changed\n");
+  const proposal = await controller.createProposal({ ...identity, title: "change one", description: "", paths: ["one.txt"] });
+  const before = await repository.listRefsWithValues("refs/worktree");
+  const pending = await controller.readStatus(identity);
+  assert.deepEqual(pending.pending, [{ proposalId: proposal.proposalId, title: "change one" }]);
+  assert.deepEqual(pending.dirtyClaims, ["one.txt"]);
+  assert.deepEqual(pending.cleanClaims, ["two.txt"]);
+  assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), before);
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "one\n");
+  assert.deepEqual((await controller.readStatus(identity)).pending, []);
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "changed\n");
+  await controller.commitProposal({ ...identity, proposalId: proposal.proposalId, title: "change one", description: "", includeNewer: false });
+  const acceptedHead = await repository.currentHead();
+  const accepted = await controller.readStatus(identity);
+  assert.deepEqual(accepted.accepted, [{ proposalId: proposal.proposalId, title: "change one", commitSha: acceptedHead }]);
+  assert.deepEqual(accepted.recovery[0]?.comparison, []);
+  assert.deepEqual(accepted.recovery[0]?.commits, []);
+  await controller.createPlan({ ...identity, intentName: "next", paths: ["two.txt"] });
+  assert.deepEqual((await controller.readStatus(identity)).accepted, accepted.accepted);
+  await controller.startArc(identity);
+  assert.deepEqual((await controller.readStatus(identity)).accepted, []);
+  assert.deepEqual((await controller.readStatus(identity)).recovery, []);
+});
+
+test("status includes old and deleted unclaimed dirt but excludes other owners", async context => {
+  const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const other = { cwd: fixture.root, harness: "codex" as const, threadId: "other" };
+  await controller.createAndStartPlan({ ...other, intentName: "other", paths: ["one.txt", "nested"] });
+  await fs.writeFile(path.join(fixture.root, "one.txt"), "other work\n");
+  await fs.mkdir(path.join(fixture.root, "nested"));
+  await fs.writeFile(path.join(fixture.root, "nested", "child.txt"), "owned child\n");
+  await fs.rm(path.join(fixture.root, "two.txt"));
+  await fs.writeFile(path.join(fixture.root, "old.txt"), "old\n");
+  await fs.utimes(path.join(fixture.root, "old.txt"), new Date(0), new Date(0));
+  const status = await controller.readStatus({ ...other, threadId: "no-lifecycle" });
+  assert.deepEqual(status.unclaimedDirt, ["old.txt", "two.txt"]);
+  assert.deepEqual(status.dirtyClaims, []);
+  assert.deepEqual(status.recovery, []);
+  assert.deepEqual((await controller.readStatus(other)).dirtyClaims, ["nested", "one.txt"]);
+});
+
 const isolatedControllerCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
 const sharedControllerCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
 let baseCommit = "";
@@ -207,8 +277,8 @@ sharedControllerTest("active arc registry keeps start idempotent and rejects sta
     proposalId: null,
     threadId: "thread-one",
   }, { expectedCheckpointCommit: initialCheckpoint });
-  assert.ok(replacement.update);
-  await repository.updateRefs([replacement.update]);
+  assert.ok(replacement.updates.length);
+  await repository.updateRefs(replacement.updates);
   await assert.rejects(registry.prepareClaim({
     checkpointCommit: "3".repeat(40),
     claimedPaths: ["one.txt"],
@@ -929,7 +999,7 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
   assert.deepEqual(completed.acceptedProposals.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
   completed.acceptedProposals.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
   const resolvedComparison = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(resolvedComparison.scopePaths, []);
+  assert.deepEqual(resolvedComparison.scopePaths, ["one.txt", "two.txt"]);
   assert.deepEqual(resolvedComparison.changes, []);
   const followUp = await controller.editArcClaims({
     cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, addPaths: ["planned.txt"],

@@ -1,14 +1,13 @@
 /*
- * Keywords: transcript, git, commands, intent, compatibility, diff.
  * Exports:
- * - GIT_CHECKPOINT_COMMAND_MATCHERS: distinct command summaries for named arc plan and lifecycle operations. Keywords: thread, command, matcher, git arc.
- * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized arc renderers. Keywords: git, arc, matcher, renderer.
- * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: read canonical arc presentation action, ref, name, proposal, ordinary paths, and adopted paths. Keywords: git, arc, command, parser, adoption.
- * - parseGitArcReceipt: decode persisted successful arc presentation metadata. Keywords: git, arc, receipt, parser.
- * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
- * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
- * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: read immediate proposal-card intent from canonical command arguments. Keywords: checkpoint, proposal, title, paths.
- * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering while excluding inspection trailers. Keywords: checkpoint, diff, artifact, trailer.
+ * - GIT_CHECKPOINT_COMMAND_MATCHERS: named arc command presentation.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: specialised arc routes.
+ * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: canonical arc command intent.
+ * - parseGitArcReceipt: persisted successful arc facts.
+ * - parseGitCheckpointCompareOutput: per-file change counts.
+ * - parseGitCheckpointProposalId: proposal identity from output.
+ * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: proposal-card command intent.
+ * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: legacy and inline diff content without trailers.
  */
 import type { FileUpdateChange } from "workbench-shared/codex/generated/app-server/v2/FileUpdateChange";
 import {
@@ -30,6 +29,7 @@ export type GitArcCommandAction = WorkbenchGitArcOperation["action"];
 const ARC_MATCHER_IDS = {
   claims: "git-arc.claims",
   scope: "git-arc.scope",
+  status: "git-arc.status",
   compare: "git-arc.compare",
   continue: "git-arc.continue",
   diff: "git-arc.diff",
@@ -92,6 +92,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+plan\s+start(?:\s|$)/iu, id: ARC_MATCHER_IDS.planStart, presentationName: "git_plan_start" }),
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+claims(?:\s|$)/iu, id: ARC_MATCHER_IDS.claims, presentationName: "git_arc_claims" }),
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+scope(?:\s|$)/iu, id: ARC_MATCHER_IDS.scope, presentationName: "git_arc_scope" }),
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+status(?:\s|$)/iu, id: ARC_MATCHER_IDS.status, presentationName: "git_arc_status" }),
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+reword(?:\s|$)/iu, id: ARC_MATCHER_IDS.propose, presentationName: "git_arc_reword" }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+rescind(?:\s|$)/iu,

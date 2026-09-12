@@ -20,5 +20,5 @@ The returned Markdown is chronological source evidence, not a current-task speci
 
 Before speaking or acting, privately form a concise current working set: the current objective, newest constraints, active mode, approval boundary, completed and remaining work, and relevant files. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
 
-The base history call is required after compaction. Search and expansion are optional; neither replaces the history walk, approval, file inspection, or arc checks.
+The base history call is required after compaction. Search and expansion are optional; neither replaces approval recovery or arc checks.
 </available:thread-recall>

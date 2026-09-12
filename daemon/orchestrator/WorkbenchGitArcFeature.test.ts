@@ -889,7 +889,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   });
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
   internal.createInspectionSnapshot = async () => ({});
-  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "continueArc", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
+  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
     internal[method] = async () => { calls.push(method); return {}; };
   }
   internal.listUnclaimedWorkspaceDirt = async () => [];
@@ -898,6 +898,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     { action: "planClaims", inherit: false, intentName: "draft", addPaths: ["new.ts"], ...common },
     { action: "arcClaims", inherit: true, addPaths: ["new.ts"], removePaths: ["old.ts"], ...common },
     { action: "arcScope", ...common },
+    { action: "arcStatus", ...common },
     { action: "arcContinue", ...common },
     { action: "plan", intentDescription: "", intentName: "draft", paths: [], ...common },
     { action: "planAdd", paths: ["src/a.ts"], ...common },
@@ -912,6 +913,6 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   const statuses = await Promise.all(requests.map(async (request) => (await feature.executeRequest(request)).status));
   assert.deepEqual(statuses, Array.from({ length: requests.length }, () => 200));
   assert.deepEqual([...calls].sort(), [
-    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "continueArc", "startArc", "rescindProposal", "diff", "createProposal",
+    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "rescindProposal", "diff", "createProposal",
   ].sort());
 });

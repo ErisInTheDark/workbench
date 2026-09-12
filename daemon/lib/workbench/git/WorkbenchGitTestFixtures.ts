@@ -898,6 +898,9 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ["GitArcRetentionController.test.ts", { fixtures: [
     demand(CONTROLLER_PARTIAL_READY_FIXTURE, 1),
   ], nested: false }],
+  ["GitArcClaimLossStore.test.ts", { fixtures: [
+    demand(CONTROLLER_BASE_FIXTURE, 2),
+  ], nested: false }],
   ["git-checkpoints.test.ts", { fixtures: [
     demand(CHECKPOINT_OPERATIONS_BASE_FIXTURE, 4),
     demand(CHECKPOINT_ADDITIONS_READY_FIXTURE, 1),
@@ -928,7 +931,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(UNBORN_FIXTURE, 3),
   ], nested: true }],
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 4),
+    demand(CONTROLLER_BASE_FIXTURE, 7),
     demand(CONTROLLER_START_READY_FIXTURE, 1),
     demand(CONTROLLER_ADOPT_READY_FIXTURE, 3),
     demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),

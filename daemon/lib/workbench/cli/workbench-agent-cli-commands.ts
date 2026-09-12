@@ -1,10 +1,9 @@
 /*
- * Keywords: CLI, commands, help, migration, parsing.
  * Exports:
- * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: compatibility names for normalized CLI request and parse contracts. Keywords: workbench, cli, request, parse.
- * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: expose immutable canonical command metadata. Keywords: workbench, cli, metadata, tools.
- * - WORKBENCH_AGENT_CLI_HELP: complete agent-facing command reference. Keywords: workbench, cli, help, commands.
- * - parseWorkbenchAgentCliCommand: adapt allowlisted wb argv into the canonical typed command registry. Keywords: workbench, cli, allowlist, cwd.
+ * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: normalised CLI contracts.
+ * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: canonical command metadata.
+ * - WORKBENCH_AGENT_CLI_HELP: agent-facing command reference.
+ * - parseWorkbenchAgentCliCommand: adapt CLI arguments into the typed command registry.
  */
 import path from "node:path";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
@@ -52,7 +51,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "Revise scope: wb git plan claims --inherit -- <add-path> -<remove-path> '*<adopt-path>'",
   "Activate approved scope: wb git arc start. Wait for sibling collisions: wb git arc wait.",
   "Edit active scope: wb git arc claims --inherit -- <add-path> -<remove-path> '*<adopt-path>'. Continuation checks are included.",
-  "Resume unchanged scope: wb git arc continue. Recover inventory only when needed: wb git arc scope.",
+  "Follow-ups: wb git arc status before rereading. Resume unchanged scope: wb git arc continue.",
   "Inspect: wb git arc compare / wb git arc diff. Explicit paths return a complete unpaged diff.",
   "Propose: wb git arc propose --title <title>. Replace pending proposals with --replace <id>.",
   "Content amend: wb git arc propose --amend [<proposal-id>] --fresh-title <title>.",
@@ -91,7 +90,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
-  "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
+  "git arc status", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
 
@@ -179,7 +178,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   },
   {
     aliases: [["git", "plan"]],
-    commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
+    commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc status", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
     footer: [
       "Pass paths after -- to restore only those files or directories from the arc snapshot.",
       "Use --confirm without paths only when the user explicitly requested a full arc restore.",

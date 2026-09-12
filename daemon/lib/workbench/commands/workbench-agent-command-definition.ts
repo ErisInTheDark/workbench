@@ -1,16 +1,15 @@
 /*
- * Keywords: commands, transport, schema, MCP, identity, lifecycle.
  * Exports:
  * - JsonPrimitive: scalar JSON transport value.
  * - WorkbenchAgentCommandEffects: write-effect declarations.
  * - managedWorkbenchAgentCommandBody: validated managed identity for command requests.
- * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: structured command transport and MCP lifecycle contracts. Keywords: workbench, command, request, response, drain.
- * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: trusted invocation context, MCP exposure, and erased registry definition. Keywords: workbench, command, context, registry, Code Mode.
- * - defineWorkbenchAgentCommand: preserve command-specific Zod inference while exposing one uniform registry boundary. Keywords: workbench, command, zod, schema.
- * - getWorkbenchAgentCommandToolName: derive the canonical typed MCP name from a command definition. Keywords: workbench, command, MCP, name.
- * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request-building helpers for command families. Keywords: workbench, command, request, query.
- * - createWorkbenchAgentMcpRuntimeReloadInterruption: create private reload re-entry control flow. Keywords: MCP, reload, interruption.
- * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise reload re-entry across module generations. Keywords: MCP, reload, interruption.
+ * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: transport and MCP lifecycle contracts.
+ * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
+ * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
+ * - getWorkbenchAgentCommandToolName: canonical MCP command name.
+ * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
+ * - createWorkbenchAgentMcpRuntimeReloadInterruption: private reload re-entry signal.
+ * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise cross-generation reload re-entry.
  */
 import { z } from "zod";
 
@@ -24,6 +23,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-adopt"
   | "git-arc-claims"
   | "git-arc-scope"
+  | "git-arc-status"
   | "git-arc-compare"
   | "git-arc-continue"
   | "git-arc-diff"

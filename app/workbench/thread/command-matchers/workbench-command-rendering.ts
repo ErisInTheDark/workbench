@@ -1,14 +1,13 @@
 /*
- * Keywords: transcript, MCP, commands, routing, presentation.
  * Exports:
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
  * - getUnknownGitArcCommandRoute: keep unrecognised arc requests inside bounded Git presentation.
- * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, questionnaire.
- * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, questionnaire.
- * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, questionnaire.
+ * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical CLI/MCP tool inventory.
+ * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: specialised and simple command routes.
+ * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve arguments into shared presentation.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 
@@ -56,6 +55,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_plan_start",
   "git_arc_claims",
   "git_arc_scope",
+  "git_arc_status",
   "git_arc_reword",
   "git_arc_start",
   "git_arc_wait",
@@ -77,7 +77,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "claims" | "scope" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "unknown";
+  action: "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
@@ -361,6 +361,7 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_plan_start: "planStart",
     git_arc_claims: "claims",
     git_arc_scope: "scope",
+    git_arc_status: "status",
     git_arc_reword: "propose",
     git_arc_compare: "compare",
     git_arc_continue: "continue",
@@ -445,6 +446,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   const matcherIds: Record<WorkbenchGitArcOperation["action"], string> = {
     claims: "git-arc.claims",
     scope: "git-arc.scope",
+    status: "git-arc.status",
     compare: "git-arc.compare",
     continue: "git-arc.continue",
     diff: "git-arc.diff",

@@ -1,11 +1,11 @@
 /*
- * Keywords: git, arc, commands, lifecycle, claims, inspection.
  * Exports:
- * - WORKBENCH_GIT_ARC_COMMANDS: typed Git plan, arc, proposal, and restore definitions shared by CLI and MCP. Keywords: workbench, git, arc, plan, commands.
+ * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP.
  */
 import { z } from "zod";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcStatusFullSchema } from "workbench-shared/workbench/git/git-arc-status";
 import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
 import { WORKBENCH_GIT_PLAN_COMMANDS } from "./git-plan-command-definitions";
 import { WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS } from "./git-arc-proposal-commands";
@@ -273,6 +273,26 @@ const scope = defineWorkbenchAgentCommand({
   },
 });
 
+const status = defineWorkbenchAgentCommand({
+  description: "Read compact proposals, dirty/clean claims and unclaimed dirt. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
+  effects: { readOnly: true, idempotent: true },
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "status"],
+  usage: "wb git arc status [--full=dirty,clean,unclaimed-dirt]",
+  inputSchema: z.object({ full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to show as complete path lists instead of counts above five.") }).strict(),
+  parseCliArgs(args) {
+    const normalized = args.flatMap(arg => arg.startsWith("--full=") ? ["--full", arg.slice(7)] : [arg]);
+    const flags = new WorkbenchAgentCommandFlags(normalized, { values: ["--full"] });
+    const value = flags.optional("--full");
+    return { full: value === null ? [] : value.split(",").map(part => GitArcStatusFullSchema.parse(part)) };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcStatus", full: input.full,
+    }, "git-arc-status");
+  },
+});
+
 export const WORKBENCH_GIT_ARC_COMMANDS = [
   ...WORKBENCH_GIT_PLAN_COMMANDS,
   start,
@@ -280,6 +300,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   continueArc,
   claims,
   scope,
+  status,
   move,
   release,
   inspectionCommand("compare"),

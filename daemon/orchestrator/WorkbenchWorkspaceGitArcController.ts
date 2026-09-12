@@ -1,14 +1,13 @@
 /*
- * Keywords: git, workspace, roots, scope, partial outcomes, inspection.
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
- * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, globally page inspection diffs, report workspace dirt, route proposal-owned amendments, and prune thread history. Keywords: git, arc, workspace, multi-root, diff, dirt, proposal, retention.
- * - WorkspaceGitArcMemberState: active repo-local member plus root identity. Keywords: git, arc, active, member.
- * - WorkspaceGitArcLifecycleState: active logical workspace projection. Keywords: git, arc, lifecycle, projection.
- * - WorkspaceGitArcPlanMemberState: planned repo-local member plus root identity. Keywords: git, arc, plan, member.
- * - WorkspaceGitArcPlanState: inactive logical workspace projection. Keywords: git, arc, plan, projection.
+ * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery and paged diffs; route mutations and history retention.
+ * - WorkspaceGitArcMemberState: active repository plus root identity.
+ * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
+ * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
+ * - WorkspaceGitArcPlanState: workspace plan projection.
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
- * Local mechanics: emit WorkbenchGitClaimSnapshot after mutations while the owning Git transition remains held. Keywords: git, claims, stats.
+ * Local mechanics: observe mutation claims while the Git transition remains held.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +30,7 @@ import WorkbenchGitCheckpointController, {
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
+import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 
@@ -353,6 +353,30 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
+      case "arcStatus": {
+        const values = await this.runMembers(members, member => this.local.readStatus({
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+        }), undefined, "read");
+        const result: GitArcStatus = {
+          pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+        };
+        for (const { member, result: status } of values) {
+          const qualify = (paths: string[]) => paths.map(file => this.qualify(project, member, file));
+          result.pending.push(...status.pending);
+          result.accepted.push(...status.accepted);
+          result.dirtyClaims.push(...qualify(status.dirtyClaims));
+          result.cleanClaims.push(...qualify(status.cleanClaims));
+          result.unclaimedDirt.push(...qualify(status.unclaimedDirt));
+          result.unavailableRecovery.push(...status.unavailableRecovery.map(() => member.roots[0]!.id));
+          result.recovery.push(...status.recovery.map(lost => ({
+            ...lost, paths: qualify(lost.paths),
+            commits: lost.commits.map(commit => ({ ...commit, changedPaths: qualify(commit.changedPaths) })),
+            comparison: lost.comparison.map(change => ({ ...change, path: this.qualify(project, member, change.path) })),
+          })));
+        }
+        for (const key of ["dirtyClaims", "cleanClaims", "unclaimedDirt"] as const) result[key] = unique(result[key]).sort();
+        return result;
+      }
       case "planClaims":
       case "arcClaims": return await this.executeClaimChanges(project, members, request);
       case "arcScope": {

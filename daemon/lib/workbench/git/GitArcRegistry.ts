@@ -1,13 +1,16 @@
 /*
  * Exports:
- * - default GitArcRegistry: own durable active arc claims and compare-and-swap registry transitions for one worktree. Keywords: git, arc, registry, claims, collision.
- * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation: typed registry identities, entries, and prepared atomic transitions. Keywords: git, arc, registry, transaction.
- * - findGitArcCollisions/getGitArcLiveClaimPaths: share exact live-claim semantics with diagnostics and registry enforcement. Keywords: git, arc, collision, overlap, diagnostics.
+ * - default GitArcRegistry: own atomic claims and final-loss snapshot publication.
+ * - REGISTRY_REF: worktree-owned registry address.
+ * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation/GitArcRegistryReplaceOptions: registry identity, state and prepared publication contracts.
+ * - GitArcCollision/GitArcCollisionError: conflicting ownership facts and rejection.
+ * - findGitArcCollisions/getGitArcLiveClaimPaths: shared live-claim semantics.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { OrchestratorReloadScope } from "workbench-shared/types";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
-import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 
 export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
 
@@ -65,12 +68,13 @@ interface GitArcRegistryState {
 
 export interface GitArcRegistryMutation {
   nextState: GitArcRegistryState;
-  update: GitRefUpdate | null;
+  updates: GitRefUpdate[];
 }
 
 export interface GitArcRegistryReplaceOptions {
   commitRemaps?: ReadonlyMap<string, string>;
   expectedCheckpointCommit?: string;
+  claimLossSnapshot?: GitWorktreeSnapshot;
 }
 
 function normalizeIdentityPart(value: string, label: string) {
@@ -155,6 +159,21 @@ function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, st
 export default class GitArcRegistry {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
+  private async prepareMutation(
+    nextState: GitArcRegistryState,
+    update: GitRefUpdate | null,
+    current: GitArcRegistryEntry | null,
+    next: GitArcRegistryEntry | null,
+    snapshot?: GitWorktreeSnapshot,
+  ): Promise<GitArcRegistryMutation> {
+    const updates = update ? [update] : [];
+    const previousClaims = current ? getGitArcLiveClaimPaths(current) : [];
+    if (update && current && previousClaims.length && (!next || !getGitArcLiveClaimPaths(next).length)) {
+      updates.push(await new GitArcClaimLossStore(this.repository).prepare(next ?? current, previousClaims, snapshot));
+    }
+    return { nextState, updates };
+  }
+
   async read() {
     const resolved = await this.repository.readBlobAtRef(REGISTRY_REF);
     if (!resolved) return { blob: null, state: { entries: [], version: 1 } satisfies GitArcRegistryState };
@@ -194,7 +213,7 @@ export default class GitArcRegistry {
         throw new Error("This thread's active Git arc changed before the registry update completed.");
       }
     } else if (current) {
-      if (current.checkpointCommit === entry.checkpointCommit) return { nextState: state, update: null };
+      if (current.checkpointCommit === entry.checkpointCommit) return { nextState: state, updates: [] };
       throw new Error("This thread already owns a different active Git arc.");
     }
     const collisions = findGitArcCollisions(state.entries, entry, getGitArcLiveClaimPaths(entry));
@@ -213,10 +232,9 @@ export default class GitArcRegistry {
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
     const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify(nextState)}\n`);
-    return {
-      nextState,
-      update: { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
-    };
+    return await this.prepareMutation(nextState,
+      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
+      current, nextEntry, options?.claimLossSnapshot);
   }
 
   async prepareRelease(identity: GitArcIdentity, options?: GitArcRegistryReplaceOptions): Promise<GitArcRegistryMutation | null> {
@@ -234,18 +252,18 @@ export default class GitArcRegistry {
     const entries = state.entries.filter((candidate) => identityKey(candidate) !== key);
     const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify(nextState)}\n`);
-    return { nextState, update: { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF } };
+    return await this.prepareMutation(nextState, { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF }, current, null);
   }
 
   async claim(entry: Omit<GitArcRegistryEntry, "updatedAt">) {
     const mutation = await this.prepareClaim(entry);
-    if (mutation.update) await this.repository.updateRefs([mutation.update]);
+    if (mutation.updates.length) await this.repository.updateRefs(mutation.updates);
     return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
   }
 
   async set(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string) {
     const mutation = await this.prepareSet(entry, expectedCheckpointCommit);
-    if (mutation.update) await this.repository.updateRefs([mutation.update]);
+    if (mutation.updates.length) await this.repository.updateRefs(mutation.updates);
     return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
   }
 
@@ -270,14 +288,12 @@ export default class GitArcRegistry {
     const entries = [...state.entries.filter((candidate) => identityKey(candidate) !== key), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
-    return {
-      nextState: { entries, version: 1 },
-      update: { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
-    };
+    return await this.prepareMutation({ entries, version: 1 },
+      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF }, current, nextEntry);
   }
 
   async release(identity: GitArcIdentity) {
     const mutation = await this.prepareRelease(identity);
-    if (mutation) await this.repository.updateRefs([mutation.update]);
+    if (mutation) await this.repository.updateRefs(mutation.updates);
   }
 }

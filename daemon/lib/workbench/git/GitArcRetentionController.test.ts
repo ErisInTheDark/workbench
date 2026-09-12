@@ -1,11 +1,12 @@
 /*
- * No production exports. Tests protect guarded, thread-scoped Git arc retention cleanup. Keywords: git, refs, retention, settled, proposal.
+ * No production exports. Protect guarded, thread-scoped Git arc retention cleanup.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { proposalMessage, proposalNamespace, type ProposalMetadata } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry from "./GitArcRegistry";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -57,6 +58,9 @@ test("expired thread cleanup removes pending proposals only from the resolved th
 
   const ownerRefsBefore = await repository.listRefs("refs/worktree/agents/codex/partial-thread");
   assert.ok(ownerRefsBefore.length > 0);
+  const recovery = await new GitArcClaimLossStore(repository).read({ harness: "codex", threadId: "partial-thread" });
+  assert.ok(recovery);
+  assert.ok(ownerRefsBefore.includes(recovery.ref));
   const unrelatedRef = "refs/worktree/agents/codex/other-thread/checkpoints/preserved";
   await repository.updateRef(unrelatedRef, active.checkpointCommit);
 
@@ -69,4 +73,5 @@ test("expired thread cleanup removes pending proposals only from the resolved th
   assert.deepEqual(await repository.listRefs("refs/worktree/agents/codex/partial-thread"), []);
   assert.equal(await repository.readRef(unrelatedRef), active.checkpointCommit);
   assert.equal(await registry.find({ harness: "codex", threadId: "partial-thread" }), null);
+  assert.equal(await repository.readRef(recovery.ref), null);
 });

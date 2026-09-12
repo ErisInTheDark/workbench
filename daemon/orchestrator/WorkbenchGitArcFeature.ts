@@ -673,6 +673,7 @@ export default class WorkbenchGitArcFeature {
       case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
       case "arcClaims": return Response.json(await this.controller.editArcClaims({ ...common, ...input }));
       case "arcScope": return Response.json(await this.controller.readScope(common));
+      case "arcStatus": return Response.json(await this.controller.readStatus(common));
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       }));

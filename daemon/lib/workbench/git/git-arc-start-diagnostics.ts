@@ -11,6 +11,7 @@ import {
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import {
   describeGitArcDriftRecovery,
@@ -116,18 +117,10 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     threadId,
   } = input;
   const collisions = findGitArcCollisions(registryEntries, { harness, threadId }, planPaths);
-  const comparison = (await repository.buildFileChanges(planCheckpointCommit, currentTree, planPaths)).map((change) => ({
-    additions: change.additions,
-    deletions: change.deletions,
-    binary: /^GIT binary patch$/mu.test(change.diff),
-    kind: change.kind.type,
-    path: change.path,
-  }));
-  const movement = await repository.classifyHeadMovement(planBaseCommit, snapshotDrift, planCheckpointCommit, currentHead);
-  const committedDrift = movement.kind === "fast-forward" ? movement.changedPaths : [];
-  const commitChanges = movement.kind === "fast-forward"
-    ? await repository.listFirstParentCommitPathChanges(planBaseCommit, currentHead, committedDrift)
-    : [];
+  const { comparison, commits: commitChanges, headMovement } = await collectGitArcDrift({
+    repository, baseline: planCheckpointCommit, baseHead: planBaseCommit, head: currentHead,
+    tree: currentTree, paths: planPaths, commitPaths: snapshotDrift, netCommittedOnly: true,
+  });
   const dirtyPaths = await repository.listChangedPaths(currentHead, currentTree, planPaths);
   const liveClaimedPaths = registryEntries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
   const dirtyUnclaimed = dirtyPaths.filter((dirtyPath) => (
@@ -135,13 +128,13 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     && !liveClaimedPaths.some((claimedPath) => pathIsCoveredBy(dirtyPath, claimedPath) || pathIsCoveredBy(claimedPath, dirtyPath))
   ));
 
-  const hasDrift = snapshotDrift.length > 0 || movement.kind === "incompatible";
+  const hasDrift = snapshotDrift.length > 0 || headMovement === "incompatible";
   const lines = [
     collisions.length ? "Arc start blocked by sibling claims." : "Arc start blocked because the stored plan no longer matches the current workspace.",
     "",
     "New commits affecting planned files:",
   ];
-  if (movement.kind === "incompatible") {
+  if (headMovement === "incompatible") {
     lines.push(`- HEAD moved incompatibly from ${code(planBaseCommit?.slice(0, 8) ?? "unborn")} to ${code(currentHead?.slice(0, 8) ?? "unborn")}`);
   } else if (!commitChanges.length) {
     lines.push("- none");
@@ -179,7 +172,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     commitChanges,
     collisions,
     dirtyUnclaimedPaths: dirtyUnclaimed,
-    headMovement: movement.kind,
+    headMovement,
     planCheckpointCommit,
     snapshotDrift: diagnosticPaths,
   });

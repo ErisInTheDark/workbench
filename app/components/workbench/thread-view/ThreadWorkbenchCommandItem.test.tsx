@@ -22,6 +22,12 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
+test("status uses the dedicated card without inventing paths for count-only groups", () => {
+  const html = renderSpecialized(makeItem("git_arc_status", {}, "Dirty claims: changed-evidence.ts\nClean claims: 8"));
+  assert.match(html, /changed-evidence\.ts/u);
+  assert.match(html, /8/u);
+});
+
 test("compact claim updates show actual changes rather than attempted or unchanged paths", () => {
   for (const tool of ["git_arc_claims", "git_plan_claims", "git_plan_start"]) {
     const action = tool === "git_arc_claims" ? "claims" : tool === "git_plan_claims" ? "plan" : "start";

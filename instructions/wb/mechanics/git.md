@@ -20,7 +20,11 @@ Arc ref: immutable historical snapshot.
 
 Arc: registered changeset in plan, active or resolved phase. Missing phase means active.
 
-Ordinary operations resolve registered lifecycle; omit refs. Use `git_arc_scope` when lifecycle ownership is unclear.
+Ordinary operations resolve registered lifecycle; omit refs. `git_arc_status` provides compact ownership and recovery facts; `git_arc_scope` provides full lifecycle inventory.
+
+`wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals remain until the next implementation arc starts. Unclaimed dirt excludes all live owners, not older files.
+
+Final claim loss atomically records its exact scope, HEAD and snapshot under the thread's Git refs. Status reports intersecting commits and per-file counts; ref-free compare/diff use that boundary while claims remain absent, including during planning. Explicit plan refs still inspect planning drift. Reads never refresh the boundary. Existing settled-history retention removes it with other thread refs.
 
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
 Arc-managed edits require claims. Gitignored files need none. Adopt intentional command-caused dirt for inclusion in proposals.
