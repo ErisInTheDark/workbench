@@ -12,15 +12,24 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   access: "agent",
   children: [],
   create: (context, build) => {
+    const threadIdentity = build.get("threadIdentity");
+    const threadState = build.get("threadState").controller;
     const controller = new WorkbenchWebSocketRequestController({
+      acceptProviderIntent: async ({ harness, nativeThreadId, nativeTurnId }) => {
+        const native = threadIdentity.knownNativeBinding(harness, nativeThreadId);
+        const threadId = threadIdentity.workbenchIdForNative(native);
+        const identity = threadIdentity.knownThread(threadId);
+        const turnId = threadIdentity.workbenchTurnIdForNative({ ...native, nativeTurnId });
+        await threadState.acceptProviderIntent(identity.projectId, harness, threadId, turnId);
+      },
       harnesses: build.get("harnesses"),
-      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
       initialState: build.handoffState as WorkbenchWebSocketRequestControllerState | undefined,
       reload: build.get("reloadController"),
       reportDelivery: context.reportWebSocketDelivery,
       stats: build.get("stats"),
-      threadState: build.get("threadState").controller,
+      threadState,
       transcript: build.get("transcript"),
     });
     controller.suspend();

@@ -1040,9 +1040,6 @@ function WorkbenchThreadClient(
     },
     getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
     optimisticInputs,
-    publishAccepted: ({ projectId, threadId, title, turnId }) => {
-      void publishAcceptedIntent({ harness: "codex", projectId, threadId, title, turnId });
-    },
     renderSource: renderOptimisticSource,
     sources: threadSources,
   });
@@ -5343,8 +5340,8 @@ function WorkbenchThreadClient(
             commitCanonicalThreadSource(admittedSource);
             const projectedSource = projectThreadSource(threadKey) ?? admittedSource;
             sendOptions.onTurnAdmitted?.(admittedTurn.id);
-            void publishAcceptedIntent({
-              ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
+            if (materializingDraftId) void publishAcceptedIntent({
+              draftId: materializingDraftId,
               harness,
               projectId: operationProjectContext.projectId,
               threadId: admittedThreadId,
@@ -5381,8 +5378,8 @@ function WorkbenchThreadClient(
         }
         throw error;
       }
-      void publishAcceptedIntent({
-        ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
+      if (materializingDraftId) void publishAcceptedIntent({
+        draftId: materializingDraftId,
         harness,
         projectId: operationProjectContext.projectId,
         threadId: admittedThreadId,

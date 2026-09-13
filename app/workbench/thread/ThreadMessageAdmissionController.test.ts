@@ -55,7 +55,6 @@ function setup(
     getLifecycleState: () => ({ ...lifecycle }),
     getThreadStatus: (value) => value.status,
     optimisticInputs,
-    publishAccepted: ({ turnId }) => events.push(`accepted:${turnId}`),
     renderSource: options.renderSource ?? (() => events.push("render")),
     sources,
   });
@@ -161,8 +160,8 @@ test("idle thread sends one managed admission with the exact resume context and 
   assert.equal(params.startRequest?.params?.clientUserMessageId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   assert.equal(params.startRequest?.params?.threadId, "thread");
   assert.equal(params.steerRequest?.method, "turn/steer");
-  assert.ok(result.events.indexOf("pending") < result.events.indexOf("accepted:new-turn"));
-  assert.equal(result.events.at(-1), "accepted:new-turn");
+  assert.equal(result.events.includes("pending"), true);
+  assert.equal(result.events.some((event) => event.startsWith("accepted:")), false);
 });
 
 test("detached new-turn admission keeps its exact source across unrelated selection changes", async () => {
@@ -240,7 +239,7 @@ test("managed admission reports a daemon-side active-turn steer as admitted", as
   assert.equal((await result.admit([{ text: "queued", text_elements: [], type: "text" }])).kind, "admitted");
   assert.deepEqual(requests, ["workbench/codex/message/admit"]);
   assert.ok(result.events.indexOf("pending") < result.events.indexOf("steered:turn"));
-  assert.equal(result.events.at(-1), "accepted:turn");
+  assert.equal(result.events.some((event) => event.startsWith("accepted:")), false);
 });
 
 test("managed start failures settle one pending projection", async () => {
@@ -267,7 +266,6 @@ test("managed start accepts canonical delivery that precedes a failed response",
   assert.deepEqual(result.events.filter((event) => event !== "connect"), [
     "pending",
     "failed",
-    "accepted:delivered-turn",
   ]);
 });
 

@@ -90,7 +90,6 @@ interface ThreadMessageAdmissionControllerOptions {
   getLifecycleState: (threadId: string) => ThreadMessageAdmissionLifecycleState;
   getThreadStatus: (thread: ThreadPayload) => string;
   optimisticInputs: ThreadOptimisticInputStore;
-  publishAccepted?: (event: { correlationHandle: string; projectId: ProjectId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId }) => void;
   renderSource: (key: string) => void;
   sources: ThreadSourceStore;
 }
@@ -110,16 +109,9 @@ function ThreadMessageAdmissionController({
   getLifecycleState,
   getThreadStatus,
   optimisticInputs,
-  publishAccepted,
   renderSource,
   sources,
 }: ThreadMessageAdmissionControllerOptions) {
-  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: WorkbenchTurnId, input: UserInput[]) {
-    const title = capture.selectionBound
-      ? "New thread"
-      : input.find((entry) => entry.type === "text")?.text ?? "New thread";
-    publishAccepted?.({ correlationHandle, projectId: capture.projectId, threadId: capture.threadId, title, turnId });
-  }
   function captureOwner(threadId: string, target?: ThreadMessageAdmissionTarget): AdmissionCapture {
     const lifecycle = getLifecycleState(threadId);
     const selectedThreadKey = documents.getSelectedThreadKey();
@@ -301,7 +293,6 @@ function ThreadMessageAdmissionController({
       if (!deliveredTurnId) {
         return null;
       }
-      reportAccepted(capture, clientUserMessageId, deliveredTurnId, input);
       return { handle: clientUserMessageId, kind: "admitted" } as const;
     };
     let response: CodexJsonRpcResponse<ManagedMessageAdmissionResponse>;
@@ -338,7 +329,6 @@ function ThreadMessageAdmissionController({
       }
       const admittedTurnId = WorkbenchTurnIdSchema.parse(turnId);
       request.projectSteeredTurn({ ...projectionContext, turnId: admittedTurnId });
-      reportAccepted(capture, clientUserMessageId, admittedTurnId, input);
       return { handle: clientUserMessageId, kind: "admitted" };
     }
     const turn = response.result?.kind === "started" ? response.result.turn : null;
@@ -356,7 +346,6 @@ function ThreadMessageAdmissionController({
       threadKey: capture.threadKey,
       turn,
     });
-    reportAccepted(capture, clientUserMessageId, turn.id, input);
     return { clientUserMessageId, kind: "turnStarted", turn };
   }
 

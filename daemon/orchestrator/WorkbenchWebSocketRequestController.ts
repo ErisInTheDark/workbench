@@ -8,7 +8,15 @@
  * - default WorkbenchWebSocketRequestController: route feature requests and own event-stream health.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
+import {
+  NativeThreadIdSchema,
+  NativeTurnIdSchema,
+  ProjectIdSchema,
+  ThreadReferenceSchema,
+  TurnReferenceSchema,
+  type NativeThreadId,
+  type NativeTurnId,
+} from "workbench-shared/workbench/identity";
 import {
   WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
@@ -121,6 +129,11 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 }
 
 export interface WorkbenchWebSocketRequestControllerOptions {
+  acceptProviderIntent?: (input: {
+    harness: WorkbenchHarness;
+    nativeThreadId: NativeThreadId;
+    nativeTurnId: NativeTurnId;
+  }) => Promise<void>;
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
@@ -144,6 +157,40 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function readAcceptedProviderIntent(
+  pending: PendingRequest,
+  response: unknown,
+): Parameters<NonNullable<WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"]>>[0] | null {
+  const provider = pending.provider;
+  const envelope = asRecord(response);
+  if (!provider || !envelope || responseIsError(response)) return null;
+  const params = asRecord(provider.request.params);
+  const result = asRecord(envelope.result);
+  if (!params || !result || typeof params.threadId !== "string") return null;
+  let nativeTurnId: string | null = null;
+  if (provider.request.method === "turn/start") {
+    const turn = asRecord(result.turn);
+    nativeTurnId = typeof turn?.id === "string" ? turn.id : null;
+  } else if (provider.request.method === "turn/steer") {
+    nativeTurnId = typeof result.turnId === "string"
+      ? result.turnId
+      : typeof params.expectedTurnId === "string" ? params.expectedTurnId : null;
+  } else if (provider.request.method === "workbench/codex/message/admit") {
+    if (result.kind === "started") {
+      const turn = asRecord(result.turn);
+      nativeTurnId = typeof turn?.id === "string" ? turn.id : null;
+    } else if (result.kind === "steered") {
+      nativeTurnId = typeof result.turnId === "string" ? result.turnId : null;
+    }
+  }
+  if (!nativeTurnId) return null;
+  return {
+    harness: provider.harness,
+    nativeThreadId: NativeThreadIdSchema.parse(params.threadId),
+    nativeTurnId: NativeTurnIdSchema.parse(nativeTurnId),
+  };
 }
 
 function formatDuration(value: number) {
@@ -179,6 +226,7 @@ function readResponseErrorMessage(message: unknown) {
 }
 
 export default class WorkbenchWebSocketRequestController {
+  private readonly acceptProviderIntent: NonNullable<WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"]>;
   private lifecycle: "active" | "suspended" | "disposed" = "active";
   private get detached() { return this.lifecycle !== "active"; }
   private generation = new AbortController();
@@ -208,6 +256,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
+    acceptProviderIntent = async () => {},
     clearTimeout: cancel = clearTimeout,
     daemonRequests = {
       accepts: () => false,
@@ -225,6 +274,7 @@ export default class WorkbenchWebSocketRequestController {
     transcript,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
+    this.acceptProviderIntent = acceptProviderIntent;
     this.cancel = cancel;
     this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
@@ -471,6 +521,7 @@ export default class WorkbenchWebSocketRequestController {
     const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
+    const acceptedProviderIntent = pending ? readAcceptedProviderIntent(pending, message) : null;
     if (this.identities) {
       if (pending?.provider) {
         try {
@@ -515,6 +566,14 @@ export default class WorkbenchWebSocketRequestController {
             message = mapProviderNotification(this.identities, native, message as ServerNotification);
           }
         }
+      }
+    }
+    if (acceptedProviderIntent && !responseIsError(message)) {
+      try {
+        await this.acceptProviderIntent(acceptedProviderIntent);
+      } catch (error) {
+        const detail = (error instanceof Error ? error.message : "Provider intent lifecycle publication failed.").slice(0, 500);
+        this.writeLine(`[thread-state] Provider accepted user input, but working lifecycle publication failed: ${detail}`);
       }
     }
     const streamEvent = this.stream.prepareDelivery(client, message);

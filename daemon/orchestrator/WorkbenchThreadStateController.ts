@@ -677,6 +677,10 @@ export default class WorkbenchThreadStateController {
     return { accepted: true, revision: (await this.getSnapshot(input.projectId)).revision };
   }
 
+  async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId) {
+    return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId });
+  }
+
   async reportRecoveryFailed(projectId: ProjectId, harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId) {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "recoveryFailed" });
   }
@@ -1077,9 +1081,14 @@ export default class WorkbenchThreadStateController {
           throw new Error("The questionnaire response was delivered but its thread was removed before settlement.");
         }
         const previousEntries = new Map(state.entries);
+        const clearsPendingQuestionnaire = matches(current.pendingQuestionnaire);
+        const lifecycle = clearsPendingQuestionnaire && areDeeplyEqual(current.lifecycle, context.lifecycle)
+          ? reduceWorkbenchThreadLifecycle(current.lifecycle, { kind: "acceptedIntent", turnId: accepted.turnId })
+          : current.lifecycle;
         const next = parseWorkbenchThreadStateEntry({
           ...current,
-          pendingQuestionnaire: matches(current.pendingQuestionnaire) ? null : current.pendingQuestionnaire,
+          lifecycle,
+          pendingQuestionnaire: clearsPendingQuestionnaire ? null : current.pendingQuestionnaire,
           questionnaireHistory: mergeQuestionnaireHistoryEntries(
             current.questionnaireHistory ?? [],
             [historyEntry],

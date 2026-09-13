@@ -469,31 +469,37 @@ test("failed new-turn admission removes only its pending projection", async () =
   assert.equal(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => getWorkbenchInputState(item)?.kind === "optimistic"), false);
 }));
 
-test("daemon-side steer admission moves the pending message onto the admitted active turn", async () => withClient(async (client, socket) => {
-  const source = activeThread("codex", "idle", "completed");
-  client.selectThreadPayload(source);
-  let admissionRequest: SocketRequest | null = null;
-  FakeWebSocket.intercept = (_target, request) => {
-    if (request.method !== "workbench/codex/message/admit") return false;
-    admissionRequest = request;
-    return true;
-  };
+test("daemon-side steer admission moves the pending message without publishing browser lifecycle", async () => {
+  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+  await withClient(async (client, socket) => {
+    const source = activeThread("codex", "idle", "completed");
+    client.selectThreadPayload(source);
+    let admissionRequest: SocketRequest | null = null;
+    FakeWebSocket.intercept = (_target, request) => {
+      if (request.method !== "workbench/codex/message/admit") return false;
+      admissionRequest = request;
+      return true;
+    };
 
-  const send = client.sendThreadMessage(source, [{ text: "became a steer", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "workbench/codex/message/admit");
-  socket.respond(admissionRequest!.id, { kind: "steered", turnId: "active-turn" });
-  await send;
+    const send = client.sendThreadMessage(source, [{ text: "became a steer", text_elements: [], type: "text" }]);
+    await waitForRequest(socket, "workbench/codex/message/admit");
+    socket.respond(admissionRequest!.id, { kind: "steered", turnId: "active-turn" });
+    await send;
 
-  const current = client.getSnapshot().currentThread!;
-  assert.equal(current.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "providerPending"), false);
-  const activeTurn = current.turns.find((turn) => turn.id === "active-turn");
-  assert.ok(activeTurn);
-  assert.deepEqual(getWorkbenchInputState(activeTurn.items[0]!), {
-    kind: "optimistic",
-    placement: "steer",
-    status: "pending",
+    const current = client.getSnapshot().currentThread!;
+    assert.equal(current.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "providerPending"), false);
+    const activeTurn = current.turns.find((turn) => turn.id === "active-turn");
+    assert.ok(activeTurn);
+    assert.deepEqual(getWorkbenchInputState(activeTurn.items[0]!), {
+      kind: "optimistic",
+      placement: "steer",
+      status: "pending",
+    });
+    assert.deepEqual(acceptedIntents, []);
+  }, {
+    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
   });
-}));
+});
 
 test("SQLite transcript source lifecycle publishes through the thread client and becomes unavailable on disconnect", async () => {
   const publications: Array<{ status: string; threadId: string | null }> = [];
@@ -803,7 +809,7 @@ test("Codex slash mentions travel outside plain user input on steer and start", 
   assert.equal((start?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
 }));
 
-test("idle selected Codex sends one managed lifecycle intent while providers preserve their routes", async () => withClient(async (client, socket) => {
+test("existing-thread sends preserve provider routes without publishing browser lifecycle", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
   const result = await client.sendThreadMessage(idle, [{ text: "codex", text_elements: [], type: "text" }]);
@@ -820,12 +826,8 @@ test("idle selected Codex sends one managed lifecycle intent while providers pre
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "thread/read" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
-  assert.deepEqual(socket.requests.find((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle")?.params, {
-    identity: { harness: "codex", threadId: "idle" },
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    title: "New thread",
-    turnId: "idle-started",
-  });
+  assert.equal(socket.requests.some((request) => request.method === "workbench/thread-state/intent/accept"
+    && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle"), false);
 
   FakeWebSocket.intercept = null;
 
@@ -837,6 +839,8 @@ test("idle selected Codex sends one managed lifecycle intent while providers pre
     const providerSteer = socket.requests.find((request) => request.method === "turn/steer" && request.params?.threadId === provider.id);
     assert.equal(providerSteer?.params?.clientUserMessageId, undefined);
     assert.equal(providerSteer?.workbenchHarness, harness);
+    assert.equal(socket.requests.some((request) => request.method === "workbench/thread-state/intent/accept"
+      && (request.params?.identity as { threadId?: string } | undefined)?.threadId === provider.id), false);
   }
 }));
 
@@ -959,7 +963,7 @@ test("detached new-turn admission fails closed when active lifecycle has no turn
   )), false);
 }));
 
-test("an accepted background child turn publishes Working before the send returns", async () => withClient(async (client, socket) => {
+test("an accepted background child turn leaves lifecycle publication to the daemon", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "parent"));
   const child = activeThread("codex", "child", "completed");
   const result = await client.sendThreadMessage(
@@ -971,7 +975,7 @@ test("an accepted background child turn publishes Working before the send return
   const startIndex = socket.requests.findIndex((request) => request.method === "workbench/codex/message/admit" && request.params?.threadId === "child");
   const acceptedIndex = socket.requests.findIndex((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "child");
   assert.ok(startIndex >= 0);
-  assert.ok(acceptedIndex > startIndex);
+  assert.equal(acceptedIndex, -1);
   const admission = socket.requests[startIndex]!;
   const admissionParams = admission.params as {
     resumeRequest?: SocketRequest;
@@ -979,12 +983,6 @@ test("an accepted background child turn publishes Working before the send return
   };
   assert.equal(admissionParams.resumeRequest?.method, "thread/resume");
   assert.equal(admissionParams.startRequest?.method, "turn/start");
-  assert.deepEqual(socket.requests[acceptedIndex]?.params, {
-    identity: { harness: "codex", threadId: "child" },
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    title: "continue",
-    turnId: "child-started",
-  });
 }));
 
 test("Copilot and OpenCode user notifications keep their provider-owned turn history path", async () => withClient(async (client, socket) => {

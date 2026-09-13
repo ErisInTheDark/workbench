@@ -53,6 +53,7 @@ function createClient(send: BridgeClient["send"] = (_data, callback) => callback
 }
 
 function createController(options: {
+  acceptProviderIntent?: WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"];
   clock: FakeClock;
   daemonRequests?: WorkbenchWebSocketRequestControllerOptions["daemonRequests"];
   initialState?: WorkbenchWebSocketRequestControllerOptions["initialState"];
@@ -68,6 +69,7 @@ function createController(options: {
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
+    acceptProviderIntent: options.acceptProviderIntent,
     clearTimeout: options.clock.clearTimeout,
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
@@ -372,6 +374,98 @@ function frame(method: string, id: number, extra: Record<string, unknown> = {}) 
 function notificationFrame(method: string, params: Record<string, unknown>) {
   return Buffer.from(JSON.stringify({ method, params }));
 }
+
+test("successful provider message responses publish daemon-owned intent admission", async () => {
+  const accepted: Parameters<NonNullable<WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"]>>[0][] = [];
+  const { controller } = createController({
+    acceptProviderIntent: async (input) => { accepted.push(input); },
+    clock: new FakeClock(),
+  });
+  const client = createClient();
+  const cases = [
+    {
+      harness: "codex" as const,
+      method: "turn/start",
+      params: { input: [], threadId: "native-thread" },
+      response: { result: { turn: { id: "started-turn" } } },
+      turnId: "started-turn",
+    },
+    {
+      harness: "codex" as const,
+      method: "turn/steer",
+      params: { expectedTurnId: "steered-turn", input: [], threadId: "native-thread" },
+      response: { result: { turnId: "steered-turn" } },
+      turnId: "steered-turn",
+    },
+    {
+      harness: "copilot" as const,
+      method: "turn/steer",
+      params: { expectedTurnId: "fallback-turn", input: [], threadId: "native-thread" },
+      response: { result: { ok: true } },
+      turnId: "fallback-turn",
+    },
+    {
+      harness: "codex" as const,
+      method: "workbench/codex/message/admit",
+      params: { threadId: "native-thread" },
+      response: { result: { kind: "started", turn: { id: "managed-start" } } },
+      turnId: "managed-start",
+    },
+    {
+      harness: "codex" as const,
+      method: "workbench/codex/message/admit",
+      params: { threadId: "native-thread" },
+      response: { result: { kind: "steered", turnId: "managed-steer" } },
+      turnId: "managed-steer",
+    },
+  ];
+  for (const [index, candidate] of cases.entries()) {
+    const id = index + 1;
+    await controller.handleMessage(client, "connection-1", frame(candidate.method, id, {
+      params: candidate.params,
+      workbenchHarness: candidate.harness,
+    }), false);
+    await controller.sendJsonToClient(client, { id, ...candidate.response });
+  }
+  await controller.handleMessage(client, "connection-1", frame("turn/start", 99, {
+    params: { input: [], threadId: "native-thread" },
+    workbenchHarness: "codex",
+  }), false);
+  await controller.sendJsonToClient(client, { id: 99, error: { code: -32000, message: "failed" } });
+
+  assert.deepEqual(accepted, cases.map(({ harness, turnId }) => ({
+    harness,
+    nativeThreadId: "native-thread",
+    nativeTurnId: turnId,
+  })));
+  controller.dispose();
+});
+
+test("provider success survives a lifecycle publication failure with a bounded daemon error", async () => {
+  const lines: string[] = [];
+  const sent: Array<Record<string, unknown>> = [];
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(data) as Record<string, unknown>);
+    callback?.();
+  });
+  const { controller } = createController({
+    acceptProviderIntent: async () => { throw new Error(`lifecycle failed ${"x".repeat(1_000)}`); },
+    clock: new FakeClock(),
+    lines,
+  });
+  await controller.handleMessage(client, "connection-1", frame("turn/steer", 1, {
+    params: { expectedTurnId: "native-turn", input: [], threadId: "native-thread" },
+    workbenchHarness: "codex",
+  }), false);
+
+  await controller.sendJsonToClient(client, { id: 1, result: { turnId: "native-turn" } });
+
+  assert.deepEqual(sent.at(-1), { id: 1, result: { turnId: "native-turn" } });
+  const warning = lines.find(line => line.includes("working lifecycle publication failed"));
+  assert.ok(warning);
+  assert.ok(warning.length < 600);
+  controller.dispose();
+});
 
 test("warns every two seconds until the matching response send completes", async () => {
   const clock = new FakeClock();

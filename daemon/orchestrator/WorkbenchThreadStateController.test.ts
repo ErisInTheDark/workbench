@@ -726,6 +726,117 @@ async function readProjectState<T extends object>(storageRoot: string, projectId
   return await testPersistence(storageRoot).readProject(projectId) as T;
 }
 
+test("accepted questionnaire response returns its thread to working", async () => {
+  const question = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
+    requestKey: "request",
+    turnId: fixtureTurnIds["turn"],
+    request: {
+      id: "request",
+      title: "Choose",
+      summary: "",
+      submitLabel: "Submit",
+      questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
+    },
+  };
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    title: "Task",
+    identity: { harness: "codex", threadId: fixtureThreadIds["thread"] },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, turnId: question.turnId, settled: false },
+    pendingQuestionnaire: question,
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "accepted-questionnaire-working",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => {},
+    reconcileProject: async (_project, _signal, accept) => {
+      await accept("codex", [provider], { complete: true });
+      return [];
+    },
+  });
+  try {
+    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+    const response = { answers: { choice: { answers: ["yes"] } } };
+    const result = await controller.resolvePendingQuestionnaire({
+      harness: "codex",
+      projectId: fixtureProjectIds["project"],
+      requestKey: question.requestKey,
+      resolvedAt: 2,
+      response,
+      threadId: fixtureThreadIds["thread"],
+    }, async () => ({
+      delivery: "delivered",
+      insertAfterItemId: null,
+      insertAfterItemIndex: null,
+      turnId: fixtureTurnIds["new-turn"],
+    }));
+
+    assert.equal(result?.delivery, "delivered");
+    const current = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+      entry => entry.entryKind === "thread" && entry.identity.threadId === fixtureThreadIds["thread"],
+    );
+    assert.deepEqual(current?.entryKind === "thread" ? current.lifecycle : null, {
+      agent: { agentStatus: "working", turnId: fixtureTurnIds["new-turn"] },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    });
+    assert.equal(current?.entryKind === "thread" ? current.pendingQuestionnaire : null, null);
+    assert.deepEqual(current?.entryKind === "thread" ? current.questionnaireHistory?.[0]?.response : null, response);
+
+    const replacement = {
+      ...question,
+      itemId: "984090b6-1d94-44cc-ab26-e6470965597e",
+      requestKey: "replacement",
+      turnId: fixtureTurnIds["new-turn"],
+    };
+    await controller.observeLifecycle("codex", fixtureThreadIds["thread"], {
+      kind: "pendingInput",
+      questionnaire: replacement,
+      requestKey: replacement.requestKey,
+      turnId: replacement.turnId,
+    });
+    await controller.resolvePendingQuestionnaire({
+      harness: "codex",
+      projectId: fixtureProjectIds["project"],
+      requestKey: replacement.requestKey,
+      resolvedAt: 3,
+      response,
+      threadId: fixtureThreadIds["thread"],
+    }, async () => {
+      await controller.applyLifecycle(
+        fixtureProjectIds["project"],
+        "codex",
+        fixtureThreadIds["thread"],
+        { kind: "userStopped" },
+      );
+      return {
+        delivery: "delivered",
+        insertAfterItemId: null,
+        insertAfterItemIndex: null,
+        turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("later-turn"),
+      };
+    });
+    const stopped = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+      entry => entry.entryKind === "thread" && entry.identity.threadId === fixtureThreadIds["thread"],
+    );
+    assert.deepEqual(stopped?.entryKind === "thread" ? stopped.lifecycle : null, {
+      kind: "stopped",
+      reason: "userMarkedStopped",
+      settled: false,
+    });
+    assert.equal(stopped?.entryKind === "thread" ? stopped.pendingQuestionnaire : null, null);
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("questionnaire completion revalidates the captured item after interruption and never grants subagent authority", async () => {
   for (const outcome of ["complete", "replace", "fail", "subagent"] as const) {
     const question = {
