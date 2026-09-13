@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - getGitChanges: summarize tracked and untracked project file changes for the explorer. Keywords: git, changes, explorer.
- * - getHeadFileContent: read a tracked file from HEAD when available. Keywords: git, HEAD, file.
- * - listGitVisibleFiles: list tracked and non-ignored untracked paths, optionally narrowed by Git pathspecs. Keywords: git, visible, tracked, untracked, pathspec.
- * - isGitTrackedFile: report whether Git tracks a project-relative path in its index. Keywords: git, tracked, file, delete.
+ * - getGitChanges: summarise tracked and untracked project changes for the explorer.
+ * - getHeadFileContent: read a tracked file from HEAD when available.
+ * - listGitVisibleFiles: list tracked and non-ignored untracked paths, optionally narrowed by Git pathspecs.
+ * - isGitTrackedFile: report whether Git tracks a project-relative path in its index.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -23,7 +23,7 @@ function normalizeDiffPath(rawPath: string) {
   if (braceRename) {
     normalized = `${braceRename[1]}${braceRename[3]}${braceRename[4]}`;
   } else if (normalized.includes(" => ")) {
-    normalized = normalized.split(" => ").at(-1);
+    normalized = normalized.split(" => ").at(-1)!;
   }
 
   return normalized.replace(/\\/g, "/");

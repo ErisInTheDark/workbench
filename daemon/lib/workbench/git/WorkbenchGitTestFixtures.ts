@@ -21,6 +21,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { APP_RELOAD_DIRT_FIXTURE } from "../../../../app/runtime/AppReloadDirt.test.fixtures";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
@@ -312,6 +313,9 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["WorkbenchAppReloadDirtController.test.ts", { fixtures: [
+    demand(APP_RELOAD_DIRT_FIXTURE, 1),
+  ], nested: false }],
   ["GitArcLifecycleController.test.ts", { fixtures: [
     demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
   ], nested: false }],

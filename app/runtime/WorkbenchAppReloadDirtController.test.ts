@@ -2,37 +2,21 @@
  * No production exports. Tests protect ignored runtime churn, missing watcher filenames, scoped app/shared/static/tray dirt, partial advancement, and watcher disposal.
  */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import fs, { type FSWatcher } from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
 
 import WorkbenchAppReloadDirtController from "./WorkbenchAppReloadDirtController.ts";
+import { APP_RELOAD_DIRT_FIXTURE } from "./AppReloadDirt.test.fixtures.ts";
 
-const run = promisify(execFile);
+const { default: GitTestFixtureCache } = createRequire(import.meta.url)(
+  "../../daemon/lib/workbench/git/GitTestFixtureCache.ts",
+) as typeof import("../../daemon/lib/workbench/git/GitTestFixtureCache");
 
 async function fixture(context: test.TestContext) {
-  const repositoryRootPath = await fsp.mkdtemp(path.join(os.tmpdir(), "workbench-app-reload-dirt-"));
-  const git = async (...args: string[]) => await run("git", args, { cwd: repositoryRootPath });
-  await git("init");
-  await git("config", "user.email", "workbench@example.invalid");
-  await git("config", "user.name", "Workbench test");
-  await fsp.mkdir(path.join(repositoryRootPath, "app", "runtime"), { recursive: true });
-  await fsp.mkdir(path.join(repositoryRootPath, "shared"), { recursive: true });
-  await fsp.mkdir(path.join(repositoryRootPath, "static"), { recursive: true });
-  await fsp.mkdir(path.join(repositoryRootPath, "tray", "src"), { recursive: true });
-  await fsp.mkdir(path.join(repositoryRootPath, "tray", "target"), { recursive: true });
-  await fsp.writeFile(path.join(repositoryRootPath, ".gitignore"), ".workbench/\n", "utf8");
-  await fsp.writeFile(path.join(repositoryRootPath, "app", "runtime", "http.ts"), "export const http = 1;\n", "utf8");
-  await fsp.writeFile(path.join(repositoryRootPath, "shared", "owner.ts"), "export const shared = 1;\n", "utf8");
-  await fsp.writeFile(path.join(repositoryRootPath, "static", "index.html"), "<main>app</main>\n", "utf8");
-  await fsp.writeFile(path.join(repositoryRootPath, "tray", "src", "main.rs"), "fn main() {}\n", "utf8");
-  await fsp.writeFile(path.join(repositoryRootPath, "tray", "target", "ignored.exe"), "ignored\n", "utf8");
-  await git("add", ".");
-  await git("commit", "-m", "initial");
+  const { root: repositoryRootPath, dispose } = await new GitTestFixtureCache().copy(APP_RELOAD_DIRT_FIXTURE);
 
   let closed = 0;
   let observe: ((event: string, filename: string | Buffer | null) => void) | null = null;
@@ -71,33 +55,47 @@ async function fixture(context: test.TestContext) {
   });
   context.after(async () => {
     await controller.dispose();
-    await fsp.rm(repositoryRootPath, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await dispose();
   });
   await controller.start();
   return {
     controller,
     get closed() { return closed; },
     observe: (filename: string | null) => observe?.("change", filename),
+    observeRefresh: async (...filenames: Array<string | null>) => {
+      const completed = Promise.withResolvers<Awaited<ReturnType<typeof controller.refresh>>>();
+      const originalRefresh = controller.refresh.bind(controller);
+      const refresh = context.mock.method(controller, "refresh", async (signal?: AbortSignal) => {
+        try {
+          const snapshot = await originalRefresh(signal);
+          completed.resolve(snapshot);
+          return snapshot;
+        } catch (error) {
+          completed.reject(error);
+          throw error;
+        }
+      }, { times: 1 });
+      try {
+        for (const filename of filenames) observe?.("change", filename);
+        return await completed.promise;
+      } finally {
+        refresh.mock.restore();
+      }
+    },
     repositoryRootPath,
   };
 }
 
-test("ignored runtime writes and missing filenames reconcile clean instead of dirtying every scope", async (context) => {
-  const target = await fixture(context);
+async function checkIgnoredRuntime(target: Awaited<ReturnType<typeof fixture>>) {
   await fsp.mkdir(path.join(target.repositoryRootPath, ".workbench"), { recursive: true });
   await fsp.writeFile(path.join(target.repositoryRootPath, ".workbench", "runtime.json"), "{}\n", "utf8");
-  target.observe(".workbench/runtime.json");
-  target.observe(null);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual((await target.controller.refresh()).dirtyScopes, []);
-});
+  assert.deepEqual((await target.observeRefresh(".workbench/runtime.json", null)).dirtyScopes, []);
+}
 
-test("real app, shared, static, and tray edits dirty only actual owners and advance independently", async (context) => {
-  const target = await fixture(context);
+async function checkSourceOwners(target: Awaited<ReturnType<typeof fixture>>) {
   const httpPath = path.join(target.repositoryRootPath, "app", "runtime", "http.ts");
   await fsp.writeFile(httpPath, "export const http = 2;\n", "utf8");
-  target.observe("app/runtime/http.ts");
-  assert.deepEqual((await target.controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["client:http"]);
+  assert.deepEqual((await target.observeRefresh("app/runtime/http.ts")).dirtyScopes.map(({ scope }) => scope), ["client:http"]);
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes[0]?.dependantScopes, ["client:compiler"]);
   await target.controller.completeReload(["client:http"]);
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes, []);
@@ -108,11 +106,8 @@ test("real app, shared, static, and tray edits dirty only actual owners and adva
   await fsp.writeFile(sharedPath, "export const shared = 2;\n", "utf8");
   await fsp.writeFile(staticPath, "<main>changed</main>\n", "utf8");
   await fsp.writeFile(trayPath, "fn main() { println!(\"changed\"); }\n", "utf8");
-  target.observe("shared/owner.ts");
-  target.observe("static/index.html");
-  target.observe("tray/src/main.rs");
   assert.deepEqual(
-    (await target.controller.refresh()).dirtyScopes.map(({ scope }) => scope),
+    (await target.observeRefresh("shared/owner.ts", "static/index.html", "tray/src/main.rs")).dirtyScopes.map(({ scope }) => scope),
     ["client:http", "client:compiler", "client:process"],
   );
   assert.deepEqual(
@@ -133,4 +128,10 @@ test("real app, shared, static, and tray edits dirty only actual owners and adva
   assert.deepEqual((await target.controller.refresh()).dirtyScopes, []);
   await target.controller.dispose();
   assert.equal(target.closed, 1);
+}
+
+test("app reload dirt shares one source and baseline history", async (context) => {
+  const target = await fixture(context);
+  await context.test("ignored runtime writes and missing filenames reconcile clean", () => checkIgnoredRuntime(target));
+  await context.test("real source edits preserve owner boundaries, partial advancement and disposal", () => checkSourceOwners(target));
 });
