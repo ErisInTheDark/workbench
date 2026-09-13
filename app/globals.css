@@ -5,6 +5,10 @@
   @container scroll-state(stuck: bottom) {
     @slot;
   }
+
+  &:where([data-sticky-composer-stuck="true"] *) {
+    @slot;
+  }
 }
 
 @utility text-fg-* {
@@ -333,6 +337,14 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     min-width: 0;
     position: sticky;
     z-index: 20;
+  }
+
+  .sticky-composer-origin-marker {
+    display: block;
+    height: 1px;
+    margin-top: -1px;
+    pointer-events: none;
+    width: 100%;
   }
 
   @keyframes sticky-composer-enter {
@@ -1208,6 +1220,10 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (hover: none) and (pointer: coarse) {
+    [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {
+      scroll-snap-type: none;
+    }
+
     .sticky-composer-shell {
       bottom: 0;
     }

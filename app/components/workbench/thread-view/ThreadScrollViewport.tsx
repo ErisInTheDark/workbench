@@ -18,10 +18,13 @@ import {
 import {
   getInitialThreadScrollTop,
   getPreservedThreadScrollTop,
+  resolveThreadEndFollowing,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
+  THREAD_COARSE_POINTER_MEDIA_QUERY,
   type ThreadScrollDirection,
   type ThreadScrollMetrics,
+  type ThreadScrollProximity,
 } from "./thread-scroll-snap";
 import {
   ThreadScrollViewportContext,
@@ -75,16 +78,20 @@ function ActiveThreadScrollViewport ({
 }: ActiveThreadScrollViewportProps) {
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
+  const endFollowingRef = useRef(true);
   const initialPlacementPendingRef = useRef(true);
   const nearEndDistancePxRef = useRef(0);
   const previousScrollTopRef = useRef(0);
+  const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
-  const syncScrollProximity = useCallback((viewport: HTMLDivElement) => {
-    viewport.dataset.threadScrollProximity = resolveThreadScrollProximity(
+  const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
+    const proximity = resolveThreadScrollProximity(
       readScrollMetrics(viewport),
       nearEndDistancePxRef.current,
     );
+    viewport.dataset.threadScrollProximity = proximity;
+    return proximity;
   }, []);
 
   const placeInitialViewportAtEnd = useCallback(() => {
@@ -99,6 +106,7 @@ function ActiveThreadScrollViewport ({
     if (scrollTop === null) return;
     viewport.scrollTop = scrollTop;
     previousScrollTopRef.current = viewport.scrollTop;
+    endFollowingRef.current = true;
     syncScrollProximity(viewport);
     initialPlacementPendingRef.current = false;
   }, [syncScrollProximity]);
@@ -138,7 +146,10 @@ function ActiveThreadScrollViewport ({
 
   useEffect(() => {
     const viewport = viewportRef.current;
+    const content = contentRef.current;
     if (!viewport) return;
+    // Coarse-touch WebKit needs managed growth following because active CSS snap suppresses momentum.
+    const managesEndFollowing = matchMedia(THREAD_COARSE_POINTER_MEDIA_QUERY).matches;
 
     const handleScroll = () => {
       const direction = resolveThreadScrollDirection(
@@ -147,15 +158,34 @@ function ActiveThreadScrollViewport ({
         viewport.scrollTop,
       );
       previousScrollTopRef.current = viewport.scrollTop;
-      syncScrollProximity(viewport);
+      const proximity = syncScrollProximity(viewport);
+      if (managesEndFollowing) {
+        endFollowingRef.current = resolveThreadEndFollowing(
+          endFollowingRef.current,
+          direction,
+          proximity,
+        );
+      }
       if (direction === directionRef.current) return;
       directionRef.current = direction;
       viewport.dataset.threadScrollDirection = direction;
     };
 
+    const contentResizeObserver = managesEndFollowing && content
+      ? new ResizeObserver(() => {
+        if (!endFollowingRef.current || viewportRef.current !== viewport) return;
+        viewport.scrollTop = viewport.scrollHeight;
+        previousScrollTopRef.current = viewport.scrollTop;
+        syncScrollProximity(viewport);
+      })
+      : null;
+    if (content && contentResizeObserver) contentResizeObserver.observe(content);
     viewport.addEventListener("scroll", handleScroll, { passive: true });
-    return () => viewport.removeEventListener("scroll", handleScroll);
-  }, []);
+    return () => {
+      contentResizeObserver?.disconnect();
+      viewport.removeEventListener("scroll", handleScroll);
+    };
+  }, [syncScrollProximity]);
 
   return (
     <div
@@ -170,7 +200,7 @@ function ActiveThreadScrollViewport ({
       style={THREAD_SCROLL_VIEWPORT_STYLE}
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
-        <div className={joinClasses("min-h-full shrink-0", contentClassName)}>
+        <div ref={contentRef} className={joinClasses("min-h-full shrink-0", contentClassName)}>
           {children}
         </div>
       </ThreadScrollViewportContext.Provider>

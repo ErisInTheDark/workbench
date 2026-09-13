@@ -1,10 +1,12 @@
 /*
  * Exports:
  * - getInitialThreadScrollTop: defer initial bottom placement until committed thread content has an end target.
+ * - THREAD_COARSE_POINTER_MEDIA_QUERY: identify touch-first viewports needing managed scroll fallbacks.
  * - ThreadScrollDirection: latest meaningful thread scroll movement.
  * - ThreadScrollMetrics: viewport geometry used for end and layout-preservation decisions.
  * - ThreadScrollProximity: whether the viewport is inside its stronger bottom snap zone.
  * - resolveThreadScrollDirection: retain direction across unchanged offsets.
+ * - resolveThreadEndFollowing: retain managed following until explicit upward movement.
  * - resolveThreadScrollProximity: classify remaining distance from the normal-flow bottom.
  * - isThreadScrollAtEnd: identify the normal-flow bottom boundary.
  * - getPreservedThreadScrollTop: preserve reading position without competing with end re-snapping.
@@ -12,6 +14,8 @@
 
 export type ThreadScrollDirection = "down" | "up";
 export type ThreadScrollProximity = "far" | "near";
+
+export const THREAD_COARSE_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 
 export interface ThreadScrollMetrics {
   readonly clientHeight: number;
@@ -41,6 +45,16 @@ export function resolveThreadScrollDirection(
   if (currentScrollTop > previousScrollTop) return "down";
   if (currentScrollTop < previousScrollTop) return "up";
   return currentDirection;
+}
+
+export function resolveThreadEndFollowing(
+  currentlyFollowing: boolean,
+  direction: ThreadScrollDirection,
+  proximity: ThreadScrollProximity,
+) {
+  if (direction === "up") return false;
+  if (proximity === "near") return true;
+  return currentlyFollowing;
 }
 
 export function resolveThreadScrollProximity(
