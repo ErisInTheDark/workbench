@@ -56,6 +56,7 @@ const fixtureIdentityValues = {
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
+let databaseImage: Buffer;
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
 let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
 
@@ -67,6 +68,14 @@ beforeEach(context => {
 });
 
 before(async () => {
+  const template = new Database(":memory:");
+  try {
+    template.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(template);
+    databaseImage = template.serialize();
+  } finally {
+    template.close();
+  }
   testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
   process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
   await fs.mkdir(path.join(testWorkbenchLibraryRoot, "instructions"), { recursive: true });
@@ -210,11 +219,15 @@ for (const route of ["managed-creation", "internal", "browser"] as const) {
   }
 }
 
+function databaseFixture() {
+  const database = new Database(databaseImage);
+  database.pragma("foreign_keys = ON");
+  return database;
+}
+
 test("bridge admits public identity before structural publication and records the same identity without blocking deltas on bodies", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-identity-"));
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
+  const database = databaseFixture();
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   let writes = 0;
@@ -348,9 +361,7 @@ test("bridge admits public identity before structural publication and records th
 
 test("database replacement preserves ordered live events and usage without replaying provider starts", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-cold-live-identity-"));
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
+  const database = databaseFixture();
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   const transcripts = new WorkbenchTranscriptRepository(database);
@@ -1808,111 +1819,114 @@ test("SQLite recovery rejects unknown WB identity before contacting the provider
   }
 });
 
-for (const interruption of ["none", "recorder failure", "cancellation"] as const) {
-  test(`paged recovery settles real WB identities and preserves the marker after ${interruption}`, async (context) => {
-    const diagnostics = captureTestOutput(context, process.stderr, text =>
-      text.startsWith("[codex-transcript] capture failed sqlite-recovery-page:") && text.includes("cause=page recording failed"));
-    context.after(() => assert.equal(diagnostics.length, interruption === "recorder failure" ? 1 : 0));
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
-    const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
-    const gaps = new WorkbenchTranscriptCaptureGapController({ markerPath: path.join(root, "gap.json") });
-    const transcript = new WorkbenchTranscriptController(database, gaps);
-    const identities = {
-      threads: new WorkbenchThreadIdentityController(database),
-      items: new WorkbenchTranscriptIdentityController(database),
-    };
-    const requests: JsonRpcRequest[] = [];
-    const cancellation = new AbortController();
-    const turns = ["old", "new"].map((id, index) => ({
-      ...bridgeThread([{
-        type: "agentMessage", id: `${id}-message`, text: id, phase: "commentary",
-        memoryCitation: null, delivery: null, questions: null,
-      }]).turns[0]!,
-      id, startedAt: index + 1,
-    }));
-    let pages = 0;
-    let interrupt = interruption;
-    const bridge = new CodexStdioBridge({
-      appServer: { send(request: JsonRpcRequest) {
-        requests.push(request);
-        const params = request.params as { threadId: string; cursor?: string; itemsView?: string };
-        assert.equal(params.threadId, "thread", "only the native binding goes upstream");
-        queueMicrotask(() => void bridge.handleUpstreamMessage({
-          id: request.id,
-          result: request.method === "thread/read"
-            ? { thread: { ...bridgeThread(), turns: [] } }
-            : params.itemsView === "notLoaded"
-              ? { data: [...turns].reverse().map((turn) => ({ ...turn, items: [], itemsView: "notLoaded" })), nextCursor: null }
-              : { data: [params.cursor ? turns[0] : turns[1]], nextCursor: params.cursor ? null : "older" },
-        }));
-      } } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-      identities, onNotification() {}, sendToClient() {}, storageRoot: root,
-      resolveProjectFromCwd: async () => ({
-        cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
-        root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
-      }),
-      recordSqliteTranscript: async (observations, context) => {
-        const fullPage = observations.some((entry) => entry.kind === "providerTurnScope" && entry.completeTurnIds.length > 0);
-        if (context.recoveryBoundary) {
-          assert.equal(pages, 2, "no gap closure before both full pages settle");
-        } else if (fullPage) {
-          pages++;
-          assert.equal(gaps.pendingRecoveryThreadIds.length, 1);
-          if (interrupt === "recorder failure") throw new Error("page recording failed");
-        }
-        await transcript.record(observations, context);
-        if (fullPage && interrupt === "cancellation") cancellation.abort(new Error("retiring"));
-      },
-    });
-    try {
-      await transcript.start();
-      await identities.threads.start();
-      const identity = await identities.threads.observe({
-        native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"] },
-        projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "recovery",
-        createdAt: 1, updatedAt: 2, activityAt: 2,
-      });
-      await gaps.captureFailure({
-        error: new Error("retained gap"), recoverability: "provider", threadId: identity.threadId, turnId: null,
-      });
-      if (interruption !== "none") {
-        await assert.rejects(bridge.recoverSqliteTranscriptThread(identity.threadId, cancellation.signal));
-        assert.deepEqual(gaps.pendingRecoveryThreadIds, [identity.threadId]);
-        assert.equal(requests.filter(({ method }) => method === "thread/turns/list").length, 2);
-        interrupt = "none";
-        pages = 0;
-      }
-      await bridge.recoverSqliteTranscriptThread(identity.threadId);
-      assert.deepEqual(gaps.pendingRecoveryThreadIds, []);
-      const snapshot = await transcript.read({ threadId: identity.threadId, turnLimit: 10 });
-      assert.equal(snapshot?.thread.id, identity.threadId);
-      assert.ok(snapshot);
-      const projection = projectWorkbenchTranscript(snapshot);
-      assert.ok(projection.success);
-      assert.deepEqual(projection.data.turns.flatMap(({ items }) => items.map((item) => (
-        item.type === "agentMessage" ? item.text : item.type
-      ))), ["old", "new"]);
-      assert.ok(projection.data.turns.every((turn) => turn.id !== "old" && turn.id !== "new"));
-      assert.ok(requests.every(({ method, params }) => (
-        method !== "thread/read" || (params as { includeTurns: boolean }).includeTurns === false
-      )));
-    } finally {
-      await bridge.disposeImmediately();
-      transcript.dispose();
-      identities.threads.dispose();
-      identities.items.dispose();
-      await database.close();
-      await fs.rm(root, { force: true, recursive: true });
-    }
+test("paged recovery shares one worker across independent thread histories", async parent => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
+  const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
+  const gaps = new WorkbenchTranscriptCaptureGapController({ markerPath: path.join(root, "gap.json") });
+  const transcript = new WorkbenchTranscriptController(database, gaps);
+  const identities = {
+    threads: new WorkbenchThreadIdentityController(database),
+    items: new WorkbenchTranscriptIdentityController(database),
+  };
+  parent.after(async () => {
+    transcript.dispose();
+    identities.threads.dispose();
+    identities.items.dispose();
+    await database.close();
+    await fs.rm(root, { force: true, recursive: true });
   });
-}
+  await transcript.start();
+  await identities.threads.start();
+  for (const interruption of ["none", "recorder failure", "cancellation"] as const) {
+    await parent.test(`paged recovery settles real WB identities and preserves the marker after ${interruption}`, async (context) => {
+      const diagnostics = captureTestOutput(context, process.stderr, text =>
+        text.startsWith("[codex-transcript] capture failed sqlite-recovery-page:") && text.includes("cause=page recording failed"));
+      context.after(() => assert.equal(diagnostics.length, interruption === "recorder failure" ? 1 : 0));
+      const nativeThreadId = NativeThreadIdSchema.parse(`thread-${interruption.replaceAll(" ", "-")}`);
+      const requests: JsonRpcRequest[] = [];
+      const cancellation = new AbortController();
+      const turns = ["old", "new"].map((id, index) => ({
+        ...bridgeThread([{
+          type: "agentMessage", id: `${id}-message`, text: id, phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        }]).turns[0]!,
+        id, startedAt: index + 1,
+      }));
+      let pages = 0;
+      let interrupt = interruption;
+      const bridge = new CodexStdioBridge({
+        appServer: { send(request: JsonRpcRequest) {
+          requests.push(request);
+          const params = request.params as { threadId: string; cursor?: string; itemsView?: string };
+          assert.equal(params.threadId, nativeThreadId, "only the native binding goes upstream");
+          queueMicrotask(() => void bridge.handleUpstreamMessage({
+            id: request.id,
+            result: request.method === "thread/read"
+              ? { thread: { ...bridgeThread(), id: nativeThreadId, turns: [] } }
+              : params.itemsView === "notLoaded"
+                ? { data: [...turns].reverse().map((turn) => ({ ...turn, items: [], itemsView: "notLoaded" })), nextCursor: null }
+                : { data: [params.cursor ? turns[0] : turns[1]], nextCursor: params.cursor ? null : "older" },
+          }));
+        } } as unknown as CodexAppServer,
+        bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+        identities, onNotification() {}, sendToClient() {}, storageRoot: root,
+        resolveProjectFromCwd: async () => ({
+          cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+          root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+        }),
+        recordSqliteTranscript: async (observations, context) => {
+          const fullPage = observations.some((entry) => entry.kind === "providerTurnScope" && entry.completeTurnIds.length > 0);
+          if (context.recoveryBoundary) {
+            assert.equal(pages, 2, "no gap closure before both full pages settle");
+          } else if (fullPage) {
+            pages++;
+            assert.equal(gaps.pendingRecoveryThreadIds.length, 1);
+            if (interrupt === "recorder failure") throw new Error("page recording failed");
+          }
+          await transcript.record(observations, context);
+          if (fullPage && interrupt === "cancellation") cancellation.abort(new Error("retiring"));
+        },
+      });
+      try {
+        const identity = await identities.threads.observe({
+          native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId },
+          projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo", title: "recovery",
+          createdAt: 1, updatedAt: 2, activityAt: 2,
+        });
+        await gaps.captureFailure({
+          error: new Error("retained gap"), recoverability: "provider", threadId: identity.threadId, turnId: null,
+        });
+        if (interruption !== "none") {
+          await assert.rejects(bridge.recoverSqliteTranscriptThread(identity.threadId, cancellation.signal));
+          assert.deepEqual(gaps.pendingRecoveryThreadIds, [identity.threadId]);
+          assert.equal(requests.filter(({ method }) => method === "thread/turns/list").length, 2);
+          interrupt = "none";
+          pages = 0;
+        }
+        await bridge.recoverSqliteTranscriptThread(identity.threadId);
+        assert.deepEqual(gaps.pendingRecoveryThreadIds, []);
+        const snapshot = await transcript.read({ threadId: identity.threadId, turnLimit: 10 });
+        assert.equal(snapshot?.thread.id, identity.threadId);
+        assert.ok(snapshot);
+        const projection = projectWorkbenchTranscript(snapshot);
+        assert.ok(projection.success);
+        assert.deepEqual(projection.data.turns.flatMap(({ items }) => items.map((item) => (
+          item.type === "agentMessage" ? item.text : item.type
+        ))), ["old", "new"]);
+        assert.ok(projection.data.turns.every((turn) => turn.id !== "old" && turn.id !== "new"));
+        assert.ok(requests.every(({ method, params }) => (
+          method !== "thread/read" || (params as { includeTurns: boolean }).includeTurns === false
+        )));
+      } finally {
+        await bridge.disposeImmediately();
+      }
+    });
+  }
+});
 
 async function recordingIdentities(options: { database?: InstanceType<typeof Database>; existingTurn?: boolean; nativeLocation?: string } = {}) {
-  const database = options.database ?? new Database(":memory:");
+  const database = options.database ?? databaseFixture();
   const nativeLocation = options.nativeLocation ?? "C:/repo";
-  database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   const thread = repository.observe({
@@ -1949,7 +1963,7 @@ async function recordingIdentities(options: { database?: InstanceType<typeof Dat
 }
 
 async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false) {
-  const database = new Database(":memory:");
+  const database = databaseFixture();
   const identities = await recordingIdentities({ database, nativeLocation, existingTurn });
   const repository = new WorkbenchTranscriptRepository(database);
   const sqliteReader = new CodexSqliteTranscriptReader(
@@ -1979,7 +1993,7 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
 }
 
 test("SQL context pages settle provider bodies and then read without legacy storage", async () => {
-  const database = new Database(":memory:");
+  const database = databaseFixture();
   const identities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-sql-context-"));
@@ -2620,9 +2634,7 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
 
 test("live transcript recording and reload use only SQL and preserve image assets", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-transcript-"));
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
+  const database = databaseFixture();
   const fixtureIdentities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
