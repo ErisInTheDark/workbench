@@ -2,10 +2,6 @@
 @import "tailwindcss";
 
 @custom-variant stuck {
-  @container scroll-state(stuck: bottom) {
-    @slot;
-  }
-
   &:where([data-sticky-composer-stuck="true"] *) {
     @slot;
   }
@@ -328,22 +324,34 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     --sticky-composer-motion-duration: 220ms;
     --sticky-composer-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
     --fg-bg: var(--shell-fade-bg);
+    align-self: end;
     background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
     border-radius: 1.15rem;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-    container-type: scroll-state;
     flex-shrink: 0;
+    grid-column: 1;
+    grid-row: 2;
     margin-top: 1.5rem;
     min-width: 0;
     position: sticky;
     z-index: 20;
   }
 
-  .sticky-composer-origin-marker {
-    display: block;
-    height: 1px;
-    margin-top: -1px;
+  .sticky-composer-flow-reserver {
+    align-self: end;
+    flex-shrink: 0;
+    grid-column: 1;
+    grid-row: 2;
+    height: 0;
     pointer-events: none;
+    position: relative;
+    width: 100%;
+  }
+
+  .sticky-composer-origin-marker {
+    bottom: 0;
+    height: 1px;
+    position: absolute;
     width: 100%;
   }
 
@@ -1205,7 +1213,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   [data-thread-scroll-target="true"][data-thread-scroll-direction="down"][data-thread-scroll-proximity="near"] {
-    --thread-scroll-snap-distance: 200vh;
+    --thread-scroll-snap-distance: 100vh;
   }
 
   [data-thread-scroll-end="true"] {

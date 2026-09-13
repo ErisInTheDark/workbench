@@ -1,13 +1,12 @@
 /*
  * Exports:
- * - default StickyComposerSurface: render one sticky host with native and coarse-touch stuck-state ownership.
+ * - default StickyComposerSurface: render one sticky host with geometry-owned stuck state and flow reservation.
  */
 "use client";
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
-import { THREAD_COARSE_POINTER_MEDIA_QUERY } from "./thread-scroll-snap";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 
 function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | null) {
@@ -35,6 +34,7 @@ export default function StickyComposerSurface({
   collapsedPreviewKind?: string;
   onCollapsedChange(collapsed: boolean): void;
 }) {
+  const flowReserverRef = useRef<HTMLDivElement>(null);
   const originMarkerRef = useRef<HTMLSpanElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const threadScrollViewport = useThreadScrollViewportContext();
@@ -48,22 +48,42 @@ export default function StickyComposerSurface({
   const collapseControlLabel = collapsed ? collapsedLabel : collapseLabel;
 
   useEffect(() => {
+    const flowReserver = flowReserverRef.current;
     const originMarker = originMarkerRef.current;
     const shell = shellRef.current;
     const viewport = threadScrollViewport.getViewport();
-    if (!originMarker || !shell || !viewport
-      || !matchMedia(THREAD_COARSE_POINTER_MEDIA_QUERY).matches) return;
+    if (!flowReserver || !originMarker || !shell || !viewport) return;
 
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry?.rootBounds) return;
-      // The marker stays in normal flow while the sticky shell is constrained.
-      shell.dataset.stickyComposerStuck = entry.boundingClientRect.top >= entry.rootBounds.bottom
-        ? "true"
-        : "false";
-    }, { root: viewport, threshold: 0 });
-    observer.observe(originMarker);
+    const syncFlowReserver = () => {
+      const shellStyle = getComputedStyle(shell);
+      const marginBlockEnd = Number.parseFloat(shellStyle.marginBottom);
+      const shellRect = shell.getBoundingClientRect();
+      const stuck = shellRect.bottom + marginBlockEnd
+        < flowReserver.getBoundingClientRect().bottom - 0.5;
+      const stuckValue = stuck ? "true" : "false";
+      if (shell.dataset.stickyComposerStuck !== stuckValue) {
+        shell.dataset.stickyComposerStuck = stuckValue;
+      }
+      if (stuck) return;
+      const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
+      flowReserver.style.height = `${shellRect.height + marginBlockStart + marginBlockEnd}px`;
+    };
+    syncFlowReserver();
+
+    // The marker wakes geometry reconciliation when the natural composer row crosses the viewport.
+    const intersectionObserver = new IntersectionObserver(syncFlowReserver, {
+      root: viewport,
+      threshold: 0,
+    });
+    const resizeObserver = new ResizeObserver(syncFlowReserver);
+    intersectionObserver.observe(originMarker);
+    resizeObserver.observe(shell);
+    viewport.addEventListener("scroll", syncFlowReserver, { passive: true });
     return () => {
-      observer.disconnect();
+      intersectionObserver.disconnect();
+      resizeObserver.disconnect();
+      viewport.removeEventListener("scroll", syncFlowReserver);
+      flowReserver.style.height = "";
       delete shell.dataset.stickyComposerStuck;
     };
   }, [threadScrollViewport]);
@@ -110,11 +130,16 @@ export default function StickyComposerSurface({
           </div>
         </div>
       </div>
-      <span
-        ref={originMarkerRef}
+      <div
+        ref={flowReserverRef}
         aria-hidden="true"
-        className="sticky-composer-origin-marker"
-      />
+        className="sticky-composer-flow-reserver"
+      >
+        <span
+          ref={originMarkerRef}
+          className="sticky-composer-origin-marker"
+        />
+      </div>
     </>
   );
 }

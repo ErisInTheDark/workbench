@@ -5,7 +5,7 @@
  * - ThreadScrollDirection: latest meaningful thread scroll movement.
  * - ThreadScrollMetrics: viewport geometry used for end and layout-preservation decisions.
  * - ThreadScrollProximity: whether the viewport is inside its stronger bottom snap zone.
- * - resolveThreadScrollDirection: retain direction across unchanged offsets.
+ * - resolveThreadScrollDirection: change direction only for user-owned scroll movement.
  * - resolveThreadEndFollowing: retain managed following until explicit upward movement.
  * - resolveThreadScrollProximity: classify remaining distance from the normal-flow bottom.
  * - isThreadScrollAtEnd: identify the normal-flow bottom boundary.
@@ -41,7 +41,9 @@ export function resolveThreadScrollDirection(
   currentDirection: ThreadScrollDirection,
   previousScrollTop: number,
   currentScrollTop: number,
+  userOwnsMovement: boolean,
 ): ThreadScrollDirection {
+  if (!userOwnsMovement) return currentDirection;
   if (currentScrollTop > previousScrollTop) return "down";
   if (currentScrollTop < previousScrollTop) return "up";
   return currentDirection;

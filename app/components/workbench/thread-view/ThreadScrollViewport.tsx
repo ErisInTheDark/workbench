@@ -43,7 +43,9 @@ interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps
   forwardedRef: ForwardedRef<HTMLDivElement>;
 }
 
+const THREAD_SCROLL_DOWN_KEYS = new Set(["ArrowDown", "End", "PageDown"]);
 const THREAD_SCROLL_NEAR_END_DISTANCE_REM = 30;
+const THREAD_SCROLL_UP_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
 const THREAD_SCROLL_VIEWPORT_STYLE: CSSProperties & {
   "--thread-scroll-near-end-distance": string;
 } = {
@@ -70,6 +72,11 @@ function readScrollMetrics (viewport: HTMLDivElement): ThreadScrollMetrics {
   };
 }
 
+function isInteractiveScrollKeyTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest("a,button,input,select,textarea,[contenteditable='true']"));
+}
+
 function ActiveThreadScrollViewport ({
   children,
   className,
@@ -81,6 +88,8 @@ function ActiveThreadScrollViewport ({
   const endFollowingRef = useRef(true);
   const initialPlacementPendingRef = useRef(true);
   const nearEndDistancePxRef = useRef(0);
+  const pointerScrollActiveRef = useRef(false);
+  const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -151,24 +160,53 @@ function ActiveThreadScrollViewport ({
     // Coarse-touch WebKit needs managed growth following because active CSS snap suppresses momentum.
     const managesEndFollowing = matchMedia(THREAD_COARSE_POINTER_MEDIA_QUERY).matches;
 
+    const setScrollDirection = (direction: ThreadScrollDirection) => {
+      if (direction === directionRef.current) return;
+      directionRef.current = direction;
+      viewport.dataset.threadScrollDirection = direction;
+    };
     const handleScroll = () => {
-      const direction = resolveThreadScrollDirection(
+      setScrollDirection(resolveThreadScrollDirection(
         directionRef.current,
         previousScrollTopRef.current,
         viewport.scrollTop,
-      );
+        pointerScrollActiveRef.current && pointerScrollMovedRef.current,
+      ));
+      pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = viewport.scrollTop;
       const proximity = syncScrollProximity(viewport);
       if (managesEndFollowing) {
         endFollowingRef.current = resolveThreadEndFollowing(
           endFollowingRef.current,
-          direction,
+          directionRef.current,
           proximity,
         );
       }
-      if (direction === directionRef.current) return;
-      directionRef.current = direction;
-      viewport.dataset.threadScrollDirection = direction;
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY > 0) setScrollDirection("down");
+      if (event.deltaY < 0) setScrollDirection("up");
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isInteractiveScrollKeyTarget(event.target)) return;
+      if (THREAD_SCROLL_DOWN_KEYS.has(event.key) || (event.key === " " && !event.shiftKey)) {
+        setScrollDirection("down");
+      }
+      if (THREAD_SCROLL_UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
+        setScrollDirection("up");
+      }
+    };
+    const handlePointerDown = () => {
+      pointerScrollActiveRef.current = true;
+      pointerScrollMovedRef.current = false;
+      previousScrollTopRef.current = viewport.scrollTop;
+    };
+    const handlePointerMove = () => {
+      if (pointerScrollActiveRef.current) pointerScrollMovedRef.current = true;
+    };
+    const handlePointerEnd = () => {
+      pointerScrollActiveRef.current = false;
+      pointerScrollMovedRef.current = false;
     };
 
     const contentResizeObserver = managesEndFollowing && content
@@ -180,10 +218,24 @@ function ActiveThreadScrollViewport ({
       })
       : null;
     if (content && contentResizeObserver) contentResizeObserver.observe(content);
+    viewport.addEventListener("keydown", handleKeyDown);
+    viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
     viewport.addEventListener("scroll", handleScroll, { passive: true });
+    viewport.addEventListener("wheel", handleWheel, { passive: true });
+    viewport.ownerDocument.addEventListener("pointercancel", handlePointerEnd, { passive: true });
+    viewport.ownerDocument.addEventListener("pointerup", handlePointerEnd, { passive: true });
     return () => {
       contentResizeObserver?.disconnect();
+      pointerScrollActiveRef.current = false;
+      pointerScrollMovedRef.current = false;
+      viewport.removeEventListener("keydown", handleKeyDown);
+      viewport.removeEventListener("pointerdown", handlePointerDown);
+      viewport.removeEventListener("pointermove", handlePointerMove);
       viewport.removeEventListener("scroll", handleScroll);
+      viewport.removeEventListener("wheel", handleWheel);
+      viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
+      viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
     };
   }, [syncScrollProximity]);
 

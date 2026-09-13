@@ -1091,9 +1091,11 @@ export default memo(function ThreadViewContent ({
           data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
           data-thread-project-file-link-boundary="true"
           className={joinClasses(
-            "mx-auto flex min-h-full w-full min-w-0 max-w-content flex-col overflow-x-clip md:overflow-x-visible",
+            "mx-auto min-h-full w-full min-w-0 max-w-content overflow-x-clip md:overflow-x-visible",
+            isDraftThreadView
+              ? "flex flex-col"
+              : "grid grid-cols-1 grid-rows-[1fr_auto_auto]",
             mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
-            !isDraftThreadView && "justify-end",
           )}
           onClick={handleThreadViewClick}
           style={{ fontSize: `${fontSizeRem}rem` }}
@@ -1116,7 +1118,13 @@ export default memo(function ThreadViewContent ({
           </>
         ) : null}
 
-        <div hidden={isDraftThreadView}>
+        <div
+          hidden={isDraftThreadView}
+          className={isDraftThreadView
+            ? undefined
+            : "col-start-1 row-start-1 flex min-w-0 flex-col justify-end"}
+        >
+          <div>
           {activeThread && usesSqlTranscript && renderActiveThread && previousTurnEntry ? (
             previousTurnLoadStatus === "loading" ? (
               <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
@@ -1245,13 +1253,14 @@ export default memo(function ThreadViewContent ({
         ) : agentTabs ? (
           <div className="mt-6">
             <div className="flex flex-wrap items-center gap-0.5">{agentTabs}</div>
-          </div>
+        </div>
         ) : null}
+          </div>
         {activeThread && !isDraftThreadView ? (
           <>
             {composer}
             {composerStatus ? (
-              <div>
+              <div className="col-start-1 row-start-3">
                 {composerStatus}
               </div>
             ) : null}

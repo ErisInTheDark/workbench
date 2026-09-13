@@ -20,9 +20,14 @@ test("initial placement waits for the committed thread end target", () => {
 });
 
 test("thread scroll direction follows movement and ignores unchanged offsets", () => {
-  assert.equal(resolveThreadScrollDirection("up", 40, 80), "down");
-  assert.equal(resolveThreadScrollDirection("down", 80, 40), "up");
-  assert.equal(resolveThreadScrollDirection("up", 40, 40), "up");
+  assert.equal(resolveThreadScrollDirection("up", 40, 80, true), "down");
+  assert.equal(resolveThreadScrollDirection("down", 80, 40, true), "up");
+  assert.equal(resolveThreadScrollDirection("up", 40, 40, true), "up");
+});
+
+test("thread scroll direction ignores movement without explicit user ownership", () => {
+  assert.equal(resolveThreadScrollDirection("down", 80, 40, false), "down");
+  assert.equal(resolveThreadScrollDirection("down", 80, 40, true), "up");
 });
 
 test("thread scroll proximity becomes near only inside the bottom threshold", () => {
