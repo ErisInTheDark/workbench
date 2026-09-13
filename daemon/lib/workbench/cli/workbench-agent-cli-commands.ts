@@ -224,7 +224,7 @@ function renderRootHelp(commands = listWorkbenchAgentCommands(), isWorkbenchRoot
   return [
     "Usage:", "  wb --help", "  wb <command> [options]", "", "Commands:",
     ...commands.map((command) => `  ${command.usage}`),
-    ...(isWorkbenchRoot ? ["  wb test [--list]  (local, claims-selected tests)"] : []), "", "Help commands:",
+    ...(isWorkbenchRoot ? ["  wb test [--list] [-- [<file>...]]  (local, claims-selected or explicit tests)"] : []), "", "Help commands:",
     ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`), "",
     "Project ownership is derived from the current working directory.", "",
   ].join("\n");

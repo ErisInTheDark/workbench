@@ -18,10 +18,6 @@ function quotePosixSingle(value: string) {
   return `'${value.replace(/'/gu, `'"'"'`)}'`;
 }
 
-function quotePowerShellSingle(value: string) {
-  return `'${value.replace(/'/gu, "''")}'`;
-}
-
 export default class WorkbenchAgentCliEnvironment {
   private readonly origin: string;
   private readonly runtimeDirectoryPath: string;
@@ -48,9 +44,10 @@ export default class WorkbenchAgentCliEnvironment {
     ]);
     await Promise.all([
       fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_ORIGIN=" + quotePosixSingle(this.origin) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
-      fs.writeFile(powershellShimPath, `# ${SHIM_MARKER}\n$env:WORKBENCH_ORIGIN = ${quotePowerShellSingle(this.origin)}\n& bash ${quotePowerShellSingle(posixShimPath)} @args\nexit $LASTEXITCODE\n`, "utf8"),
       fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
     ]);
+    // PowerShell consumes unquoted -- for .ps1 commands; let it resolve wb.cmd instead.
+    await fs.rm(powershellShimPath, { force: true });
     await fs.chmod(posixShimPath, 0o755);
 
     const currentPath = env.PATH ?? env.Path ?? "";
@@ -63,7 +60,6 @@ export default class WorkbenchAgentCliEnvironment {
 
     return {
       posixShimPath,
-      powershellShimPath,
       windowsShimPath,
     };
   }

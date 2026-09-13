@@ -2,7 +2,7 @@
  * Exports:
  * - default ProjectTestRunner: validate test discovery and own fixtures and Node test-runner children.
  * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and timeout.
- * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse discovery inputs and the cooperative full-suite flag.
+ * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse explicit discovery inputs.
  * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -22,7 +22,6 @@ import ProjectTestCatalog from "./ProjectTestCatalog";
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
-const GOOD_CITIZEN_TEST_TIMEOUT_MS = 120_000;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
 
@@ -47,26 +46,16 @@ export type PreparedTestFixtures = WorkbenchPreparedTestFixtures;
 
 export interface ProjectTestRunnerArguments {
   inputs: string[];
-  testConcurrency?: number;
-  testTimeoutMs?: number;
 }
 
 export function parseProjectTestRunnerArguments(arguments_: readonly string[]): ProjectTestRunnerArguments {
   const inputs: string[] = [];
-  let goodCitizen = false;
   for (const argument of arguments_) {
     if (argument === "--") continue;
-    if (argument === "--good-citizen") {
-      goodCitizen = true;
-      continue;
-    }
     if (argument.startsWith("--")) throw new Error(`Unknown test runner option: ${argument}`);
     inputs.push(argument);
   }
-  return {
-    inputs,
-    ...(goodCitizen ? { testConcurrency: 1, testTimeoutMs: GOOD_CITIZEN_TEST_TIMEOUT_MS } : {}),
-  };
+  return { inputs };
 }
 
 export default class ProjectTestRunner {
@@ -172,10 +161,6 @@ export default class ProjectTestRunner {
 }
 
 export async function runProjectTests(projectRoot: string, arguments_: readonly string[]) {
-  const { inputs, testConcurrency, testTimeoutMs } = parseProjectTestRunnerArguments(arguments_);
-  const runnerOptions: ProjectTestRunnerOptions = {
-    ...(testConcurrency === undefined ? {} : { testConcurrency }),
-    ...(testTimeoutMs === undefined ? {} : { testTimeoutMs }),
-  };
-  return await new ProjectTestRunner(projectRoot, runnerOptions).run(inputs);
+  const { inputs } = parseProjectTestRunnerArguments(arguments_);
+  return await new ProjectTestRunner(projectRoot).run(inputs);
 }

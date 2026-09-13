@@ -1304,9 +1304,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     shellSourcePath,
   }).install(env);
   const posixContent = await readFile(installed.posixShimPath, "utf8");
-  const powershellContent = await readFile(installed.powershellShimPath, "utf8");
   assert.match(posixContent, /^#!\/usr\/bin\/env bash/u);
-  assert.match(powershellContent, /workbench-agent-cli-shim-v1/u);
   if (process.platform !== "win32") {
     assert.notEqual((await stat(installed.posixShimPath)).mode & 0o111, 0);
   }

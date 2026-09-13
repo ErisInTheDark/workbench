@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ClaimedProjectTestCommandOptions: inject claim transport, selection and execution boundaries.
- * - default ClaimedProjectTestCommand: validate local invocation and execute tests for live claims.
+ * - default ClaimedProjectTestCommand: execute local tests selected by live claims or explicit inputs.
  */
 import { realpath } from "node:fs/promises";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc
 import { GitCheckpointRequestSchema } from "../shared/workbench/git/checkpoint-contracts";
 import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/lib/workbench/testing/ClaimedTestSelector";
 import ProjectTestCatalog from "./ProjectTestCatalog";
-import ProjectTestRunner from "./ProjectTestRunner";
+import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
 export interface ClaimedProjectTestCommandOptions {
   cwd?: string;
@@ -28,11 +28,23 @@ export default class ClaimedProjectTestCommand {
     const cwd = await realpath(this.options.cwd ?? process.cwd());
     if (path.relative(root, cwd)) throw new Error("wb test only works from the Workbench repository root.");
     const output = this.options.output ?? console.log;
+    const usage = "Usage: wb test [--list] [-- [<file>...]]";
     if (args.length === 1 && args[0] === "--help") {
-      output("Usage: wb test [--list]\nRun companion tests selected from all live claims. --list only prints the selection.");
+      output(`${usage}\nDefault: select companion tests from all live claims.\nAfter --: use explicit files/directories, or the full suite when empty.\n--list only prints the selection.`);
       return { exitCode: 0, signal: null };
     }
-    if (args.some(argument => argument !== "--list")) throw new Error("Usage: wb test [--list]");
+    const separator = args.indexOf("--");
+    const flags = separator < 0 ? args : args.slice(0, separator);
+    if (flags.some(argument => argument !== "--list")) throw new Error(usage);
+    if (separator >= 0) {
+      const { inputs } = parseProjectTestRunnerArguments(args.slice(separator + 1));
+      if (flags.includes("--list")) {
+        const files = await new ProjectTestRunner(root).discoverTestFiles(inputs);
+        output(files.map(file => path.relative(root, file)).join("\n"));
+        return { exitCode: 0, signal: null };
+      }
+      return await (this.options.run ?? (files => new ProjectTestRunner(root).run(files)))(inputs);
+    }
     const env = this.options.env ?? process.env;
     const origin = new URL(env.WORKBENCH_ORIGIN ?? "");
     if (origin.protocol !== "http:" || !["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname)

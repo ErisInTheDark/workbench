@@ -1,4 +1,4 @@
-/* No exports. Tests protect cwd/claim boundaries, list-only mode and failure propagation. */
+/* No exports. Tests protect claim/explicit-input boundaries, previews and failure propagation. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,4 +55,21 @@ test("uses every live local claim without mixing repositories or launching list-
   status = 503;
   await assert.rejects(command.run([]), /HTTP 503/);
   assert.equal(runs.length, 1);
+
+  const explicit = new ClaimedProjectTestCommand(root, { ...options, env: {} });
+  const requestsBeforeExplicit = requests.length;
+  const selectionsBeforeExplicit = selected.length;
+  const files = ["test/ProjectTestRunner.test.ts", "test/ProjectTestCatalog.test.ts"];
+  assert.deepEqual(await explicit.run(["--", ...files]), { exitCode: 7, signal: null });
+  assert.deepEqual(runs.at(-1), files);
+  await explicit.run(["--"]);
+  assert.deepEqual(runs.at(-1), []);
+  const runsBeforeList = runs.length;
+  await explicit.run(["--list", "--", ...files, files[0]]);
+  assert.deepEqual(output.at(-1)?.split("\n").sort(), files.map(file => path.normalize(file)).sort());
+  assert.equal(runs.length, runsBeforeList);
+  assert.equal(requests.length, requestsBeforeExplicit);
+  assert.equal(selected.length, selectionsBeforeExplicit);
+  await assert.rejects(explicit.run(["--", "--invalid-option"]), /Unknown test runner option/);
+  await assert.rejects(new ClaimedProjectTestCommand(root, { ...options, cwd: path.join(root, "test") }).run(["--", ...files]), /repository root/);
 });

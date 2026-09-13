@@ -57,7 +57,6 @@ export default class ClaimedTestSelector {
     };
     this.roots.forEach(visit);
     const nodeFiles = new Set(this.modules.values());
-    const seeds = new Map<string, string[]>();
     const owned = new Map<string, Set<string>>();
     const matchers = new Map<string, ReturnType<typeof createGitignoreMatcher>>();
     for (const node of nodes.values()) {
@@ -66,7 +65,6 @@ export default class ClaimedTestSelector {
       const files = this.catalog.sources.filter(file => matcher.matches(path.relative(this.catalog.root, file)));
       const module = this.modules.get(node.scope);
       if (module) files.push(module);
-      seeds.set(node.scope, [...new Set(files)]);
       const stops = new Set([...nodeFiles].filter(file => file !== module));
       owned.set(node.scope, this.graph.closure(files, "imports", stops));
     }
@@ -78,7 +76,8 @@ export default class ClaimedTestSelector {
     const includeNode = (node: TestReloadNode) => {
       if (selectedNodes.has(node.scope)) return;
       selectedNodes.add(node.scope);
-      for (const file of this.graph.closure(seeds.get(node.scope) ?? [])) selectedSources.add(file);
+      const module = this.modules.get(node.scope);
+      if (module) selectedSources.add(module);
       node.children.forEach(includeNode);
     };
     for (const claim of claims) {
@@ -98,14 +97,15 @@ export default class ClaimedTestSelector {
       }
       for (const file of matching) {
         if (this.catalog.owners.has(file)) { selectedTests.add(file); continue; }
+        selectedSources.add(file);
         if ([...owned.values()].some(files => files.has(file))) continue;
         outsideSources.add(file);
-        for (const importer of this.graph.closure([file], "importers")) selectedSources.add(importer);
       }
       if (!mapped) unmapped.push(claim);
     }
     if (unmapped.length) throw new Error(`Claims cannot be mapped to current source or reload boundaries:\n${unmapped.join("\n")}`);
-    this.catalog.companions(selectedSources).forEach(file => selectedTests.add(file));
+    // Reloading a consumer does not make its unchanged dependencies affected sources.
+    this.catalog.companions(this.graph.closure(selectedSources, "importers")).forEach(file => selectedTests.add(file));
     if (!selectedTests.size) throw new Error("No tests match the current Workbench claims.");
     return { files: [...selectedTests].sort(), scopes: [...selectedNodes].sort(), outsideSources: [...outsideSources].sort() };
   }
