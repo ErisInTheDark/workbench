@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchProjectCatalogControllerOptions: injected project discovery, resolution, watcher, clock, logging, and TTL controls. Keywords: project, catalog, cache, watcher, test.
- * - default WorkbenchProjectCatalogController: own the structured project catalog, project icon assets, JIT snapshot replay, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, icon, asset, cwd, cache, orchestrator.
+ * - WorkbenchProjectCatalogControllerOptions: injected discovery, resolution, watcher, clock, logging, and TTL controls.
+ * - default WorkbenchProjectCatalogController: own catalog discovery, icon assets, snapshot replay, durable CWD resolution, and invalidation.
  */
 import fs from "node:fs";
 import fileSystem from "node:fs/promises";
@@ -95,6 +95,26 @@ function shouldInvalidateProjects(eventType: string, filename: string | Buffer |
   return eventType === "rename" || relativePath.endsWith(".code-workspace");
 }
 
+function sameResolutionInputs(left: readonly WorkbenchProjectOption[], right: readonly WorkbenchProjectOption[]) {
+  return left.length === right.length && left.every((project, index) => {
+    const other = right[index];
+    return project.id === other.id
+      && project.kind === other.kind
+      && project.relativePath === other.relativePath
+      && project.rootPath === other.rootPath
+      && project.workspacePath === other.workspacePath
+      && project.roots.length === other.roots.length
+      && project.roots.every((root, rootIndex) => {
+        const otherRoot = other.roots[rootIndex];
+        return root.id === otherRoot.id
+          && root.name === otherRoot.name
+          && root.isPrimary === otherRoot.isPrimary
+          && root.relativePath === otherRoot.relativePath
+          && root.rootPath === otherRoot.rootPath;
+      });
+  });
+}
+
 function sendSerializedJson(response: http.ServerResponse, statusCode: number, serialized: string, cacheState?: CatalogCacheState) {
   response.writeHead(statusCode, {
     "Cache-Control": "no-store",
@@ -137,6 +157,7 @@ export default class WorkbenchProjectCatalogController {
   private catalog: ProjectCatalogSnapshot | null = null;
   private catalogExpiresAt = 0;
   private catalogGeneration = 0;
+  private readonly cwdResolutions = new Map<string, Promise<AgentEndpointProjectResolution>>();
   private readonly createWatcher: NonNullable<WorkbenchProjectCatalogControllerOptions["createWatcher"]>;
   private readonly discoverProjectOptions: typeof discoverProjects;
   private disposed = false;
@@ -177,6 +198,7 @@ export default class WorkbenchProjectCatalogController {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.cwdResolutions.clear();
     this.projectsWatcher?.close();
     this.projectsWatcher = null;
     this.catalog = null;
@@ -266,13 +288,38 @@ export default class WorkbenchProjectCatalogController {
     options: { endpointName?: string } = {},
   ) {
     this.assertActive();
+    const generation = this.catalogGeneration;
     const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
+    this.assertActive();
+    const endpointName = options.endpointName ?? "Agent endpoint";
+    const key = `${endpointName.length}:${endpointName}${cwd ?? ""}`;
+    const cached = generation === this.catalogGeneration ? this.cwdResolutions.get(key) : undefined;
+    if (cached) {
+      const result = await cached;
+      this.assertActive();
+      return result;
+    }
+    const resolution = (async () => {
+      let result: AgentEndpointProjectResolution;
+      try {
+        result = await this.resolveProjectFromCatalog(catalog.data, cwd, options);
+      } catch (firstError) {
+        this.assertActive();
+        if (refreshed) throw firstError;
+        const refreshedCatalog = await (refresh ?? this.refreshCatalog());
+        this.assertActive();
+        result = await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, options);
+      }
+      this.assertActive();
+      return result;
+    })();
+    // Retired callers may finish, but cannot publish into a newer catalog generation.
+    if (generation === this.catalogGeneration) this.cwdResolutions.set(key, resolution);
     try {
-      return await this.resolveProjectFromCatalog(catalog.data, cwd, options);
-    } catch (firstError) {
-      if (refreshed) throw firstError;
-      const refreshedCatalog = await (refresh ?? this.refreshCatalog());
-      return await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, options);
+      return await resolution;
+    } catch (error) {
+      if (this.cwdResolutions.get(key) === resolution) this.cwdResolutions.delete(key);
+      throw error;
     }
   }
 
@@ -302,6 +349,7 @@ export default class WorkbenchProjectCatalogController {
     if (this.disposed) return;
     this.catalogExpiresAt = 0;
     this.catalogGeneration += 1;
+    this.cwdResolutions.clear();
     this.hardStale = true;
   };
 
@@ -358,6 +406,10 @@ export default class WorkbenchProjectCatalogController {
       };
       const catalog = { data, payload, serialized: JSON.stringify(payload) };
       if (!this.disposed && this.catalogGeneration === generation) {
+        if (this.catalog && !sameResolutionInputs(this.catalog.data, data)) {
+          this.cwdResolutions.clear();
+          this.catalogGeneration += 1;
+        }
         this.catalog = catalog;
         this.catalogExpiresAt = this.now() + this.cacheTtlMs;
         this.hardStale = false;

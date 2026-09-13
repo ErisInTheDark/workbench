@@ -2,9 +2,14 @@
  * Exports:
  * - default GitArcRegistry: preserve raw rows while owning canonical live claims and final-loss snapshot publication.
  * - REGISTRY_REF: worktree-owned registry address.
- * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation/GitArcRegistryReplaceOptions: registry identity, state and prepared publication contracts.
- * - GitArcCollision/GitArcCollisionError: conflicting ownership facts and rejection.
- * - findGitArcCollisions/getGitArcLiveClaimPaths: shared live-claim semantics.
+ * - GitArcIdentity: registry owner identity.
+ * - GitArcRegistryEntry: stored arc lifecycle and claims.
+ * - GitArcRegistryMutation: prepared canonical state and ref updates.
+ * - GitArcRegistryReplaceOptions: replacement guards, remaps and claim-loss snapshot.
+ * - GitArcCollision: overlapping sibling claims.
+ * - GitArcCollisionError: conflicting ownership rejection.
+ * - findGitArcCollisions: detect overlapping live sibling claims.
+ * - getGitArcLiveClaimPaths: derive live claims from arc lifecycle.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { OrchestratorReloadScope } from "workbench-shared/types";
@@ -273,8 +278,10 @@ export default class GitArcRegistry {
     const ownedRaw = new Set(owned.map(candidate => candidate.raw));
     const entries = [...state.entries.filter(candidate => !ownedRaw.has(candidate)), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
+    const canonicalRows = new Map(resolvedEntries.map(candidate => [candidate.raw, candidate.resolved]));
+    canonicalRows.set(nextEntry, nextEntry);
     const nextState = {
-      entries: (await this.resolveEntries(entries)).map(candidate => candidate.resolved),
+      entries: entries.flatMap(raw => canonicalRows.get(raw) ?? []),
       version: 1,
     } satisfies GitArcRegistryState;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
@@ -297,16 +304,17 @@ export default class GitArcRegistry {
       }
     }
     if (!blob || !current) return null;
-    const state = remapState(storedState, options?.commitRemaps);
-    const resolvedEntries = await this.resolveEntries(state.entries);
     const ownedRaw = new Set(
-      resolvedEntries.filter(candidate => identityKey(candidate.resolved) === key).map(candidate => candidate.raw),
+      resolvedStoredEntries.filter(candidate => identityKey(candidate.resolved) === key).map(candidate => candidate.raw),
     );
-    const entries = state.entries.filter(candidate => !ownedRaw.has(candidate));
-    const nextState = {
-      entries: resolvedEntries.filter(candidate => !ownedRaw.has(candidate.raw)).map(candidate => candidate.resolved),
+    const entries = remapState({
+      entries: storedState.entries.filter(candidate => !ownedRaw.has(candidate)),
       version: 1,
-    } satisfies GitArcRegistryState;
+    }, options?.commitRemaps).entries;
+    const nextState = remapState({
+      entries: resolvedStoredEntries.filter(candidate => !ownedRaw.has(candidate.raw)).map(candidate => candidate.resolved),
+      version: 1,
+    }, options?.commitRemaps);
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return await this.prepareMutation(nextState, { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF }, current, null);
   }
@@ -356,8 +364,10 @@ export default class GitArcRegistry {
     const entries = [...state.entries.filter(candidate => !ownedRaw.has(candidate)), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
+    const canonicalRows = new Map(resolvedEntries.map(candidate => [candidate.raw, candidate.resolved]));
+    canonicalRows.set(nextEntry, nextEntry);
     const nextState = {
-      entries: (await this.resolveEntries(entries)).map(candidate => candidate.resolved),
+      entries: entries.flatMap(raw => canonicalRows.get(raw) ?? []),
       version: 1,
     } satisfies GitArcRegistryState;
     return await this.prepareMutation(nextState,

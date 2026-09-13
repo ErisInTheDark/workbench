@@ -153,6 +153,7 @@ function createResponse() {
 
 function createHarness() {
   let discoveryReads = 0;
+  let resolutionReads = 0;
   let now = 1_000;
   let projects = [createProject("alpha")];
   let readProjects = async () => projects;
@@ -174,11 +175,15 @@ function createHarness() {
     now: () => now,
     projectsRootPath: "C:/projects",
     resolveProjectByIdFromCatalog,
-    resolveProjectFromCatalog: async (catalog, cwd, options) => await resolveProjects(catalog, cwd, options),
+    resolveProjectFromCatalog: async (catalog, cwd, options) => {
+      resolutionReads += 1;
+      return await resolveProjects(catalog, cwd, options);
+    },
   });
   return {
     controller,
     get discoveryReads() { return discoveryReads; },
+    get resolutionReads() { return resolutionReads; },
     loggedErrors,
     setNow(value: number) { now = value; },
     setProjects(value: WorkbenchProjectOption[]) { projects = value; },
@@ -187,6 +192,145 @@ function createHarness() {
     watchers,
   };
 }
+
+test("durable CWD resolutions share bursts and survive unchanged catalog refreshes", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  const cwd = "C:/projects/alpha/src";
+  const gate = deferred<AgentEndpointProjectResolution>();
+  harness.setResolver(() => gate.promise);
+  const burst = Array.from({ length: 276 }, () => harness.controller.resolveAgentEndpointProjectFromCwd(cwd));
+  gate.resolve(await resolveFromCatalog([createProject("alpha")], cwd));
+  assert.ok((await Promise.all(burst)).every(result => result.project.id === "alpha"));
+  await harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  assert.equal(harness.resolutionReads, 1, "one validation serves concurrent and sequential identical requests");
+
+  harness.setResolver(resolveFromCatalog);
+  await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/test");
+  await harness.controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Browse" });
+  assert.equal(harness.resolutionReads, 3, "different CWDs and endpoint labels remain independent");
+
+  harness.setNow(2_000);
+  harness.setProjects([{ ...createProject("alpha"), lastCommitTimeMs: 123, icon: { rootId: "alpha", path: "favicon.png" } }]);
+  await harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  await assert.rejects(harness.controller.resolveProjectById("missing"), /Unknown project/u);
+  assert.ok(harness.discoveryReads > 1, "a resolution cache hit still starts due discovery");
+  await harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  assert.equal(harness.resolutionReads, 3, "activity and icon refreshes do not discard ownership");
+
+  harness.setProjects([createProject("beta", "C:/projects/alpha")]);
+  await harness.controller.resolveProjectById("beta");
+  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd(cwd)).project.id, "beta");
+  assert.equal(harness.resolutionReads, 4, "changed ownership retires old resolutions");
+  harness.controller.invalidate();
+  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd(cwd)).project.id, "beta");
+  assert.equal(harness.resolutionReads, 5, "explicit invalidation forces validation");
+});
+
+test("failed CWD resolutions share retry work without retaining failures", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  await harness.controller.ensureLoaded();
+  harness.setResolver(async (_projects, _cwd, { endpointName = "Agent endpoint" } = {}) => {
+    throw new Error(`${endpointName} rejected`);
+  });
+  const cwd = "C:/projects/alpha";
+  const results = await Promise.allSettled(Array.from({ length: 12 }, () => (
+    harness.controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" })
+  )));
+  assert.ok(results.every(result => result.status === "rejected" && /Git arc rejected/u.test(String(result.reason))));
+  assert.equal(harness.resolutionReads, 2, "one shared initial attempt and refresh retry");
+  await assert.rejects(harness.controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Browse" }), /Browse rejected/u);
+  assert.equal(harness.resolutionReads, 4);
+  harness.setResolver(resolveFromCatalog);
+  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" })).project.id, "alpha");
+  assert.equal(harness.resolutionReads, 5, "failure does not poison later requests");
+});
+
+test("catalog root changes invalidate cached ownership even when project identity stays the same", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  const cwd = "C:/projects/alpha/src";
+  const original = await harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  const changed = createProject("alpha", "C:/projects");
+  changed.roots[0] = { ...changed.roots[0], id: "parent", name: "parent workspace" };
+  harness.setProjects([changed]);
+  await assert.rejects(harness.controller.resolveProjectById("missing"), /Unknown project/u);
+  const resolved = await harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  assert.notDeepEqual(resolved.root, original.root);
+  assert.equal(resolved.project.id, original.project.id);
+  assert.equal(resolved.root.rootPath, changed.roots[0].rootPath);
+  assert.equal(resolved.root.id, changed.roots[0].id);
+  assert.equal(resolved.root.name, changed.roots[0].name);
+});
+
+test("a retired failed resolution cannot remove newer in-flight work", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  const cwd = "C:/projects/alpha";
+  const entered = deferred<void>();
+  const old = deferred<AgentEndpointProjectResolution>();
+  harness.setResolver(() => {
+    entered.resolve();
+    return old.promise;
+  });
+  const first = harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  const rejected = assert.rejects(first, /old failure/u);
+  await entered.promise;
+  harness.controller.invalidate();
+  const newer = deferred<AgentEndpointProjectResolution>();
+  const newerEntered = deferred<void>();
+  harness.setResolver(() => {
+    newerEntered.resolve();
+    return newer.promise;
+  });
+  const second = harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  await newerEntered.promise;
+  old.reject(new Error("old failure"));
+  await rejected;
+  const joined = harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  newer.resolve(await resolveFromCatalog([createProject("alpha")], cwd));
+  assert.deepEqual(await second, await joined);
+  assert.equal(harness.resolutionReads, 2, "old failure leaves the newer request joinable");
+});
+
+test("retired CWD work cannot replace newer mappings or survive disposal", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  await harness.controller.ensureLoaded();
+  const cwd = "C:/projects/alpha";
+  const entered = deferred<void>();
+  const old = deferred<AgentEndpointProjectResolution>();
+  harness.setResolver(() => {
+    entered.resolve();
+    return old.promise;
+  });
+  const pending = harness.controller.resolveAgentEndpointProjectFromCwd(cwd);
+  await entered.promise;
+  harness.controller.invalidate();
+  harness.setProjects([createProject("beta", cwd)]);
+  await harness.controller.resolveProjectById("beta");
+  harness.setResolver(resolveFromCatalog);
+  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd(cwd)).project.id, "beta");
+  old.resolve(await resolveFromCatalog([createProject("alpha")], cwd));
+  assert.equal((await pending).project.id, "alpha");
+  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd(cwd)).project.id, "beta");
+  const readsAfterRetirement = harness.resolutionReads;
+
+  const disposing = deferred<AgentEndpointProjectResolution>();
+  const disposingEntered = deferred<void>();
+  harness.setResolver(() => {
+    disposingEntered.resolve();
+    return disposing.promise;
+  });
+  const last = harness.controller.resolveAgentEndpointProjectFromCwd(`${cwd}/other`);
+  await disposingEntered.promise;
+  const rejected = assert.rejects(last, /disposed/u);
+  harness.controller.dispose();
+  disposing.resolve(await resolveFromCatalog([createProject("beta", cwd)], `${cwd}/other`));
+  await rejected;
+  assert.equal(readsAfterRetirement, 2, "old completion cannot evict the newer cached result");
+});
 
 test("serves catalog-selected PNG and ICO assets with bounded content types", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-asset-"));
