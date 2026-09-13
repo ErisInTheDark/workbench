@@ -291,7 +291,7 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
   }, async () => parent.projectId);
   try {
     const resolved = await ports.resolveThread(native.nativeLocation, native.nativeThreadId);
-    assert.equal(resolved.turnId, null);
+    assert.equal(resolved.turnId, native.nativeTurnId);
     assert.equal(resolved.pendingQuestionnaire?.turnId, native.nativeTurnId);
     assert.equal(resolved.pendingQuestionnaire?.itemId, questionnaire.itemId);
     await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });

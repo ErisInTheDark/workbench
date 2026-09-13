@@ -3,7 +3,7 @@
  * - WorkbenchQuestionnaireControllerOptions: caller resolution, durable projection, and dismissal ports.
  * - WorkbenchNativeQuestionnaire: thread questionnaire with optional transcript placement.
  * - WorkbenchAnsweredQuestionnaire: consumed native questionnaire and response.
- * - default WorkbenchQuestionnaireController: own pending native questionnaire waits and correlation.
+ * - default WorkbenchQuestionnaireController: own pending native questionnaire waits, viability, delivery, and correlation.
  */
 import { randomUUID } from "node:crypto";
 
@@ -95,7 +95,7 @@ export default class WorkbenchQuestionnaireController {
     return {
       data: [...this.pendingByThreadId.values()]
         .filter((pending) => pending.projected && pending.status !== "cancelling")
-        .map((pending): Omit<WorkbenchPendingUserInputRequest, "harness" | "responseMode"> => ({
+        .map((pending): Omit<WorkbenchPendingUserInputRequest, "harness"> => ({
           itemId: pending.questionnaire.itemId,
           request: pending.questionnaire.request,
           requestKey: pending.questionnaire.requestKey,
@@ -192,15 +192,7 @@ export default class WorkbenchQuestionnaireController {
     threadId: NativeThreadId;
   }): Promise<WorkbenchAnsweredQuestionnaire | null> {
     const pending = this.pendingByThreadId.get(input.threadId);
-    if (
-      !pending
-      || !pending.projected
-      || pending.status !== "waiting"
-      || pending.questionnaire.requestKey !== input.requestKey
-    ) {
-      return null;
-    }
-
+    if (!pending || !this.canDeliver(input.threadId, input.requestKey)) return null;
     pending.status = "responding";
     try {
       await this.options.clearPending(input.threadId, input.requestKey);
@@ -219,7 +211,32 @@ export default class WorkbenchQuestionnaireController {
       throw error;
     }
 
-    this.pendingByThreadId.delete(input.threadId);
+    return this.finishDelivery(pending, input.response);
+  }
+
+  canDeliver(threadId: NativeThreadId, requestKey: string) {
+    const pending = this.pendingByThreadId.get(threadId);
+    return Boolean(
+      pending
+      && pending.projected
+      && pending.status === "waiting"
+      && pending.questionnaire.requestKey === requestKey,
+    );
+  }
+
+  async deliver(input: {
+    requestKey: string;
+    response: WorkbenchUserInputResponse;
+    threadId: NativeThreadId;
+  }): Promise<WorkbenchAnsweredQuestionnaire | null> {
+    const pending = this.pendingByThreadId.get(input.threadId);
+    if (!pending || !this.canDeliver(input.threadId, input.requestKey)) return null;
+    pending.status = "responding";
+    return this.finishDelivery(pending, input.response);
+  }
+
+  private finishDelivery(pending: PendingQuestionnaire, response: WorkbenchUserInputResponse) {
+    this.pendingByThreadId.delete(pending.threadId);
     pending.stopAbort?.();
     const signalCancellation = pending.signal.aborted
       && !isWorkbenchAgentMcpRuntimeReloadInterruption(pending.signal.reason)
@@ -230,11 +247,11 @@ export default class WorkbenchQuestionnaireController {
       pending.reject(cancellation);
       throw cancellation;
     }
-    pending.resolve(input.response);
+    pending.resolve(response);
     return {
       ...pending.questionnaire,
-      response: input.response,
-      threadId: input.threadId,
+      response,
+      threadId: pending.threadId,
     };
   }
 

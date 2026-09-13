@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchDaemonMethod/WorkbenchDaemonRequestMap: typed browser-to-daemon request contract.
+ * - WorkbenchQuestionnaireRespondRequest/WorkbenchQuestionnaireRespondResult: daemon-owned questionnaire answer contract.
  * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse: agent and skill catalogue results.
  * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations.
  * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map browser methods to existing Git actions.
@@ -35,8 +36,11 @@ import type {
   WorkbenchLocalCapabilitySettingsUpdateRequest,
   WorkbenchProjectsPayload,
   WorkbenchModelContextCapability,
+  WorkbenchHarness,
   WorkbenchSkillSummary,
+  WorkbenchUserInputResponse,
 } from "../../types.ts";
+import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
 import type {
   GitCheckpointCompareResult,
   GitCheckpointProposal,
@@ -77,6 +81,25 @@ export type WorkbenchFileWriteResult = SaveFilePayload | SaveConflictPayload;
 
 export interface WorkbenchGitArcSuccess {
   ok: true;
+}
+
+export interface WorkbenchQuestionnaireRespondRequest {
+  activatedSkillPaths?: string[];
+  harness: WorkbenchHarness;
+  insertAfterItemId?: string | null;
+  insertAfterItemIndex?: number | null;
+  projectId: string;
+  requestKey: string;
+  response: WorkbenchUserInputResponse;
+  supplementalInput?: UserInput[];
+  threadId: string;
+  turnId?: string | null;
+}
+
+export interface WorkbenchQuestionnaireRespondResult {
+  ok: true;
+  route: "admitted" | "live" | "provider";
+  warning?: string;
 }
 
 type GitArcParams<TAction extends GitCheckpointRequest["action"]> = Omit<
@@ -127,6 +150,7 @@ export interface WorkbenchDaemonRequestMap {
   "project/file/reset": { params: { expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "project/file/save": { params: { content: string; expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "search/query": { params: WorkbenchSearchRequest; result: WorkbenchSearchResponse };
+  "questionnaire/respond": { params: WorkbenchQuestionnaireRespondRequest; result: WorkbenchQuestionnaireRespondResult };
   "stats/import/start": { params: object; result: WorkbenchStatsImportProgress };
   "stats/rate-limits/refresh": { params: object; result: { ok: true } };
   "stats/read": { params: WorkbenchStatsReadRequest; result: WorkbenchStatsResponse };

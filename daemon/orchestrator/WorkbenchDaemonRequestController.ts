@@ -7,13 +7,16 @@ import type {
     OpenFileInEditorRequest,
     ResolveExternalFileLinkRootsRequest,
     RevealProjectEntryRequest,
+    WorkbenchUserInputResponse,
     WorkbenchComposerProfileSlot,
     WorkbenchComposerSettings,
 } from "workbench-shared/types";
 import {
     WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
     type WorkbenchDaemonGitArcMethod,
+    type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import {
     GitCheckpointCompareResultSchema,
     GitCheckpointProposalSchema,
@@ -25,7 +28,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-failures";
 import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
-import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
     WorkbenchThreadIdentityResolutionSchema,
     WorkbenchThreadIdentityResolveRequestSchema,
@@ -43,6 +46,7 @@ import type WorkbenchProjectFileController from "./WorkbenchProjectFileControlle
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import type CodexModelCatalog from "./CodexModelCatalog";
 
 export interface WorkbenchBrowseSessionPort {
@@ -61,6 +65,7 @@ const METHODS = new Set([
   "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
+  "questionnaire/respond",
   "search/query",
   "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2",
   "skills/read",
@@ -101,6 +106,70 @@ function requiredFiniteNumber(params: Record<string, unknown>, name: string) {
   const value = optionalFiniteNumber(params, name);
   if (value === null) throw new InvalidParamsError(`${name} is required.`);
   return value;
+}
+
+function optionalStringArray(params: Record<string, unknown>, name: string) {
+  const value = params[name];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== "string")) {
+    throw new InvalidParamsError(`${name} must be an array of strings.`);
+  }
+  return value;
+}
+
+function optionalUserInput(params: Record<string, unknown>, name: string) {
+  const value = params[name];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some(entry => {
+    const input = entry && typeof entry === "object" && !Array.isArray(entry)
+      ? entry as Record<string, unknown>
+      : null;
+    if (!input || typeof input.type !== "string") return true;
+    if (input.type === "text") return typeof input.text !== "string" || !Array.isArray(input.text_elements);
+    if (input.type === "image" || input.type === "audio") return typeof input.url !== "string";
+    if (input.type === "localImage" || input.type === "localAudio") return typeof input.path !== "string";
+    if (input.type === "skill" || input.type === "mention") return typeof input.name !== "string" || typeof input.path !== "string";
+    return true;
+  })) {
+    throw new InvalidParamsError(`${name} must contain valid user input.`);
+  }
+  return value as UserInput[];
+}
+
+function questionnaireResponse(value: unknown): WorkbenchUserInputResponse {
+  const response = record(value);
+  const answers = record(response.answers);
+  const normalized: WorkbenchUserInputResponse["answers"] = {};
+  for (const [questionId, answerValue] of Object.entries(answers)) {
+    if (answerValue === undefined) continue;
+    const answer = record(answerValue);
+    if (!Array.isArray(answer.answers) || answer.answers.some(entry => typeof entry !== "string")) {
+      throw new InvalidParamsError("Questionnaire answers must be arrays of strings.");
+    }
+    normalized[questionId] = { answers: answer.answers };
+  }
+  return { answers: normalized };
+}
+
+function questionnaireRespondRequest(params: Record<string, unknown>): WorkbenchQuestionnaireRespondRequest {
+  const insertAfterItemIndex = optionalFiniteNumber(params, "insertAfterItemIndex");
+  if (insertAfterItemIndex !== null && (!Number.isInteger(insertAfterItemIndex) || insertAfterItemIndex < 0)) {
+    throw new InvalidParamsError("insertAfterItemIndex must be a non-negative integer.");
+  }
+  const harness = WorkbenchHarnessSchema.safeParse(params.harness);
+  if (!harness.success) throw new InvalidParamsError("harness must identify a supported provider.");
+  return {
+    activatedSkillPaths: optionalStringArray(params, "activatedSkillPaths"),
+    harness: harness.data,
+    insertAfterItemId: params.insertAfterItemId == null ? null : requiredString(params, "insertAfterItemId"),
+    insertAfterItemIndex,
+    projectId: requiredString(params, "projectId"),
+    requestKey: requiredString(params, "requestKey"),
+    response: questionnaireResponse(params.response),
+    supplementalInput: optionalUserInput(params, "supplementalInput"),
+    threadId: requiredString(params, "threadId"),
+    turnId: params.turnId == null ? null : requiredString(params, "turnId"),
+  };
 }
 
 function openFileRequest(params: Record<string, unknown>): OpenFileInEditorRequest {
@@ -147,6 +216,7 @@ export default class WorkbenchDaemonRequestController {
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
     threadIdentity: Pick<WorkbenchThreadIdentityController, "resolve">;
+    questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
   }) {}
 
   accepts(method: string) { return METHODS.has(method); }
@@ -231,6 +301,9 @@ export default class WorkbenchDaemonRequestController {
           projectId: requiredString(params, "projectId"),
           resetToHead: true,
         }); break;
+        case "questionnaire/respond":
+          result = await this.owners.questionnaireResponses.respond(questionnaireRespondRequest(params));
+          break;
         case "search/query": {
           const projectId = params.projectId === null || params.projectId === ""
             ? null

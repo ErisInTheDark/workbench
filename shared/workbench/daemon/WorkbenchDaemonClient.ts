@@ -93,6 +93,11 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "native/file/open":
     case "native/file/reveal": return z.object({ ok: z.literal(true), path: z.string(), projectId: z.string().nullable() }).passthrough();
     case "native/file/link-roots": return z.object({ roots: z.array(recordSchema) }).strict();
+    case "questionnaire/respond": return z.object({
+      ok: z.literal(true),
+      route: z.enum(["admitted", "live", "provider"]),
+      warning: z.string().optional(),
+    }).strict();
     case "browse/sessions/read": return z.object({ sessions: z.array(recordSchema) }).passthrough();
     case "browse/sessions/forget":
     case "browse/sessions/stop": return recordSchema;

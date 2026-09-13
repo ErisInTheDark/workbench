@@ -526,9 +526,6 @@ export default function ThreadComposer ({
                   workspaceRoots={workspaceRoots}
                   mode="live"
                   onSubmit={async (response, supplementalInput, activatedSkillPaths) => {
-                    if (visiblePendingUserInputRequest.responseMode === "newTurn" && !hasEffectiveProfile) {
-                      throw new Error("The daemon composer profile is unavailable.");
-                    }
                     await questionnaire.submit(
                       response,
                       {

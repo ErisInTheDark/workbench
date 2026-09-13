@@ -48,6 +48,7 @@ function createController(options: {
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
   profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
+  questionnaireResponses?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["questionnaireResponses"];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -108,6 +109,9 @@ function createController(options: {
     profiles: options.profiles ?? {
       mutate: async () => ({ profiles: [] }),
       read: async () => ({ profiles: [] }),
+    },
+    questionnaireResponses: options.questionnaireResponses ?? {
+      respond: async () => ({ ok: true, route: "provider" }),
     },
     profileTargets: options.profileTargets ?? {
       readComposerProfileTarget: async (slot) => {
@@ -204,6 +208,49 @@ function createController(options: {
     targetWrites,
   };
 }
+
+test("questionnaire response dispatch validates and delegates one semantic daemon intent", async () => {
+  const submissions: object[] = [];
+  const { controller } = createController({
+    questionnaireResponses: {
+      respond: async input => {
+        submissions.push(input);
+        return { ok: true, route: "admitted" };
+      },
+    },
+  });
+  const response = await controller.handle({
+    id: 10,
+    method: "questionnaire/respond",
+    params: {
+      activatedSkillPaths: ["C:/skills/review/SKILL.md"],
+      harness: "codex",
+      projectId: "project",
+      requestKey: "workbench-mcp:question",
+      response: { answers: { route: { answers: ["approve"] } } },
+      supplementalInput: [{ text: "extra", text_elements: [], type: "text" }],
+      threadId: "thread",
+      turnId: "turn",
+    },
+  });
+  assert.equal(response.error, undefined);
+  assert.deepEqual(response.result, { ok: true, route: "admitted" });
+  assert.equal(submissions.length, 1);
+
+  const invalid = await controller.handle({
+    id: 11,
+    method: "questionnaire/respond",
+    params: {
+      harness: "codex",
+      projectId: "project",
+      requestKey: "request",
+      response: { answers: { route: { answers: [1] } } },
+      threadId: "thread",
+    },
+  });
+  assert.equal(invalid.error?.code, -32602);
+  assert.equal(submissions.length, 1);
+});
 
 test("thread lookup resolves native and WB inputs without publishing native bindings or requiring bodies", async () => {
   const database = new Database(":memory:");

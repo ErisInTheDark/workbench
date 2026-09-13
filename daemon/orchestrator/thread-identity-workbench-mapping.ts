@@ -11,7 +11,7 @@
 import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import { serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -81,9 +81,10 @@ export function createNativeQuestionnaireStatePorts(
       const entry = await state.getCanonicalThreadEntry(projectId, thread.threadId);
       if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire caller has no stored thread in this cwd project.");
       const pending = entry.pendingQuestionnaire;
+      const lifecycleTurnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
       return {
         projectId,
-        turnId: null,
+        turnId: lifecycleTurnId === null ? null : await nativeTurn(thread.threadId, threadId, lifecycleTurnId),
         pendingQuestionnaire: pending ? {
           ...pending,
           turnId: pending.turnId === null ? null : await nativeTurn(thread.threadId, threadId, pending.turnId),
@@ -324,7 +325,7 @@ export async function mapNativeProviderResponse(
     mapped.data = (result.data as Turn[]).map((turn) => mapProviderTurn(owners, native(), turn));
   }
   if (request.method === "questionnaire/list") {
-    const pending = result.data as Array<Omit<WorkbenchPendingUserInputRequest, "harness" | "responseMode">>;
+    const pending = result.data as Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
     mapped.data = await Promise.all(pending.map(async (entry) => {
       const identity = { harness, threadId: entry.threadId };
       const thread = await resolveNativeReference(owners, identity);

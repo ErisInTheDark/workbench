@@ -125,6 +125,26 @@ test("freeform request publishes one durable question and returns its correlated
   await nextWaiting;
 });
 
+test("daemon-owned delivery resolves the waiter without clearing durable state", async () => {
+  const harness = createHarness();
+  const waiting = harness.controller.request(freeformInput, new AbortController().signal);
+  const questionnaire = await harness.published;
+  const response = { answers: { details: { answers: ["Continue through the daemon."] } } };
+
+  assert.equal(harness.controller.canDeliver(fixtureIdentityValues.NativeThreadId["thread-one"], questionnaire.requestKey), true);
+  const delivered = await harness.controller.deliver({
+    requestKey: questionnaire.requestKey,
+    response,
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
+  });
+
+  assert.deepEqual(delivered, { ...questionnaire, response, threadId: "thread-one" });
+  assert.deepEqual(await waiting, response);
+  assert.equal(harness.clearCount(), 0);
+  assert.deepEqual(harness.readPending(), questionnaire);
+  assert.equal(harness.controller.canDeliver(fixtureIdentityValues.NativeThreadId["thread-one"], questionnaire.requestKey), false);
+});
+
 for (const fails of [false, true]) {
   test(`interruption retains the pending tool until provider ${fails ? "failure" : "success"}`, async () => {
     const h = createHarness();

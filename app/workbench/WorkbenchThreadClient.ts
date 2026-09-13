@@ -3,7 +3,7 @@
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks.
- * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, live questionnaire reconciliation, durable answer recovery, and notifications.
+ * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, questionnaire source reconciliation and answer intent submission, and notifications.
  */
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
@@ -117,7 +117,6 @@ import {
     mergeQuestionnaireHistoryEntries,
 } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import {
-    createWorkbenchQuestionnaireResponseInput,
     createWorkbenchThreadRecoveryId,
     isWorkbenchThreadRecoveryInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
@@ -1012,6 +1011,7 @@ function WorkbenchThreadClient(
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<boolean>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
+  const providerPendingUserInputRequestsByHarness = new Map<WorkbenchHarness, Map<string, WorkbenchPendingUserInputRequest>>();
   lifecycle.addUnsubscribe(threadObservations.subscribe(() => {
     if (disposed) return;
     reconcileObservedSubagents();
@@ -1211,6 +1211,7 @@ function WorkbenchThreadClient(
     }
     questionnaireListSyncPromisesByHarness.clear();
     questionnaireListSyncedHarnesses.clear();
+    providerPendingUserInputRequestsByHarness.clear();
     resolvedDurableQuestionnaireKeysByThreadId.clear();
     if (!retainedKeys.size) {
       threadSources.clear();
@@ -1598,9 +1599,10 @@ function WorkbenchThreadClient(
       }
     }
     for (const harness of ["codex", "copilot", "opencode"] as const) {
-      replacePendingUserInputRequests(harness, Array.from(state.pendingUserInputRequestsByThreadId.values()).filter((request) => (
-        request.harness === harness && request.responseMode === "native"
-      )));
+      replacePendingUserInputRequests(
+        harness,
+        Array.from(providerPendingUserInputRequestsByHarness.get(harness)?.values() ?? []),
+      );
       if (!questionnaireListSyncedHarnesses.has(harness)) {
         void refreshPendingUserInputRequests(harness);
       }
@@ -2528,11 +2530,9 @@ function WorkbenchThreadClient(
     request: WorkbenchUserInputRequest,
     {
       itemId = null,
-      responseMode = "native",
       turnId = null,
     }: {
       itemId?: string | null;
-      responseMode?: WorkbenchPendingUserInputRequest["responseMode"];
       turnId?: string | null;
     } = {},
   ) {
@@ -2542,7 +2542,6 @@ function WorkbenchThreadClient(
       && existing.harness === harness
       && existing.turnId === turnId
       && existing.itemId === itemId
-      && existing.responseMode === responseMode
       && areDeeplyEqual(existing.request, request)
     ) {
       return false;
@@ -2553,7 +2552,6 @@ function WorkbenchThreadClient(
       itemId,
       request,
       requestKey,
-      responseMode,
       threadId,
       turnId,
     });
@@ -2643,7 +2641,7 @@ function WorkbenchThreadClient(
       Array.from(state.pendingUserInputRequestsByThreadId.entries()).filter(([, entry]) => entry.harness !== harness),
     );
     for (const request of requests) {
-      nextRequests.set(request.threadId, { ...request, responseMode: "native" });
+      nextRequests.set(request.threadId, request);
     }
     for (const entry of observedQuestionnaireEntries()) {
       if (entry.entryKind === "draft" || entry.identity.harness !== harness || !entry.pendingQuestionnaire) continue;
@@ -2654,7 +2652,6 @@ function WorkbenchThreadClient(
           itemId: entry.pendingQuestionnaire.itemId ?? null,
           request: entry.pendingQuestionnaire.request,
           requestKey: entry.pendingQuestionnaire.requestKey,
-          responseMode: "newTurn",
           threadId: entry.identity.threadId,
           turnId: entry.pendingQuestionnaire.turnId ?? null,
         });
@@ -2671,7 +2668,6 @@ function WorkbenchThreadClient(
           || existing.harness !== request.harness
           || existing.turnId !== request.turnId
           || existing.itemId !== request.itemId
-          || existing.responseMode !== request.responseMode
           || !areDeeplyEqual(existing.request, request.request)
         ) {
           unchanged = false;
@@ -2705,16 +2701,20 @@ function WorkbenchThreadClient(
     const promise = (async () => {
       let requests: WorkbenchPendingUserInputRequest[] = [];
       try {
-        const response = await sendBridgeRequest<{ data: Array<Omit<WorkbenchPendingUserInputRequest, "harness" | "responseMode">> }>(harness, {
+        const response = await sendBridgeRequest<{ data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">> }>(harness, {
           method: "questionnaire/list",
         });
-        requests = response.data.map((request) => ({ ...request, harness, responseMode: "native" }));
+        requests = response.data.map((request) => ({ ...request, harness }));
       } catch (error) {
         emitStatusMessage(`Workbench could not reconcile ${harness} questionnaires: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
       if (disposed || generation !== projectContextGeneration) return false;
       questionnaireListSyncedHarnesses.add(harness);
+      providerPendingUserInputRequestsByHarness.set(
+        harness,
+        new Map(requests.map((request) => [request.threadId, request])),
+      );
       if (replacePendingUserInputRequests(harness, requests)) emit();
       return true;
     })().finally(() => questionnaireListSyncPromisesByHarness.delete(harness));
@@ -2912,35 +2912,6 @@ function WorkbenchThreadClient(
 
   function refreshFinalVisibleQuestionnaireHistory(threadId: string) {
     refreshFinalVisibleThreadForOverlay(threadId);
-  }
-
-  function recordLocalQuestionnaireHistoryEntry(
-    pendingRequest: WorkbenchPendingUserInputRequest,
-    response: WorkbenchUserInputResponse,
-    options: WorkbenchSubmitUserInputRequestOptions,
-  ) {
-    const turnId = options.turnId ?? pendingRequest.turnId;
-    if (!turnId) {
-      return false;
-    }
-
-    const existingEntries = state.questionnaireHistoryByThreadId.get(pendingRequest.threadId) ?? [];
-    const legacyAnchorId = isWorkbenchMcpQuestionnaireRequestKey(pendingRequest.requestKey) ? null : pendingRequest.itemId;
-    const entry: WorkbenchQuestionnaireHistoryEntry = {
-      insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
-      insertAfterItemIndex: options.insertAfterItemIndex ?? null,
-      itemId: pendingRequest.itemId,
-      request: pendingRequest.request,
-      requestKey: pendingRequest.requestKey,
-      resolvedAt: Date.now(),
-      response,
-      threadId: pendingRequest.threadId,
-      turnId,
-    };
-    return setQuestionnaireHistoryEntries(
-      pendingRequest.threadId,
-      mergeQuestionnaireHistoryEntries(existingEntries, [entry]),
-    );
   }
 
   function setSteerHistoryEntries(threadId: string, entries: WorkbenchSteerHistoryEntry[]) {
@@ -5534,83 +5505,6 @@ function WorkbenchThreadClient(
     return thread;
   }
 
-  function getPendingUserInputRequestThread(pendingRequest: WorkbenchPendingUserInputRequest) {
-    if (state.currentThread?.id === pendingRequest.threadId && state.currentThread.harness === pendingRequest.harness) {
-      return state.currentThread;
-    }
-
-    const document = threadDocuments.getDocumentByThreadId(pendingRequest.threadId);
-    return document?.harness === pendingRequest.harness ? document : null;
-  }
-
-  function getPendingUserInputRequestTurnId(pendingRequest: WorkbenchPendingUserInputRequest) {
-    const pendingTurnId = pendingRequest.turnId?.trim();
-    if (pendingTurnId) {
-      return pendingTurnId;
-    }
-
-    const thread = getPendingUserInputRequestThread(pendingRequest);
-    return thread ? getCurrentInProgressTurn(thread)?.id ?? null : null;
-  }
-
-  function getPendingUserInputRequestAgentPath(pendingRequest: WorkbenchPendingUserInputRequest) {
-    return normalizeWorkbenchAgentPath(
-      getPendingUserInputRequestThread(pendingRequest)?.agentPath
-        ?? null,
-    );
-  }
-
-  async function sendQuestionnaireSupplementalSteer(
-    pendingRequest: WorkbenchPendingUserInputRequest,
-    input: UserInput[] | string,
-    activatedSkillPaths: readonly string[] | undefined,
-  ) {
-    const normalizedInput = normalizeThreadMessageInput(input);
-    const hasActivatedSkills = pendingRequest.harness === "codex" && Boolean(activatedSkillPaths?.length);
-    if (!normalizedInput.length && !hasActivatedSkills) {
-      return;
-    }
-
-    const turnId = getPendingUserInputRequestTurnId(pendingRequest);
-    if (!turnId) {
-      throw new Error("Unable to send questionnaire supplemental input because the pending turn could not be found.");
-    }
-
-    const workbenchOrigin = readLocalWorkbenchOrigin();
-    const agentPath = getPendingUserInputRequestAgentPath(pendingRequest);
-    const projectContext = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId);
-    await sendBridgeRequest<TurnSteerResponse | { ok?: boolean }>(pendingRequest.harness, {
-      method: "turn/steer",
-      ...(pendingRequest.harness === "opencode" || pendingRequest.harness === "codex"
-        ? {
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-            pendingRequest.harness,
-            pendingRequest.threadId,
-            agentPath,
-            workbenchOrigin,
-            undefined,
-            undefined,
-            pendingRequest.harness === "codex" ? "full" : "threadUtilities",
-            activatedSkillPaths,
-          ),
-        }
-        : {}),
-      params: {
-        ...(agentPath && pendingRequest.harness === "copilot" ? { agentPath } : {}),
-        ...(projectContext.projectId && pendingRequest.harness === "copilot" ? { projectId: projectContext.projectId } : {}),
-        ...(projectContext.projectRootPath && pendingRequest.harness !== "codex" ? { cwd: projectContext.projectRootPath } : {}),
-        ...(workbenchOrigin && pendingRequest.harness !== "codex" ? { workbenchOrigin } : {}),
-        expectedTurnId: turnId,
-        input: normalizedInput,
-        threadId: pendingRequest.threadId,
-      } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; projectId?: string; threadId: string; workbenchOrigin?: string },
-    });
-
-    if (pendingRequest.harness === "codex") {
-      await readCompletedSteerHistory(pendingRequest.threadId);
-    }
-  }
-
   async function submitPendingUserInputRequest(
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -5622,128 +5516,10 @@ function WorkbenchThreadClient(
       throw new Error("There is no pending question for this thread.");
     }
     const submissionProjectGeneration = projectContextGeneration;
-    if (isWorkbenchMcpQuestionnaireRequestKey(pendingRequest.requestKey)) {
-      const reconciled = await refreshPendingUserInputRequests(pendingRequest.harness);
-      const current = state.pendingUserInputRequestsByThreadId.get(threadId);
-      if (
-        disposed
-        || submissionProjectGeneration !== projectContextGeneration
-        || !current
-        || current.harness !== pendingRequest.harness
-        || current.requestKey !== pendingRequest.requestKey
-      ) {
-        throw new Error("The pending question changed before its response could be submitted.");
-      }
-      if (!reconciled) {
-        throw new Error("Could not reconcile the questionnaire before submitting its response. Please try again.");
-      }
-      pendingRequest = current;
-    }
     const legacyAnchorId = isWorkbenchMcpQuestionnaireRequestKey(pendingRequest.requestKey) ? null : pendingRequest.itemId;
-    const submissionPendingGeneration = getPendingUserInputRequestGeneration(pendingRequest.harness);
-    const isPendingSubmissionCurrent = () => (
-      !disposed
-      && submissionProjectGeneration === projectContextGeneration
-      && submissionPendingGeneration === getPendingUserInputRequestGeneration(pendingRequest.harness)
-      && state.pendingUserInputRequestsByThreadId.get(threadId)?.requestKey === pendingRequest.requestKey
-    );
 
     if (isWorkbenchApprovalRequest(pendingRequest.request) && !hasWorkbenchApprovalDecisionSelection(pendingRequest.request, response)) {
       throw new Error("Choose one of the approval options before submitting.");
-    }
-
-    if (pendingRequest.responseMode === "newTurn") {
-      if (isApprovalUserInputRequest(pendingRequest.request)) {
-        throw new Error("Approval requests cannot be submitted after their owning turn ends.");
-      }
-      let thread = getPendingUserInputRequestThread(pendingRequest);
-      const originalTurnId = options.turnId ?? pendingRequest.turnId ?? (thread ? getCurrentTurn(thread)?.id ?? null : null);
-      if (!thread) {
-        const metadata = await sendBridgeRequest<ThreadReadResponse>(pendingRequest.harness, {
-          method: "thread/read",
-          params: { threadId: pendingRequest.threadId, includeTurns: false },
-        });
-        if (!isPendingSubmissionCurrent()) {
-          throw new Error("The pending question changed before its response could be submitted.");
-        }
-        const projectContext = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId);
-        const projectRoots = getThreadProjectRootPaths(projectContext);
-        if (metadata.thread.id !== pendingRequest.threadId
-          || (projectRoots.length && !isProjectCodexThreadAtExpectedCwd(metadata.thread, projectRoots, undefined))) {
-          throw new Error("Questionnaire metadata does not belong to its thread and project.");
-        }
-        thread = getPendingUserInputRequestThread(pendingRequest) ?? projectStableThreadMetadata(toThreadPayload(
-          metadata.thread, pendingRequest.harness, metadata.thread.model, metadata.thread.reasoningEffort,
-        ));
-      }
-      const historyFields: Omit<WorkbenchQuestionnaireHistoryEntryState, "turnId"> = {
-        insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
-        insertAfterItemIndex: options.insertAfterItemIndex ?? null,
-        itemId: pendingRequest.itemId,
-        request: pendingRequest.request,
-        requestKey: pendingRequest.requestKey,
-        resolvedAt: Date.now(),
-        response: {
-          answers: Object.fromEntries(
-            Object.entries(response.answers).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== undefined),
-          ),
-        },
-        threadId: pendingRequest.threadId,
-      };
-      let admittedTurnId: string | null = null;
-      await sendThreadMessage(
-        thread,
-        createWorkbenchQuestionnaireResponseInput(response),
-        {
-          onTurnAdmitted: (turnId) => {
-            admittedTurnId = turnId;
-          },
-          activatedSkillPaths: options.activatedSkillPaths,
-          selectThread: false,
-          startNewTurn: true,
-        },
-      );
-      if (!admittedTurnId) {
-        throw new Error("The questionnaire response turn was not admitted.");
-      }
-      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
-        ...historyFields,
-        turnId: WorkbenchTurnIdSchema.parse(originalTurnId ?? admittedTurnId),
-      };
-      let transcriptWarning: string | null = null;
-      if (pendingRequest.harness === "codex") {
-        try {
-          const transcriptResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>("codex", {
-            method: "questionnaire/history/record",
-            params: historyEntry,
-          });
-          transcriptWarning = transcriptResult.warning ?? null;
-        } catch (error) {
-          const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-          transcriptWarning = `The questionnaire response turn started, but transcript history recording failed: ${message}`;
-        }
-      }
-      const resolution = await requestWorkbench<{ accepted: boolean }>("workbench/thread-state/questionnaire/resolve", {
-        entry: historyEntry,
-        identity: { harness: pendingRequest.harness, threadId: pendingRequest.threadId },
-        projectId: effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId).projectId,
-      });
-      if (!resolution.accepted) {
-        throw new Error("The questionnaire response was admitted, but its durable history could not be resolved.");
-      }
-      if (disposed || submissionProjectGeneration !== projectContextGeneration) return;
-      resolvedDurableQuestionnaireKeysByThreadId.set(threadId, pendingRequest.requestKey);
-      recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
-        insertAfterItemId: historyEntry.insertAfterItemId,
-        insertAfterItemIndex: historyEntry.insertAfterItemIndex,
-        turnId: historyEntry.turnId,
-      });
-      const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
-      const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
-      refreshFinalVisibleQuestionnaireHistory(threadId);
-      if (clearedPendingRequest || clearedWaitingFlag) emit();
-      if (transcriptWarning) emitStatusMessage(transcriptWarning);
-      return;
     }
 
     const supplementalApprovalSteerText = getWorkbenchApprovalSupplementalSteerText(pendingRequest.request, response);
@@ -5752,24 +5528,19 @@ function WorkbenchThreadClient(
       ...(options.supplementalInput ?? []),
     ];
     const hasActivatedSkills = pendingRequest.harness === "codex" && Boolean(options.activatedSkillPaths?.length);
-    if (supplementalInput.length || hasActivatedSkills) {
-      await sendQuestionnaireSupplementalSteer(pendingRequest, supplementalInput, options.activatedSkillPaths);
-      if (!isPendingSubmissionCurrent()) {
-        throw new Error("The pending question changed before its response could be submitted.");
-      }
-    }
-
-    const submissionTurnId = options.turnId ?? getPendingUserInputRequestTurnId(pendingRequest);
-    const submitResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>(pendingRequest.harness, {
-      method: "questionnaire/respond",
-      params: {
-        insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
-        insertAfterItemIndex: options.insertAfterItemIndex ?? null,
-        response,
-        requestKey: pendingRequest.requestKey,
-        threadId,
-        turnId: submissionTurnId,
-      },
+    const projectId = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId).projectId;
+    if (!projectId) throw new Error("The questionnaire thread has no selected project.");
+    const submitResult = await requestWorkbench<{ ok: true; route: "admitted" | "live" | "provider"; warning?: string }>("questionnaire/respond", {
+      ...(options.activatedSkillPaths?.length ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
+      harness: pendingRequest.harness,
+      insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
+      insertAfterItemIndex: options.insertAfterItemIndex ?? null,
+      projectId,
+      requestKey: pendingRequest.requestKey,
+      response,
+      ...(supplementalInput.length ? { supplementalInput } : {}),
+      threadId,
+      turnId: options.turnId ?? pendingRequest.turnId,
     });
     if (disposed || submissionProjectGeneration !== projectContextGeneration) {
       return;
@@ -5777,26 +5548,20 @@ function WorkbenchThreadClient(
     if (submitResult.warning) {
       emitStatusMessage(submitResult.warning);
     }
+    const providerRequests = providerPendingUserInputRequestsByHarness.get(pendingRequest.harness);
+    if (providerRequests?.get(threadId)?.requestKey === pendingRequest.requestKey) {
+      providerRequests.delete(threadId);
+    }
     resolvedDurableQuestionnaireKeysByThreadId.set(threadId, pendingRequest.requestKey);
     const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
     const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
     if (clearedPendingRequest || clearedWaitingFlag) {
       emit();
     }
-    if (pendingRequest.harness === "opencode") {
-      if (recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
-        insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
-        insertAfterItemIndex: options.insertAfterItemIndex ?? null,
-        turnId: submissionTurnId,
-      })) {
-        refreshFinalVisibleQuestionnaireHistory(threadId);
-      }
+    if ((supplementalInput.length || hasActivatedSkills) && pendingRequest.harness === "codex") {
+      await readCompletedThreadWorkbenchHistory(threadId);
     } else {
-      if ((supplementalInput.length || hasActivatedSkills) && pendingRequest.harness === "codex") {
-        await readCompletedThreadWorkbenchHistory(threadId);
-      } else {
-        await readCompletedQuestionnaireHistoryForHarness(threadId, pendingRequest.harness);
-      }
+      await readCompletedQuestionnaireHistoryForHarness(threadId, pendingRequest.harness);
     }
   }
 
@@ -5809,6 +5574,16 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "questionnaire/requested") {
+      const providerRequests = providerPendingUserInputRequestsByHarness.get(harness) ?? new Map<string, WorkbenchPendingUserInputRequest>();
+      providerRequests.set(notification.params.threadId, {
+        harness,
+        itemId: notification.params.itemId,
+        request: notification.params.request,
+        requestKey: notification.params.requestKey,
+        threadId: notification.params.threadId,
+        turnId: notification.params.turnId,
+      });
+      providerPendingUserInputRequestsByHarness.set(harness, providerRequests);
       const selectedTurn = getCurrentInProgressTurn(state.currentThread);
       if (
         state.currentThread?.harness === harness
@@ -5824,7 +5599,6 @@ function WorkbenchThreadClient(
         notification.params.request,
         {
           itemId: notification.params.itemId,
-          responseMode: "native",
           turnId: notification.params.turnId,
         },
       )) {
@@ -5835,6 +5609,10 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "questionnaire/resolved") {
+      const providerRequests = providerPendingUserInputRequestsByHarness.get(harness);
+      if (providerRequests?.get(notification.params.threadId)?.requestKey === notification.params.requestKey) {
+        providerRequests.delete(notification.params.threadId);
+      }
       const clearedPendingRequest = clearPendingUserInputRequest(notification.params.threadId, notification.params.requestKey);
       const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(notification.params.threadId);
       if (clearedPendingRequest || clearedWaitingFlag) {
@@ -5849,14 +5627,14 @@ function WorkbenchThreadClient(
     if (notification.method === "turn/completed" && notification.params.turn.status === "interrupted") {
       const pendingRequest = state.pendingUserInputRequestsByThreadId.get(notification.params.threadId);
       if (pendingRequest && (!pendingRequest.turnId || pendingRequest.turnId === notification.params.turn.id)) {
+        const providerRequests = providerPendingUserInputRequestsByHarness.get(harness);
+        if (providerRequests?.get(notification.params.threadId)?.requestKey === pendingRequest.requestKey) {
+          providerRequests.delete(notification.params.threadId);
+        }
         if (isApprovalUserInputRequest(pendingRequest.request)) {
           const clearedPendingRequest = clearPendingUserInputRequest(notification.params.threadId, pendingRequest.requestKey);
           const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(notification.params.threadId);
           if (clearedPendingRequest || clearedWaitingFlag) emit();
-        } else if (pendingRequest.responseMode !== "newTurn") {
-          state.pendingUserInputRequestsByThreadId.set(notification.params.threadId, { ...pendingRequest, responseMode: "newTurn" });
-          bumpPendingUserInputRequestGeneration(pendingRequest.harness);
-          emit();
         }
       }
     }

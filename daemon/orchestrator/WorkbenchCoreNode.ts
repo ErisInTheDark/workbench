@@ -48,6 +48,7 @@ import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
+import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
@@ -233,24 +234,6 @@ function createWorkbenchCoreFeature(
       console.warn("[stats]", message.slice(0, 500));
     },
   });
-  const daemonRequests = new WorkbenchDaemonRequestController({
-    models: new CodexModelCatalog(),
-    agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
-    codexSandboxNetwork,
-    files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
-    gitArc,
-    nativeFiles: new WorkbenchNativeFileController(projectCatalog),
-    profiles: profileStore,
-    profileTargets: {
-      readComposerProfileTarget: async (slot) => await requireThreadState().controller.readComposerProfileTarget(slot),
-      setComposerProfileTarget: async (slot, selection) => await requireThreadState().controller.setComposerProfileTarget(slot, selection),
-    },
-    projects: projectCatalog,
-    search,
-    settings: new WorkbenchServerSettings(),
-    stats,
-    threadIdentity: { resolve: (input) => harnesses.resolveThreadIdentity(input) },
-  });
   const threadGit = new WorkbenchThreadGitFeature({
     identities: threadIdentity,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
@@ -314,6 +297,30 @@ function createWorkbenchCoreFeature(
     logError: (message) => {
       console.error("[questionnaire]", message.slice(0, 500));
     },
+  });
+  const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
+    harnesses,
+    questionnaires,
+    state: threadState.controller,
+  });
+  const daemonRequests = new WorkbenchDaemonRequestController({
+    models: new CodexModelCatalog(),
+    agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
+    codexSandboxNetwork,
+    files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
+    gitArc,
+    nativeFiles: new WorkbenchNativeFileController(projectCatalog),
+    profiles: profileStore,
+    profileTargets: {
+      readComposerProfileTarget: async (slot) => await threadState.controller.readComposerProfileTarget(slot),
+      setComposerProfileTarget: async (slot, selection) => await threadState.controller.setComposerProfileTarget(slot, selection),
+    },
+    projects: projectCatalog,
+    questionnaireResponses,
+    search,
+    settings: new WorkbenchServerSettings(),
+    stats,
+    threadIdentity: { resolve: (input) => harnesses.resolveThreadIdentity(input) },
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
   const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({
@@ -483,6 +490,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateController.ts",
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
     "daemon/orchestrator/WorkbenchQuestionnaireController.ts",
+    "daemon/orchestrator/WorkbenchQuestionnaireResponseController.ts",
     "shared/workbench/thread/thread-stop.ts",
     "daemon/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "daemon/orchestrator/CodexHealthMonitor.ts",

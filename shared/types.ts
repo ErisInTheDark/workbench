@@ -1004,7 +1004,6 @@ export interface WorkbenchPendingUserInputRequest {
   turnId: string | null;
   itemId: string | null;
   request: WorkbenchUserInputRequest;
-  responseMode?: "native" | "newTurn";
 }
 
 export interface WorkbenchQuestionnaireHistoryEntry {

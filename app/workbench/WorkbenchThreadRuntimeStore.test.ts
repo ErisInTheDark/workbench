@@ -96,7 +96,6 @@ test("thread runtime publishes meaningful background state without replacing rou
       title: "Questionnaire",
     },
     requestKey: "request",
-    responseMode: "newTurn" as const,
     threadId: "selected",
     turnId: "turn",
   };

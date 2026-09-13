@@ -3147,22 +3147,50 @@ test("proper questionnaires and late-response history survive controller restart
   assert.equal("result" in repeatedDismissal && (repeatedDismissal.result as { accepted?: boolean }).accepted, true);
 
   await third.observeLifecycle("codex", fixtureThreadIds["thread"], { kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(questionnaire.turnId) });
-  const historyEntry = {
-    ...questionnaire,
+  const response = { answers: { route: { answers: ["Approve"] } } };
+  const resolutionInput = {
+    harness: "codex" as const,
     insertAfterItemId: "item",
     insertAfterItemIndex: 0,
-    resolvedAt: 3,
-    response: { answers: { route: { answers: ["Approve"] } } },
-    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
-    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
-  };
-  const resolved = await third.handleRequest("third", {
-    entry: historyEntry,
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/resolve",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    requestKey: questionnaire.requestKey,
+    resolvedAt: 3,
+    response,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
+  };
+  await assert.rejects(
+    third.resolvePendingQuestionnaire(resolutionInput, async () => {
+      throw new Error("delivery failed");
+    }),
+    /delivery failed/u,
+  );
+  const retainedAfterFailure = (await third.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(retainedAfterFailure?.entryKind === "thread" ? retainedAfterFailure.pendingQuestionnaire?.requestKey : null, "request-key");
+
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let deliveries = 0;
+  const firstResolution = third.resolvePendingQuestionnaire(resolutionInput, async ({ historyEntry }) => {
+    deliveries += 1;
+    assert.deepEqual(historyEntry.response, response);
+    enter();
+    await gate;
+    return "delivered";
   });
-  assert.equal("result" in resolved && (resolved.result as { accepted?: boolean }).accepted, true);
+  await entered;
+  const competingResolution = third.resolvePendingQuestionnaire(resolutionInput, async () => {
+    deliveries += 1;
+    return "duplicate";
+  });
+  await Promise.resolve();
+  assert.equal(deliveries, 1);
+  release();
+  const [resolved, duplicate] = await Promise.all([firstResolution, competingResolution]);
+  assert.equal(resolved?.delivery, "delivered");
+  assert.equal(duplicate, null);
+  assert.equal(deliveries, 1);
   const completed = (await third.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
   assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");

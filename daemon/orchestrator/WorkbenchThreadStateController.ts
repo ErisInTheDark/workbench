@@ -10,7 +10,7 @@
  */
 import { z } from "zod";
 
-import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
@@ -1021,6 +1021,68 @@ export default class WorkbenchThreadStateController {
     if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
     return this.applyLifecycle(projectId, entry.identity.harness, threadId,
       { kind: "inputResolved", requestKey }, undefined, { kind: "clear", requestKey });
+  }
+
+  async resolvePendingQuestionnaire<TDelivery>(
+    input: {
+      harness: WorkbenchHarnessId;
+      insertAfterItemId?: string | null;
+      insertAfterItemIndex?: number | null;
+      projectId: ProjectId;
+      requestKey: string;
+      resolvedAt: number;
+      response: WorkbenchUserInputResponse;
+      threadId: WorkbenchThreadId;
+    },
+    deliver: (context: {
+      historyEntry: WorkbenchQuestionnaireHistoryEntryState;
+      lifecycle: WorkbenchThreadLifecycle;
+      questionnaire: WorkbenchDurableQuestionnaire;
+    }) => Promise<TDelivery>,
+  ) {
+    const state = await this.getProject(input.projectId);
+    const key = `${input.harness}:${input.threadId}`;
+    return await this.enqueue(`${input.projectId}:thread:${key}`, async () => {
+      const existing = state.entries.get(key);
+      if (
+        !existing
+        || existing.entryKind === "draft"
+        || existing.pendingQuestionnaire?.requestKey !== input.requestKey
+      ) {
+        return null;
+      }
+      const questionnaire = existing.pendingQuestionnaire;
+      const turnId = questionnaire.turnId ?? getWorkbenchLifecycleTurnId(existing.lifecycle);
+      if (!turnId) throw new Error("The questionnaire has no owning turn.");
+      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
+        ...questionnaire,
+        insertAfterItemId: input.insertAfterItemId ?? questionnaire.itemId ?? null,
+        insertAfterItemIndex: input.insertAfterItemIndex ?? null,
+        resolvedAt: input.resolvedAt,
+        response: input.response,
+        threadId: input.threadId,
+        turnId,
+      };
+      const delivery = await deliver({
+        historyEntry,
+        lifecycle: existing.lifecycle,
+        questionnaire,
+      });
+      const previousEntries = new Map(state.entries);
+      const next = parseWorkbenchThreadStateEntry({
+        ...existing,
+        pendingQuestionnaire: null,
+        questionnaireHistory: mergeQuestionnaireHistoryEntries(
+          existing.questionnaireHistory ?? [],
+          [historyEntry],
+        ),
+      });
+      if (next.entryKind === "draft") throw new Error("Questionnaire completion cannot produce a draft entry.");
+      state.entries.set(key, next);
+      await this.persist(input.projectId, state, [key], { previousEntries });
+      this.publish(input.projectId, state, next);
+      return { delivery, historyEntry };
+    });
   }
 
   async getRevision(projectId: ProjectId) {
