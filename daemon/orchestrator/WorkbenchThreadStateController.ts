@@ -1044,20 +1044,24 @@ export default class WorkbenchThreadStateController {
   ) {
     const state = await this.getProject(input.projectId);
     const key = `${input.harness}:${input.threadId}`;
-    return await this.enqueue(`${input.projectId}:thread:${key}`, async () => {
-      const existing = state.entries.get(key);
-      if (
-        !existing
-        || existing.entryKind === "draft"
-        || existing.pendingQuestionnaire?.requestKey !== input.requestKey
-      ) {
-        return null;
-      }
-      const questionnaire = existing.pendingQuestionnaire;
-      const accepted = await deliver({
-        lifecycle: existing.lifecycle,
-        questionnaire,
+    const candidate = state.entries.get(key);
+    const questionnaire = candidate?.entryKind !== "draft" ? candidate?.pendingQuestionnaire : null;
+    if (!questionnaire || questionnaire.requestKey !== input.requestKey) return null;
+    const matches = (question: WorkbenchDurableQuestionnaire | null | undefined) => (
+      question?.requestKey === questionnaire.requestKey && question.itemId === questionnaire.itemId
+    );
+    const mutationKey = `${input.projectId}:thread:${key}`;
+    return await this.enqueue(`${input.projectId}:questionnaire:${key}`, async () => {
+      const context = await this.enqueue(mutationKey, async () => {
+        const current = state.entries.get(key);
+        if (!current || current.entryKind === "draft" || !matches(current.pendingQuestionnaire)
+          || current.questionnaireHistory?.some(matches)) return null;
+        return { lifecycle: current.lifecycle, questionnaire };
       });
+      if (!context) return null;
+      // Admission mutates this thread's MCP state. Never hold its mutation queue
+      // across delivery, or the global Codex command queue deadlocks behind it.
+      const accepted = await deliver(context);
       const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
         ...questionnaire,
         insertAfterItemId: accepted.insertAfterItemId,
@@ -1067,20 +1071,26 @@ export default class WorkbenchThreadStateController {
         threadId: input.threadId,
         turnId: accepted.turnId,
       };
-      const previousEntries = new Map(state.entries);
-      const next = parseWorkbenchThreadStateEntry({
-        ...existing,
-        pendingQuestionnaire: null,
-        questionnaireHistory: mergeQuestionnaireHistoryEntries(
-          existing.questionnaireHistory ?? [],
-          [historyEntry],
-        ),
+      return await this.enqueue(mutationKey, async () => {
+        const current = state.entries.get(key);
+        if (!current || current.entryKind === "draft") {
+          throw new Error("The questionnaire response was delivered but its thread was removed before settlement.");
+        }
+        const previousEntries = new Map(state.entries);
+        const next = parseWorkbenchThreadStateEntry({
+          ...current,
+          pendingQuestionnaire: matches(current.pendingQuestionnaire) ? null : current.pendingQuestionnaire,
+          questionnaireHistory: mergeQuestionnaireHistoryEntries(
+            current.questionnaireHistory ?? [],
+            [historyEntry],
+          ),
+        });
+        if (next.entryKind === "draft") throw new Error("Questionnaire completion cannot produce a draft entry.");
+        state.entries.set(key, next);
+        await this.persist(input.projectId, state, [key], { previousEntries });
+        this.publish(input.projectId, state, next);
+        return { delivery: accepted.delivery, historyEntry };
       });
-      if (next.entryKind === "draft") throw new Error("Questionnaire completion cannot produce a draft entry.");
-      state.entries.set(key, next);
-      await this.persist(input.projectId, state, [key], { previousEntries });
-      this.publish(input.projectId, state, next);
-      return { delivery: accepted.delivery, historyEntry };
     });
   }
 

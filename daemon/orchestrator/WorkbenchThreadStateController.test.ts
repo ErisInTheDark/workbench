@@ -3177,12 +3177,24 @@ test("proper questionnaires and late-response history survive controller restart
   let release!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
+  const repeatedKeyQuestionnaire = {
+    ...questionnaire,
+    itemId: "item-2",
+    request: { ...questionnaire.request, id: "request-2", title: "Questionnaire 2" },
+  };
   let deliveries = 0;
   const firstResolution = third.resolvePendingQuestionnaire(resolutionInput, async ({ questionnaire: deliveredQuestionnaire }) => {
     deliveries += 1;
     assert.equal(deliveredQuestionnaire.requestKey, unplacedQuestionnaire.requestKey);
     enter();
     await gate;
+    await third.setMcpGeneration(fixtureProjectIds["project"], "codex", fixtureThreadIds["thread"], "questionnaire-admission");
+    await third.observeLifecycle("codex", fixtureThreadIds["thread"], {
+      kind: "pendingInput",
+      questionnaire: repeatedKeyQuestionnaire,
+      requestKey: repeatedKeyQuestionnaire.requestKey,
+      turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(repeatedKeyQuestionnaire.turnId),
+    });
     return {
       delivery: "delivered",
       insertAfterItemId: null,
@@ -3208,7 +3220,9 @@ test("proper questionnaires and late-response history survive controller restart
   assert.equal(duplicate, null);
   assert.equal(deliveries, 1);
   const completed = (await third.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
-  assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
+  assert.equal(await third.getMcpGeneration(fixtureProjectIds["project"], "codex", fixtureThreadIds["thread"]), "questionnaire-admission");
+  assert.deepEqual(completed?.entryKind === "thread" ? completed.pendingQuestionnaire : null, repeatedKeyQuestionnaire);
+  assert.equal(completed?.lifecycle.kind, "needsAttention");
   assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");
   assert.deepEqual(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0] : null, {
     ...unplacedQuestionnaire,
@@ -3220,17 +3234,6 @@ test("proper questionnaires and late-response history survive controller restart
     turnId: fixtureTurnIds["turn"],
   });
 
-  const repeatedKeyQuestionnaire = {
-    ...questionnaire,
-    itemId: "item-2",
-    request: { ...questionnaire.request, id: "request-2", title: "Questionnaire 2" },
-  };
-  await third.observeLifecycle("codex", fixtureThreadIds["thread"], {
-    kind: "pendingInput",
-    questionnaire: repeatedKeyQuestionnaire,
-    requestKey: repeatedKeyQuestionnaire.requestKey,
-    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(repeatedKeyQuestionnaire.turnId),
-  });
   const repeatedKeyResolution = await third.handleRequest("third", {
     entry: {
       ...repeatedKeyQuestionnaire,

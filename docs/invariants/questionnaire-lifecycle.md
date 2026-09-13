@@ -2,3 +2,4 @@
 - Workbench `request_user_input` survives turns ending due to process interruption virtually.
 - Questionnaire response routing is daemon-owned. The client submits answer intent without inferring live or detached thread state. Durable pending state clears only after live delivery or managed continuation accepts the answer.
 - Ordinary questionnaire responses append at their daemon-owned acceptance point. Approval responses remain bound to their active approval turn.
+- Questionnaire delivery must not hold the thread mutation queue. Admission needs that queue; accepted history merges into current state without clearing a replacement question.
