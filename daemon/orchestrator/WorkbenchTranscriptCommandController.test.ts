@@ -1,6 +1,5 @@
 /*
- * Keywords: transcript, command, cancellation, pagination, CLI.
- * Exports: none. Tests protect access, scan ownership and actionable results.
+ * Exports: none. Tests protect access, scan ownership, rendering and continuation.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -31,7 +30,7 @@ test("search fills a result page across empty batches without ignoring cancellat
     assert.equal(request.cursor, "next");
     return { ...empty, nextCursor: null, scanned: 1, rows: [{
       kind: "assistant-message", id: "item", threadId: "wb-id", turnId: "turn", projectId: "project", title: "title",
-      createdAt: 1, fields: [{ name: "text", text: "needle", offset: 0, length: 6 }], counts: {},
+      createdAt: 1, fields: [{ path: ["text"], value: "needle" }], counts: {},
     }] };
   } });
   const response = await controller.execute(input, signal.signal);
@@ -39,7 +38,8 @@ test("search fills a result page across empty batches without ignoring cancellat
   const result = await response.json() as ReturnType<typeof transcriptPageOutput>;
   assert.equal(result.rows.length, 1);
   assert.equal(result.scanned, 201);
-  assert.match(result.rows[0].showCommand, /--thread 'wb-id' --item 'item'/u);
+  assert.deepEqual(result.rows[0]?.fields, [{ path: ["text"], value: "needle" }]);
+  assert.equal(result.nextCommand, null);
   assert.equal(reads, 2);
 
   reads = 0;
@@ -56,4 +56,34 @@ test("invalid queries and stale cursors propagate as bounded failures, not empty
   const response = await controller.execute(input, new AbortController().signal);
   assert.equal(response.status, 400);
   assert.match(await response.text(), /stale cursor/u);
+});
+
+test("text rendering abbreviates matching caller directories without changing data or other paths", async () => {
+  const fields = [
+    { path: ["cwd"], value: "c:\\WORKBENCH\\" },
+    { path: ["arguments", "cwd"], value: "C:/workbench/other" },
+    { path: ["arguments", "file"], value: "C:/workbench" },
+    { path: ["exitCode"], value: 0 },
+    { path: ["success"], value: false },
+  ];
+  const controller = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async () => ({
+    coverage, nextCursor: null, scanned: 1,
+    rows: [{
+      id: "item", kind: "commandExecution", threadId: "wb-id", turnId: "turn", projectId: "project",
+      title: "title", createdAt: 1, counts: {}, fields,
+    }],
+  }) });
+  for (const action of ["read", "show"]) {
+    const request = { ...input, action, queries: [], json: false, ...(action === "show" ? { item: "item" } : {}) };
+    const response = await controller.execute(request, new AbortController().signal);
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(text, /cwd: \./u);
+    assert.ok(text.includes("C:/workbench/other"));
+    assert.ok(text.includes("file: C:/workbench"));
+    assert.ok(!text.includes("c:\\WORKBENCH\\"));
+    const dataResponse = await controller.execute({ ...request, json: true }, new AbortController().signal);
+    const data = await dataResponse.json() as ReturnType<typeof transcriptPageOutput>;
+    assert.deepEqual(data.rows[0]?.fields, fields);
+  }
 });

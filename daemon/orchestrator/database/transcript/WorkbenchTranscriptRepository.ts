@@ -139,6 +139,18 @@ export default class WorkbenchTranscriptRepository {
     return this.#contextUsage.read(threadId);
   }
 
+  readStoredItems(threadId: string, itemIds: number[]) {
+    return this.#database.transaction(() => {
+      const roots = this.#all(selectRows(itemTables.threadItems, {
+        where: { thread_id: threadId },
+        whereIn: { id: itemIds },
+        orderBy: [{ column: "item_position" }],
+      }));
+      if (roots.length !== itemIds.length) throw new Error("Stored transcript item selection crossed its thread boundary or disappeared.");
+      return projectWorkbenchTranscriptItems(this.#readRows(threadId, roots));
+    })();
+  }
+
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {
     const changedThreadIds = new Set<string>();
     const affected: SettlementChanges = { itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map() };

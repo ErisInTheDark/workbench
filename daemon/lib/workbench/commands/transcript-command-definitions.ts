@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, CLI, SQLite, project admission.
  * Exports:
  * - WORKBENCH_TRANSCRIPT_COMMANDS: CLI-only stored-history discovery, search and reading.
  */
@@ -14,8 +13,8 @@ const descriptors = [
   { action: "threads", description: "Find stored threads by title and metadata. Returned ids are Workbench thread ids." },
   { action: "turns", description: "List a Workbench thread's turns and stored-body coverage." },
   { action: "search", description: "Search SQLite transcript fields across projects or exact --thread Workbench ids. No provider reads." },
-  { action: "read", description: "Read stored history chronologically, optionally around a matching item." },
-  { action: "show", description: "Expand a stored item through bounded field pages. Use the returned continuation." },
+  { action: "read", description: "Read canonical item data chronologically with trimmed text, optionally around a matching item." },
+  { action: "show", description: "Expand complete item data through bounded pages. Follow the returned continuation." },
   { action: "stats", description: "Count stored threads, turns, materialised turns and item kinds." },
 ] as const;
 

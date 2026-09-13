@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, query, CLI, worker, pagination.
  * Exports:
  * - TranscriptQuerySchema/TranscriptQuery: validate the stored-history command vocabulary.
  * - TranscriptField/TranscriptQueryRow/TranscriptQueryPage: bounded display records shared by worker and CLI.
@@ -47,10 +46,11 @@ export const TranscriptQuerySchema = z.object({
 export type TranscriptQuery = z.output<typeof TranscriptQuerySchema>;
 
 export interface TranscriptField {
-  name: string;
-  text: string;
-  offset: number;
-  length: number;
+  path: (string | number)[];
+  value: string | number | boolean | null | [] | Record<string, never>;
+  /** Present only when a string is abbreviated or split across pages. */
+  offset?: number;
+  length?: number;
 }
 
 export interface TranscriptQueryRow {

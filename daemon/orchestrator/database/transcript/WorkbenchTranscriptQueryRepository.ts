@@ -1,19 +1,20 @@
 /*
- * Keywords: transcript, SQLite, bounded queries.
  * Exports:
  * - default WorkbenchTranscriptQueryRepository: query stored canonical transcript rows without materialisation.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { TranscriptQueryError, type TranscriptQuery, type TranscriptQueryPage, type TranscriptQueryRow } from "./transcript-query-contract.ts";
+import { TranscriptQueryError, type TranscriptField, type TranscriptQuery, type TranscriptQueryPage, type TranscriptQueryRow } from "./transcript-query-contract.ts";
 import { transcriptQueryFieldsSql, transcriptQueryKindSql } from "./transcript-query-fields.ts";
+import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
+import { expandTranscriptFields, previewTranscriptFields, transcriptItemFields } from "./transcript-item-data.ts";
 
 const positionSchema = z.tuple([z.number(), z.string(), z.number(), z.number(), z.number()]);
 const cursorSchema = z.object({
   version: z.literal(1), signature: z.string(), ceiling: z.number().int().nonnegative(),
   position: positionSchema.nullable(), offset: z.number().int().nonnegative(),
-  field: z.string().nullable(), fieldOffset: z.number().int().nonnegative(), revision: z.string().nullable(),
+  field: z.number().int().nonnegative().nullable(), fieldOffset: z.number().int().nonnegative(), revision: z.string().nullable(),
 }).strict();
 type Cursor = z.infer<typeof cursorSchema>;
 type Bindings = Record<string, string | number | null>;
@@ -21,9 +22,7 @@ interface ItemRow {
   id: number; publicId: string; threadId: string; turnId: string; projectId: string;
   title: string; kind: string; createdAt: number; ordTime: number; turnIndex: number; position: number;
 }
-interface FieldRow { name: string; text: string; offset: number; length: number }
 const BATCH_SIZE = 200;
-const ITEM_CHAR_BUDGET = 12000;
 const itemJoins = `FROM thread_items i
   JOIN thread_turns tr ON tr.id = i.turn_id
   JOIN workbench_threads th ON th.id = i.thread_id
@@ -40,17 +39,16 @@ function signature(query: TranscriptQuery) {
 }
 function encode(cursor: Cursor) { return Buffer.from(JSON.stringify(cursor)).toString("base64url"); }
 function itemPosition(row: ItemRow): z.infer<typeof positionSchema> { return [row.ordTime, row.threadId, row.turnIndex, row.position, row.id]; }
-function entry(row: ItemRow, fields: FieldRow[]): TranscriptQueryRow {
+function entry(row: ItemRow, fields: TranscriptField[]): TranscriptQueryRow {
   return { id: row.publicId, threadId: row.threadId, turnId: row.turnId, projectId: row.projectId,
     title: row.title.slice(0, 300), kind: row.kind, createdAt: row.createdAt, fields, counts: {} };
 }
-function displayField(name: string, text: string): FieldRow { return { name, text, offset: 0, length: text.length }; }
+function displayField(name: string, value: TranscriptField["value"]): TranscriptField { return { path: [name], value }; }
 
 export default class WorkbenchTranscriptQueryRepository {
   constructor(private readonly database: Database.Database) {
     // SQLite's built-in lower() only folds ASCII. Keep literal matching Unicode-aware.
     database.function("wb_transcript_fold", { deterministic: true }, (value: string) => value.toLowerCase());
-    database.function("wb_transcript_digest", { deterministic: true }, (value: string) => digest(value));
   }
 
   read(query: TranscriptQuery): TranscriptQueryPage {
@@ -160,7 +158,7 @@ export default class WorkbenchTranscriptQueryRepository {
         WHERE tr.rowid <= @ceiling AND ${where} ORDER BY tr.turn_index ${query.direction === "older" ? "DESC" : "ASC"} LIMIT @limit OFFSET @offset`).all(bindings) as { id: string; threadId: string; turnIndex: number; state: string; harness: string; createdAt: number; startedAt: number | null; endedAt: number | null; materialized: number }[];
       rows = values.map(row => ({ kind: "turn", id: row.id, threadId: row.threadId, turnId: row.id, projectId: null,
         title: `${row.state} (${row.harness})`, createdAt: row.createdAt,
-        fields: [displayField("startedAt", String(row.startedAt)), displayField("endedAt", String(row.endedAt))],
+        fields: [displayField("startedAt", row.startedAt), displayField("endedAt", row.endedAt)],
         counts: { turnIndex: row.turnIndex, materialized: row.materialized } }));
     } else {
       const matching = this.textPredicate("th.title", query, bindings);
@@ -177,7 +175,7 @@ export default class WorkbenchTranscriptQueryRepository {
   }
 
   private selectItems(query: TranscriptQuery, where: string) {
-    return `SELECT i.id, COALESCE(i.public_id, CAST(i.id AS TEXT)) AS publicId, i.thread_id AS threadId,
+    return `SELECT i.id, COALESCE(i.public_id, i.source_id) AS publicId, i.thread_id AS threadId,
       i.turn_id AS turnId, th.project_id AS projectId, th.title, ${transcriptQueryKindSql} AS kind,
       i.created_at AS createdAt, ${query.threads.length === 1 ? "0" : "tr.created_at"} AS ordTime,
       tr.turn_index AS turnIndex, i.item_position AS position ${itemJoins} WHERE ${where}`;
@@ -186,7 +184,7 @@ export default class WorkbenchTranscriptQueryRepository {
   private locate(query: TranscriptQuery, item: string): ItemRow {
     const bindings: Bindings = { item };
     const where = this.filters(query, bindings, true);
-    const row = this.database.prepare(this.selectItems(query, `${where} AND (i.public_id = @item OR (i.public_id IS NULL AND CAST(i.id AS TEXT) = @item))`))
+    const row = this.database.prepare(this.selectItems(query, `${where} AND (i.public_id = @item OR (i.public_id IS NULL AND (i.source_id = @item OR CAST(i.id AS TEXT) = @item)))`))
       .get(bindings) as ItemRow | undefined;
     if (!row) throw new TranscriptQueryError("Unknown item in the selected Workbench thread.");
     return row;
@@ -218,14 +216,19 @@ export default class WorkbenchTranscriptQueryRepository {
       ORDER BY ordTime ${direction}, threadId ${direction}, turnIndex ${direction}, position ${direction}, i.id ${direction}
       LIMIT ${BATCH_SIZE + 1}`).all(bindings) as ItemRow[];
     const batch = candidates.slice(0, BATCH_SIZE);
-    const rows: TranscriptQueryRow[] = [];
+    const selected: ItemRow[] = [];
     let last: ItemRow | undefined;
     for (const row of batch) {
       last = row;
       if (query.action === "search" && !this.matches(row.id, query)) continue;
-      rows.push(entry(row, this.preview(row.id, query)));
-      if (rows.length === query.limit) break;
+      selected.push(row);
+      if (selected.length === query.limit) break;
     }
+    const projected = this.projected(selected, query);
+    const rows = selected.map(row => {
+      const item = projected.get(row.id)!;
+      return entry({ ...row, kind: item.kind }, previewTranscriptFields(item.fields));
+    });
     const consumed = last ? batch.findIndex(row => row.id === last.id) + 1 : 0;
     const more = consumed < candidates.length;
     if (query.action === "read" && descending) rows.reverse();
@@ -249,47 +252,29 @@ export default class WorkbenchTranscriptQueryRepository {
       WHERE (${include.join(query.any ? " OR " : " AND ") || "1"}) ${exclude.length ? `AND ${exclude.join(" AND ")}` : ""}`).get(bindings);
   }
 
-  private preview(id: number, query: TranscriptQuery): FieldRow[] {
-    const bindings: Bindings = {};
-    const fold = query.caseSensitive ? "text" : "wb_transcript_fold(text)";
-    const positions = query.queries.map((value, index) => {
-      bindings[`q${index}`] = query.caseSensitive ? value : value.toLowerCase();
-      return `NULLIF(instr(${fold}, @q${index}), 0)`;
-    });
-    const match = positions.length ? `COALESCE(${positions.join(",")}, 1)` : "1";
-    return this.database.prepare(`${this.fieldsCte(id, query.opaque)}
-      SELECT name, substr(text, max(1, ${match} - 80), 320) AS text,
-      max(0, ${match} - 81) AS offset, length(text) AS length
-      FROM fields ${query.action === "search" && positions.length ? `WHERE ${positions.map(position => `${position} IS NOT NULL`).join(" OR ")}` : ""}
-      ORDER BY name LIMIT 3`).all(bindings) as FieldRow[];
+  private projected(rows: ItemRow[], query: TranscriptQuery) {
+    const result = new Map<number, { kind: string; fields: TranscriptField[] }>();
+    const repository = new WorkbenchTranscriptRepository(this.database);
+    for (const threadId of new Set(rows.map(row => row.threadId))) {
+      const projection = repository.readStoredItems(threadId, rows.filter(row => row.threadId === threadId).map(row => row.id));
+      if ("issues" in projection) {
+        throw new Error(`Stored transcript projection failed: ${projection.issues.map(issue => `${issue.code} in ${issue.table}`).join(", ").slice(0, 500)}`);
+      }
+      for (const { root, item } of projection.data) {
+        result.set(root.id, { kind: item.type, fields: transcriptItemFields(item, query.opaque) });
+      }
+    }
+    return result;
   }
 
   private show(query: TranscriptQuery, cursor: Cursor, coverage: TranscriptQueryPage["coverage"]): TranscriptQueryPage {
     const row = this.locate(query, query.item!);
-    const cte = this.fieldsCte(row.id, query.opaque);
-    const fingerprints = this.database.prepare(`${cte} SELECT name, wb_transcript_digest(text) AS hash FROM fields ORDER BY name`).all() as { name: string; hash: string }[];
-    const revision = digest(JSON.stringify(fingerprints));
+    const item = this.projected([row], query).get(row.id)!;
+    const revision = digest(JSON.stringify(item));
     if (cursor.revision && cursor.revision !== revision) throw new TranscriptQueryError("Item changed since this expansion cursor. Read the item again.");
-    const fields: FieldRow[] = [];
-    let nextCursor: string | null = null;
-    let budget = ITEM_CHAR_BUDGET;
-    const selected = fingerprints.filter(field => cursor.field === null || field.name >= cursor.field);
-    for (const [index, fingerprint] of selected.entries()) {
-      const field = this.database.prepare(`${cte} SELECT name, substr(text, @offset + 1, @budget) AS text,
-        @offset AS offset, length(text) AS length FROM fields WHERE name = @field`)
-        .get({ field: fingerprint.name, offset: index === 0 ? cursor.fieldOffset : 0, budget }) as FieldRow;
-      fields.push(field);
-      const consumed = Array.from(field.text).length;
-      budget -= consumed;
-      if (field.offset + consumed < field.length) {
-        nextCursor = encode({ ...cursor, field: field.name, fieldOffset: field.offset + consumed, revision });
-        break;
-      }
-      if ((budget <= 0 || fields.length === 50) && selected[index + 1]) {
-        nextCursor = encode({ ...cursor, field: selected[index + 1]!.name, fieldOffset: 0, revision });
-        break;
-      }
-    }
-    return { rows: [entry(row, fields)], coverage, scanned: 1, nextCursor };
+    const expanded = expandTranscriptFields(item.fields, cursor.field ?? 0, cursor.fieldOffset);
+    const nextCursor = expanded.next
+      ? encode({ ...cursor, field: expanded.next.index, fieldOffset: expanded.next.offset, revision }) : null;
+    return { rows: [entry({ ...row, kind: item.kind }, expanded.fields)], coverage, scanned: 1, nextCursor };
   }
 }

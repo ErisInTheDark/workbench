@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, sqlite, isolation, pagination, redaction.
  * Exports: none. Behaviour tests for stored-history queries.
  */
 import assert from "node:assert/strict";
@@ -8,6 +7,30 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptQueryRepository from "./WorkbenchTranscriptQueryRepository";
 import { TranscriptQuerySchema, type TranscriptQuery } from "./transcript-query-contract";
+
+test("read exposes canonical item data rather than database field snippets", () => {
+  const { db, read } = fixture();
+  try {
+    db.pragma("query_only = ON");
+    const page = read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", limit: 1 });
+    assert.equal(page.rows[0]?.kind, "agentMessage");
+    assert.ok(page.rows[0]?.fields.some(field => field.value === "commentary"));
+    const stored = db.prepare<[], { text: string }>("SELECT text FROM thread_item_assistant_messages WHERE item_id = 1").get()!;
+    assert.ok(page.rows[0]?.fields.some(field => field.value === stored.text));
+  } finally { db.close(); }
+});
+
+test("read trims long content while keeping item metadata available", () => {
+  const { db, read } = fixture();
+  try {
+    db.prepare("UPDATE thread_item_assistant_messages SET text = ? WHERE item_id = 1").run("message ".repeat(300));
+    const page = read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", limit: 1 });
+    const fields = page.rows[0]!.fields;
+    assert.ok(fields.some(field => field.value === "commentary"));
+    assert.ok(fields.some(field => typeof field.value === "string"
+      && field.value.startsWith("message ") && field.value.length < 200 && field.length! > field.value.length));
+  } finally { db.close(); }
+});
 
 function fixture() {
   const db = new Database(":memory:");
@@ -82,12 +105,13 @@ test("history context follows turn positions and long expansion remains traversa
     assert.deepEqual(around.rows.map(row => row.id), history.rows.map(row => row.id));
     db.prepare("UPDATE thread_item_assistant_messages SET text = ? WHERE item_id = 1").run("x".repeat(40000));
     let page = read({ action: "show", queries: [], threads: ["wb-one"], item: anchor.id });
-    let result = page.rows.flatMap(row => row.fields).map(field => field.text).join("");
+    const content = () => page.rows.flatMap(row => row.fields).filter(field => field.path[0] === "text").map(field => field.value).join("");
+    let result = content();
     const stale = page.nextCursor;
     assert.ok(stale);
     while (page.nextCursor) {
       page = read({ action: "show", queries: [], threads: ["wb-one"], item: anchor.id, cursor: page.nextCursor });
-      result += page.rows.flatMap(row => row.fields).map(field => field.text).join("");
+      result += content();
     }
     assert.equal(result, "x".repeat(40000));
     db.prepare("UPDATE thread_item_assistant_messages SET text = 'changed' WHERE item_id = 1").run();
@@ -109,8 +133,15 @@ test("secret answers are neither searchable nor revealed by expansion", () => {
     const found = read({ queries: ["credential"] }).rows[0];
     assert.ok(found);
     const shown = read({ action: "show", queries: [], threads: ["wb-one"], item: found.id });
-    assert.ok(shown.rows[0]?.fields.some(field => field.text.includes("[redacted]")));
-    assert.ok(shown.rows[0]?.fields.every(field => !field.text.includes("hidden-answer")));
+    assert.ok(shown.rows[0]?.fields.some(field => field.value === "[redacted]"));
+    assert.ok(shown.rows[0]?.fields.every(field => field.value !== "hidden-answer"));
+    for (const opaque of [false, true]) {
+      const preview = read({ action: "read", queries: [], threads: ["wb-one"], opaque });
+      const expanded = read({ action: "show", queries: [], threads: ["wb-one"], item: found.id, opaque });
+      for (const page of [preview, expanded]) {
+        assert.ok(page.rows.flatMap(row => row.fields).every(field => field.value !== "hidden-answer"));
+      }
+    }
   } finally { db.close(); }
 });
 
@@ -127,8 +158,8 @@ test("item expansion honours intersecting project filters and packs small fields
     assert.throws(() => read({ action: "show", queries: [], threads: ["wb-one"], item: match.id, project: "project-1" }), /item|project/i);
     const shown = read({ action: "show", queries: [], threads: ["wb-one"], item: match.id });
     assert.equal(shown.nextCursor, null);
-    assert.ok(shown.rows[0]?.fields.some(field => field.text === "output needle"));
-    assert.ok(shown.rows[0]?.fields.some(field => field.text === "run tool"));
+    assert.ok(shown.rows[0]?.fields.some(field => field.value === "output needle"));
+    assert.ok(shown.rows[0]?.fields.some(field => field.value === "run tool"));
   } finally { db.close(); }
 });
 
@@ -189,6 +220,6 @@ test("a sparse query yields resumable batches and follows canonical order rather
     assert.equal(second.nextCursor, null);
     db.prepare("UPDATE thread_items SET created_at = 9999 WHERE id = 1").run();
     const oldest = read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", limit: 1 });
-    assert.equal(oldest.rows[0]?.id, "1");
+    assert.equal(oldest.rows[0]?.id, "source-1");
   } finally { db.close(); }
 });

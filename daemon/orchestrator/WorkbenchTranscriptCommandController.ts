@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, command, access, cancellation.
  * Exports:
  * - default WorkbenchTranscriptCommandController: own admitted stored-history scans and CLI responses.
  */
@@ -43,7 +42,7 @@ export default class WorkbenchTranscriptCommandController {
       const headers = { "Cache-Control": "no-store" };
       return query.json
         ? Response.json(transcriptPageOutput(query, page), { headers })
-        : new Response(renderTranscriptPage(query, page), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
+        : new Response(renderTranscriptPage(query, page, cwd), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       if (error instanceof TranscriptQueryError) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });
