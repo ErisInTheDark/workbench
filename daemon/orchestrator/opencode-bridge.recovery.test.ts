@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect OpenCode completed, busy, prompt, and deterministic recovery branches. Keywords: opencode, recovery, dedupe, test.
+ * No production exports. Node tests protect OpenCode completed, busy, prompt, and deterministic recovery branches.
  */
 
 import assert from "node:assert/strict";

@@ -17,5 +17,10 @@
   },
   "include": [
     "./**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "./workbench/git/checkpoint-contracts.test.ts",
+    "./workbench/transcript/workbench-transcript-projection.integration.test.ts"
   ]
 }

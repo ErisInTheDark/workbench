@@ -2,6 +2,7 @@
  * No production exports. Real SQLite fixtures protect relational item reconstruction, browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal.
  */
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import Database from "better-sqlite3";
@@ -9,13 +10,15 @@ import Database from "better-sqlite3";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
-import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema";
-import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
-} from "../../../orchestrator/database/transcript/workbench-transcript-types";
+} from "../../../daemon/orchestrator/database/transcript/workbench-transcript-types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const require = createRequire(import.meta.url);
+const { installWorkbenchDatabaseSchema } = require("../../../daemon/orchestrator/database/workbench-database-schema") as typeof import("../../../daemon/orchestrator/database/workbench-database-schema");
+const { default: WorkbenchTranscriptRepository } = require("../../../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository") as typeof import("../../../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository");
 
 const fixtureIdentityValues = {
   NativeThreadId: {

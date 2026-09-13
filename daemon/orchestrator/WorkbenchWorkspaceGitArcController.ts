@@ -13,6 +13,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
+import type { GitArcRepositoryScope } from "workbench-shared/workbench/git/git-arc-scope-response";
 
 import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -384,7 +385,13 @@ export default class WorkbenchWorkspaceGitArcController {
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
         }), undefined, "read");
         const present = values.flatMap(({ member, result }) => result ? [{ member, result }] : []);
-        return present.length ? this.aggregateResults(project, present) : null;
+        return present.length ? {
+          ...this.aggregateResults(project, present),
+          repositoryScopes: present.map(({ member, result }) => ({
+            repoRoot: member.repoRoot,
+            claimedPaths: result.claimedPaths,
+          })) satisfies GitArcRepositoryScope[],
+        } : null;
       }
       case "plan":
       case "planStart": return await this.executePlan(project, members, request);

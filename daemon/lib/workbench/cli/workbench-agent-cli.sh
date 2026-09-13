@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Workbench native agent transport: forward argv to the long-lived orchestrator without starting Node.
+# No exports. Dispatch local tests or forward agent argv to the orchestrator.
 set -u
 
 if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
@@ -10,6 +10,17 @@ if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
   done
 fi
 unset WORKBENCH_CWD_REDIRECTED
+
+if [[ "${1:-}" == "test" ]]; then
+  shift
+  test_entry="${WORKBENCH_TEST_ENTRY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)/test/run-claimed-tests.mjs}"
+  test_root="$(cd -- "$(dirname -- "$test_entry")/.." && pwd)"
+  if [[ ! "$PWD" -ef "$test_root" ]]; then
+    printf '%s\n' 'wb test only works from the Workbench repository root.' >&2
+    exit 1
+  fi
+  exec node --disable-warning=ExperimentalWarning --import tsx "$test_entry" "$@"
+fi
 
 if [[ -z "${WORKBENCH_ORIGIN:-}" ]]; then
   printf '%s\n' 'WORKBENCH_ORIGIN is unavailable. Run wb from a Workbench-managed agent process.' >&2

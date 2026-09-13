@@ -1,13 +1,11 @@
 /*
- * Keywords: tests, discovery, fixtures, CLI, lifecycle, concurrency, Windows.
  * Exports:
- * - default ProjectTestRunner: deterministically discover TypeScript tests and own the Node test-runner child lifecycle.
+ * - default ProjectTestRunner: validate test discovery and own fixtures and Node test-runner children.
  * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse discovery inputs and the cooperative full-suite flag.
  * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { readdir, stat } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,14 +17,12 @@ import {
 } from "../daemon/lib/workbench/git/WorkbenchGitTestFixtures";
 import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
+import ProjectTestCatalog from "./ProjectTestCatalog";
 
-const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
-const DEFAULT_TEST_INPUTS = ["app", "daemon", "package", "runner", "shared", "test"] as const;
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
 const GOOD_CITIZEN_TEST_TIMEOUT_MS = 120_000;
-const TEST_FILE_PATTERN = /\.test\.tsx?$/u;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
 
@@ -68,13 +64,9 @@ export function parseProjectTestRunnerArguments(arguments_: readonly string[]): 
     inputs.push(argument);
   }
   return {
-    inputs: inputs.length ? inputs : [...DEFAULT_TEST_INPUTS],
+    inputs,
     ...(goodCitizen ? { testConcurrency: 1, testTimeoutMs: GOOD_CITIZEN_TEST_TIMEOUT_MS } : {}),
   };
-}
-
-function comparePaths(left: string, right: string) {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export default class ProjectTestRunner {
@@ -103,13 +95,13 @@ export default class ProjectTestRunner {
     this.testTimeoutMs = requestedTimeoutMs;
   }
 
-  async discoverTestFiles(inputs: readonly string[] = ["."]) {
-    const discovered = new Set<string>();
-    for (const input of inputs) await this.discoverPath(path.resolve(this.projectRoot, input), discovered);
-    return [...discovered].sort(comparePaths);
+  async discoverTestFiles(inputs: readonly string[] = []) {
+    const catalog = await ProjectTestCatalog.read(this.projectRoot, inputs);
+    catalog.validate();
+    return catalog.select(inputs);
   }
 
-  async run(inputs: readonly string[] = ["."]) {
+  async run(inputs: readonly string[] = []) {
     const files = await this.discoverTestFiles(inputs);
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
@@ -176,23 +168,6 @@ export default class ProjectTestRunner {
       child.once("error", reject);
       child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     });
-  }
-
-  private async discoverPath(candidate: string, discovered: Set<string>): Promise<void> {
-    const candidateStat = await stat(candidate);
-    if (candidateStat.isFile()) {
-      if (TEST_FILE_PATTERN.test(path.basename(candidate))) discovered.add(candidate);
-      return;
-    }
-    if (!candidateStat.isDirectory() || EXCLUDED_DIRECTORY_NAMES.has(path.basename(candidate))) return;
-
-    const entries = await readdir(candidate, { withFileTypes: true });
-    entries.sort((left, right) => comparePaths(left.name, right.name));
-    for (const entry of entries) {
-      if (entry.isDirectory() && EXCLUDED_DIRECTORY_NAMES.has(entry.name)) continue;
-      if (!entry.isDirectory() && !entry.isFile()) continue;
-      await this.discoverPath(path.join(candidate, entry.name), discovered);
-    }
   }
 }
 

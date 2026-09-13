@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect bounded, fresh, unique, atomic manual-resume handoffs. Keywords: recovery, handoff, test.
+ * No production exports. Node tests protect bounded, fresh, unique, atomic manual-resume handoffs.
  */
 
 import assert from "node:assert/strict";

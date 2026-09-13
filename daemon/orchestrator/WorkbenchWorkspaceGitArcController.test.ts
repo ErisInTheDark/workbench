@@ -16,6 +16,7 @@ import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-status";
+import { GitArcScopeClaimsResponseSchema } from "workbench-shared/workbench/git/git-arc-scope-response";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const execFileAsync = promisify(execFile);
@@ -78,8 +79,21 @@ test("inherited scope revisions retain unmentioned repositories and qualify exac
   const scope = await controller.execute(project, { ...identity, action: "arcScope" }) as { plannedPaths: string[]; claimedPaths: string[] };
   assert.deepEqual([...scope.plannedPaths].sort(), ["api:new.ts", "web:kept.ts"]);
   assert.deepEqual(scope.claimedPaths, []);
+  assert.deepEqual((scope as { repositoryScopes?: Array<{ repoRoot: string; claimedPaths: string[] }> }).repositoryScopes?.map(
+    entry => ({ ...entry, repoRoot: path.resolve(entry.repoRoot) }),
+  ), [
+    { repoRoot: path.resolve("C:/repo/api"), claimedPaths: [] },
+    { repoRoot: path.resolve("C:/repo/web"), claimedPaths: [] },
+  ]);
   assert.deepEqual(local.snapshotCalls, []);
   assert.deepEqual(local.claimEditCalls.at(-2)?.removePaths, [path.resolve("C:/repo/api/old.ts")]);
+  await Promise.all(project.project.roots.map(root => local.startArc({ cwd: root.root })));
+  const active = GitArcScopeClaimsResponseSchema.parse(await controller.execute(project, { ...identity, action: "arcScope" }));
+  assert.deepEqual(active.map(entry => ({ ...entry, repoRoot: path.resolve(entry.repoRoot) })), [
+    { repoRoot: path.resolve("C:/repo/api"), claimedPaths: ["new.ts"] },
+    { repoRoot: path.resolve("C:/repo/web"), claimedPaths: ["kept.ts"] },
+  ]);
+  assert.deepEqual(local.snapshotCalls, []);
 });
 
 class FakeLocalGitArcController {

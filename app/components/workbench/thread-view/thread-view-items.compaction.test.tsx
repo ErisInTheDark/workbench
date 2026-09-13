@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect live context-compaction marker activity and completion rendering. Keywords: thread, context compaction, timeline, test.
+ * - No production exports; Node tests protect live context-compaction marker activity and completion rendering.
  */
 
 import assert from "node:assert/strict";

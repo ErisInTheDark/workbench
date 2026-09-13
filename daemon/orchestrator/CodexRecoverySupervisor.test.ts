@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the existing supervisor's coalescing, retry, and disposal ownership. Keywords: codex, recovery, supervisor, test.
+ * No production exports. Node tests protect the existing supervisor's coalescing, retry, and disposal ownership.
  */
 
 import assert from "node:assert/strict";

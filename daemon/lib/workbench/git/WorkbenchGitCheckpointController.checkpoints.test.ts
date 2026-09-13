@@ -6,13 +6,13 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
-import WorkbenchGitCheckpointController from "./workbench/git/WorkbenchGitCheckpointController";
-import WorkbenchGitRepository from "./workbench/git/WorkbenchGitRepository";
-import GitTestFixtureCache, { type GitTestFixtureCopy } from "./workbench/git/GitTestFixtureCache";
+import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import {
   CHECKPOINT_OPERATIONS_FIXTURE,
   type CheckpointFixtureState,
-} from "./workbench/git/GitCheckpointTestFixtures";
+} from "./GitCheckpointTestFixtures";
 
 const execFileAsync = promisify(execFile);
 type CheckpointFixture = GitTestFixtureCopy<CheckpointFixtureState>;

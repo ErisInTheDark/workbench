@@ -3,5 +3,12 @@
   "compilerOptions": {
     "incremental": false
   },
-  "include": ["./**/*.ts", "../diagnostics/**/*.ts"]
+  "include": [
+    "./**/*.ts",
+    "../diagnostics/**/*.ts",
+    "../*.test.ts",
+    "../app/workbench/thread/thread-command-matchers.test.ts",
+    "../shared/workbench/git/checkpoint-contracts.test.ts",
+    "../shared/workbench/transcript/workbench-transcript-projection.integration.test.ts"
+  ]
 }

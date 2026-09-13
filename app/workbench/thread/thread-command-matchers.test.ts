@@ -4,17 +4,16 @@
  */
 
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { test } from "node:test";
 
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
-import { getWorkbenchAgentCommandToolName } from "../commands/workbench-agent-command-definition.ts";
-import type { ThreadCommandDisplayPart } from "../../../../app/workbench/thread/command-matchers/types.ts";
+import type { ThreadCommandDisplayPart } from "./command-matchers/types.ts";
 import {
   WORKBENCH_COMMAND_PRESENTATION_NAMES,
   type WorkbenchCommandPresentationName,
-} from "../../../../app/workbench/thread/command-matchers/workbench-command-rendering.ts";
+} from "./command-matchers/workbench-command-rendering.ts";
 
 import {
   getGitArcMatcherAction,
@@ -35,8 +34,11 @@ import {
   parseWorkbenchTaskStatusCommand,
   parseWorkbenchTaskTitleCommand,
   parseWorkbenchThreadRecallCommand,
-} from "../../../../app/workbench/thread/thread-command-matchers.ts";
+} from "./thread-command-matchers.ts";
 
+const require = createRequire(import.meta.url);
+const { listWorkbenchAgentCommands } = require("../../../daemon/lib/workbench/commands/workbench-agent-command-registry.ts") as typeof import("../../../daemon/lib/workbench/commands/workbench-agent-command-registry.ts");
+const { getWorkbenchAgentCommandToolName } = require("../../../daemon/lib/workbench/commands/workbench-agent-command-definition.ts") as typeof import("../../../daemon/lib/workbench/commands/workbench-agent-command-definition.ts");
 const PROJECT_ROOT = "C:/git/web/workbench";
 
 test("combined scope transcript intent preserves literal MCP paths and CLI operations", () => {

@@ -6,11 +6,12 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
-const rootDispatcherPath = path.resolve(import.meta.dirname, "..", "wb");
+const rootDispatcherPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "wb");
 
 async function dispatcherFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-root-wb-"));

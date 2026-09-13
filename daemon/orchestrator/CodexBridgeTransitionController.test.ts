@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect arrival-time barriers, FIFO ordering, and generation invalidation. Keywords: codex, bridge, transition, test.
+ * No production exports. Node tests protect arrival-time barriers, FIFO ordering, and generation invalidation.
  */
 
 import assert from "node:assert/strict";

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchAgentCliEnvironmentOptions: CLI shim environment configuration. Keywords: workbench, cli, environment, shim.
- * - default WorkbenchAgentCliEnvironment: generate cross-platform wb shims and install their loopback runtime environment. Keywords: workbench, cli, controller, path.
+ * - WorkbenchAgentCliEnvironmentOptions: CLI shim environment configuration.
+ * - default WorkbenchAgentCliEnvironment: generate cross-platform wb shims with their owning runtime paths.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +35,7 @@ export default class WorkbenchAgentCliEnvironment {
 
   async install(env: NodeJS.ProcessEnv = process.env) {
     const shellSource = await fs.readFile(this.shellSourcePath, "utf8");
+    const testEntry = path.resolve(path.dirname(this.shellSourcePath), "../../../../test/run-claimed-tests.mjs");
     await fs.mkdir(this.runtimeDirectoryPath, { recursive: true });
 
     const posixShimPath = path.join(this.runtimeDirectoryPath, "wb");
@@ -46,7 +47,7 @@ export default class WorkbenchAgentCliEnvironment {
       assertManagedOrMissing(windowsShimPath),
     ]);
     await Promise.all([
-      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_ORIGIN=" + quotePosixSingle(this.origin) + "\n")}`, "utf8"),
+      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_ORIGIN=" + quotePosixSingle(this.origin) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
       fs.writeFile(powershellShimPath, `# ${SHIM_MARKER}\n$env:WORKBENCH_ORIGIN = ${quotePowerShellSingle(this.origin)}\n& bash ${quotePowerShellSingle(posixShimPath)} @args\nexit $LASTEXITCODE\n`, "utf8"),
       fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
     ]);

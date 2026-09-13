@@ -217,13 +217,14 @@ function orderCommands(commands: readonly WorkbenchAgentCommandDefinition[], ord
   const indexes = new Map(order.map((key, index) => [key, index]));
   return [...commands].sort((left, right) => (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER) - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER));
 }
-function renderRootHelp(commands = listWorkbenchAgentCommands()) {
+function renderRootHelp(commands = listWorkbenchAgentCommands(), isWorkbenchRoot = false) {
   commands = commands.filter((command) => !command.hideFromRootHelp);
   commands = orderCommands(commands, ROOT_HELP_COMMAND_ORDER);
   const helpGroups = HELP_GROUPS.filter((group) => commands.some((command) => command.helpGroups.includes(group.key)));
   return [
     "Usage:", "  wb --help", "  wb <command> [options]", "", "Commands:",
-    ...commands.map((command) => `  ${command.usage}`), "", "Help commands:",
+    ...commands.map((command) => `  ${command.usage}`),
+    ...(isWorkbenchRoot ? ["  wb test [--list]  (local, claims-selected tests)"] : []), "", "Help commands:",
     ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`), "",
     "Project ownership is derived from the current working directory.", "",
   ].join("\n");
@@ -303,7 +304,7 @@ export async function parseWorkbenchAgentCliCommand(
   const workbenchArgs = argsBeforeTrailingSeparator(argv);
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(workbenchArgs));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog) : renderRootHelp(commands), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog) : renderRootHelp(commands, isWorkbenchRoot), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))

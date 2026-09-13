@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect parent-owned topology ordering, shared-child identity, candidate validation, gated topology publication, waiter transfer, and rollback. Keywords: graph, topology, reload, gate, handoff, test.
+ * No production exports. Node tests protect parent-owned topology ordering, shared-child identity, candidate validation, gated topology publication, waiter transfer, and rollback.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";

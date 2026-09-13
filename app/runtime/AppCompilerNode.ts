@@ -1,7 +1,6 @@
 /*
- * Keywords: app, compiler, reload, lifecycle.
  * Default export:
- * - AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles. Keywords: app, compiler, handoff.
+ * - AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import type { WorkbenchFrontendGeneration } from "workbench-shared/frontend-generation";
@@ -11,6 +10,7 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
+  boundarySources: "app/browser-entry.tsx\napp/globals.css",
   children: [],
   create: (context, build) => {
     const logger = build.get("logger");

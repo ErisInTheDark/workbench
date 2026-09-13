@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect source-Markdown bubble copying, attachment exclusion, renderer coverage, and bounded feedback lifecycle. Keywords: thread, bubble, copy, markdown, lifecycle, test.
+ * No production exports. Regression wards protect source-Markdown bubble copying, attachment exclusion, renderer coverage, and bounded feedback lifecycle.
  */
 
 import assert from "node:assert/strict";

@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the production graph's parent-owned declarations and shared-child identity. Keywords: topology, parent, child, graph, test.
+ * No production exports. Node tests protect the production graph's parent-owned declarations and shared-child identity.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";

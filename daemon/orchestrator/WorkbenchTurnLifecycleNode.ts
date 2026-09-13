@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTurnLifecycleNode: own reloadable turn recovery and Codex MCP generation above their core and bridge dependants. Keywords: turn, recovery, MCP, graph, handoff.
+ * - default WorkbenchTurnLifecycleNode: own reloadable turn recovery and Codex MCP generation above their core and bridge dependants.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -144,8 +144,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchTurnRecoveryHandoffStore.ts",
     "daemon/orchestrator/WorkbenchCodexMcpGenerationController.ts",
     "daemon/orchestrator/codex-turn-recovery.ts",
-    "daemon/orchestrator/workbench-turn-recovery-*.test.ts",
-    "daemon/orchestrator/workbench-codex-mcp-generation-controller.test.ts",
+    "daemon/orchestrator/WorkbenchTurnRecovery*.test.ts",
+    "daemon/orchestrator/WorkbenchCodexMcpGenerationController.test.ts",
     "daemon/orchestrator/codex-turn-recovery.test.ts",
   ].join("\n"),
 });

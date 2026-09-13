@@ -1,4 +1,4 @@
-/* No production exports. Tests protect cross-wrapper atomic mutation serialization. Keywords: atomic json, reload, queue, lost update, test. */
+/* No production exports. Tests protect cross-wrapper atomic mutation serialization. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";

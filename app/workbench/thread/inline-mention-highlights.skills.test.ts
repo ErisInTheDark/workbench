@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect the exact activated-skill transport wrapper and UI stripping boundary. Keywords: skills, input, hidden.
+ * No production exports. Tests protect the exact activated-skill transport wrapper and UI stripping boundary.
  */
 
 import assert from "node:assert/strict";

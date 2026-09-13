@@ -22,5 +22,9 @@
   "include": [
     "./**/*.ts",
     "./**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "./workbench/thread/thread-command-matchers.test.ts"
   ]
 }

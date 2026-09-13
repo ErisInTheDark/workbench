@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect Codex native prompt suppression, asynchronous shutdown, and intentional child replacement from stale callbacks. Keywords: codex, app-server, policy, generation, test.
+ * No production exports. Node tests protect Codex native prompt suppression, asynchronous shutdown, and intentional child replacement from stale callbacks.
  */
 
 import assert from "node:assert/strict";

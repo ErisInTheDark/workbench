@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect generation coalescing, failure retry, and concurrent bump admission. Keywords: MCP, generation, refresh, test.
+ * No production exports. Node tests protect generation coalescing, failure retry, and concurrent bump admission.
  */
 import assert from "node:assert/strict";
 import test from "node:test";

@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - No production exports; tests cover checkpoint request and proposal contract boundaries. Keywords: git, checkpoint, Zod, test.
+ * - No production exports; tests cover checkpoint request and proposal contract boundaries.
  */
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import {
@@ -11,9 +12,12 @@ import {
   GitCheckpointRequestSchema,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { remapArcOutcome } from "workbench-shared/workbench/git/git-arc-storage";
-import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
-import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import type { GitArcRegistryEntry } from "../../../daemon/lib/workbench/git/GitArcRegistry";
 import { readGitArcValidationRejection } from "workbench-shared/workbench/git/git-arc-rejections";
+
+const require = createRequire(import.meta.url);
+const { default: GitArcRegistry } = require("../../../daemon/lib/workbench/git/GitArcRegistry") as typeof import("../../../daemon/lib/workbench/git/GitArcRegistry");
+const { default: WorkbenchGitCheckpointController } = require("../../../daemon/lib/workbench/git/WorkbenchGitCheckpointController") as typeof import("../../../daemon/lib/workbench/git/WorkbenchGitCheckpointController");
 
 function registryFromState(entries: object[]) {
   let nextBlob = 0;
@@ -477,9 +481,9 @@ test("checkpoint facade exposes the complete plan, proposal, and lifecycle owner
 
 test("checkpoint, plan, and proposal responsibilities have dedicated owners", async () => {
   const modules = await Promise.allSettled([
-    import("./GitCheckpointStore"),
-    import("./GitArcPlanController"),
-    import("./GitArcProposalController"),
+    import("../../../daemon/lib/workbench/git/GitCheckpointStore"),
+    import("../../../daemon/lib/workbench/git/GitArcPlanController"),
+    import("../../../daemon/lib/workbench/git/GitArcProposalController"),
   ]);
   assert.deepEqual(modules.map((result) => result.status), ["fulfilled", "fulfilled", "fulfilled"]);
 });

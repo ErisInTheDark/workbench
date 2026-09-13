@@ -342,7 +342,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ["GitArcClaimLossStore.test.ts", { fixtures: [
     demand(CLAIM_LOSS_OPERATIONS_FIXTURE, 1),
   ], nested: true }],
-  ["git-checkpoints.test.ts", { fixtures: [
+  ["WorkbenchGitCheckpointController.checkpoints.test.ts", { fixtures: [
     demand(CHECKPOINT_OPERATIONS_FIXTURE, 1),
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [

@@ -1,5 +1,4 @@
 /*
- * Keywords: timestamps, user messages, steers, questionnaire, provenance.
  * No production exports. Tests protect event-time selection across transcript render paths.
  */
 import assert from "node:assert/strict";
