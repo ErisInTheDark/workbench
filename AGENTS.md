@@ -52,9 +52,8 @@ Run `pnpm test` and `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 
-`pnpm test -- [<file>...]` tests only the specified files
-`pnpm test` tests full suite
-`pnpm test -- --good-citizen` is available for use only when the user asks for it
+`wb test -- [<file>...]` tests only the specified files
+`wb test` tests full suite
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration
 `pnpm test:live` runs a clone of the full app, testing with a paid luna low codex turn; only use when the user asks for it
 `pnpm typecheck`
