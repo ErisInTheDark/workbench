@@ -16,6 +16,8 @@ import ReloadDirtController, {
   type ReloadDirtSourceState,
 } from "./ReloadDirtController.ts";
 import type { ReloadDirtSnapshotRepositoryPort } from "./ReloadDirtSnapshotRepository.ts";
+import { createReloadContentController, RELOAD_DIRT_FIXTURE } from "./ReloadDirt.test.fixtures.ts";
+import { claimPreparedGitTestFixture } from "../workbench/git/git-test-fixture.ts";
 
 const run = promisify(execFile);
 
@@ -197,36 +199,17 @@ test("watcher events during reconciliation collapse into one trailing refresh", 
 });
 
 async function gitFixture() {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-shared-reload-dirt-"));
+  const { root: repoRoot, dispose, state } = await claimPreparedGitTestFixture(RELOAD_DIRT_FIXTURE);
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
-  await git("init");
-  await git("config", "user.email", "workbench@example.invalid");
-  await git("config", "user.name", "Workbench test");
-  await fs.mkdir(path.join(repoRoot, "shared"), { recursive: true });
-  await fs.writeFile(path.join(repoRoot, ".gitignore"), ".workbench/\n", "utf8");
-  await fs.writeFile(path.join(repoRoot, "shared", "owner.ts"), "export const value = 1;\n", "utf8");
-  await git("add", ".");
-  await git("commit", "-m", "initial");
-  return { git, repoRoot };
+  return { dispose, git, repoRoot, state };
 }
 
-test("Git content truth preserves unapplied owners and detects deletion plus recreation", async (context) => {
-  const { git, repoRoot } = await gitFixture();
-  const descriptors: ReloadDirtSourceDescriptor[] = [
-    { access: "operator", description: "One", destructive: false, paths: ["shared/owner.ts"], safeAll: false, scope: "client:one" },
-    { access: "operator", description: "Two", destructive: false, paths: ["shared/owner.ts"], safeAll: false, scope: "client:two" },
-  ];
+async function checkContentTruth(context: test.TestContext, { git, repoRoot, state }: Awaited<ReturnType<typeof gitFixture>>) {
   const snapshotRef = "refs/worktree/workbench/shared-test-reload-snapshot";
-  const controller = new ReloadDirtController({
-    getSourceState: () => sourceState(descriptors),
-    repoRoot,
-    snapshotRef,
-  });
+  const controller = createReloadContentController(repoRoot, "content", state.content);
   context.after(async () => {
     await controller.dispose();
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
   });
-  await controller.start();
 
   const sourcePath = path.join(repoRoot, "shared", "owner.ts");
   await fs.writeFile(sourcePath, "export const value = 2;\n", "utf8");
@@ -240,35 +223,14 @@ test("Git content truth preserves unapplied owners and detects deletion plus rec
   await fs.writeFile(sourcePath, "export const value = 3;\n", "utf8");
   assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["client:one", "client:two"]);
   assert.match((await git("rev-parse", snapshotRef)).stdout, /^[0-9a-f]{40}\s*$/u);
-});
+}
 
-test("boundary source patterns detect unobserved files and respect exclusions", async (context) => {
-  const { git, repoRoot } = await gitFixture();
+async function checkBoundaryPatterns(context: test.TestContext, { repoRoot, state }: Awaited<ReturnType<typeof gitFixture>>) {
   const excludedPath = path.join(repoRoot, "shared", "generated", "ignored.ts");
-  await fs.mkdir(path.dirname(excludedPath), { recursive: true });
-  await fs.writeFile(excludedPath, "export const ignored = 1;\n", "utf8");
-  await git("add", ".");
-  await git("commit", "-m", "add excluded source");
-
-  const boundaryDescriptor: ReloadDirtSourceDescriptor = {
-    access: "operator",
-    boundaryPatterns: ["shared/**", "!shared/generated/**"],
-    description: "Boundary",
-    destructive: false,
-    paths: [],
-    safeAll: false,
-    scope: "client:boundary",
-  };
-  const controller = new ReloadDirtController({
-    getSourceState: () => sourceState([boundaryDescriptor]),
-    repoRoot,
-    snapshotRef: "refs/worktree/workbench/shared-test-boundary-snapshot",
-  });
+  const controller = createReloadContentController(repoRoot, "boundary", state.boundary);
   context.after(async () => {
     await controller.dispose();
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
   });
-  await controller.start();
 
   await fs.writeFile(excludedPath, "export const ignored = 2;\n", "utf8");
   assert.deepEqual((await controller.refresh()).dirtyScopes, []);
@@ -280,6 +242,13 @@ test("boundary source patterns detect unobserved files and respect exclusions", 
     (await controller.refresh()).dirtyScopes.map(({ scope }) => scope),
     ["client:boundary"],
   );
+}
+
+test("Git reload content shares one repository across source graphs", async (context) => {
+  const target = await gitFixture();
+  context.after(target.dispose);
+  await context.test("boundary source patterns detect unobserved files and respect exclusions", child => checkBoundaryPatterns(child, target));
+  await context.test("Git content truth preserves unapplied owners and detects deletion plus recreation", child => checkContentTruth(child, target));
 });
 
 test("external dirt remains until its owner reloads after the marker is removed", async (context) => {

@@ -1,123 +1,37 @@
 /*
- * Keywords: git, fixture, cache, initialisation, test allocation.
  * Exports:
- * - default GitTestFixtureCache: build immutable content-addressed Git test bundles and copy fresh disposable repositories. Keywords: git, test, fixture, cache, bundle.
- * - GitTestFixtureSpec/GitTestFixtureCopy/GitTestFixturePrepareContext: describe deterministic commit graphs, prepared scenarios, and copied repositories. Keywords: git, fixture, scenario, cleanup.
- * - GIT_TEST_FIXTURE_MANIFEST_ENV/gitTestFixtureKey: connect runner-prepared fixture copies to isolated Node test workers. Keywords: test runner, manifest, allocation, process.
+ * - default GitTestFixtureCache: build immutable Git bundles and copy fresh disposable repositories.
+ * - GitTestFixtureSpec/GitTestFixtureCopy/GitTestFixturePrepareContext: shared preparation and copy contracts.
+ * - GIT_TEST_FIXTURE_MANIFEST_ENV/gitTestFixtureKey: shared runner allocation protocol.
  */
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import {
+  describeGitTestFixture,
+  GIT_TEST_FIXTURE_MANIFEST_ENV,
+  gitTestFixtureKey,
+  type GitTestFixtureCopy,
+  type GitTestFixtureDescriptor,
+  type GitTestFixtureSpec,
+} from "workbench-shared/workbench/git/git-test-fixture";
+
+export {
+  GIT_TEST_FIXTURE_MANIFEST_ENV,
+  gitTestFixtureKey,
+  type GitTestFixtureCopy,
+  type GitTestFixturePrepareContext,
+  type GitTestFixtureSpec,
+} from "workbench-shared/workbench/git/git-test-fixture";
 
 const execFileAsync = promisify(execFile);
-const CACHE_FORMAT_VERSION = 2;
-export const GIT_TEST_FIXTURE_MANIFEST_ENV = "WORKBENCH_GIT_TEST_FIXTURE_MANIFEST";
 const inFlightTemplates = new Map<string, Promise<string>>();
-interface PreparedFixtureSlot {
-  bundleRoot: string;
-  root: string;
-  state: object;
-  storageRootPath: string;
-  temporaryRoot: string;
-}
-
-interface PreparedFixtureManifest {
-  fixtures: Record<string, Record<string, PreparedFixtureSlot[]>>;
-  version: 1;
-}
-
-let loadedManifest: Promise<PreparedFixtureManifest> | null = null;
-let loadedManifestPath: string | null = null;
-
 type EmptyFixtureState = Record<string, never>;
-
-export interface GitTestFixturePrepareContext {
-  bundleRoot: string;
-  repositoryRoot: string;
-  runGit: (
-    args: string[],
-    options?: { cwd?: string; env?: NodeJS.ProcessEnv },
-  ) => Promise<string>;
-}
-
-export interface GitTestFixtureSpec<State extends object = EmptyFixtureState> {
-  commits: Array<{
-    files: Record<string, string | null>;
-    message: string;
-  }>;
-  name: string;
-  prepare?: (context: GitTestFixturePrepareContext) => Promise<State>;
-  revision?: number;
-}
-
-export interface GitTestFixtureCopy<State extends object = EmptyFixtureState> {
-  bundleRoot: string;
-  dispose: () => Promise<void>;
-  root: string;
-  state: State;
-  storageRootPath: string;
-  temporaryRoot: string;
-}
-
-interface FixtureDescriptor {
-  commits: Array<{
-    files: Array<[string, string | null]>;
-    message: string;
-  }>;
-  formatVersion: number;
-  name: string;
-  prepared: boolean;
-  revision: number;
-}
-
-function descriptor<State extends object>(spec: GitTestFixtureSpec<State>): FixtureDescriptor {
-  const name = String(spec.name ?? "").trim();
-  if (!name) throw new Error("A Git test fixture name is required.");
-  const revision = spec.revision ?? 1;
-  if (!Number.isSafeInteger(revision) || revision < 1) {
-    throw new Error("A Git test fixture revision must be a positive integer.");
-  }
-  return {
-    commits: spec.commits.map((commit) => ({
-      files: Object.entries(commit.files).sort(([left], [right]) => left.localeCompare(right)),
-      message: commit.message,
-    })),
-    formatVersion: CACHE_FORMAT_VERSION,
-    name,
-    prepared: spec.prepare !== undefined,
-    revision,
-  };
-}
-
-function cacheKey(value: FixtureDescriptor) {
-  const name = value.name.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "fixture";
-  const hash = createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 20);
-  return `${name}-${hash}`;
-}
-
-export function gitTestFixtureKey<State extends object>(spec: GitTestFixtureSpec<State>) {
-  return cacheKey(descriptor(spec));
-}
-
-async function preparedManifest() {
-  const manifestPath = process.env[GIT_TEST_FIXTURE_MANIFEST_ENV]?.trim() ?? "";
-  if (!manifestPath) return null;
-  if (loadedManifest && loadedManifestPath === manifestPath) return await loadedManifest;
-  loadedManifestPath = manifestPath;
-  loadedManifest = fs.readFile(manifestPath, "utf8").then((contents) => {
-    const parsed = JSON.parse(contents) as Partial<PreparedFixtureManifest>;
-    if (parsed.version !== 1 || !parsed.fixtures || typeof parsed.fixtures !== "object") {
-      throw new Error("The prepared Git test fixture manifest is invalid.");
-    }
-    return parsed as PreparedFixtureManifest;
-  });
-  return await loadedManifest;
-}
 
 function isWithin(candidate: string, root: string) {
   const normalizedCandidate = path.resolve(candidate).toLowerCase();
@@ -144,8 +58,11 @@ export default class GitTestFixtureCache {
   }
 
   async copy<State extends object = EmptyFixtureState>(spec: GitTestFixtureSpec<State>): Promise<GitTestFixtureCopy<State>> {
-    const manifest = await preparedManifest();
-    if (manifest) return await this.claimPreparedCopy(manifest, spec);
+    if (process.env[GIT_TEST_FIXTURE_MANIFEST_ENV]?.trim()) {
+      // Native import shares the ESM manifest queue with direct test consumers.
+      const { claimPreparedGitTestFixture } = await import("workbench-shared/workbench/git/git-test-fixture");
+      return await claimPreparedGitTestFixture(spec);
+    }
     return await this.copyFresh(spec);
   }
 
@@ -182,8 +99,8 @@ export default class GitTestFixtureCache {
   }
 
   async template<State extends object = EmptyFixtureState>(spec: GitTestFixtureSpec<State>) {
-    const fixtureDescriptor = descriptor(spec);
-    const key = cacheKey(fixtureDescriptor);
+    const fixtureDescriptor = describeGitTestFixture(spec);
+    const key = gitTestFixtureKey(spec);
     const templateRoot = path.join(this.root, key);
     const inFlightKey = `${this.root}\0${key}`;
     const existing = inFlightTemplates.get(inFlightKey);
@@ -197,7 +114,7 @@ export default class GitTestFixtureCache {
 
   private async buildTemplate<State extends object>(
     stagingRoot: string,
-    fixtureDescriptor: FixtureDescriptor,
+    fixtureDescriptor: GitTestFixtureDescriptor,
     spec: GitTestFixtureSpec<State>,
   ) {
     const bundleRoot = path.join(stagingRoot, "bundle");
@@ -249,7 +166,7 @@ export default class GitTestFixtureCache {
 
   private async ensureTemplate<State extends object>(
     templateRoot: string,
-    fixtureDescriptor: FixtureDescriptor,
+    fixtureDescriptor: GitTestFixtureDescriptor,
     spec: GitTestFixtureSpec<State>,
   ) {
     if (await this.isValidTemplate(templateRoot, fixtureDescriptor)) return path.join(templateRoot, "bundle", "repo");
@@ -272,7 +189,7 @@ export default class GitTestFixtureCache {
     return path.join(templateRoot, "bundle", "repo");
   }
 
-  private async isValidTemplate(templateRoot: string, fixtureDescriptor: FixtureDescriptor) {
+  private async isValidTemplate(templateRoot: string, fixtureDescriptor: GitTestFixtureDescriptor) {
     try {
       const manifest = await fs.readFile(path.join(templateRoot, "manifest.json"), "utf8");
       if (manifest !== `${JSON.stringify(fixtureDescriptor)}\n`) return false;
@@ -284,22 +201,4 @@ export default class GitTestFixtureCache {
     }
   }
 
-  private async claimPreparedCopy<State extends object>(
-    manifest: PreparedFixtureManifest,
-    spec: GitTestFixtureSpec<State>,
-  ): Promise<GitTestFixtureCopy<State>> {
-    const key = gitTestFixtureKey(spec);
-    const testFile = path.basename(process.argv[1] ?? "");
-    const slots = manifest.fixtures[testFile]?.[key];
-    if (!slots?.length) throw new Error(`Git test fixture ${spec.name} was not prepared by the project test runner.`);
-    const slot = slots.shift()!;
-    return {
-      bundleRoot: slot.bundleRoot,
-      dispose: async () => undefined,
-      root: slot.root,
-      state: slot.state as State,
-      storageRootPath: slot.storageRootPath,
-      temporaryRoot: slot.temporaryRoot,
-    };
-  }
 }

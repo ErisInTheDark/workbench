@@ -22,6 +22,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { APP_RELOAD_DIRT_FIXTURE } from "../../../../app/runtime/AppReloadDirt.test.fixtures";
+import { RELOAD_DIRT_FIXTURE } from "../../../../shared/reload/ReloadDirt.test.fixtures";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
@@ -313,6 +314,9 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["ReloadDirtController.test.ts", { fixtures: [
+    demand(RELOAD_DIRT_FIXTURE, 1),
+  ], nested: false }],
   ["WorkbenchAppReloadDirtController.test.ts", { fixtures: [
     demand(APP_RELOAD_DIRT_FIXTURE, 1),
   ], nested: false }],
