@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
- * - buildRenderableBlocks: group visible provider items before rendering.
+ * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers, before rendering.
  * - isHiddenCommandExecution/hasReasoningSteps: shared visibility decisions.
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
  * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
@@ -10,8 +10,12 @@
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { getWorkbenchInputState, type WorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
+import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -31,10 +35,12 @@ import { groupThreadSubagentWaitRenderEntries, type ThreadSubagentWaitRenderEntr
 
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
+type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type ThreadRenderableBlock =
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
   | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" }>[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
+  | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
   | { kind: "webSearchSequence"; items: Extract<ThreadItem, { type: "webSearch" }>[] }
   | { kind: "item"; item: Exclude<ThreadItem, { type: "commandExecution" | "fileChange" | "reasoning" }> };
 
@@ -62,9 +68,26 @@ export function hasReasoningSteps(item: Extract<ThreadItem, { type: "reasoning" 
   return item.summary.some(section => section.trim()) || item.content.some(section => section.trim());
 }
 
+function getMergeableSteerState(item: UserMessageItem) {
+  const input = getWorkbenchInputState(item);
+  const isSteer = input?.kind === "steer"
+    || (input?.kind === "optimistic" && input.placement === "steer");
+  if (!isSteer
+    || readWorkbenchAgentMessageInput(item.content)
+    || isAgentScreenshotSteerUserMessage(item)) {
+    return null;
+  }
+
+  const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
+  return displayContent.length > 0
+    && displayContent.every((part) => part.type === "text" && part.text_elements.length === 0)
+    ? input.status
+    : null;
+}
+
 export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = "."): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
-  let pending: Exclude<ThreadRenderableBlock, { kind: "item" }> | null = null;
+  let pending: Extract<ThreadRenderableBlock, { kind: "commandSequence" | "fileChangeSequence" | "reasoningSequence" | "webSearchSequence" }> | null = null;
   const flush = () => { if (pending) blocks.push(pending); pending = null; };
   const commands = (item: CommandSequenceItem) => {
     if (pending?.kind !== "commandSequence") { flush(); pending = { kind: "commandSequence", items: [] }; }
@@ -86,6 +109,27 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (item.type === "contextCompaction") compacted = true;
     if (item.type === "agentMessage" && (!item.text.trim() || hidden.controlAgentMessages)) continue;
     if (item.type === "userMessage" && hidden.controlUserMessages && isWorkbenchHiddenSystemSteerInput(item.content)) continue;
+    if (item.type === "userMessage") {
+      const steerState = getMergeableSteerState(item);
+      if (steerState) {
+        flush();
+        const previous = blocks.at(-1);
+        if (previous?.kind === "userMessageSequence" && previous.state === steerState) {
+          previous.items.push(item);
+        } else if (previous?.kind === "item"
+          && previous.item.type === "userMessage"
+          && getMergeableSteerState(previous.item) === steerState) {
+          blocks[blocks.length - 1] = {
+            items: [previous.item, item],
+            kind: "userMessageSequence",
+            state: steerState,
+          };
+        } else {
+          blocks.push({ item, kind: "item" });
+        }
+        continue;
+      }
+    }
     if (item.type === "commandExecution") {
       if (!isHiddenCommandExecution(item.command)) commands(item);
       continue;
@@ -192,6 +236,7 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
 
 export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
   if (block.kind !== "commandSequence") {
+    if (block.kind === "userMessageSequence") return [{ block, eligible: false }];
     if (block.kind === "item" && block.item.type === "functionCallOutput") {
       const output = readWorkbenchToolOutput(block.item);
       if (output?.namespace === "workbench" && output.name === "patch_recovery") return [];

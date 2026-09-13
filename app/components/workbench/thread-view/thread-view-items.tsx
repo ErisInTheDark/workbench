@@ -308,6 +308,7 @@ function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadI
     case "commandSequence":
     case "fileChangeSequence":
     case "reasoningSequence":
+    case "userMessageSequence":
     case "webSearchSequence":
       return block.items;
     case "item":
@@ -414,6 +415,7 @@ function ThreadUserInputLine ({
       const text = input.text.trim();
       return (
         <ThreadMarkdown
+          className="[&>p]:mb-[0.45em]"
           inlineMentionSources={inlineMentionSources}
           markdown={text || "No text captured."}
           threadCwdPath={threadCwdPath}
@@ -527,7 +529,7 @@ function ThreadUserMessageItem ({
       className="flex flex-col items-end py-2"
       data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
     >
-      <div className="group/thread-bubble relative w-full max-w-[42rem]">
+      <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]">
         <div className={isDecoratedInput ? inputMessageClass : undefined}>
           {isPending ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
           <div className={`space-y-2 text-left${decoratedInputSurfaceClass}`}>
@@ -552,6 +554,22 @@ function ThreadUserMessageItem ({
       <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} />
     </section>
   );
+}
+
+function mergeSteerUserMessages(items: Extract<ThreadItem, { type: "userMessage" }>[]) {
+  const first = items[0]!;
+  const last = items.at(-1)!;
+  return {
+    ...last,
+    content: [{
+      text: items
+        .map((item) => getUserMessageCopyMarkdown(unwrapWorkbenchSteerDisplayInput(item.content)))
+        .join("\n\n"),
+      text_elements: [],
+      type: "text" as const,
+    }],
+    id: `${first.id}:through:${last.id}`,
+  };
 }
 
 function ThreadAgentMessageItem ({
@@ -2084,6 +2102,25 @@ function ThreadRenderableBlockViewComponent ({
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (block.kind === "userMessageSequence") {
+    const lastItem = block.items.at(-1)!;
+    const timeline = findWorkbenchThreadItemTimelineEntry(lastItem.id, itemTimeline);
+    const timestampMs = timeline?.firstSeenAt ?? timeline?.startedAt;
+    return (
+      <ThreadUserMessageItem
+        item={mergeSteerUserMessages(block.items)}
+        inlineMentionSources={inlineMentionSources}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        threadCwdPath={threadCwdPath}
+        projectRootPath={projectRootPath}
+        subagents={subagents}
+        workspaceRoots={workspaceRoots}
+        startedAt={timestampMs !== undefined && timestampMs !== null ? timestampMs / 1_000 : null}
+      />
+    );
+  }
+
   if (block.kind === "commandSequence") {
     return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} items={block.items} knownSkills={knownSkills} presentationSource={presentationSource} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} turnId={turnId} workspaceRoots={workspaceRoots} />;
   }
@@ -2623,6 +2660,8 @@ function ThreadTurnDetailsComponent ({
           ? `fileChanges:${block.items[0]?.id ?? index}`
           : block.kind === "reasoningSequence"
             ? `reasoning:${block.items[0]?.id ?? index}`
+            : block.kind === "userMessageSequence"
+              ? `userMessages:${block.items[0]?.id ?? index}`
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}

@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchProjectedInteractionItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { ThreadTranscriptItemsDetails, ThreadTurnDetails } from "./thread-view-items";
 
 const user = (id: string): Extract<ThreadItem, { type: "userMessage" }> => ({
@@ -22,16 +23,18 @@ const timestamps = (html: string) => [...html.matchAll(/<time\b[^>]*dateTime="([
 const iso = (ms: number) => new Date(ms).toISOString();
 
 for (const status of ["inProgress", "completed"] as const) {
-  test(`user timestamps use individual event times in ${status} turns`, () => {
+  test(`merged steers use only the final event time in ${status} turns`, () => {
+    const steerA = withWorkbenchInputState(user("steer-a"), { kind: "steer", status: "sent" });
+    const steerB = withWorkbenchInputState(user("steer-b"), { kind: "steer", status: "sent" });
     const turn: Turn = {
       completedAt: status === "completed" ? 90 : null, durationMs: null, error: null,
-      id: "turn", items: [user("initial"), user("steer")], itemsView: "full", startedAt: 1, status,
+      id: "turn", items: [user("initial"), steerA, steerB], itemsView: "full", startedAt: 1, status,
     };
     const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
       flattenCompletedWork: true, threadId: "thread", turn,
-      itemTimeline: [timing("initial", 2_000), timing("steer", 8_000, 9_000)],
+      itemTimeline: [timing("initial", 2_000), timing("steer-a", 8_000, 9_000), timing("steer-b", 12_000, 13_000)],
     }));
-    assert.deepEqual(timestamps(html), [iso(2_000), iso(8_000)]);
+    assert.deepEqual(timestamps(html), [iso(2_000), iso(12_000)]);
   });
 }
 

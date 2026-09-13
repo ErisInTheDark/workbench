@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { buildRenderableBlocks, getWorkedBlockRows, type CommandItem } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
@@ -15,7 +16,53 @@ function mcp(id: string, tool: string, args: Extract<ThreadItem, { type: "mcpToo
   return { id, type: "mcpToolCall", server: "wb", tool, arguments: args, status: "completed", result: null,
     error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: null };
 }
+function user(id: string): Extract<ThreadItem, { type: "userMessage" }> {
+  return { clientId: null, content: [{ text: id, text_elements: [], type: "text" }], id, type: "userMessage" };
+}
+function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted") {
+  return withWorkbenchInputState(user(id), { kind: "steer", status });
+}
 const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
+
+test("adjacent textual steers group only while their exact state matches", () => {
+  const blocks = buildRenderableBlocks([
+    steer("sent-a", "sent"),
+    steer("sent-b", "sent"),
+    steer("pending-a", "pending"),
+    steer("pending-b", "pending"),
+    steer("failed", "failed"),
+    steer("interrupted", "interrupted"),
+  ]);
+
+  assert.deepEqual(blocks.map((block) => (
+    block.kind === "userMessageSequence"
+      ? { ids: block.items.map(({ id }) => id), kind: block.kind }
+      : block.kind === "item"
+        ? { id: block.item.id, kind: block.kind }
+        : { ids: block.items.map(({ id }) => id), kind: block.kind }
+  )), [
+    { ids: ["sent-a", "sent-b"], kind: "userMessageSequence" },
+    { ids: ["pending-a", "pending-b"], kind: "userMessageSequence" },
+    { id: "failed", kind: "item" },
+    { id: "interrupted", kind: "item" },
+  ]);
+});
+
+test("ordinary messages and non-message items remain steer grouping boundaries", () => {
+  const blocks = buildRenderableBlocks([
+    steer("before", "sent"),
+    user("initial"),
+    steer("after-a", "sent"),
+    command("boundary"),
+    steer("after-b", "sent"),
+  ]);
+
+  assert.deepEqual(blocks.map((block) => (
+    block.kind === "userMessageSequence"
+      ? block.items.map(({ id }) => id)
+      : block.kind === "item" ? block.item.id : block.items.map(({ id }) => id)
+  )), ["before", "initial", "after-a", ["boundary"], "after-b"]);
+});
 
 test("merged commands and reasoning count once each and hidden calls count zero", () => {
   const items: ThreadItem[] = [

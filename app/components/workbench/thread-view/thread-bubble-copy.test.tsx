@@ -88,6 +88,25 @@ test("ordinary user messages and pending inputs render source-Markdown copy acti
   assert.equal(html.match(/data-workbench-spinning-border="true"/gu)?.length, 3, html);
 });
 
+test("same-state textual steers render one merged Markdown bubble and copy action", () => {
+  const html = renderUserItems([
+    withWorkbenchInputState(createUserMessage("steer-a", "First **steer**"), { kind: "steer", status: "sent" }),
+    withWorkbenchInputState(createUserMessage("steer-b", "Second *steer*"), { kind: "steer", status: "sent" }),
+  ]);
+
+  assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 1, html);
+  assert.match(html, /<p\b[^>]*>First <strong>steer<\/strong><\/p><p\b[^>]*>Second <em>steer<\/em><\/p>/u);
+});
+
+test("different-state textual steers remain separate bubbles", () => {
+  const html = renderUserItems([
+    withWorkbenchInputState(createUserMessage("sent", "Sent"), { kind: "steer", status: "sent" }),
+    withWorkbenchInputState(createUserMessage("pending", "Pending"), { kind: "steer", status: "pending" }),
+  ]);
+
+  assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 2, html);
+});
+
 test("approval-note metadata stays hidden from steer rendering and copy Markdown", () => {
   const wrapped = WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER.wrap(
     "The requested cwd is wrong.",
