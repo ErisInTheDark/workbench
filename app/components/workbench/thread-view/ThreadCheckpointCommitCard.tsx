@@ -279,7 +279,7 @@ export default function ThreadCheckpointCommitCard({
                     value={commitMode}
                   />
                 ) : null}
-                {!compact && proposal?.status === "committed" && canCommit ? (
+                {!compact && proposal?.status === "committed" && (canCommit || committing) ? (
                   <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" data-thread-checkpoint-commit-action="true" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
                     {committing ? "Amending..." : "Amend"}
                   </PrimaryButton>

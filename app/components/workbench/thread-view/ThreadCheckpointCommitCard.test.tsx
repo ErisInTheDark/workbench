@@ -100,3 +100,25 @@ test("loaded proposed cards restore editing and commit actions only in interacti
     }
   }
 });
+
+test("accepted proposal amendments keep their pending action visible until completion", () => {
+  const proposal = {
+    amendTargetMessage: null, amendTargetSha: null, amendability: { status: "available" },
+    baseCommit: "a".repeat(40), changes: [], committedSha: "b".repeat(40),
+    description: "accepted description", freshChanges: null, includeNewerAvailable: false,
+    mode: "commit", paths: [], proposalId: "accepted-proposal", status: "committed",
+    supersededByProposalId: null, supersededBySha: null, title: "accepted proposal", unavailableReason: null,
+  } satisfies GitCheckpointProposal;
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    ...pendingProps,
+    committing: true,
+    description: proposal.description,
+    state: { status: "loaded", proposal },
+    title: "amended proposal",
+  }));
+
+  assert.match(html, /<button(?=[^>]*data-thread-checkpoint-commit-action="true")(?=[^>]*disabled="")[^>]*>/u);
+  assert.match(html, /Amending\.\.\./u);
+  assert.match(html, /data-workbench-spinning-border="true"/u);
+  assert.doesNotMatch(html, />Committed</u);
+});
