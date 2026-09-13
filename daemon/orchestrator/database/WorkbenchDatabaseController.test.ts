@@ -118,7 +118,7 @@ test("worker startup retains its old-schema backup even when closed during openi
     await started;
     await closed;
     const backups = join(directory, "backups", "workbench.sqlite3");
-    const files = await readdir(backups).catch(error => {
+    const files = await readdir(backups).then(names => names.filter(name => name.endsWith(".sqlite3"))).catch(error => {
       if (error.code === "ENOENT") return [];
       throw error;
     });
@@ -135,6 +135,49 @@ test("worker startup retains its old-schema backup even when closed during openi
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const rejectCheckpoint of [false, true]) {
+  test(`worker startup recovers a newer database before readiness (reject checkpoint: ${rejectCheckpoint})`, async context => {
+    const directory = await mkdtemp(join(tmpdir(), "workbench-worker-recovery-"));
+    captureTestOutput(context, process.stdout, text => text.startsWith("[database]") && text.includes(directory));
+    const databasePath = join(directory, "workbench.sqlite3");
+    const backups = join(directory, "backups", "workbench.sqlite3");
+    const initial = new WorkbenchDatabaseController({ databasePath });
+    try { await initial.start(); }
+    finally { await initial.close(); }
+    const candidate = new Database(databasePath);
+    try {
+      candidate.exec("CREATE TABLE recovery_evidence(value TEXT); INSERT INTO recovery_evidence VALUES ('original')");
+      await preserveWorkbenchDatabaseBackup(candidate, backups);
+      candidate.exec("UPDATE recovery_evidence SET value = 'failed-upgrade'");
+      candidate.pragma(`user_version = ${WORKBENCH_DATABASE_SCHEMA_VERSION + 1}`);
+    } finally { candidate.close(); }
+    let archive = "";
+    const controller = new WorkbenchDatabaseController({
+      databasePath,
+      beforeMigration: archivePath => {
+        archive = archivePath;
+        if (rejectCheckpoint) throw new Error("recovery checkpoint rejected");
+      },
+    });
+    try {
+      if (rejectCheckpoint) await assert.rejects(controller.start(), /recovery checkpoint rejected/);
+      else assert.equal((await controller.start()).schemaVersion, WORKBENCH_DATABASE_SCHEMA_VERSION);
+      assert.ok(archive.startsWith(join(backups, "failed-upgrades")));
+      const inspection = new Database(databasePath, { readonly: true });
+      const archived = new Database(archive, { readonly: true });
+      try {
+        assert.deepEqual(inspection.prepare("SELECT value FROM recovery_evidence").get(), {
+          value: rejectCheckpoint ? "failed-upgrade" : "original",
+        });
+        assert.deepEqual(archived.prepare("SELECT value FROM recovery_evidence").get(), { value: "failed-upgrade" });
+      } finally { inspection.close(); archived.close(); }
+    } finally {
+      await controller.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("database lifecycle reuses retained state across cold workers", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));

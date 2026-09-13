@@ -20,7 +20,7 @@ import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workb
 
 async function temporaryDatabase(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database]") && text.includes(directory));
   context.after(() => fs.rm(directory, { force: true, recursive: true }));
   return path.join(directory, "state.sqlite3");
 }
@@ -133,6 +133,41 @@ test("the local daemon registration remains stable across app restarts", async (
 
   assert.equal(secondId, firstId);
 });
+
+for (const rejectCheckpoint of [false, true]) {
+  test(`app startup recovers a newer database before serving (reject checkpoint: ${rejectCheckpoint})`, async context => {
+    const databasePath = await temporaryDatabase(context);
+    const repository = new WorkbenchAppStateRepository({ databasePath });
+    const registration = await repository.start();
+    await repository.close();
+    const candidate = new Database(databasePath);
+    const backups = path.join(path.dirname(databasePath), "backups", path.basename(databasePath));
+    try {
+      candidate.exec("CREATE TABLE recovery_evidence(value TEXT); INSERT INTO recovery_evidence VALUES ('original')");
+      await preserveWorkbenchDatabaseBackup(candidate, backups);
+      candidate.exec("UPDATE recovery_evidence SET value = 'failed-upgrade'");
+      candidate.pragma(`user_version = ${appStateSchema.currentVersion + 1}`);
+    } finally { candidate.close(); }
+    let archive = "";
+    try {
+      const opening = repository.start(archivePath => {
+        archive = archivePath;
+        if (rejectCheckpoint) throw new Error("recovery checkpoint rejected");
+      });
+      if (rejectCheckpoint) await assert.rejects(opening, /recovery checkpoint rejected/);
+      else assert.equal(await opening, registration);
+      assert.equal(path.dirname(archive), path.join(backups, "failed-upgrades"));
+      const inspection = new Database(databasePath, { readonly: true });
+      const archived = new Database(archive, { readonly: true });
+      try {
+        assert.deepEqual(inspection.prepare("SELECT value FROM recovery_evidence").get(), {
+          value: rejectCheckpoint ? "failed-upgrade" : "original",
+        });
+        assert.deepEqual(archived.prepare("SELECT value FROM recovery_evidence").get(), { value: "failed-upgrade" });
+      } finally { inspection.close(); archived.close(); }
+    } finally { await repository.close(); }
+  });
+}
 
 test("installation roots keep app state independent and durable", async context => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-state-"));

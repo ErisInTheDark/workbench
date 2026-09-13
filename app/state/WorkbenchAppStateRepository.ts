@@ -1,8 +1,7 @@
 /*
- * Keywords: app state, SQLite, migration backup, registration, lifecycle.
  * Exports:
- * - WorkbenchAppStateRepositoryOptions: app-state database path and clock seams. Keywords: app, state, SQLite, test.
- * - default WorkbenchAppStateRepository: own one app-state SQLite connection, schema, transactions, and local registration. Keywords: app, state, repository.
+ * - WorkbenchAppStateRepositoryOptions: app-state database path and clock seams.
+ * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, transactions, and local registration.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -20,6 +19,7 @@ import {
 } from "workbench-shared/database/workbench-database-statements";
 
 import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
 import {
     appStateSchema,
     appStateTableInventory,
@@ -66,6 +66,7 @@ export default class WorkbenchAppStateRepository {
   async #open(beforeMigration?: (backupPath: string) => void) {
     assertSchemaReleaseManifest(appStateSchema, appStateReleases, "app");
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
+    await recoverWorkbenchDatabase(this.databasePath, appStateSchema, beforeMigration);
     const database = new Database(this.databasePath);
     try {
       database.pragma("foreign_keys = ON");

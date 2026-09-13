@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import type { WorkbenchDatabaseInventory, WorkbenchDatabaseRequest, WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
 import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
 import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
 import {
   compileWorkbenchDatabaseStatement,
   type WorkbenchDatabaseRow,
@@ -482,6 +483,13 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
     try {
       if (database) throw new Error("Workbench database is already initialized");
       validateWorkbenchDatabaseReleases();
+      const acknowledgeCheckpoint = async (backupPath: string) => {
+        if (request.acknowledgeMigration) await new Promise<void>((acknowledge) => {
+          migrationAcknowledgement = { id: request.id, acknowledge };
+          post({ id: request.id, type: "migrationCheckpoint", backupPath });
+        });
+      };
+      await recoverWorkbenchDatabase(request.databasePath, workbenchDatabaseSchema, acknowledgeCheckpoint);
       database = new Database(request.databasePath);
       database.pragma("foreign_keys = ON");
       database.pragma("journal_mode = WAL");
@@ -504,10 +512,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       }
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
         beforeMigration: async (backupPath) => {
-          if (request.acknowledgeMigration) await new Promise<void>((acknowledge) => {
-            migrationAcknowledgement = { id: request.id, acknowledge };
-            post({ id: request.id, type: "migrationCheckpoint", backupPath });
-          });
+          await acknowledgeCheckpoint(backupPath);
           // The existing owner has verified and acknowledged its backup before
           // this source conversion is allowed to retire any legacy facts.
           await convertThreadState();

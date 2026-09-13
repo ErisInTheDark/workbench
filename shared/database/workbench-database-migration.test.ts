@@ -197,7 +197,9 @@ for (const ages of [[1, 2, 3, 4, 5, 6, 7], [0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3, 4]
     const names = ages.map(() => `${randomUUID()}.sqlite3`);
     for (const [index, name] of names.entries()) {
       const file = path.join(backups, name);
-      await fs.writeFile(file, "owned backup fixture");
+      const backup = new Database(file);
+      applyWorkbenchDatabaseSchema(backup, schema);
+      backup.close();
       const time = new Date(now - ages[index]! * day);
       await fs.utimes(file, time, time);
     }
@@ -225,7 +227,9 @@ test("retention failure warns but leaves the database usable", async context => 
   await fs.mkdir(backups, { recursive: true });
   for (let index = 0; index < 6; index++) {
     const file = path.join(backups, `${randomUUID()}.sqlite3`);
-    await fs.writeFile(file, "owned backup fixture");
+    const backup = new Database(file);
+    applyWorkbenchDatabaseSchema(backup, schema);
+    backup.close();
     await fs.utimes(file, new Date(0), new Date(0));
   }
   const warnings = context.mock.method(console, "warn", () => {});
@@ -245,4 +249,21 @@ test("empty first installation creates no backup", async context => {
     assert.equal(fresh.pragma("user_version", { simple: true }), schema.currentVersion);
     assert.deepEqual(await completedBackups(path.join(path.dirname(backups), "fresh.sqlite3")), []);
   } finally { fresh.close(); }
+});
+
+test("retention preserves the latest checkpoint per schema and never prunes failed upgrades", async context => {
+  const { database, backups } = await fixture(context);
+  const checkpoint = await preserveWorkbenchDatabaseBackup(database, backups);
+  await fs.utimes(checkpoint, new Date(0), new Date(0));
+  applyWorkbenchDatabaseSchema(database, schema);
+  for (let index = 0; index < 6; index++) {
+    const backup = await preserveWorkbenchDatabaseBackup(database, backups);
+    await fs.utimes(backup, new Date(index + 1), new Date(index + 1));
+  }
+  const archive = await preserveWorkbenchDatabaseBackup(database, path.join(backups, "failed-upgrades"));
+  await fs.utimes(archive, new Date(0), new Date(0));
+  await migrateWorkbenchDatabase(database, schema);
+  assert.ok((await fs.stat(checkpoint)).isFile(), "last checkpoint for old schema must survive retention");
+  assert.ok((await fs.stat(archive)).isFile(), "failed upgrades are outside automatic retention");
+  assert.equal((await completedBackups(backups)).length, 6);
 });

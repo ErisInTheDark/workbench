@@ -1,9 +1,9 @@
 /*
- * Keywords: SQLite, migration, backup, retention.
  * Exports:
  * - WorkbenchDatabaseMigrationOptions: target version, rollback checkpoint acknowledgement, and retention clock.
  * - preserveWorkbenchDatabaseBackup: publish a verified complete snapshot without migrating the source.
  * - restoreWorkbenchDatabaseBackup: restore a verified checkpoint after every destination connection is closed.
+ * - readWorkbenchDatabaseBackups: read verified ordinary checkpoints newest-first, excluding archives and scratch files.
  * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune expired backups.
  */
 import { randomUUID } from "node:crypto";
@@ -99,21 +99,12 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
 
 async function pruneBackups(directory: string, now: number) {
   try {
-    let entries;
-    try { entries = await fs.readdir(directory, { withFileTypes: true }); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    const backups: { filePath: string; modifiedAt: number }[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !completedBackupName.test(entry.name)) continue;
-      const filePath = path.join(directory, entry.name);
-      const stat = await fs.lstat(filePath);
-      if (stat.isFile()) backups.push({ filePath, modifiedAt: stat.mtimeMs });
-    }
-    backups.sort((a, b) => b.modifiedAt - a.modifiedAt || a.filePath.localeCompare(b.filePath));
-    for (const backup of backups.slice(5)) {
+    const backups = await readWorkbenchDatabaseBackups(directory);
+    const retainedVersions = new Set<number>();
+    for (const [index, backup] of backups.entries()) {
+      const firstForVersion = !retainedVersions.has(backup.version);
+      retainedVersions.add(backup.version);
+      if (index < 5 || firstForVersion) continue;
       if (now - backup.modifiedAt <= retentionAgeMs) continue;
       const current = await fs.lstat(backup.filePath);
       if (!current.isFile() || current.mtimeMs !== backup.modifiedAt) continue;
@@ -122,6 +113,35 @@ async function pruneBackups(directory: string, now: number) {
   } catch (error) {
     console.warn(`[database] migration backup cleanup retained extra files in ${boundedMessage(directory)}: ${boundedMessage(error)}`);
   }
+}
+
+export async function readWorkbenchDatabaseBackups(directory: string) {
+  let entries;
+  try { entries = await fs.readdir(directory, { withFileTypes: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const backups: { filePath: string; modifiedAt: number; version: number }[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !completedBackupName.test(entry.name)) continue;
+    const filePath = path.join(directory, entry.name);
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile()) continue;
+    let backup: Database.Database | undefined;
+    try {
+      backup = new Database(filePath, { readonly: true, fileMustExist: true });
+      const integrity = backup.pragma("quick_check") as { quick_check: string }[];
+      if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok") {
+        throw new Error("Checkpoint integrity verification failed.");
+      }
+      const version = backup.pragma("user_version", { simple: true }) as number;
+      backups.push({ filePath, modifiedAt: stat.mtimeMs, version });
+    } catch (error) {
+      throw new Error(`Database checkpoint verification failed at ${boundedMessage(filePath)}: ${boundedMessage(error)}`, { cause: error });
+    } finally { backup?.close(); }
+  }
+  return backups.sort((a, b) => b.modifiedAt - a.modifiedAt || a.filePath.localeCompare(b.filePath));
 }
 
 export default async function migrateWorkbenchDatabase(
