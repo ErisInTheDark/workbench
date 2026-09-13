@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitCheckpointStore from "./GitCheckpointStore";
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -16,7 +17,7 @@ import {
   HISTORY_ARC_READY_FIXTURE,
   HISTORY_CONFLICT_READY_FIXTURE,
   HISTORY_LINEAR_FIXTURE,
-  UNBORN_FIXTURE,
+  HISTORY_ROOT_READY_FIXTURE,
 } from "./WorkbenchGitTestFixtures";
 import { type ArcOutcome, outcomeRef } from "workbench-shared/workbench/git/git-arc-storage";
 
@@ -25,7 +26,7 @@ const fixtureCache = new GitTestFixtureCache();
 const historyCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
 
 function historyTest(name: string, run: (context: TestContext) => Promise<void>) {
-  historyCases.push({ name, run });
+  historyCases.push({ name, run: context => GitObjectReadSession.run(() => run(context)) });
 }
 
 async function git(cwd: string, args: string[]) {
@@ -39,8 +40,9 @@ async function write(root: string, file: string, contents: string) {
 async function repository(context: TestContext) {
   const { dispose, root, storageRootPath } = await fixtureCache.copy(HISTORY_LINEAR_FIXTURE);
   context.after(dispose);
-  const target = (await git(root, ["rev-parse", "HEAD^"])).trim();
-  return { root, storage: storageRootPath, target };
+  const repositoryOwner = await WorkbenchGitRepository.open(root);
+  const target = (await repositoryOwner.readCommitAt("HEAD^"))!.commit;
+  return { repositoryOwner, root, storage: storageRootPath, target };
 }
 
 async function arcRepository(context: TestContext) {
@@ -50,8 +52,7 @@ async function arcRepository(context: TestContext) {
   return { repository, root, state };
 }
 
-historyTest("amends an older linear commit without changing worktree files or unrelated staged entries", async (context) => {
-  const { root, storage, target } = await repository(context);
+async function checkContentAmend({ repositoryOwner, root, storage, target }: Awaited<ReturnType<typeof repository>>) {
   const oldHead = (await git(root, ["rev-parse", "HEAD"])).trim();
   await write(root, "selected.txt", "amended\n");
   await write(root, "later.txt", "staged but unrelated\n");
@@ -65,17 +66,16 @@ historyTest("amends an older linear commit without changing worktree files or un
 
   assert.notEqual(result.commit, oldHead);
   assert.equal(result.rewrittenCommitCount, 2);
-  assert.equal(await git(root, ["show", `${result.amendedCommit}:selected.txt`]), "amended\n");
-  assert.equal(await git(root, ["show", "HEAD:selected.txt"]), "amended\n");
-  assert.equal((await git(root, ["show", "-s", "--format=%s", "HEAD"])).trim(), "descendant");
+  assert.equal(await repositoryOwner.readBlob(`${result.amendedCommit}:selected.txt`), "amended\n");
+  assert.equal(await repositoryOwner.readBlob("HEAD:selected.txt"), "amended\n");
+  assert.equal((await repositoryOwner.readCommit("HEAD")).message.trim(), "descendant");
   assert.deepEqual(await fs.readFile(path.join(root, "selected.txt")), beforeSelected);
   assert.deepEqual(await fs.readFile(path.join(root, "later.txt")), beforeLater);
   assert.equal((await git(root, ["diff", "--cached", "--name-only"])).trim(), "later.txt");
-});
+  return result.amendedCommit;
+}
 
-historyTest("rewrites only an older commit message without normalizing the worktree or index", async (context) => {
-  const { root, target } = await repository(context);
-  const repositoryOwner = await WorkbenchGitRepository.open(root);
+async function checkMessageAmend({ repositoryOwner, root, target }: Awaited<ReturnType<typeof repository>>) {
   await write(root, "selected.txt", "unstaged and unrelated\n");
   await write(root, "later.txt", "staged and unrelated\n");
   await git(root, ["add", "later.txt"]);
@@ -96,8 +96,8 @@ historyTest("rewrites only an older commit message without normalizing the workt
     target,
   });
 
-  assert.equal((await git(root, ["show", "-s", "--format=%s", result.amendedCommit])).trim(), "replacement message");
-  assert.equal((await git(root, ["show", "-s", "--format=%s", "HEAD"])).trim(), "descendant");
+  assert.equal((await repositoryOwner.readCommit(result.amendedCommit)).message.trim(), "replacement message");
+  assert.equal((await repositoryOwner.readCommit("HEAD")).message.trim(), "descendant");
   assert.equal(await git(root, ["diff", "--binary"]), worktreeBefore);
   assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
   const after = await repositoryOwner.readCommits([result.amendedCommit, result.commit]);
@@ -105,9 +105,9 @@ historyTest("rewrites only an older commit message without normalizing the workt
   assert.equal(after.commits.get(result.commit)?.tree, before.commits.get(oldHead)?.tree);
   const remappedPlan = await controller.findPlanState({ cwd: root, harness: "codex", threadId: "message-plan" });
   assert.ok(remappedPlan);
-  assert.equal(await git(root, ["show", `${remappedPlan.checkpointCommit}:selected.txt`]), "unstaged and unrelated\n");
-  assert.equal(await git(root, ["show", `${remappedPlan.checkpointCommit}:later.txt`]), await git(root, ["show", "HEAD:later.txt"]));
-});
+  assert.equal(await repositoryOwner.readBlob(`${remappedPlan.checkpointCommit}:selected.txt`), "unstaged and unrelated\n");
+  assert.equal(await repositoryOwner.readBlob(`${remappedPlan.checkpointCommit}:later.txt`), await repositoryOwner.readBlob("HEAD:later.txt"));
+}
 
 historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
   const { dispose, root, state, storageRootPath: storage } = await fixtureCache.copy(HISTORY_CONFLICT_READY_FIXTURE);
@@ -134,42 +134,15 @@ historyTest("a descendant conflict leaves branch, worktree, index, refs, and sel
 historyTest("arc proposal amend remaps sibling state, completed proposals, and a pending deep amend", async (context) => {
   const { repository, root, state } = await arcRepository(context);
   const controller = new WorkbenchGitCheckpointController();
-  const { firstProposalId, oldHead, originalParent, siblingPlanCheckpoint } = state;
-  await write(root, "descendant.txt", "later descendant\n");
-  await git(root, ["add", "descendant.txt"]);
-  await git(root, ["commit", "--quiet", "-m", "later descendant"]);
-  const originalDescendant = await repository.currentHead();
+  const store = new GitCheckpointStore(repository);
+  const { firstProposalId, oldHead, originalParent, siblingPlanCheckpoint, originalDescendant } = state;
   const originalDescendantPatch = await git(root, ["show", "--format=", "--binary", "--no-renames", originalDescendant]);
 
-  await write(root, "selected.txt", "first proposal\nfirst amendment\n");
-  const amendment = await controller.createProposal({
-    amend: true,
-    amendProposalId: firstProposalId,
-    cwd: root,
-    description: "",
-    harness: "codex",
-    threadId: "amend-thread",
-    title: "",
-  });
-  const amendmentPreview = await controller.getProposal({
-    cwd: root,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: amendment.proposalId,
-    threadId: "amend-thread",
-  });
+  const amendment = { proposalId: state.amendmentProposalId, sourceCheckpoint: state.amendmentSourceCheckpoint };
+  const amendmentPreview = (await store.readProposal("codex", "amend-thread", amendment.proposalId)).metadata;
   assert.equal(amendmentPreview.title, "Original title");
   assert.equal(amendmentPreview.description, "Original description");
-  await write(root, "selected.txt", "first proposal\nfirst amendment\nsecond amendment\n");
-  const second = await controller.createProposal({
-    amend: true,
-    amendProposalId: firstProposalId,
-    cwd: root,
-    description: "",
-    harness: "codex",
-    threadId: "amend-thread",
-    title: "second pending amend",
-  });
+  const second = { proposalId: state.secondProposalId };
   const secondBefore = await controller.getProposal({
     cwd: root,
     harness: "codex",
@@ -179,7 +152,6 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   });
   assert.equal(secondBefore.status, "proposed");
   assert.equal(secondBefore.amendTargetSha, oldHead);
-  const store = new GitCheckpointStore(repository);
   const secondStoredBefore = await store.readProposal("codex", "amend-thread", second.proposalId);
 
   const amended = await controller.commitProposal({
@@ -202,24 +174,21 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
     await git(root, ["show", "--format=", "--binary", "--no-renames", firstRewrittenDescendant]),
     originalDescendantPatch,
   );
-  const superseded = await controller.getProposal({
-    cwd: root,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: firstProposalId,
-    threadId: "amend-thread",
-  });
+  const superseded = (await store.readProposal("codex", "amend-thread", firstProposalId)).metadata;
   assert.equal(superseded.status, "superseded");
   assert.equal(superseded.committedSha, amended.committedSha);
   assert.equal(superseded.supersededByProposalId, amendment.proposalId);
   assert.equal(superseded.supersededBySha, amended.committedSha);
   assert.equal(await repository.readRef(outcomeRef("codex", "amend-thread", amendment.sourceCheckpoint)), null);
   const outcomeNamespace = "refs/worktree/agents/codex/amend-thread/arc-outcomes";
-  const amendedOutcomes = (await Promise.all((await repository.listRefs(outcomeNamespace)).map(async (ref) => {
-    const blob = await repository.readRef(ref);
-    return blob ? { outcome: JSON.parse(await repository.readBlob(blob)) as ArcOutcome, ref } : null;
-  }))).filter((entry): entry is { outcome: ArcOutcome; ref: string } => entry !== null)
-    .filter(({ outcome }) => outcome.proposalId === amendment.proposalId);
+  const outcomeRefs = await repository.listRefs(outcomeNamespace);
+  const outcomeBlobs = await repository.readBlobs(outcomeRefs);
+  const amendedOutcomes = outcomeRefs.flatMap(ref => {
+    const error = outcomeBlobs.errors.get(ref);
+    if (error) throw new Error(error);
+    const blob = outcomeBlobs.blobs.get(ref);
+    return blob ? [{ outcome: JSON.parse(blob.contents) as ArcOutcome, ref }] : [];
+  }).filter(({ outcome }) => outcome.proposalId === amendment.proposalId);
   assert.equal(amendedOutcomes.length, 1);
   const { outcome: amendedOutcome, ref: amendedOutcomeRef } = amendedOutcomes[0]!;
   assert.equal(amendedOutcome.committedSha, amended.committedSha);
@@ -236,7 +205,7 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   assert.notEqual(siblingAfterFirst.checkpointCommit, siblingPlanCheckpoint);
   assert.deepEqual(siblingAfterFirst.claimedPaths, ["later.txt"]);
   assert.equal(
-    await git(root, ["show", `${siblingAfterFirst.checkpointCommit}:selected.txt`]),
+    await repository.readBlob(`${siblingAfterFirst.checkpointCommit}:selected.txt`),
     "first proposal\nfirst amendment\n",
   );
 
@@ -274,22 +243,16 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   assert.deepEqual(await repository.listChangedPaths(pendingPlan.checkpointCommit, retainedPlan.checkpointCommit, pendingPlan.scopePaths), []);
   assert.notEqual(secondCommitted.committedSha, amended.committedSha);
   assert.equal(
-    await git(root, ["show", `${secondCommitted.committedSha}:selected.txt`]),
+    await repository.readBlob(`${secondCommitted.committedSha}:selected.txt`),
     "first proposal\nfirst amendment\nsecond amendment\n",
   );
   const finalDescendant = await repository.currentHead();
-  assert.equal((await git(root, ["show", "-s", "--format=%s", finalDescendant])).trim(), "later descendant");
+  assert.equal((await repository.readCommit(finalDescendant)).message.trim(), "later descendant");
   assert.equal(
     await git(root, ["show", "--format=", "--binary", "--no-renames", finalDescendant]),
     originalDescendantPatch,
   );
-  const firstAfterSecond = await controller.getProposal({
-    cwd: root,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: amendment.proposalId,
-    threadId: "amend-thread",
-  });
+  const firstAfterSecond = (await store.readProposal("codex", "amend-thread", amendment.proposalId)).metadata;
   assert.equal(firstAfterSecond.status, "superseded");
   assert.equal(firstAfterSecond.supersededByProposalId, second.proposalId);
   assert.equal(firstAfterSecond.supersededBySha, secondCommitted.committedSha);
@@ -318,9 +281,7 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   );
 });
 
-historyTest("index locks leave targeted amendments unpublished and retryable", async (context) => {
-  const { root, target } = await repository(context);
-  const gitRepository = await WorkbenchGitRepository.open(root);
+async function checkIndexLock(context: TestContext, { repositoryOwner: gitRepository, root, target }: Awaited<ReturnType<typeof repository>>) {
   const rewriter = new WorkbenchGitHistoryRewriter(gitRepository);
   await write(root, "selected.txt", "locked amendment\n");
   const headBefore = await gitRepository.currentHead();
@@ -346,21 +307,27 @@ historyTest("index locks leave targeted amendments unpublished and retryable", a
   });
   assert.notEqual(committed.commit, headBefore);
   assert.equal(await git(root, ["status", "--short", "--", "selected.txt"]), "");
+  return committed.amendedCommit;
+}
+
+historyTest("linear amendments preserve state through lock retry, content and message changes", async (context) => {
+  const fixture = await repository(context);
+  await context.test("index locks leave targeted amendments unpublished and retryable", async () => {
+    fixture.target = await checkIndexLock(context, fixture);
+  });
+  await context.test("content amendments preserve worktree files and unrelated staged entries", async () => {
+    fixture.target = await checkContentAmend(fixture);
+  });
+  await context.test("message-only amendments preserve trees, worktree, index and scoped snapshots", () => checkMessageAmend(fixture));
 });
 
 historyTest("root amendments preserve parentless proposal history and accepted receipts", async (context) => {
-  const fixture = await fixtureCache.copy(UNBORN_FIXTURE);
+  const fixture = await fixtureCache.copy(HISTORY_ROOT_READY_FIXTURE);
   context.after(fixture.dispose);
   const controller = new WorkbenchGitCheckpointController();
   const identity = { cwd: fixture.root, threadId: "initial" };
-  await controller.createAndStartPlan({ ...identity, intentName: "initial", paths: ["one.txt"] });
-  await write(fixture.root, "one.txt", "first\n");
-  const proposal = await controller.createProposal({ ...identity, title: "first", description: "" });
-  const accepted = await controller.commitProposal({
-    ...identity, proposalId: proposal.proposalId, title: "first", description: "", includeNewer: false,
-  });
+  const accepted = fixture.state;
   assert.ok(accepted.committedSha);
-  await controller.editArcClaims({ ...identity, inherit: true, addPaths: ["one.txt"] });
   await write(fixture.root, "one.txt", "amended\n");
   const amendment = await controller.createProposal({
     ...identity, amend: true, title: "amended", description: "", freshTitle: "fresh",
@@ -371,8 +338,8 @@ historyTest("root amendments preserve parentless proposal history and accepted r
   assert.ok(amended.committedSha);
   const repository = await WorkbenchGitRepository.open(fixture.root);
   assert.deepEqual((await repository.readCommit(amended.committedSha)).parents, []);
-  assert.equal(await git(fixture.root, ["show", "HEAD:one.txt"]), "amended\n");
-  const prior = await controller.getProposal({ ...identity, proposalId: proposal.proposalId, includeNewer: false });
+  assert.equal(await repository.readBlob("HEAD:one.txt"), "amended\n");
+  const prior = (await new GitCheckpointStore(repository).readProposal("codex", identity.threadId, accepted.proposalId)).metadata;
   assert.notEqual(prior.committedSha, accepted.committedSha);
   assert.equal(prior.committedSha, amended.committedSha);
 });

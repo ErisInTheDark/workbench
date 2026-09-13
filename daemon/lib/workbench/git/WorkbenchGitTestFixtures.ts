@@ -9,6 +9,7 @@
  * - HISTORY_LINEAR_FIXTURE: linear rewrite history.
  * - HISTORY_ARC_READY_FIXTURE: active arc rewrite scenario.
  * - HISTORY_CONFLICT_READY_FIXTURE: conflicting rewrite scenario.
+ * - HISTORY_ROOT_READY_FIXTURE: accepted parentless proposal ready for amendment.
  * - HISTORY_GLOBAL_REMAP_READY_FIXTURE: sibling rewrite state.
  * - HISTORY_PUSHED_READY_FIXTURE: published history.
  * - HISTORY_MERGE_READY_FIXTURE: nonlinear history.
@@ -24,6 +25,7 @@ import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
 import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
+import { HISTORY_ARC_READY_FIXTURE, HISTORY_CONFLICT_READY_FIXTURE, HISTORY_LINEAR_FIXTURE, HISTORY_ROOT_READY_FIXTURE } from "./GitHistoryRewriteTestFixtures";
 import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE } from "./GitArcControllerTestFixtures";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
@@ -54,6 +56,7 @@ const LINEAR_COMMITS = [
 ];
 
 export { CONTROLLER_BASE_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE };
+export { HISTORY_ARC_READY_FIXTURE, HISTORY_CONFLICT_READY_FIXTURE, HISTORY_LINEAR_FIXTURE, HISTORY_ROOT_READY_FIXTURE };
 
 export const UNBORN_FIXTURE = {
   commits: [],
@@ -134,111 +137,6 @@ export const THREAD_GIT_LINEAR_FIXTURE = {
   commits: LINEAR_COMMITS,
   name: "thread-git-linear",
 } satisfies GitTestFixtureSpec;
-
-export const HISTORY_LINEAR_FIXTURE = {
-  commits: [
-    { files: { "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" },
-    { files: { "selected.txt": "target\n" }, message: "target" },
-    { files: { "later.txt": "descendant\n" }, message: "descendant" },
-  ],
-  name: "history-linear",
-} satisfies GitTestFixtureSpec;
-
-export const HISTORY_ARC_READY_FIXTURE = {
-  commits: [{ files: { "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" }],
-  name: "history-arc-ready",
-  prepare: async ({ repositoryRoot }) => {
-    const repository = await WorkbenchGitRepository.open(repositoryRoot);
-    const controller = new WorkbenchGitCheckpointController();
-    await createTranscript(repositoryRoot, "codex", "amend-thread");
-    const plan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "amend lifecycle",
-      paths: ["selected.txt"],
-      threadId: "amend-thread",
-    });
-    await controller.startArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "amend-thread",
-    });
-    await write(repositoryRoot, "selected.txt", "first proposal\n");
-    const first = await controller.createProposal({
-      cwd: repositoryRoot,
-      description: "Original description",
-      harness: "codex",
-      threadId: "amend-thread",
-      title: "Original title",
-    });
-    const firstCommit = await controller.commitProposal({
-      cwd: repositoryRoot,
-      description: first.description,
-      harness: "codex",
-      includeNewer: false,
-      proposalId: first.proposalId,
-      threadId: "amend-thread",
-      title: first.title,
-    });
-    const oldHead = firstCommit.committedSha!;
-    const originalParent = await repository.resolveParent(oldHead);
-    await write(repositoryRoot, "selected.txt", "first proposal\nincidental sibling snapshot\n");
-    const siblingPlan = await controller.createPlan({
-      cwd: repositoryRoot,
-      harness: "codex",
-      intentName: "sibling plan",
-      paths: ["later.txt"],
-      threadId: "sibling-thread",
-    });
-    await write(repositoryRoot, "selected.txt", "first proposal\n");
-    await controller.startArc({
-      checkpointCommit: siblingPlan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "sibling-thread",
-    });
-    await controller.continueArc({
-      checkpointCommit: plan.checkpointCommit,
-      cwd: repositoryRoot,
-      harness: "codex",
-      threadId: "amend-thread",
-    });
-    return {
-      firstProposalId: first.proposalId,
-      oldHead,
-      originalParent,
-      originalPlanCheckpoint: plan.checkpointCommit,
-      siblingPlanCheckpoint: siblingPlan.checkpointCommit,
-    };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{
-  firstProposalId: string;
-  oldHead: string;
-  originalParent: string;
-  originalPlanCheckpoint: string;
-  siblingPlanCheckpoint: string;
-}>;
-
-export const HISTORY_CONFLICT_READY_FIXTURE = {
-  commits: HISTORY_LINEAR_FIXTURE.commits,
-  name: "history-conflict-ready",
-  prepare: async ({ repositoryRoot, runGit }) => {
-    const { target } = await targetAndHead(repositoryRoot, runGit);
-    await write(repositoryRoot, "selected.txt", "descendant edit\n");
-    await runGit(["add", "selected.txt"]);
-    await runGit(["commit", "--quiet", "-m", "conflicting descendant"]);
-    await new WorkbenchGitCheckpointController().createPlan({
-      cwd: repositoryRoot,
-      intentName: "rollback witness",
-      paths: ["later.txt"],
-      threadId: "witness-thread",
-    });
-    return { target };
-  },
-  revision: 1,
-} satisfies GitTestFixtureSpec<{ target: string }>;
 
 export const HISTORY_GLOBAL_REMAP_READY_FIXTURE = {
   commits: [
@@ -444,8 +342,8 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(THREAD_GIT_BASE_FIXTURE, 5),
   ], nested: false }],
   ["WorkbenchGitHistoryRewriter.test.ts", { fixtures: [
-    demand(UNBORN_FIXTURE, 1),
-    demand(HISTORY_LINEAR_FIXTURE, 3),
+    demand(HISTORY_ROOT_READY_FIXTURE, 1),
+    demand(HISTORY_LINEAR_FIXTURE, 1),
     demand(HISTORY_CONFLICT_READY_FIXTURE, 1),
     demand(HISTORY_ARC_READY_FIXTURE, 1),
   ], nested: false }],
