@@ -52,19 +52,15 @@ Run `pnpm test` and `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 
-```
-pnpm test
-pnpm test -- --good-citizen
-pnpm typecheck
-cargo test --manifest-path ..\tray\Cargo.toml
-cargo build --release --manifest-path ..\tray\Cargo.toml
-```
+`pnpm test -- [<file>...]` tests only the specified files
+`pnpm test` tests full suite
+`pnpm test -- --good-citizen` is available for use only when the user asks for it
+`pnpm test:lifecycle` runs a clone of the full app, testing schema migration
+`pnpm test:live` runs a clone of the full app, testing with a paid luna low codex turn; only use when the user asks for it
+`pnpm typecheck`
+`cargo test --manifest-path ..\tray\Cargo.toml`
+`cargo build --release --manifest-path ..\tray\Cargo.toml`
 
-- `pnpm test` executes the TypeScript `node:test` suite through the project-owned runner.
-- Run `pnpm test -- --good-citizen` only when the user asks for it. Otherwise, run `pnpm test`.
-- `pnpm typecheck` type-checks the app and orchestrator without emitting files.
-- `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
-- Do not run `pnpm test` or `pnpm typecheck` unless your work has actually changed TypeScript code.
 <!-- - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks. -->
 
 <!-- ### Ask the User First
