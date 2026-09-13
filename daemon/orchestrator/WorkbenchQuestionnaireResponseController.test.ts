@@ -16,14 +16,16 @@ import {
   WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import type {
-  WorkbenchQuestionnaireHistoryEntryState,
   WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 const projectId = ProjectIdSchema.parse("project");
 const threadId = WorkbenchThreadIdSchema.parse("thread");
 const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
 const turnId = WorkbenchTurnIdSchema.parse("turn");
+const latestTurnId = WorkbenchTurnIdSchema.parse("latest-turn");
+const admittedTurnId = WorkbenchTurnIdSchema.parse("admitted-turn");
 const response = { answers: { route: { answers: ["approve"] } } };
 const questionnaire = {
   itemId: "item",
@@ -45,24 +47,19 @@ const questionnaire = {
   turnId,
 };
 
-function createHistoryEntry(): WorkbenchQuestionnaireHistoryEntryState {
-  return {
-    ...questionnaire,
-    insertAfterItemId: null,
-    insertAfterItemIndex: null,
-    resolvedAt: 10,
-    response,
-    threadId,
-  };
-}
-
 function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   admissionError?: string;
+  admissionKind?: "started" | "steered";
+  approval?: boolean;
   deliverable?: boolean;
+  harness?: "codex" | "copilot" | "opencode";
+  latestTurnId?: typeof latestTurnId | null;
+  pendingTurnId?: typeof turnId | null;
   requestKey?: string;
 } = {}) {
   const events: string[] = [];
   const requests: JsonRpcRequest[] = [];
+  let historyTurnId: string | null = null;
   let settled = false;
   let pendingRequestKey: string | null = options.requestKey ?? questionnaire.requestKey;
   let stateQueue = Promise.resolve();
@@ -74,12 +71,46 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       await previous;
       try {
         if (pendingRequestKey !== input.requestKey) return null;
-        const historyEntry = createHistoryEntry();
-        const delivery = await deliver({ historyEntry, lifecycle, questionnaire });
+        const pendingQuestionnaire = {
+          ...questionnaire,
+          ...(options.approval ? {
+            request: {
+              ...questionnaire.request,
+              approval: {
+                command: {
+                  command: "git status",
+                  commandActions: [],
+                  cwd: "C:/project",
+                },
+              },
+              questions: [{
+                ...questionnaire.request.questions[0]!,
+                id: "decision",
+                options: [
+                  { description: "run", label: "Allow once" },
+                  { description: "stop", label: "Decline" },
+                ],
+              }],
+            },
+          } : {}),
+          requestKey: pendingRequestKey!,
+          turnId: options.pendingTurnId === undefined ? questionnaire.turnId : options.pendingTurnId,
+        };
+        const accepted = await deliver({ lifecycle, questionnaire: pendingQuestionnaire });
+        const historyEntry = {
+          ...pendingQuestionnaire,
+          insertAfterItemId: accepted.insertAfterItemId,
+          insertAfterItemIndex: accepted.insertAfterItemIndex,
+          resolvedAt: input.resolvedAt,
+          response: input.response,
+          threadId,
+          turnId: accepted.turnId,
+        };
+        historyTurnId = historyEntry.turnId;
         events.push("settled");
         pendingRequestKey = null;
         settled = true;
-        return { delivery, historyEntry };
+        return { delivery: accepted.delivery, historyEntry };
       } finally {
         release();
       }
@@ -93,10 +124,18 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         if (request.method === "workbench/codex/message/admit" && options.admissionError) {
           return { id: request.id ?? null, error: { code: -32000, message: options.admissionError } };
         }
+        if (request.method === "workbench/codex/message/admit") {
+          return options.admissionKind === "steered"
+            ? { id: request.id ?? null, result: { kind: "steered", turnId: admittedTurnId } }
+            : { id: request.id ?? null, result: { kind: "started", turn: { id: admittedTurnId } } };
+        }
+        if (request.method === "turn/start") {
+          return { id: request.id ?? null, result: { turn: { id: admittedTurnId } } };
+        }
         return { id: request.id ?? null, result: { ok: true } };
       },
-      resolvePublicRequest: async (_harness, request) => ({
-        harness: "codex",
+      resolvePublicRequest: async (harness: WorkbenchHarness, request) => ({
+        harness,
         request: {
           ...request,
           params: {
@@ -107,7 +146,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       }),
       resolveThreadIdentity: async () => ({
         bindings: [{
-          harness: "codex",
+          harness: options.harness ?? "codex",
           nativeLocation: "C:/project",
           nativeThreadId,
           pending: false,
@@ -125,9 +164,10 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         return { ...questionnaire, response, threadId: nativeThreadId, turnId: NativeTurnIdSchema.parse("native-turn") };
       },
     },
+    resolveLatestTurn: async () => options.latestTurnId === undefined ? latestTurnId : options.latestTurnId,
     state,
   });
-  return { controller, events, requests, settled: () => settled };
+  return { controller, events, historyTurnId: () => historyTurnId, requests, settled: () => settled };
 }
 
 function request() {
@@ -164,6 +204,9 @@ test("terminal lifecycle admits even when the daemon still exposes an orphan wai
     request().activatedSkillPaths,
   );
   assert.equal(harness.settled(), true);
+  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
+  assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, null);
 });
 
 test("matching pending-input lifecycle resolves its live waiter before settlement", async () => {
@@ -173,13 +216,97 @@ test("matching pending-input lifecycle resolves its live waiter before settlemen
     requestKey: questionnaire.requestKey,
     settled: false,
     turnId,
-  });
+  }, { pendingTurnId: null });
 
   const result = await harness.controller.respond({ ...request(), activatedSkillPaths: undefined, supplementalInput: undefined });
 
   assert.equal(result.route, "live");
   assert.deepEqual(harness.events, ["waiter", "settled", "questionnaire/history/record"]);
   assert.equal(harness.requests.some(({ method }) => method === "workbench/codex/message/admit"), false);
+  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, latestTurnId);
+  assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, null);
+});
+
+test("missing live history placement leaves the ordinary questionnaire pending", async () => {
+  const harness = createHarness({
+    kind: "needsAttention",
+    reason: "pendingInput",
+    requestKey: questionnaire.requestKey,
+    settled: false,
+    turnId: null,
+  }, { latestTurnId: null, pendingTurnId: null });
+
+  await assert.rejects(
+    harness.controller.respond({ ...request(), activatedSkillPaths: undefined, supplementalInput: undefined }),
+    /no history point/u,
+  );
+
+  assert.equal(harness.settled(), false);
+  assert.deepEqual(harness.events, []);
+});
+
+test("detached admission stamps a steered response onto the accepted active turn", async () => {
+  const harness = createHarness({
+    agent: { agentStatus: "blocked", turnId },
+    kind: "needsAttention",
+    reason: "agentBlocked",
+    settled: false,
+  }, { admissionKind: "steered" });
+
+  const result = await harness.controller.respond(request());
+
+  assert.equal(result.route, "admitted");
+  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
+});
+
+test("detached provider admission stamps its response onto the started turn", async () => {
+  const requestKey = "provider-question";
+  const harness = createHarness({
+    agent: { agentStatus: "blocked", turnId },
+    kind: "needsAttention",
+    reason: "agentBlocked",
+    settled: false,
+  }, { harness: "opencode", requestKey });
+
+  const result = await harness.controller.respond({
+    ...request(),
+    harness: "opencode",
+    requestKey,
+  });
+
+  assert.equal(result.route, "admitted");
+  assert.equal(harness.historyTurnId(), admittedTurnId);
+  assert.equal(harness.requests.some(({ method }) => method === "turn/start"), true);
+});
+
+test("approval responses retain their active owner and detached approvals remain pending", async () => {
+  const live = createHarness({
+    kind: "needsAttention",
+    reason: "pendingInput",
+    requestKey: questionnaire.requestKey,
+    settled: false,
+    turnId,
+  }, { approval: true });
+
+  const result = await live.controller.respond(request());
+  assert.equal(result.route, "live");
+  const steer = live.requests.find(({ method }) => method === "turn/steer");
+  assert.equal((steer?.params as { expectedTurnId?: string } | undefined)?.expectedTurnId, turnId);
+  const recorded = live.requests.find(({ method }) => method === "questionnaire/history/record");
+  assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, turnId);
+  assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, questionnaire.itemId);
+
+  const detached = createHarness({
+    agent: { agentStatus: "blocked", turnId },
+    kind: "needsAttention",
+    reason: "agentBlocked",
+    settled: false,
+  }, { approval: true });
+  await assert.rejects(detached.controller.respond(request()), /Approval requests cannot be submitted/u);
+  assert.equal(detached.settled(), false);
+  assert.equal(detached.requests.some(({ method }) => method === "workbench/codex/message/admit"), false);
 });
 
 test("failed detached admission leaves durable settlement untouched", async () => {

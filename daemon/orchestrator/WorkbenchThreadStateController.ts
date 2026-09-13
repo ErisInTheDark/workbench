@@ -1026,8 +1026,6 @@ export default class WorkbenchThreadStateController {
   async resolvePendingQuestionnaire<TDelivery>(
     input: {
       harness: WorkbenchHarnessId;
-      insertAfterItemId?: string | null;
-      insertAfterItemIndex?: number | null;
       projectId: ProjectId;
       requestKey: string;
       resolvedAt: number;
@@ -1035,10 +1033,14 @@ export default class WorkbenchThreadStateController {
       threadId: WorkbenchThreadId;
     },
     deliver: (context: {
-      historyEntry: WorkbenchQuestionnaireHistoryEntryState;
       lifecycle: WorkbenchThreadLifecycle;
       questionnaire: WorkbenchDurableQuestionnaire;
-    }) => Promise<TDelivery>,
+    }) => Promise<{
+      delivery: TDelivery;
+      insertAfterItemId: string | null;
+      insertAfterItemIndex: number | null;
+      turnId: WorkbenchTurnId;
+    }>,
   ) {
     const state = await this.getProject(input.projectId);
     const key = `${input.harness}:${input.threadId}`;
@@ -1052,22 +1054,19 @@ export default class WorkbenchThreadStateController {
         return null;
       }
       const questionnaire = existing.pendingQuestionnaire;
-      const turnId = questionnaire.turnId ?? getWorkbenchLifecycleTurnId(existing.lifecycle);
-      if (!turnId) throw new Error("The questionnaire has no owning turn.");
-      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
-        ...questionnaire,
-        insertAfterItemId: input.insertAfterItemId ?? questionnaire.itemId ?? null,
-        insertAfterItemIndex: input.insertAfterItemIndex ?? null,
-        resolvedAt: input.resolvedAt,
-        response: input.response,
-        threadId: input.threadId,
-        turnId,
-      };
-      const delivery = await deliver({
-        historyEntry,
+      const accepted = await deliver({
         lifecycle: existing.lifecycle,
         questionnaire,
       });
+      const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
+        ...questionnaire,
+        insertAfterItemId: accepted.insertAfterItemId,
+        insertAfterItemIndex: accepted.insertAfterItemIndex,
+        resolvedAt: input.resolvedAt,
+        response: input.response,
+        threadId: input.threadId,
+        turnId: accepted.turnId,
+      };
       const previousEntries = new Map(state.entries);
       const next = parseWorkbenchThreadStateEntry({
         ...existing,
@@ -1081,7 +1080,7 @@ export default class WorkbenchThreadStateController {
       state.entries.set(key, next);
       await this.persist(input.projectId, state, [key], { previousEntries });
       this.publish(input.projectId, state, next);
-      return { delivery, historyEntry };
+      return { delivery: accepted.delivery, historyEntry };
     });
   }
 

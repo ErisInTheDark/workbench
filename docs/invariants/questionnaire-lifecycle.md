@@ -1,3 +1,4 @@
 - Workbench `request_user_input` survives user steers. Only an answer, caller/tool cancellation, or dismissal ends its long wait.
 - Workbench `request_user_input` survives turns ending due to process interruption virtually.
 - Questionnaire response routing is daemon-owned. The client submits answer intent without inferring live or detached thread state. Durable pending state clears only after live delivery or managed continuation accepts the answer.
+- Ordinary questionnaire responses append at their daemon-owned acceptance point. Approval responses remain bound to their active approval turn.

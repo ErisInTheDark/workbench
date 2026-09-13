@@ -13,8 +13,11 @@ import {
   NativeThreadIdSchema,
   ProjectIdSchema,
   WorkbenchThreadIdSchema,
+  WorkbenchTurnIdSchema,
+  type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import {
+  getWorkbenchLifecycleTurnId,
   type WorkbenchDurableQuestionnaire,
   type WorkbenchQuestionnaireHistoryEntryState,
   type WorkbenchThreadLifecycle,
@@ -44,16 +47,24 @@ export interface WorkbenchQuestionnaireResponseStatePort {
       threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>;
     },
     deliver: (context: {
-      historyEntry: WorkbenchQuestionnaireHistoryEntryState;
       lifecycle: WorkbenchThreadLifecycle;
       questionnaire: WorkbenchDurableQuestionnaire;
-    }) => Promise<TDelivery>,
+    }) => Promise<{
+      delivery: TDelivery;
+      insertAfterItemId: string | null;
+      insertAfterItemIndex: number | null;
+      turnId: WorkbenchTurnId;
+    }>,
   ): Promise<{ delivery: TDelivery; historyEntry: WorkbenchQuestionnaireHistoryEntryState } | null>;
 }
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
   harnesses: Pick<WorkbenchHarnessController, "request" | "resolvePublicRequest" | "resolveThreadIdentity">;
   questionnaires: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
+  resolveLatestTurn(input: {
+    projectId: ReturnType<typeof ProjectIdSchema.parse>;
+    threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>;
+  }): Promise<WorkbenchTurnId | null>;
   state: WorkbenchQuestionnaireResponseStatePort;
 }
 
@@ -68,6 +79,10 @@ function warningFrom(response: JsonRpcResponse) {
   return typeof warning === "string" && warning.trim() ? warning.slice(0, 500) : undefined;
 }
 
+type QuestionnaireDelivery =
+  | { route: "admitted" }
+  | { route: "live"; warning?: string };
+
 export default class WorkbenchQuestionnaireResponseController {
   constructor(private readonly options: WorkbenchQuestionnaireResponseControllerOptions) {}
 
@@ -80,16 +95,15 @@ export default class WorkbenchQuestionnaireResponseController {
     const projectId = ProjectIdSchema.parse(input.projectId);
     const threadId = WorkbenchThreadIdSchema.parse(input.threadId);
     const nativeThreadId = workbenchMcp ? await this.resolveNativeThreadId(input) : null;
-    const resolved = await this.options.state.resolvePendingQuestionnaire({
+    const resolved = await this.options.state.resolvePendingQuestionnaire<QuestionnaireDelivery>({
       harness: input.harness,
-      insertAfterItemId: input.insertAfterItemId,
-      insertAfterItemIndex: input.insertAfterItemIndex,
       projectId,
       requestKey: input.requestKey,
       resolvedAt: Date.now(),
       response: input.response,
       threadId,
-    }, async ({ historyEntry, lifecycle, questionnaire }) => {
+    }, async ({ lifecycle, questionnaire }) => {
+      const approval = isWorkbenchApprovalRequest(questionnaire.request);
       const pendingInput = lifecycle.kind === "needsAttention"
         && lifecycle.reason === "pendingInput"
         && lifecycle.requestKey === input.requestKey;
@@ -97,27 +111,35 @@ export default class WorkbenchQuestionnaireResponseController {
         !workbenchMcp
         || (nativeThreadId !== null && this.options.questionnaires.canDeliver(nativeThreadId, input.requestKey))
       );
+      const settle = <TDelivery>(delivery: TDelivery, acceptedTurnId: WorkbenchTurnId) => ({
+        delivery,
+        insertAfterItemId: approval ? input.insertAfterItemId ?? questionnaire.itemId : null,
+        insertAfterItemIndex: approval ? input.insertAfterItemIndex ?? null : null,
+        turnId: acceptedTurnId,
+      });
       if (live && workbenchMcp && nativeThreadId) {
-        await this.sendSupplementalInput(input, historyEntry.turnId);
+        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
+        await this.sendSupplementalInput(input, acceptedTurnId);
         const delivered = await this.options.questionnaires.deliver({
           requestKey: input.requestKey,
           response: input.response,
           threadId: nativeThreadId,
         });
         if (!delivered) throw new Error("The questionnaire waiter detached before delivery.");
-        return { route: "live" as const };
+        return settle({ route: "live" as const }, acceptedTurnId);
       }
       if (live) {
-        await this.sendSupplementalInput(input, historyEntry.turnId);
-        const response = await this.sendProviderResponse(input, historyEntry.turnId);
+        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
+        await this.sendSupplementalInput(input, acceptedTurnId);
+        const response = await this.sendProviderResponse(input, acceptedTurnId);
         const warning = warningFrom(response);
-        return { route: "live" as const, ...(warning ? { warning } : {}) };
+        return settle({ route: "live" as const, ...(warning ? { warning } : {}) }, acceptedTurnId);
       }
-      if (isWorkbenchApprovalRequest(questionnaire.request)) {
+      if (approval) {
         throw new Error("Approval requests cannot be submitted after their owning turn ends.");
       }
-      await this.admitContinuation(input);
-      return { route: "admitted" as const };
+      const acceptedTurnId = await this.admitContinuation(input);
+      return settle({ route: "admitted" as const }, acceptedTurnId);
     });
     if (!resolved) {
       if (workbenchMcp) throw new Error("That questionnaire is no longer pending.");
@@ -194,6 +216,35 @@ export default class WorkbenchQuestionnaireResponseController {
     });
   }
 
+  private async resolveLiveTurn(
+    projectId: ReturnType<typeof ProjectIdSchema.parse>,
+    threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>,
+    questionnaire: WorkbenchDurableQuestionnaire,
+    lifecycle: WorkbenchThreadLifecycle,
+    approval: boolean,
+  ) {
+    if (approval) {
+      const turnId = questionnaire.turnId ?? getWorkbenchLifecycleTurnId(lifecycle);
+      if (!turnId) throw new Error("The approval request has no active owning turn.");
+      return turnId;
+    }
+    const turnId = await this.options.resolveLatestTurn({ projectId, threadId });
+    if (!turnId) throw new Error("The questionnaire thread has no history point for its response.");
+    return turnId;
+  }
+
+  private readAcceptedTurnId(response: JsonRpcResponse) {
+    const result = record(response.result);
+    const turn = record(result?.turn);
+    const turnId = typeof result?.turnId === "string"
+      ? result.turnId
+      : typeof turn?.id === "string"
+        ? turn.id
+        : null;
+    if (!turnId) throw new Error("Questionnaire continuation admission returned no accepted turn.");
+    return WorkbenchTurnIdSchema.parse(turnId);
+  }
+
   private async admitContinuation(input: WorkbenchQuestionnaireRespondRequest) {
     const activatedSkillPaths = Array.from(new Set(
       input.activatedSkillPaths?.map(path => path.trim()).filter(Boolean) ?? [],
@@ -213,7 +264,7 @@ export default class WorkbenchQuestionnaireResponseController {
       });
       const binding = identity?.bindings.find(binding => binding.harness === input.harness);
       if (!binding) throw new Error("The questionnaire thread has no native provider binding.");
-      await this.sendMapped(input.harness, {
+      const response = await this.sendMapped(input.harness, {
         method: "turn/start",
         ...(input.harness === "opencode" ? {
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
@@ -229,9 +280,9 @@ export default class WorkbenchQuestionnaireResponseController {
           threadId: input.threadId,
         },
       });
-      return;
+      return this.readAcceptedTurnId(response);
     }
-    await this.sendMapped("codex", {
+    const response = await this.sendMapped("codex", {
       method: "workbench/codex/message/admit",
       params: {
         resumeRequest: {
@@ -255,6 +306,7 @@ export default class WorkbenchQuestionnaireResponseController {
         threadId: input.threadId,
       },
     });
+    return this.readAcceptedTurnId(response);
   }
 
   private async sendMapped(harness: WorkbenchHarness, request: JsonRpcRequest) {

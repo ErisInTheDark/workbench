@@ -3146,14 +3146,20 @@ test("proper questionnaires and late-response history survive controller restart
   });
   assert.equal("result" in repeatedDismissal && (repeatedDismissal.result as { accepted?: boolean }).accepted, true);
 
-  await third.observeLifecycle("codex", fixtureThreadIds["thread"], { kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(questionnaire.turnId) });
+  const unplacedQuestionnaire = { ...questionnaire, turnId: null };
+  await third.observeLifecycle("codex", fixtureThreadIds["thread"], {
+    kind: "pendingInput",
+    questionnaire: unplacedQuestionnaire,
+    requestKey: unplacedQuestionnaire.requestKey,
+    turnId: null,
+  });
   const response = { answers: { route: { answers: ["Approve"] } } };
   const resolutionInput = {
     harness: "codex" as const,
     insertAfterItemId: "item",
     insertAfterItemIndex: 0,
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    requestKey: questionnaire.requestKey,
+    requestKey: unplacedQuestionnaire.requestKey,
     resolvedAt: 3,
     response,
     threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
@@ -3172,17 +3178,27 @@ test("proper questionnaires and late-response history survive controller restart
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
   let deliveries = 0;
-  const firstResolution = third.resolvePendingQuestionnaire(resolutionInput, async ({ historyEntry }) => {
+  const firstResolution = third.resolvePendingQuestionnaire(resolutionInput, async ({ questionnaire: deliveredQuestionnaire }) => {
     deliveries += 1;
-    assert.deepEqual(historyEntry.response, response);
+    assert.equal(deliveredQuestionnaire.requestKey, unplacedQuestionnaire.requestKey);
     enter();
     await gate;
-    return "delivered";
+    return {
+      delivery: "delivered",
+      insertAfterItemId: null,
+      insertAfterItemIndex: null,
+      turnId: fixtureTurnIds["turn"],
+    };
   });
   await entered;
   const competingResolution = third.resolvePendingQuestionnaire(resolutionInput, async () => {
     deliveries += 1;
-    return "duplicate";
+    return {
+      delivery: "duplicate",
+      insertAfterItemId: null,
+      insertAfterItemIndex: null,
+      turnId: fixtureTurnIds["turn"],
+    };
   });
   await Promise.resolve();
   assert.equal(deliveries, 1);
@@ -3194,6 +3210,15 @@ test("proper questionnaires and late-response history survive controller restart
   const completed = (await third.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
   assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");
+  assert.deepEqual(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0] : null, {
+    ...unplacedQuestionnaire,
+    insertAfterItemId: null,
+    insertAfterItemIndex: null,
+    resolvedAt: 3,
+    response,
+    threadId: fixtureThreadIds["thread"],
+    turnId: fixtureTurnIds["turn"],
+  });
 
   const repeatedKeyQuestionnaire = {
     ...questionnaire,

@@ -7,7 +7,7 @@ import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
 import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createNativeQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchProjectsPayload } from "workbench-shared/types";
@@ -301,6 +301,15 @@ function createWorkbenchCoreFeature(
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     harnesses,
     questionnaires,
+    resolveLatestTurn: async ({ projectId, threadId }) => {
+      const snapshot = await transcript.read({ threadId, turnLimit: 1 });
+      if (!snapshot) return null;
+      if (snapshot.thread.project_id !== projectId) {
+        throw new Error(`Questionnaire thread ${threadId} does not belong to project ${projectId}.`);
+      }
+      const turnId = snapshot.turns.at(-1)?.id;
+      return turnId ? WorkbenchTurnIdSchema.parse(turnId) : null;
+    },
     state: threadState.controller,
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
