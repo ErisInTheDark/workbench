@@ -249,7 +249,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       : update(initialDraft),
   });
   const { selectedValues, customValues, attachments } = editing.draft;
-  const [customInputRequestId, setCustomInputRequestId] = useState("");
+  const [isQuickResponseCustomInputRequested, setIsQuickResponseCustomInputRequested] = useState(false);
   const [localError, setError] = useState("");
   const error = localError || editing.error;
   const { isSubmitting, isAttaching } = editing;
@@ -257,7 +257,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
     || attachments.length > 0;
   const useQuickResponseLayout = Boolean(
     quickResponseQuestion
-    && customInputRequestId !== request.id
+    && !isQuickResponseCustomInputRequested
     && !hasCustomResponseContent,
   );
 
@@ -499,7 +499,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         presentation={compact ? "compact-card" : "card"}
                         showMarker={false}
                         onClick={() => {
-                          setCustomInputRequestId(request.id);
+                          setIsQuickResponseCustomInputRequested(true);
                           if (error) {
                             setError("");
                           }
@@ -581,7 +581,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            autoFocus={isSoleFreeformQuestion || customInputRequestId === request.id}
+                            autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
                             className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
                             placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
@@ -591,7 +591,6 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             disabled={isSubmitting}
                             value={customValue}
                             onChange={(nextValue) => {
-                              setCustomInputRequestId(request.id);
                               editing.session.edit((draft) => ({
                                 ...draft,
                                 customValues: { ...draft.customValues, [question.id]: nextValue },
@@ -609,7 +608,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         <PlaintextEditable
                           id={`${request.id}:${question.id}:custom`}
                           ariaLabel={`${headerText} answer`}
-                          autoFocus={isSoleFreeformQuestion || customInputRequestId === request.id}
+                          autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
                           className={joinClasses(
                             "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
                             customValue || isSoleFreeformQuestion
@@ -627,7 +626,6 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           disabled={isSubmitting}
                           value={customValue}
                           onChange={(nextValue) => {
-                            setCustomInputRequestId(request.id);
                             editing.session.edit((draft) => ({
                               ...draft,
                               customValues: { ...draft.customValues, [question.id]: nextValue },
