@@ -3,12 +3,15 @@
  * - getInitialThreadScrollTop: defer initial bottom placement until committed thread content has an end target.
  * - ThreadScrollDirection: latest meaningful thread scroll movement.
  * - ThreadScrollMetrics: viewport geometry used for end and layout-preservation decisions.
+ * - ThreadScrollProximity: whether the viewport is inside its stronger bottom snap zone.
  * - resolveThreadScrollDirection: retain direction across unchanged offsets.
+ * - resolveThreadScrollProximity: classify remaining distance from the normal-flow bottom.
  * - isThreadScrollAtEnd: identify the normal-flow bottom boundary.
  * - getPreservedThreadScrollTop: preserve reading position without competing with end re-snapping.
  */
 
 export type ThreadScrollDirection = "down" | "up";
+export type ThreadScrollProximity = "far" | "near";
 
 export interface ThreadScrollMetrics {
   readonly clientHeight: number;
@@ -38,6 +41,15 @@ export function resolveThreadScrollDirection(
   if (currentScrollTop > previousScrollTop) return "down";
   if (currentScrollTop < previousScrollTop) return "up";
   return currentDirection;
+}
+
+export function resolveThreadScrollProximity(
+  metrics: ThreadScrollMetrics,
+  nearEndDistancePx: number,
+): ThreadScrollProximity {
+  return getMaximumScrollTop(metrics) - metrics.scrollTop < nearEndDistancePx
+    ? "near"
+    : "far";
 }
 
 export function isThreadScrollAtEnd(

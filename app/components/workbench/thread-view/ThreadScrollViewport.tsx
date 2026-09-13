@@ -10,6 +10,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  type CSSProperties,
   type ForwardedRef,
   type ReactNode,
 } from "react";
@@ -18,6 +19,7 @@ import {
   getInitialThreadScrollTop,
   getPreservedThreadScrollTop,
   resolveThreadScrollDirection,
+  resolveThreadScrollProximity,
   type ThreadScrollDirection,
   type ThreadScrollMetrics,
 } from "./thread-scroll-snap";
@@ -37,6 +39,13 @@ interface ThreadScrollViewportProps {
 interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps, "enabled" | "resetKey"> {
   forwardedRef: ForwardedRef<HTMLDivElement>;
 }
+
+const THREAD_SCROLL_NEAR_END_DISTANCE_REM = 30;
+const THREAD_SCROLL_VIEWPORT_STYLE: CSSProperties & {
+  "--thread-scroll-near-end-distance": string;
+} = {
+  "--thread-scroll-near-end-distance": `${THREAD_SCROLL_NEAR_END_DISTANCE_REM}rem`,
+};
 
 function joinClasses (...values: Array<string | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -67,8 +76,16 @@ function ActiveThreadScrollViewport ({
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
   const initialPlacementPendingRef = useRef(true);
+  const nearEndDistancePxRef = useRef(0);
   const previousScrollTopRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  const syncScrollProximity = useCallback((viewport: HTMLDivElement) => {
+    viewport.dataset.threadScrollProximity = resolveThreadScrollProximity(
+      readScrollMetrics(viewport),
+      nearEndDistancePxRef.current,
+    );
+  }, []);
 
   const placeInitialViewportAtEnd = useCallback(() => {
     if (!initialPlacementPendingRef.current) return;
@@ -82,15 +99,22 @@ function ActiveThreadScrollViewport ({
     if (scrollTop === null) return;
     viewport.scrollTop = scrollTop;
     previousScrollTopRef.current = viewport.scrollTop;
+    syncScrollProximity(viewport);
     initialPlacementPendingRef.current = false;
-  }, []);
+  }, [syncScrollProximity]);
 
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport;
     previousScrollTopRef.current = viewport?.scrollTop ?? 0;
+    nearEndDistancePxRef.current = viewport
+      ? THREAD_SCROLL_NEAR_END_DISTANCE_REM * Number.parseFloat(
+        getComputedStyle(viewport.ownerDocument.documentElement).fontSize,
+      )
+      : 0;
     assignRef(forwardedRef, viewport);
+    if (viewport) syncScrollProximity(viewport);
     placeInitialViewportAtEnd();
-  }, [forwardedRef, placeInitialViewportAtEnd]);
+  }, [forwardedRef, placeInitialViewportAtEnd, syncScrollProximity]);
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     getViewport: () => viewportRef.current,
@@ -103,13 +127,14 @@ function ActiveThreadScrollViewport ({
         const preservedScrollTop = getPreservedThreadScrollTop(previousMetrics, readScrollMetrics(viewport));
         if (preservedScrollTop !== null) viewport.scrollTop = preservedScrollTop;
         previousScrollTopRef.current = viewport.scrollTop;
+        syncScrollProximity(viewport);
       };
     },
     setEndTarget: (target) => {
       endTargetRef.current = target;
       placeInitialViewportAtEnd();
     },
-  }), [placeInitialViewportAtEnd]);
+  }), [placeInitialViewportAtEnd, syncScrollProximity]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -122,6 +147,7 @@ function ActiveThreadScrollViewport ({
         viewport.scrollTop,
       );
       previousScrollTopRef.current = viewport.scrollTop;
+      syncScrollProximity(viewport);
       if (direction === directionRef.current) return;
       directionRef.current = direction;
       viewport.dataset.threadScrollDirection = direction;
@@ -139,7 +165,9 @@ function ActiveThreadScrollViewport ({
         className,
       )}
       data-thread-scroll-direction="down"
+      data-thread-scroll-proximity="far"
       data-thread-scroll-target="true"
+      style={THREAD_SCROLL_VIEWPORT_STYLE}
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
         <div className={joinClasses("min-h-full shrink-0", contentClassName)}>

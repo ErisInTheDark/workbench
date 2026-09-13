@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect initial placement, scroll direction, end detection, and normal-flow layout preservation.
+ * No production exports. Tests protect initial placement, direction, proximity, end detection, and layout preservation.
  */
 
 import assert from "node:assert/strict";
@@ -10,6 +10,7 @@ import {
   getPreservedThreadScrollTop,
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
+  resolveThreadScrollProximity,
 } from "./thread-scroll-snap";
 
 test("initial placement waits for the committed thread end target", () => {
@@ -21,6 +22,17 @@ test("thread scroll direction follows movement and ignores unchanged offsets", (
   assert.equal(resolveThreadScrollDirection("up", 40, 80), "down");
   assert.equal(resolveThreadScrollDirection("down", 80, 40), "up");
   assert.equal(resolveThreadScrollDirection("up", 40, 40), "up");
+});
+
+test("thread scroll proximity becomes near only inside the bottom threshold", () => {
+  const metrics = {
+    clientHeight: 600,
+    scrollHeight: 1_800,
+    scrollTop: 721,
+  };
+  assert.equal(resolveThreadScrollProximity(metrics, 480), "near");
+  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 720 }, 480), "far");
+  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 719 }, 480), "far");
 });
 
 test("thread end detection uses the normal top-origin boundary", () => {
