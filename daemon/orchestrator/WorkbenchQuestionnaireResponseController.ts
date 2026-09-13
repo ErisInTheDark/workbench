@@ -12,8 +12,8 @@ import type {
 import {
   NativeThreadIdSchema,
   ProjectIdSchema,
+  TurnReferenceSchema,
   WorkbenchThreadIdSchema,
-  WorkbenchTurnIdSchema,
   type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import {
@@ -59,7 +59,7 @@ export interface WorkbenchQuestionnaireResponseStatePort {
 }
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
-  harnesses: Pick<WorkbenchHarnessController, "request" | "resolvePublicRequest" | "resolveThreadIdentity">;
+  harnesses: Pick<WorkbenchHarnessController, "request" | "resolvePublicRequest" | "resolveThreadIdentity" | "resolveTurnIdentity">;
   questionnaires: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
   resolveLatestTurn(input: {
     projectId: ReturnType<typeof ProjectIdSchema.parse>;
@@ -233,7 +233,7 @@ export default class WorkbenchQuestionnaireResponseController {
     return turnId;
   }
 
-  private readAcceptedTurnId(response: JsonRpcResponse) {
+  private async readAcceptedTurnId(input: WorkbenchQuestionnaireRespondRequest, response: JsonRpcResponse) {
     const result = record(response.result);
     const turn = record(result?.turn);
     const turnId = typeof result?.turnId === "string"
@@ -242,7 +242,14 @@ export default class WorkbenchQuestionnaireResponseController {
         ? turn.id
         : null;
     if (!turnId) throw new Error("Questionnaire continuation admission returned no accepted turn.");
-    return WorkbenchTurnIdSchema.parse(turnId);
+    const identity = await this.options.harnesses.resolveTurnIdentity({
+      harness: input.harness,
+      projectId: ProjectIdSchema.parse(input.projectId),
+      threadId: WorkbenchThreadIdSchema.parse(input.threadId),
+      turnId: TurnReferenceSchema.parse(turnId),
+    });
+    if (!identity) throw new Error("The accepted questionnaire turn has no canonical identity.");
+    return identity.turnId;
   }
 
   private async admitContinuation(input: WorkbenchQuestionnaireRespondRequest) {
@@ -280,7 +287,7 @@ export default class WorkbenchQuestionnaireResponseController {
           threadId: input.threadId,
         },
       });
-      return this.readAcceptedTurnId(response);
+      return this.readAcceptedTurnId(input, response);
     }
     const response = await this.sendMapped("codex", {
       method: "workbench/codex/message/admit",
@@ -306,7 +313,7 @@ export default class WorkbenchQuestionnaireResponseController {
         threadId: input.threadId,
       },
     });
-    return this.readAcceptedTurnId(response);
+    return this.readAcceptedTurnId(input, response);
   }
 
   private async sendMapped(harness: WorkbenchHarness, request: JsonRpcRequest) {

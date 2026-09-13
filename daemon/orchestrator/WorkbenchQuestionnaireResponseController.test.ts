@@ -3,6 +3,10 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import Database from "better-sqlite3";
+import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
+import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchThreadStateQuestionnaireRepository from "./database/thread-state/WorkbenchThreadStateQuestionnaireRepository";
 
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchQuestionnaireResponseController, {
@@ -26,6 +30,7 @@ const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
 const turnId = WorkbenchTurnIdSchema.parse("turn");
 const latestTurnId = WorkbenchTurnIdSchema.parse("latest-turn");
 const admittedTurnId = WorkbenchTurnIdSchema.parse("admitted-turn");
+const nativeAdmittedTurnId = NativeTurnIdSchema.parse("native-admitted-turn");
 const response = { answers: { route: { answers: ["approve"] } } };
 const questionnaire = {
   itemId: "item",
@@ -50,6 +55,7 @@ const questionnaire = {
 function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   admissionError?: string;
   admissionKind?: "started" | "steered";
+  missingTurnIdentity?: boolean;
   approval?: boolean;
   deliverable?: boolean;
   harness?: "codex" | "copilot" | "opencode";
@@ -126,11 +132,11 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         }
         if (request.method === "workbench/codex/message/admit") {
           return options.admissionKind === "steered"
-            ? { id: request.id ?? null, result: { kind: "steered", turnId: admittedTurnId } }
-            : { id: request.id ?? null, result: { kind: "started", turn: { id: admittedTurnId } } };
+            ? { id: request.id ?? null, result: { kind: "steered", turnId: nativeAdmittedTurnId } }
+            : { id: request.id ?? null, result: { kind: "started", turn: { id: nativeAdmittedTurnId } } };
         }
         if (request.method === "turn/start") {
-          return { id: request.id ?? null, result: { turn: { id: admittedTurnId } } };
+          return { id: request.id ?? null, result: { turn: { id: nativeAdmittedTurnId } } };
         }
         return { id: request.id ?? null, result: { ok: true } };
       },
@@ -156,6 +162,19 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         projectRoot: "C:/project",
         threadId,
       }),
+      resolveTurnIdentity: async (input) => {
+        assert.equal(input.threadId, threadId);
+        assert.equal(input.projectId, projectId);
+        assert.equal(input.turnId, nativeAdmittedTurnId);
+        if (options.missingTurnIdentity) return null;
+        return {
+          threadId, turnId: admittedTurnId, turnIndex: 1,
+          native: {
+            harness: options.harness ?? "codex", nativeLocation: "C:/project",
+            nativeThreadId, nativeTurnId: nativeAdmittedTurnId,
+          },
+        };
+      },
     },
     questionnaires: {
       canDeliver: () => options.deliverable ?? true,
@@ -182,6 +201,60 @@ function request() {
     turnId,
   };
 }
+
+test("admitted native turns settle questionnaire history under SQLite canonical foreign keys", async () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const native = { harness: "codex" as const, nativeLocation: "C:/project", nativeThreadId };
+    const thread = identities.observe({
+      native, projectId, projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1,
+    });
+    const turn = identities.observeTurn({
+      kind: "turn", threadId: thread.threadId, turnId: nativeAdmittedTurnId,
+      nativeTurnId: nativeAdmittedTurnId, nativeThreadId, nativeLocation: native.nativeLocation,
+      harnessId: "codex", state: "inProgress", createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
+    });
+    assert.notEqual(turn.turnId, nativeAdmittedTurnId);
+    database.prepare(`INSERT INTO workbench_thread_states(thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      VALUES (?, 'topLevel', 'codex', 'thread', 1, 1)`).run(thread.threadId);
+    const repository = new WorkbenchThreadStateQuestionnaireRepository(database);
+    const pending = { ...questionnaire, turnId: null, itemId: null };
+    repository.replace(thread.threadId, { pending, history: [] });
+    const controller = new WorkbenchQuestionnaireResponseController({
+      harnesses: {
+        request: async (_harness, input) => ({ id: input.id ?? null, result: { turn: { id: nativeAdmittedTurnId } } }),
+        resolvePublicRequest: async (_harness, input) => ({ harness: "codex", request: { ...input, params: { threadId: nativeThreadId } } }),
+        resolveThreadIdentity: async () => thread,
+        resolveTurnIdentity: async (input) => identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId }),
+      },
+      questionnaires: { canDeliver: () => false, deliver: async () => null },
+      resolveLatestTurn: async () => null,
+      state: {
+        resolvePendingQuestionnaire: async (input, deliver) => {
+          const accepted = await deliver({ questionnaire: pending, lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false } });
+          const historyEntry = {
+            ...pending, turnId: accepted.turnId, threadId: thread.threadId,
+            insertAfterItemId: accepted.insertAfterItemId, insertAfterItemIndex: accepted.insertAfterItemIndex,
+            resolvedAt: input.resolvedAt, response: input.response,
+          };
+          repository.replace(thread.threadId, { pending: null, history: [historyEntry] });
+          return { delivery: accepted.delivery, historyEntry };
+        },
+      },
+    });
+    await controller.respond({ ...request(), threadId: thread.threadId });
+    const stored = repository.read(thread.threadId);
+    assert.equal(stored.pending, null);
+    assert.equal(stored.history[0]?.turnId, turn.turnId);
+    assert.deepEqual(stored.history[0]?.response, response);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
 
 test("terminal lifecycle admits even when the daemon still exposes an orphan waiter", async () => {
   const harness = createHarness({
@@ -321,6 +394,15 @@ test("failed detached admission leaves durable settlement untouched", async () =
 
   assert.equal(harness.settled(), false);
   assert.deepEqual(harness.events, ["workbench/codex/message/admit"]);
+});
+
+test("missing accepted turn identity cannot settle history with a native id", async () => {
+  const harness = createHarness({
+    kind: "stopped", reason: "userMarkedStopped", settled: false,
+  }, { missingTurnIdentity: true });
+  await assert.rejects(harness.controller.respond(request()), /no canonical identity/u);
+  assert.equal(harness.settled(), false);
+  assert.equal(harness.requests.some(({ method }) => method === "questionnaire/history/record"), false);
 });
 
 test("a replaced request key cannot deliver or settle the old answer", async () => {
