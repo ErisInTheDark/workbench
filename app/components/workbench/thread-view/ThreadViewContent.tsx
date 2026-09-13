@@ -407,6 +407,10 @@ export default memo(function ThreadViewContent ({
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const activeThreadController = useWorkbenchThread(projectId, activeTarget, undefined, "view");
+  const observeGitArcProposal = useCallback(
+    (proposalId: string) => activeThreadController.owner?.observeGitArcProposal(proposalId) ?? (() => {}),
+    [activeThreadController.owner],
+  );
   const transcriptSource = activeThreadController.state.transcript;
   const threadGoalControls = threads.goals;
   const rateLimits = activeThreadController.state.rateLimits;
@@ -1069,7 +1073,10 @@ export default memo(function ThreadViewContent ({
       disambiguationKey={projectFileIndexId}
       disambiguationPaths={projectFilePaths}
     >
-      <ThreadGitArcObservationProvider proposals={activeThreadController.state.gitArcProposals}>
+      <ThreadGitArcObservationProvider
+        observeProposal={observeGitArcProposal}
+        proposals={activeThreadController.state.gitArcProposals}
+      >
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",

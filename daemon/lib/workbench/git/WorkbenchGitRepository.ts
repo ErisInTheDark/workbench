@@ -741,7 +741,7 @@ export default class WorkbenchGitRepository {
     };
   }
 
-  async buildFileChanges(from: string | null, to: string, paths: string[]) {
+  async buildFileChanges(from: string | null, to: string, paths: string[], signal?: AbortSignal) {
     from = await this.contentBase(from);
     const scopes = paths.includes(".") ? [] : paths;
     let output: string;
@@ -749,7 +749,7 @@ export default class WorkbenchGitRepository {
       output = await this.run([
         "diff", "--raw", "--numstat", "--binary", "-z", "--no-renames", from, to,
         "--", ...scopes.map((scope) => this.literalPathspec(scope)),
-      ]);
+      ], process.env, signal);
     } catch (error) {
       const capacityExceeded = error instanceof Error && "code" in error && (
         error.code === "E2BIG" || error.code === "ENAMETOOLONG"
@@ -757,7 +757,7 @@ export default class WorkbenchGitRepository {
       );
       if (!capacityExceeded) throw error;
       // Combined output/arguments can overflow even when each selected file fits.
-      return await this.inspectFileChanges(from, to, await this.listChangedPaths(from, to, paths));
+      return await this.inspectFileChanges(from, to, await this.listChangedPaths(from, to, paths, signal), signal);
     }
     const parsed = parseGitFileChangeOutput(output);
     if (parsed.kind === "changes") {
@@ -766,15 +766,15 @@ export default class WorkbenchGitRepository {
         .sort((left, right) => left.path.localeCompare(right.path));
     }
     const changedPaths = filterPathsByScopes(parsed.paths, paths).sort((left, right) => left.localeCompare(right));
-    return await this.inspectFileChanges(from, to, changedPaths);
+    return await this.inspectFileChanges(from, to, changedPaths, signal);
   }
 
-  private async inspectFileChanges(from: string, to: string, changedPaths: string[]) {
+  private async inspectFileChanges(from: string, to: string, changedPaths: string[], signal?: AbortSignal) {
     return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
       const pathspec = this.literalPathspec(filePath);
       const inspected = await this.run([
         "diff", "--raw", "--numstat", "--binary", "--no-renames", from, to, "--", pathspec,
-      ]);
+      ], process.env, signal);
       const patchOffset = inspected.indexOf("diff --git ");
       if (patchOffset < 0) throw new Error(`Git did not return a patch for changed path ${filePath}.`);
       const metadata = inspected.slice(0, patchOffset);

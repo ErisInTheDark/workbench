@@ -11,6 +11,10 @@ import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./Git
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import {
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 
 interface Identity {
   cwd: string;
@@ -27,14 +31,18 @@ function covers(scope: string, candidate: string) {
 }
 
 export default class GitArcLifecycleController {
-  private readonly proposals = new GitArcProposalController();
+  private readonly proposals: GitArcProposalController;
+
+  constructor(private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver) {
+    this.proposals = new GitArcProposalController(undefined, resolveThreadIdentity);
+  }
 
   async scope(input: Identity): Promise<GitArcScopeState | null> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = input.harness ?? "codex";
-    const current = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
+    const current = await new GitArcRegistry(repository, this.resolveThreadIdentity).find({ harness, threadId: input.threadId });
     if (!current) return null;
-    const checkpoint = await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit);
+    const checkpoint = await new GitCheckpointStore(repository, this.resolveThreadIdentity).readCheckpoint(harness, input.threadId, current.checkpointCommit);
     return {
       phase: current.phase ?? "active",
       checkpointCommit: current.checkpointCommit,
@@ -67,8 +75,8 @@ export default class GitArcLifecycleController {
   ): Promise<GitArcMutationResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = input.harness ?? "codex";
-    const registry = new GitArcRegistry(repository);
-    const store = new GitCheckpointStore(repository);
+    const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
+    const store = new GitCheckpointStore(repository, this.resolveThreadIdentity);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
     if (request?.kind === "add") {

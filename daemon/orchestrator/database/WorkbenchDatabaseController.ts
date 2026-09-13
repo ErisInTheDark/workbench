@@ -336,6 +336,26 @@ export default class WorkbenchDatabaseController {
     return response.snapshot;
   }
 
+  async readGitArcProposalDiff(identity: Extract<WorkbenchDatabaseRequestPayload, { type: "readGitArcProposalDiff" }>["identity"]) {
+    await this.start();
+    const response = await this.#request({ type: "readGitArcProposalDiff", identity });
+    if (response.type !== "gitArcProposalDiff") {
+      throw new WorkbenchDatabaseFailure(`Unexpected Git arc proposal diff response: ${response.type}`);
+    }
+    return response.changes;
+  }
+
+  async writeGitArcProposalDiff(
+    value: Extract<WorkbenchDatabaseRequestPayload, { type: "writeGitArcProposalDiff" }>["value"],
+    maxBytes: number,
+  ) {
+    await this.start();
+    const response = await this.#request({ type: "writeGitArcProposalDiff", value, maxBytes });
+    if (response.type !== "mutationResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected Git arc proposal diff mutation response: ${response.type}`);
+    }
+  }
+
   async readTranscriptProviderCursor(threadId: string, turnId: string) {
     await this.start();
     const response = await this.#request({ type: "readTranscriptProviderCursor", threadId, turnId });

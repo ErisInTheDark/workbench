@@ -4,7 +4,7 @@
  * - WorkbenchGitArcLifecycleState: public lifecycle with canonical owner and member identities.
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
  * - WorkbenchGitArcActiveClaim: public claim with a canonical thread owner.
- * - default WorkbenchGitArcFeature: own Git arc dispatch and native registry identity conversion.
+ * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress, and proposal diff lifecycle.
  */
 import type http from "node:http";
 
@@ -33,12 +33,14 @@ import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ProjectIdSchema, ThreadReferenceSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "../lib/workbench/git/GitArcProposalDiffController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface WorkbenchGitArcFeatureOptions {
   identities: WorkbenchThreadIdentityController;
+  proposalDiffStore?: GitArcProposalDiffStore;
   getReloadScopesForPaths?(paths: readonly string[]): string[];
   getThreadCreatedAt(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<number | null>;
   getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null>;
@@ -133,7 +135,8 @@ async function sendResponse(response: http.ServerResponse, upstream: Response) {
 
 export default class WorkbenchGitArcFeature {
   private readonly claimHistory = new GitClaimHistoryReader();
-  private readonly controller = new WorkbenchGitCheckpointController();
+  private readonly controller: WorkbenchGitCheckpointController;
+  private readonly proposalDiffs: GitArcProposalDiffController;
   private readonly disposal = new AbortController();
   private readonly workspaceController: WorkbenchWorkspaceGitArcController;
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
@@ -141,6 +144,16 @@ export default class WorkbenchGitArcFeature {
   private readonly claimWaiters = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
+    this.proposalDiffs = new GitArcProposalDiffController({ store: options.proposalDiffStore });
+    this.controller = new WorkbenchGitCheckpointController(this.proposalDiffs, async input => {
+      const project = await this.resolveProject(input.repositoryRoot);
+      return await this.options.identities.resolveGitArcThreadIdentity({
+        harness: WorkbenchHarnessSchema.parse(input.harness),
+        projectId: project.project.id,
+        repositoryRoot: project.cwd,
+        threadId: input.threadId,
+      });
+    });
     const readMany = options.transitions.readMany ?? options.transitions.runMany;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
       readMany: async (paths, operation) => readMany
@@ -165,25 +178,21 @@ export default class WorkbenchGitArcFeature {
 
   async findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null> {
     const project = await this.resolveProject(cwd);
-    const native = await this.nativeThreadIdentity(project.project.id, harness, threadId);
-    const claim = await this.controller.findActiveClaim({ cwd, ...native });
-    return claim
-      ? { ...claim, threadId: await this.publicThreadId(project.project.id, harness, claim.threadId) }
-      : null;
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    const claim = await this.controller.findActiveClaim({ cwd, ...owner });
+    return claim ? { ...claim, threadId: WorkbenchThreadIdSchema.parse(claim.threadId) } : null;
   }
 
   async checkActiveClaimPaths(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId, paths: readonly string[]) {
     const project = await this.resolveProject(cwd);
-    const native = await this.nativeThreadIdentity(project.project.id, harness, threadId);
-    return await this.workspaceController.checkActiveClaimPaths(project, native.harness, native.threadId, paths);
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    return await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, paths);
   }
 
   async listActiveClaims(cwd: string): Promise<WorkbenchGitArcActiveClaim[]> {
     const project = await this.resolveProject(cwd);
     const claims = await this.controller.listActiveClaims({ cwd });
-    return await Promise.all(claims.map(async claim => ({
-      ...claim, threadId: await this.publicThreadId(project.project.id, WorkbenchHarnessSchema.parse(claim.harness), claim.threadId),
-    })));
+    return claims.map(claim => ({ ...claim, threadId: WorkbenchThreadIdSchema.parse(claim.threadId) }));
   }
 
   async listReloadScopeClaims(_cwd: string) {
@@ -193,17 +202,17 @@ export default class WorkbenchGitArcFeature {
   async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>) {
     if (!identities.length) return { prunedRefCount: 0, registryEntryRemoved: false };
     const project = await this.resolveProject(cwd);
-    const native = await Promise.all(identities.map(identity => (
-      this.nativeThreadIdentity(project.project.id, identity.harness, identity.threadId)
+    const owners = await Promise.all(identities.map(identity => (
+      this.gitThreadIdentity(project, identity.harness, identity.threadId)
     )));
-    return await this.workspaceController.pruneThreadHistories(project, native);
+    return await this.workspaceController.pruneThreadHistories(project, owners);
   }
 
   async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcLifecycleState | null> {
     const project = await this.resolveProject(cwd);
-    const native = await this.nativeThreadIdentity(project.project.id, harness, threadId);
-    const state = await this.workspaceController.findLifecycleState(project, native.harness, native.threadId);
-    return state ? await this.publicState(project.project.id, state) : null;
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    const state = await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId);
+    return state ? this.publicState(state) : null;
   }
 
   async discoverClaimHistory(input: { projectId: string; rootId: string; workspaceRoot: string }) {
@@ -216,15 +225,13 @@ export default class WorkbenchGitArcFeature {
 
   async hasLiveClaims(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
     const project = await this.resolveProject(cwd);
-    const native = await this.nativeThreadIdentity(project.project.id, harness, threadId);
-    return await this.workspaceController.hasLiveClaims(project, native.harness, native.threadId);
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    return await this.workspaceController.hasLiveClaims(project, owner.harness, owner.threadId);
   }
 
   async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
     const project = await this.resolveProject(cwd);
-    return await Promise.all((await this.workspaceController.listLifecycleStates(project)).map(state => (
-      this.publicState(project.project.id, state)
-    )));
+    return (await this.workspaceController.listLifecycleStates(project)).map(state => this.publicState(state));
   }
 
   async reconcileClaimSnapshots(cwd: string) {
@@ -238,16 +245,14 @@ export default class WorkbenchGitArcFeature {
 
   async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcPlanState | null> {
     const project = await this.resolveProject(cwd);
-    const native = await this.nativeThreadIdentity(project.project.id, harness, threadId);
-    const state = await this.workspaceController.findPlanState(project, native.harness, native.threadId);
-    return state ? await this.publicState(project.project.id, state) : null;
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    const state = await this.workspaceController.findPlanState(project, owner.harness, owner.threadId);
+    return state ? this.publicState(state) : null;
   }
 
   async listPlanStates(cwd: string): Promise<WorkbenchGitArcPlanState[]> {
     const project = await this.resolveProject(cwd);
-    return await Promise.all((await this.workspaceController.listPlanStates(project)).map(state => (
-      this.publicState(project.project.id, state)
-    )));
+    return (await this.workspaceController.listPlanStates(project)).map(state => this.publicState(state));
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -266,16 +271,18 @@ export default class WorkbenchGitArcFeature {
     if (!parsed.success) return failureResponse(createGitArcFailureFromError("unknown", parsed.error));
     try {
       const project = await this.resolveProject(parsed.data.cwd);
-      const identity = await this.options.identities.resolve({
-        threadId: ThreadReferenceSchema.parse(parsed.data.threadId), projectId: ProjectIdSchema.parse(project.project.id), harness: parsed.data.harness,
+      const identity = await this.options.identities.resolveGitArcThreadIdentity({
+        harness: parsed.data.harness,
+        projectId: project.project.id,
+        repositoryRoot: project.cwd,
+        threadId: parsed.data.threadId,
       });
-      if (!identity?.bindings[0]) throw new Error("The managed thread has no native Git arc identity.");
-      const binding = identity.bindings[0];
+      if (!identity) throw new Error("The managed thread has no Git arc identity for this repository.");
       const request = {
         ...parsed.data, cwd: project.cwd,
-        harness: WorkbenchHarnessSchema.parse(binding.harness), threadId: binding.nativeThreadId,
+        harness: WorkbenchHarnessSchema.parse(parsed.data.harness), threadId: WorkbenchThreadIdSchema.parse(identity.threadId),
       };
-      const owner = { harness: request.harness, threadId: identity.threadId };
+      const owner = { harness: request.harness, threadId: request.threadId };
       const modifiedSince = request.action === "compare" || request.action === "diff"
         ? await this.options.getThreadCreatedAt(project.project.id, owner.harness, owner.threadId)
         : null;
@@ -454,6 +461,7 @@ export default class WorkbenchGitArcFeature {
 
   dispose() {
     this.disposal.abort(new Error("Git arc feature disposed."));
+    this.proposalDiffs.dispose();
     this.notifyClaimMutation();
   }
 
@@ -542,7 +550,7 @@ export default class WorkbenchGitArcFeature {
       : error instanceof GitArcStartDiagnosticError ? error.details.collisions : [];
     const conflicts = await Promise.all(collisions.slice(0, 8).map(async (collision) => {
       const harness = WorkbenchHarnessSchema.parse(collision.entry.harness);
-      const threadId = await this.publicThreadId(projectId, harness, collision.entry.threadId);
+      const threadId = WorkbenchThreadIdSchema.parse(collision.entry.threadId);
       const ownerContext = await this.options.getThreadClaimContext(
         projectId,
         harness,
@@ -639,31 +647,25 @@ export default class WorkbenchGitArcFeature {
     });
   }
 
-  private async publicThreadId(projectId: ProjectId, harness: WorkbenchHarness, threadId: string) {
-    const identity = await this.options.identities.resolve({
-      projectId: ProjectIdSchema.parse(projectId), harness, threadId: ThreadReferenceSchema.parse(threadId),
+  private async gitThreadIdentity(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
+    const identity = await this.options.identities.resolveGitArcThreadIdentity({
+      harness,
+      projectId: project.project.id,
+      repositoryRoot: project.cwd,
+      threadId,
     });
-    if (!identity) throw new Error("Git arc owner metadata is unavailable for public projection.");
-    return identity.threadId;
+    if (!identity) throw new Error("The managed thread has no Git arc identity for this repository.");
+    return { harness, threadId: WorkbenchThreadIdSchema.parse(identity.threadId) };
   }
 
-  private async nativeThreadIdentity(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
-    const identity = await this.options.identities.resolve({
-      projectId: ProjectIdSchema.parse(projectId), harness, threadId: ThreadReferenceSchema.parse(threadId),
-    });
-    const binding = identity?.bindings.find(binding => binding.harness === harness);
-    if (!binding) throw new Error("The managed thread has no native Git arc identity.");
-    return { harness, threadId: binding.nativeThreadId };
-  }
-
-  private async publicState<T extends WorkspaceGitArcLifecycleState | WorkspaceGitArcPlanState>(projectId: ProjectId, state: T): Promise<PublicGitState<T>> {
+  private publicState<T extends WorkspaceGitArcLifecycleState | WorkspaceGitArcPlanState>(state: T): PublicGitState<T> {
     return {
       ...state,
-      threadId: await this.publicThreadId(projectId, WorkbenchHarnessSchema.parse(state.harness), state.threadId),
-      members: await Promise.all(state.members.map(async member => ({
+      threadId: WorkbenchThreadIdSchema.parse(state.threadId),
+      members: state.members.map(member => ({
         ...member,
-        threadId: await this.publicThreadId(projectId, WorkbenchHarnessSchema.parse(member.harness), member.threadId),
-      }))),
+        threadId: WorkbenchThreadIdSchema.parse(member.threadId),
+      })),
     };
   }
 

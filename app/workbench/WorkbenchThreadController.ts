@@ -4,7 +4,7 @@
  * - ThreadGitArcProposalObservation: source-local loading, loaded, refreshing, or failed proposal validity.
  * - ThreadControllerSnapshot: one thread surface, with source-local SQLite state.
  * - ThreadControllerPorts: native data, observation and transcript adapter ports.
- * - default WorkbenchThreadController: own a shared thread's admission, reads and source lifecycle.
+ * - default WorkbenchThreadController: own shared thread admission, reads, proposal demand, and source lifecycle.
  */
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchReadThreadOptions, WorkbenchSubagentSummary, WorkbenchControls } from "workbench-shared/types";
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
@@ -74,6 +74,7 @@ export default class WorkbenchThreadController {
   private gitArcProposalObservationGeneration = 0;
   private gitArcProposalObservationKey: string | null = null;
   private gitArcProposalRefreshKey: string | null = null;
+  private readonly gitArcProposalDemands = new Map<string, number>();
   private gitArcProposals: Record<string, ThreadGitArcProposalObservation> = {};
   private stopGitArcProposalRefresh: (() => void) | null = null;
   private generation = 0;
@@ -87,6 +88,20 @@ export default class WorkbenchThreadController {
 
   get threadId() { return this.target.kind === "draft" ? this.target.draftId : this.target.threadId; }
   get hasConsumers() { return this.consumers.size > 0; }
+  observeGitArcProposal(proposalId: string) {
+    if (this.disposed) return () => {};
+    this.gitArcProposalDemands.set(proposalId, (this.gitArcProposalDemands.get(proposalId) ?? 0) + 1);
+    this.syncGitArcProposalObservation(this.snapshot.entry, this.snapshot.document?.cwd ?? null);
+    this.publish({ ...this.snapshot, gitArcProposals: this.gitArcProposals });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = this.gitArcProposalDemands.get(proposalId) ?? 0;
+      if (count <= 1) this.gitArcProposalDemands.delete(proposalId);
+      else this.gitArcProposalDemands.set(proposalId, count - 1);
+    };
+  }
   captureLifetime() {
     const generation = this.generation;
     return () => !this.disposed && this.hasConsumers && generation === this.generation;
@@ -263,6 +278,7 @@ export default class WorkbenchThreadController {
     this.disposed = true;
     this.generation++;
     this.clearGitArcProposalObservation();
+    this.gitArcProposalDemands.clear();
     this.consumers.clear();
     this.cancelRefresh();
     for (const family of this.families.values()) {
@@ -340,19 +356,40 @@ export default class WorkbenchThreadController {
       entry.gitArc?.checkpointCommit ?? "",
       ...proposals.map(({ proposalId, rootId, status }) => `${proposalId}\0${rootId ?? ""}\0${status}`),
     ].join("\0");
-    if (key === this.gitArcProposalObservationKey) return;
+    const proposalRoots = new Map(proposals.map(({ proposalId, rootId }) => [proposalId, rootId]));
+    if (key === this.gitArcProposalObservationKey) {
+      for (const [proposalId] of this.gitArcProposalDemands) {
+        if (!proposalRoots.has(proposalId) || this.gitArcProposals[proposalId]) continue;
+        this.gitArcProposals = { ...this.gitArcProposals, [proposalId]: { status: "loading" } };
+        this.readGitArcProposal(entry, cwd, proposalId, proposalRoots.get(proposalId), this.gitArcProposalObservationGeneration, key);
+      }
+      return;
+    }
     const retainLoadedProposals = key === this.gitArcProposalRefreshKey;
     this.gitArcProposalRefreshKey = null;
     this.gitArcProposalObservationKey = key;
     const generation = ++this.gitArcProposalObservationGeneration;
-    this.gitArcProposals = Object.fromEntries(proposals.map(({ proposalId }) => {
-      const current = this.gitArcProposals[proposalId];
-      return [proposalId, retainLoadedProposals && current?.status === "loaded"
-        ? { ...current, refreshing: true as const }
-        : { status: "loading" as const }];
-    }));
-    for (const { proposalId, rootId } of proposals) {
-      void this.ports.readGitArcProposal!({
+    const previous = this.gitArcProposals;
+    this.gitArcProposals = {};
+    for (const [proposalId] of this.gitArcProposalDemands) {
+      if (!proposalRoots.has(proposalId)) continue;
+      const current = previous[proposalId];
+      this.gitArcProposals[proposalId] = retainLoadedProposals && current?.status === "loaded"
+        ? { ...current, refreshing: true }
+        : { status: "loading" };
+      this.readGitArcProposal(entry, cwd, proposalId, proposalRoots.get(proposalId), generation, key);
+    }
+  }
+
+  private readGitArcProposal(
+    entry: ThreadEntry,
+    cwd: string,
+    proposalId: string,
+    rootId: string | undefined,
+    generation: number,
+    key: string,
+  ) {
+    void this.ports.readGitArcProposal!({
         cwd,
         harness: entry.identity.harness,
         proposalId,
@@ -380,7 +417,6 @@ export default class WorkbenchThreadController {
         };
         this.reconcile();
       });
-    }
   }
 
   private isCurrentGitArcProposalObservation(generation: number, key: string, proposalId: string) {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcRegistry: own atomic claims and final-loss snapshot publication.
+ * - default GitArcRegistry: preserve raw rows while owning canonical live claims and final-loss snapshot publication.
  * - REGISTRY_REF: worktree-owned registry address.
  * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation/GitArcRegistryReplaceOptions: registry identity, state and prepared publication contracts.
  * - GitArcCollision/GitArcCollisionError: conflicting ownership facts and rejection.
@@ -11,6 +11,10 @@ import type { OrchestratorReloadScope } from "workbench-shared/types";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
+import {
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 
 export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
 
@@ -157,7 +161,32 @@ function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, st
 }
 
 export default class GitArcRegistry {
-  constructor(private readonly repository: WorkbenchGitRepository) {}
+  constructor(
+    private readonly repository: WorkbenchGitRepository,
+    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+  ) {}
+
+  private async readStored() {
+    const resolved = await this.repository.readBlobAtRef(REGISTRY_REF);
+    if (!resolved) return { blob: null, state: { entries: [], version: 1 } satisfies GitArcRegistryState };
+    return { blob: resolved.blob, state: parseState(resolved.contents) };
+  }
+
+  private async resolveIdentity(identity: GitArcIdentity) {
+    return await this.resolveThreadIdentity({
+      harness: identity.harness,
+      repositoryRoot: this.repository.root,
+      threadId: identity.threadId,
+    });
+  }
+
+  private async resolveEntries(entries: readonly GitArcRegistryEntry[]) {
+    const candidates = await Promise.all(entries.map(async raw => {
+      const identity = await this.resolveIdentity(raw);
+      return identity ? { raw, resolved: { ...raw, threadId: identity.threadId } } : null;
+    }));
+    return candidates.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
+  }
 
   private async prepareMutation(
     nextState: GitArcRegistryState,
@@ -175,14 +204,16 @@ export default class GitArcRegistry {
   }
 
   async read() {
-    const resolved = await this.repository.readBlobAtRef(REGISTRY_REF);
-    if (!resolved) return { blob: null, state: { entries: [], version: 1 } satisfies GitArcRegistryState };
-    return { blob: resolved.blob, state: parseState(resolved.contents) };
+    const stored = await this.readStored();
+    const entries = (await this.resolveEntries(stored.state.entries)).map(candidate => candidate.resolved);
+    return { blob: stored.blob, state: { entries, version: 1 } satisfies GitArcRegistryState };
   }
 
   async find(identity: GitArcIdentity) {
+    const resolved = await this.resolveIdentity(identity);
+    if (!resolved) return null;
     const { state } = await this.read();
-    const key = identityKey(identity);
+    const key = identityKey({ ...identity, threadId: resolved.threadId });
     return state.entries.find((entry) => identityKey(entry) === key) ?? null;
   }
 
@@ -191,7 +222,7 @@ export default class GitArcRegistry {
   }
 
   async prepareCommitRemap(commits: ReadonlyMap<string, string>) {
-    const { blob, state } = await this.read();
+    const { blob, state } = await this.readStored();
     if (!blob) return null;
     const entries = remapState(state, commits).entries;
     if (areDeeplyEqual(entries, state.entries)) return null;
@@ -203,44 +234,62 @@ export default class GitArcRegistry {
     entry: Omit<GitArcRegistryEntry, "updatedAt">,
     options?: GitArcRegistryReplaceOptions,
   ): Promise<GitArcRegistryMutation> {
-    const { blob, state: storedState } = await this.read();
-    const key = identityKey(entry);
-    const current = storedState.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    const { blob, state: storedState } = await this.readStored();
+    const resolvedInput = await this.resolveIdentity(entry);
+    if (!resolvedInput) throw new Error("The Git arc owner identity is unavailable.");
+    const canonicalEntry = { ...entry, threadId: resolvedInput.threadId };
+    const key = identityKey(canonicalEntry);
     const state = remapState(storedState, options?.commitRemaps);
+    const resolvedEntries = await this.resolveEntries(state.entries);
+    const owned = resolvedEntries.filter(candidate => identityKey(candidate.resolved) === key);
+    const current = owned[0]?.resolved ?? null;
     if (options?.expectedCheckpointCommit) {
       if (!current) throw new Error("This thread no longer owns an active Git arc.");
       if (current.checkpointCommit !== options.expectedCheckpointCommit) {
         throw new Error("This thread's active Git arc changed before the registry update completed.");
       }
     } else if (current) {
-      if (current.checkpointCommit === entry.checkpointCommit) return { nextState: state, updates: [] };
+      if (current.checkpointCommit === canonicalEntry.checkpointCommit) {
+        return { nextState: { entries: resolvedEntries.map(candidate => candidate.resolved), version: 1 }, updates: [] };
+      }
       throw new Error("This thread already owns a different active Git arc.");
     }
-    const collisions = findGitArcCollisions(state.entries, entry, getGitArcLiveClaimPaths(entry));
+    const collisions = findGitArcCollisions(
+      resolvedEntries.map(candidate => candidate.resolved),
+      canonicalEntry,
+      getGitArcLiveClaimPaths(canonicalEntry),
+    );
     if (collisions.length) throw new GitArcCollisionError(collisions);
-    const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
-    const { reloadScopes: _inputReloadScopes, ...storedEntry } = entry;
+    const proposalIds = canonicalEntry.proposalIds ?? (canonicalEntry.proposalId ? [canonicalEntry.proposalId] : []);
+    const { reloadScopes: _inputReloadScopes, ...storedEntry } = canonicalEntry;
     const nextEntry: GitArcRegistryEntry = {
       ...storedEntry,
-      phase: entry.phase ?? "active",
+      phase: canonicalEntry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
-      retainedArc: entry.retainedArc ?? null,
+      retainedArc: canonicalEntry.retainedArc ?? null,
       updatedAt: new Date().toISOString(),
     };
-    const entries = [...state.entries.filter((candidate) => identityKey(candidate) !== key), nextEntry]
+    const ownedRaw = new Set(owned.map(candidate => candidate.raw));
+    const entries = [...state.entries.filter(candidate => !ownedRaw.has(candidate)), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
-    const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
-    const nextBlob = await this.repository.writeBlob(`${JSON.stringify(nextState)}\n`);
+    const nextState = {
+      entries: (await this.resolveEntries(entries)).map(candidate => candidate.resolved),
+      version: 1,
+    } satisfies GitArcRegistryState;
+    const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return await this.prepareMutation(nextState,
       { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
       current, nextEntry, options?.claimLossSnapshot);
   }
 
   async prepareRelease(identity: GitArcIdentity, options?: GitArcRegistryReplaceOptions): Promise<GitArcRegistryMutation | null> {
-    const { blob, state: storedState } = await this.read();
-    const key = identityKey(identity);
-    const current = storedState.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    const { blob, state: storedState } = await this.readStored();
+    const resolvedInput = await this.resolveIdentity(identity);
+    if (!resolvedInput) return null;
+    const key = identityKey({ ...identity, threadId: resolvedInput.threadId });
+    const resolvedStoredEntries = await this.resolveEntries(storedState.entries);
+    const current = resolvedStoredEntries.find(candidate => identityKey(candidate.resolved) === key)?.resolved ?? null;
     if (options?.expectedCheckpointCommit) {
       if (!current) throw new Error("This thread no longer owns an active Git arc.");
       if (current.checkpointCommit !== options.expectedCheckpointCommit) {
@@ -249,46 +298,69 @@ export default class GitArcRegistry {
     }
     if (!blob || !current) return null;
     const state = remapState(storedState, options?.commitRemaps);
-    const entries = state.entries.filter((candidate) => identityKey(candidate) !== key);
-    const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
-    const nextBlob = await this.repository.writeBlob(`${JSON.stringify(nextState)}\n`);
+    const resolvedEntries = await this.resolveEntries(state.entries);
+    const ownedRaw = new Set(
+      resolvedEntries.filter(candidate => identityKey(candidate.resolved) === key).map(candidate => candidate.raw),
+    );
+    const entries = state.entries.filter(candidate => !ownedRaw.has(candidate));
+    const nextState = {
+      entries: resolvedEntries.filter(candidate => !ownedRaw.has(candidate.raw)).map(candidate => candidate.resolved),
+      version: 1,
+    } satisfies GitArcRegistryState;
+    const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return await this.prepareMutation(nextState, { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF }, current, null);
   }
 
   async claim(entry: Omit<GitArcRegistryEntry, "updatedAt">) {
     const mutation = await this.prepareClaim(entry);
     if (mutation.updates.length) await this.repository.updateRefs(mutation.updates);
-    return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
+    const resolved = await this.resolveIdentity(entry);
+    return mutation.nextState.entries.find(candidate => (
+      resolved && identityKey(candidate) === identityKey({ ...entry, threadId: resolved.threadId })
+    ))!;
   }
 
   async set(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string) {
     const mutation = await this.prepareSet(entry, expectedCheckpointCommit);
     if (mutation.updates.length) await this.repository.updateRefs(mutation.updates);
-    return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
+    const resolved = await this.resolveIdentity(entry);
+    return mutation.nextState.entries.find(candidate => (
+      resolved && identityKey(candidate) === identityKey({ ...entry, threadId: resolved.threadId })
+    ))!;
   }
 
   async prepareSet(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string): Promise<GitArcRegistryMutation> {
-    const { blob, state } = await this.read();
-    const key = identityKey(entry);
-    const current = state.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    const { blob, state } = await this.readStored();
+    const resolvedInput = await this.resolveIdentity(entry);
+    if (!resolvedInput) throw new Error("The Git arc owner identity is unavailable.");
+    const canonicalEntry = { ...entry, threadId: resolvedInput.threadId };
+    const key = identityKey(canonicalEntry);
+    const resolvedEntries = await this.resolveEntries(state.entries);
+    const owned = resolvedEntries.filter(candidate => identityKey(candidate.resolved) === key);
+    const current = owned[0]?.resolved ?? null;
     if (expectedCheckpointCommit && current?.checkpointCommit !== expectedCheckpointCommit) {
       throw new Error("This thread's current Git arc changed before the registry update completed.");
     }
-    const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
-    const { reloadScopes: _inputReloadScopes, ...storedEntry } = entry;
+    const proposalIds = canonicalEntry.proposalIds ?? (canonicalEntry.proposalId ? [canonicalEntry.proposalId] : []);
+    const { reloadScopes: _inputReloadScopes, ...storedEntry } = canonicalEntry;
     const nextEntry: GitArcRegistryEntry = {
       ...storedEntry,
-      claimedPaths: entry.phase === "resolved" ? [] : entry.claimedPaths,
-      phase: entry.phase ?? "active",
+      claimedPaths: canonicalEntry.phase === "resolved" ? [] : canonicalEntry.claimedPaths,
+      phase: canonicalEntry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
-      retainedArc: entry.retainedArc ?? null,
+      retainedArc: canonicalEntry.retainedArc ?? null,
       updatedAt: new Date().toISOString(),
     };
-    const entries = [...state.entries.filter((candidate) => identityKey(candidate) !== key), nextEntry]
+    const ownedRaw = new Set(owned.map(candidate => candidate.raw));
+    const entries = [...state.entries.filter(candidate => !ownedRaw.has(candidate)), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
-    return await this.prepareMutation({ entries, version: 1 },
+    const nextState = {
+      entries: (await this.resolveEntries(entries)).map(candidate => candidate.resolved),
+      version: 1,
+    } satisfies GitArcRegistryState;
+    return await this.prepareMutation(nextState,
       { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF }, current, nextEntry);
   }
 

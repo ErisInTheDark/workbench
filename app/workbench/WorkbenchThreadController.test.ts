@@ -165,17 +165,23 @@ test("summary consumers share admission without loading a transcript", () => {
   f.owner.dispose();
 });
 
-test("proposal observation hydrates beside a ready thread and fences stale refreshes", async () => {
+test("proposal observation hydrates only on demand and fences stale refreshes", async () => {
   const f = fixture();
   f.publish(f.document);
   const release = f.owner.acquire("view");
   f.admit(0, [], gitArc());
 
   assert.equal(f.owner.getSnapshot().status, "ready");
-  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, { proposal: { status: "loading" } });
-  assert.equal(f.proposalReads.length, 1);
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {});
+  assert.equal(f.proposalReads.length, 0);
   assert.equal(f.proposalRefreshListeners.size, 1);
 
+  const releaseProposal = f.owner.observeGitArcProposal("proposal");
+  const releaseDuplicateProposal = f.owner.observeGitArcProposal("proposal");
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, { proposal: { status: "loading" } });
+  assert.equal(f.proposalReads.length, 1);
+
+  releaseProposal();
   [...f.proposalRefreshListeners][0]!();
   assert.equal(f.proposalReads.length, 2);
   f.proposalReads[0]!.resolve(proposal("proposal", "proposed"));
@@ -204,6 +210,9 @@ test("proposal observation hydrates beside a ready thread and fences stale refre
 
   [...f.proposalRefreshListeners][0]!();
   assert.equal(f.proposalReads.length, 4);
+  releaseDuplicateProposal();
+  [...f.proposalRefreshListeners][0]!();
+  assert.equal(f.proposalReads.length, 4);
   release();
   assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {});
   assert.equal(f.proposalRefreshListeners.size, 0);
@@ -218,6 +227,7 @@ test("proposal observation failures stay source-local", async () => {
   f.publish(f.document);
   const release = f.owner.acquire("view");
   f.admit(0, [], gitArc());
+  const releaseProposal = f.owner.observeGitArcProposal("proposal");
   f.proposalReads[0]!.reject(new Error("proposal read failed"));
   await new Promise<void>(resolve => setImmediate(resolve));
 
@@ -225,6 +235,7 @@ test("proposal observation failures stay source-local", async () => {
   assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
     proposal: { error: "proposal read failed", status: "failed" },
   });
+  releaseProposal();
   release();
   f.owner.dispose();
 });

@@ -221,6 +221,7 @@ test("proposal cards consume loaded validity from thread observation", () => {
     unavailableReason: "Proposal is no longer valid.",
   };
   const html = renderToStaticMarkup(createElement(ThreadGitArcObservationProvider, {
+    observeProposal: () => () => {},
     proposals: {
       [proposal.proposalId]: { proposal, status: "loaded" },
     },

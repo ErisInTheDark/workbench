@@ -15,6 +15,9 @@
 import { z } from "zod";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
 import { GitArcStatusFullSchema } from "./git-arc-status";
+import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
+
+export { GitCheckpointFileChangeSchema, type GitCheckpointFileChange } from "./git-checkpoint-file-change.ts";
 
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
@@ -260,20 +263,6 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
 });
 
 export type GitCheckpointRequest = z.infer<typeof GitCheckpointRequestSchema>;
-
-export const GitCheckpointFileChangeSchema = z.object({
-  additions: z.number().int().nonnegative(),
-  deletions: z.number().int().nonnegative(),
-  diff: z.string(),
-  kind: z.discriminatedUnion("type", [
-    z.object({ type: z.literal("add") }),
-    z.object({ type: z.literal("delete") }),
-    z.object({ move_path: z.string().nullable(), type: z.literal("update") }),
-  ]),
-  path: nonEmptyString,
-});
-
-export type GitCheckpointFileChange = z.infer<typeof GitCheckpointFileChangeSchema>;
 
 const GitCheckpointCompareMemberSchema = z.object({
   phase: z.enum(["plan", "active", "resolved"]).optional(),

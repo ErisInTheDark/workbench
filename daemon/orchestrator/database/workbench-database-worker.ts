@@ -1,5 +1,5 @@
 /*
- * No production exports. This worker owns the one better-sqlite3 connection, schema installation, search/stats/transcript repositories, readiness proof, and close boundary.
+ * No production exports. This worker owns the one better-sqlite3 connection, schema installation, domain repositories including proposal diff cache, readiness proof, and close boundary.
  */
 import { parentPort } from "node:worker_threads";
 import path from "node:path";
@@ -26,6 +26,7 @@ import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./stats/WorkbenchClaimStatsRepository.ts";
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
+import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
@@ -38,6 +39,7 @@ let searchRepository: WorkbenchSearchRepository | null = null;
 let statsRepository: WorkbenchStatsRepository | null = null;
 let statsImportRepository: WorkbenchStatsImportRepository | null = null;
 let statsAttributionRepository: WorkbenchStatsAttributionRepository | null = null;
+let gitArcProposalDiffRepository: GitArcProposalDiffRepository | null = null;
 let migrationAcknowledgement: { id: number; acknowledge(): void } | null = null;
 let suspendedDatabase: { path: string; version: number } | null = null;
 
@@ -52,6 +54,7 @@ function initializeRepositories() {
   statsRepository = new WorkbenchStatsRepository(database);
   statsImportRepository = new WorkbenchStatsImportRepository(database);
   statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
+  gitArcProposalDiffRepository = new GitArcProposalDiffRepository(database);
 }
 
 function boundedError(error: unknown) {
@@ -211,6 +214,16 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
       type: "transcriptSnapshot",
       snapshot: transcriptRepository.read(request.request),
     });
+    return;
+  }
+  if (request.type === "readGitArcProposalDiff" || request.type === "writeGitArcProposalDiff") {
+    if (!gitArcProposalDiffRepository) throw new Error("Git arc proposal diff repository is not initialized");
+    if (request.type === "readGitArcProposalDiff") {
+      post({ id: request.id, type: "gitArcProposalDiff", changes: gitArcProposalDiffRepository.read(request.identity) });
+    } else {
+      gitArcProposalDiffRepository.write(request.value, request.maxBytes);
+      post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
+    }
     return;
   }
   if (request.type === "readTranscriptProviderCursor") {

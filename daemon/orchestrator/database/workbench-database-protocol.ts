@@ -62,6 +62,11 @@ import type {
   WorkbenchStatsUsageImportCandidate,
   WorkbenchStatsUsageImportSettlement,
 } from "./stats/WorkbenchStatsImportRepository.ts";
+import type {
+  GitArcProposalDiffCacheIdentity,
+  GitArcProposalDiffCacheValue,
+} from "../../lib/workbench/git/GitArcProposalDiffController.ts";
+import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
 
@@ -82,6 +87,8 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
+  | { type: "readGitArcProposalDiff"; identity: GitArcProposalDiffCacheIdentity }
+  | { type: "writeGitArcProposalDiff"; value: GitArcProposalDiffCacheValue; maxBytes: number }
   | { type: "observeThreadIdentities"; inputs: readonly WorkbenchThreadIdentityMetadata[] }
   | { type: "resolveThreadIdentity"; input: WorkbenchThreadIdentityLookup }
   | { type: "resolveNativeThreadIdentity"; input: WorkbenchNativeThreadIdentity }
@@ -144,6 +151,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
+  | { id: number; type: "gitArcProposalDiff"; changes: GitCheckpointFileChange[] | null }
   | { id: number; type: "threadIdentity"; identity: WorkbenchThreadIdentityRecord | null }
   | { id: number; type: "turnIdentities"; identities: WorkbenchTurnIdentityRecord[] }
   | { id: number; type: "threadIdentities"; identities: WorkbenchThreadIdentityRecord[] }

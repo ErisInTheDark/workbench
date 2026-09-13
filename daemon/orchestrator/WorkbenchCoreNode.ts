@@ -167,6 +167,10 @@ function createWorkbenchCoreFeature(
   };
   const gitArc = new WorkbenchGitArcFeature({
     identities: threadIdentity,
+    proposalDiffStore: {
+      read: async identity => await database.readGitArcProposalDiff(identity),
+      write: async (value, maxBytes) => await database.writeGitArcProposalDiff(value, maxBytes),
+    },
     getThreadCreatedAt: async (projectId, _harness, threadId) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
       if (!snapshot) return null;

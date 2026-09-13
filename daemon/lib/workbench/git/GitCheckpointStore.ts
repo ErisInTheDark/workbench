@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitCheckpointStore: own checkpoint/outcome storage and scoped batched history and proposal reads.
+ * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, outcome, history, and proposal reads.
  * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
@@ -28,6 +28,11 @@ import {
   normalizeCommit,
   type ProposalMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
+import {
+  gitArcThreadStorageIds,
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 
 export interface GitArcProposalSummary {
   committedSha: string | null;
@@ -86,12 +91,38 @@ function normalizeProposalMetadata(metadata: ProposalMetadata): ProposalMetadata
 }
 
 export default class GitCheckpointStore {
-  constructor(private readonly repository: WorkbenchGitRepository) {}
+  constructor(
+    private readonly repository: WorkbenchGitRepository,
+    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+  ) {}
+
+  private async identity(harness: GitArcHarness, threadId: string) {
+    const identity = await this.resolveThreadIdentity({ harness, repositoryRoot: this.repository.root, threadId });
+    if (!identity) throw new Error("The Git arc owner identity is unavailable.");
+    return identity;
+  }
+
+  private async checkpointNamespaces(harness: GitArcHarness, threadId: string) {
+    return [...new Set(gitArcThreadStorageIds(await this.identity(harness, threadId))
+      .flatMap(id => [checkpointNamespace(harness, id), legacyCheckpointNamespace(id)]))];
+  }
+
+  private async proposalNamespaces(harness: GitArcHarness, threadId: string) {
+    return [...new Set(gitArcThreadStorageIds(await this.identity(harness, threadId))
+      .flatMap(id => [proposalNamespace(harness, id), legacyProposalNamespace(id)]))];
+  }
+
+  async proposalRefName(harness: GitArcHarness, threadId: string, proposalId: string) {
+    return `${proposalNamespace(harness, (await this.identity(harness, threadId)).threadId)}/${proposalId}`;
+  }
 
   async readOutcome(harness: GitArcHarness, threadId: string, sourceCheckpoint: string) {
-    const resolved = await this.repository.readBlobAtRef(outcomeRef(harness, threadId, sourceCheckpoint));
-    if (!resolved) return null;
-    return await this.decodeOutcome(resolved.contents, sourceCheckpoint);
+    const refs = gitArcThreadStorageIds(await this.identity(harness, threadId))
+      .map(id => outcomeRef(harness, id, sourceCheckpoint));
+    const resolved = (await this.repository.readBlobs(refs)).blobs;
+    const value = refs.map(ref => resolved.get(ref)).find(candidate => candidate);
+    if (!value) return null;
+    return await this.decodeOutcome(value.contents, sourceCheckpoint);
   }
 
   private async decodeOutcome(contents: string, sourceCheckpoint: string) {
@@ -106,18 +137,19 @@ export default class GitCheckpointStore {
     if (!checkpoint.metadata?.amendedFrom || checkpoint.metadata.kind === "plan") {
       return (await this.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals ?? [];
     }
-    const refs = await this.repository.listRefsWithValues(
-      checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
-    );
+    const refs = await this.repository.listRefsWithValues(...await this.checkpointNamespaces(harness, threadId));
     const byCommit = new Map<string, (typeof refs)[number]>();
     for (const ref of refs) if (!byCommit.has(ref.value)) byCommit.set(ref.value, ref);
     const [commits, outcomes] = await Promise.all([
       this.repository.readCommits([...byCommit.keys()]),
-      this.repository.readBlobs([...new Set([checkpoint.checkpointCommit, ...byCommit.keys()])]
-        .map((commit) => outcomeRef(harness, threadId, commit))),
+      this.repository.readBlobs(gitArcThreadStorageIds(await this.identity(harness, threadId)).flatMap(id => (
+        [...new Set([checkpoint.checkpointCommit, ...byCommit.keys()])].map(commit => outcomeRef(harness, id, commit))
+      ))),
     ]);
     while (true) {
-      const ref = outcomeRef(harness, threadId, checkpoint.checkpointCommit);
+      const outcomeRefs = gitArcThreadStorageIds(await this.identity(harness, threadId))
+        .map(id => outcomeRef(harness, id, checkpoint.checkpointCommit));
+      const ref = outcomeRefs.find(candidate => outcomes.blobs.has(candidate) || outcomes.errors.has(candidate)) ?? outcomeRefs[0]!;
       const error = outcomes.errors.get(ref);
       if (error) throw new Error(error);
       const blob = outcomes.blobs.get(ref);
@@ -139,7 +171,7 @@ export default class GitCheckpointStore {
   }
 
   async prepareOutcome(harness: GitArcHarness, threadId: string, outcome: ArcOutcome): Promise<GitRefUpdate> {
-    const ref = outcomeRef(harness, threadId, outcome.sourceCheckpoint);
+    const ref = outcomeRef(harness, (await this.identity(harness, threadId)).threadId, outcome.sourceCheckpoint);
     const previous = await this.repository.readRef(ref);
     const normalized = normalizeArcOutcome(outcome);
     const blob = await this.repository.writeBlob(`${JSON.stringify(normalized)}\n`);
@@ -151,17 +183,17 @@ export default class GitCheckpointStore {
   }
 
   async readProposalSummaryGroups(requests: GitArcProposalSummaryRequest[]) {
-    const namespaces = [...new Set(requests.flatMap(({ harness, proposalIds, threadId }) => (
-      proposalIds.length ? [proposalNamespace(harness, threadId), legacyProposalNamespace(threadId)] : []
-    )))];
+    const resolvedRequests = await Promise.all(requests.map(async request => ({
+      ...request,
+      namespaces: request.proposalIds.length ? await this.proposalNamespaces(request.harness, request.threadId) : [],
+    })));
+    const namespaces = [...new Set(resolvedRequests.flatMap(request => request.namespaces))];
     if (!namespaces.length) return requests.map(() => []);
     const refs = await this.repository.listRefsWithValues(...namespaces);
     const byRef = new Map(refs.map((entry) => [entry.ref, entry]));
-    const selections = requests.map(({ harness, proposalIds, threadId }) => {
-      const canonical = proposalNamespace(harness, threadId);
-      const legacy = legacyProposalNamespace(threadId);
+    const selections = resolvedRequests.map(({ namespaces: requestNamespaces, proposalIds }) => {
       return [...new Set(proposalIds)].map((proposalId) => ({
-        entry: byRef.get(`${canonical}/${proposalId}`) ?? byRef.get(`${legacy}/${proposalId}`) ?? null,
+        entry: requestNamespaces.map(namespace => byRef.get(`${namespace}/${proposalId}`)).find(entry => entry) ?? null,
         proposalId,
       }));
     });
@@ -190,7 +222,7 @@ export default class GitCheckpointStore {
 
   async prepareCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string | null, metadata: CheckpointMetadata) {
     const checkpointCommit = await this.repository.createCommitFromTree(tree, parent, checkpointMessage(metadata));
-    const checkpointRef = this.checkpointRefName(harness, threadId, checkpointCommit);
+    const checkpointRef = this.checkpointRefName(harness, (await this.identity(harness, threadId)).threadId, checkpointCommit);
     return {
       checkpointCommit,
       checkpointRef,
@@ -199,11 +231,10 @@ export default class GitCheckpointStore {
   }
 
   async readCheckpoint(harness: GitArcHarness, threadId: string, rawCommit: string): Promise<StoredCheckpoint> {
+    const namespaces = await this.checkpointNamespaces(harness, threadId);
     const original = normalizeCommit(rawCommit);
     if (original.length === 40 || original.length === 64) {
-      const owned = await this.repository.readCommitRef(
-        original, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
-      );
+      const owned = await this.repository.readCommitRef(original, ...namespaces);
       if (owned) {
         return this.decodeCheckpoint(original, owned.ref, owned.identity);
       }
@@ -211,12 +242,12 @@ export default class GitCheckpointStore {
     let checkpointCommit = original;
     let resolved = await this.repository.readCommitAt(checkpointCommit);
     if (!resolved) throw new GitCheckpointMissingObjectError(original);
-    let refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
+    let refs = await this.repository.refsPointingAt(checkpointCommit, ...namespaces);
     if (!refs.length) {
       checkpointCommit = await new GitArcHistoryRewriter(this.repository).resolveAlias(checkpointCommit);
       resolved = await this.repository.readCommitAt(checkpointCommit);
       if (!resolved) throw new GitCheckpointMissingObjectError(original);
-      refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
+      refs = await this.repository.refsPointingAt(checkpointCommit, ...namespaces);
     }
     if (!refs.length) throw new GitArcRejectionError({ reason: "wrongCheckpointOwnership" }, "Checkpoint commit is not in this thread/worktree checkpoint timeline.");
     return this.decodeCheckpoint(checkpointCommit, refs[0]!, resolved.identity);
@@ -234,11 +265,16 @@ export default class GitCheckpointStore {
   async readProposal(harness: GitArcHarness, threadId: string, proposalId: string): Promise<StoredProposal> {
     const normalizedProposalId = String(proposalId ?? "").trim();
     if (!/^[A-Za-z0-9._-]+$/u.test(normalizedProposalId)) throw new GitArcRejectionError({ reason: "invalidProposalId" }, "Invalid checkpoint proposal id.");
-    const canonicalRef = `${proposalNamespace(harness, threadId)}/${normalizedProposalId}`;
-    const legacyRef = `${legacyProposalNamespace(threadId)}/${normalizedProposalId}`;
-    const canonical = await this.repository.readCommitAt(canonicalRef);
-    const proposalRef = canonical ? canonicalRef : legacyRef;
-    const resolved = canonical ?? await this.repository.readCommitAt(legacyRef);
+    const refs = (await this.proposalNamespaces(harness, threadId)).map(namespace => `${namespace}/${normalizedProposalId}`);
+    let proposalRef = refs[0]!;
+    let resolved = null;
+    for (const ref of refs) {
+      resolved = await this.repository.readCommitAt(ref);
+      if (resolved) {
+        proposalRef = ref;
+        break;
+      }
+    }
     if (!resolved) throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: normalizedProposalId }, "Checkpoint proposal not found.");
     const parsed = parseMarkedMetadata<ProposalMetadata>(resolved.identity.message, PROPOSAL_METADATA_MARKER);
     if (!parsed || parsed.proposalId !== normalizedProposalId) throw new Error("Checkpoint proposal metadata is invalid.");
@@ -251,7 +287,7 @@ export default class GitCheckpointStore {
     committedSha: string,
     excludedProposalId?: string,
   ): Promise<StoredProposal | null> {
-    const namespaces = [proposalNamespace(harness, threadId), legacyProposalNamespace(threadId)];
+    const namespaces = await this.proposalNamespaces(harness, threadId);
     const refs = (await this.repository.listRefsWithValues("refs/worktree/agents"))
       .filter(({ ref }) => namespaces.some((namespace) => ref.startsWith(`${namespace}/`)));
     const commits = await this.repository.readCommits(refs.map(({ value }) => value));

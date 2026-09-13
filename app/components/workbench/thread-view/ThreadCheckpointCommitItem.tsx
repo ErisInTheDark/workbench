@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadCheckpointCommitItem: render observed or fallback-loaded proposals and own their edit and commit actions.
+ * - default ThreadCheckpointCommitItem: demand near-visible proposals and own their edit and commit actions.
  */
 "use client";
 
@@ -59,11 +59,13 @@ function ThreadCheckpointCommitController({
   threadId,
   workspaceRoots,
   isProposalObserved,
+  observeProposal,
   proposalObservation,
 }: ThreadCheckpointCommitItemProps & {
   cwd: string;
   harness: WorkbenchHarness;
   isProposalObserved: boolean;
+  observeProposal: ((proposalId: string) => () => void) | null;
   proposalObservation: ThreadGitArcProposalObservation | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
@@ -80,6 +82,7 @@ function ThreadCheckpointCommitController({
     (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
   );
   const [committing, setCommitting] = useState(false);
+  const [observationTarget, setObservationTarget] = useState<HTMLElement | null>(null);
   const [state, setState] = useState<CheckpointCommitCardState>(() => proposalObservation
     ? proposalObservation.status === "loaded"
       ? { proposal: proposalObservation.proposal, status: "loaded" }
@@ -95,6 +98,31 @@ function ThreadCheckpointCommitController({
   const title = commitMode === "amend" ? amendTitle : commitTitle;
   const description = commitMode === "amend" ? amendDescription : commitDescription;
   const freshCommitAvailable = Boolean(intent?.amend && intent.freshTitle?.trim());
+
+  useEffect(() => {
+    if (!proposalId || !observeProposal || !observationTarget) return;
+    let release: (() => void) | null = null;
+    const reconcile = (visible: boolean) => {
+      if (visible && !release) release = observeProposal(proposalId);
+      if (!visible && release) {
+        release();
+        release = null;
+      }
+    };
+    if (typeof IntersectionObserver === "undefined") {
+      reconcile(true);
+      return () => release?.();
+    }
+    const observer = new IntersectionObserver(
+      entries => reconcile(entries.some(entry => entry.isIntersecting)),
+      { rootMargin: "160px 0px", threshold: 0 },
+    );
+    observer.observe(observationTarget);
+    return () => {
+      observer.disconnect();
+      release?.();
+    };
+  }, [observationTarget, observeProposal, proposalId]);
 
   useEffect(() => {
     if (!intent) return;
@@ -286,6 +314,7 @@ function ThreadCheckpointCommitController({
       onIncludeNewerChange={setIncludeNewer}
       onRetry={() => void loadProposal()}
       onTitleChange={changeTitle}
+      observationRef={setObservationTarget}
       paths={intent?.paths ?? []}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
@@ -373,6 +402,7 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
       harness={harness}
       intent={resolvedIntent}
       isProposalObserved={proposalObservation.isObserved}
+      observeProposal={proposalObservation.observe}
       proposalObservation={proposalObservation.state}
     />
   );

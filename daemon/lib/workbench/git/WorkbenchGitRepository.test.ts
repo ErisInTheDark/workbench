@@ -220,6 +220,33 @@ test("diff batching falls back only for capacity limits and preserves per-file f
   }
 });
 
+test("file-change construction passes cancellation through combined and fallback Git reads", async (context) => {
+  const signal = new AbortController().signal;
+  const patch = "diff --git a/selected b/selected\n+selected\n";
+  const combined = new WorkbenchGitRepository(process.cwd());
+  const combinedSignals: Array<AbortSignal | undefined> = [];
+  context.mock.method(combined, "run", async (_args, _env, receivedSignal) => {
+    combinedSignals.push(receivedSignal);
+    return `:100644 100644 aaaaaaa bbbbbbb M\0selected\0`
+      + `1\t0\tselected\0\0${patch}`;
+  });
+  await combined.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"], signal);
+  assert.deepEqual(combinedSignals, [signal]);
+
+  const fallback = new WorkbenchGitRepository(process.cwd());
+  const fallbackSignals: Array<AbortSignal | undefined> = [];
+  context.mock.method(fallback, "run", async (args, _env, receivedSignal) => {
+    fallbackSignals.push(receivedSignal);
+    if (args.includes("--name-only")) return "selected\0";
+    if (args.includes("-z")) {
+      throw Object.assign(new Error("spawn git E2BIG"), { code: "E2BIG" });
+    }
+    return `:100644 100644 aaaaaaa bbbbbbb M\tselected\n1\t0\tselected\n${patch}`;
+  });
+  await fallback.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"], signal);
+  assert.deepEqual(fallbackSignals, [signal, signal, signal]);
+});
+
 test("normalizes the index before atomic ref publication and keeps retries idempotent", async () => {
   const repository = new WorkbenchGitRepository("C:/Git/Project");
   const events: string[] = [];

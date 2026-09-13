@@ -205,6 +205,83 @@ test("database lifecycle reuses retained state across cold workers", async (cont
   }
 });
 
+test("proposal diff cache persists, rejects corruption, touches reads, and enforces its byte budget", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-git-arc-diff-cache-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  let controller = new WorkbenchDatabaseController({ databasePath });
+  const changes = [{
+    additions: 1,
+    deletions: 0,
+    diff: "diff --git a/file.ts b/file.ts\n+value\n",
+    kind: { move_path: null, type: "update" as const },
+    path: "file.ts",
+  }];
+  const value = (key: string, targetTree: string) => ({
+    baseTree: "a".repeat(40),
+    changes,
+    key,
+    paths: ["file.ts"],
+    repositoryRoot: "C:/repo",
+    targetTree,
+    version: 1 as const,
+  });
+  const byteSize = (candidate: ReturnType<typeof value>) => (
+    Buffer.byteLength(candidate.key)
+    + Buffer.byteLength(candidate.repositoryRoot)
+    + Buffer.byteLength(candidate.baseTree)
+    + Buffer.byteLength(candidate.targetTree)
+    + Buffer.byteLength(JSON.stringify(candidate.paths))
+    + Buffer.byteLength(JSON.stringify(candidate.changes))
+    + 8
+  );
+  try {
+    const persisted = value("persisted", "b".repeat(40));
+    await controller.writeGitArcProposalDiff(persisted, 1_000_000);
+    await controller.close();
+    controller = new WorkbenchDatabaseController({ databasePath });
+    assert.deepEqual(await controller.readGitArcProposalDiff(persisted), changes);
+
+    await controller.close();
+    const corrupted = new Database(databasePath);
+    try {
+      corrupted.prepare("UPDATE workbench_git_arc_proposal_diffs SET target_tree = ? WHERE cache_key = ?")
+        .run("wrong-tree", persisted.key);
+    } finally {
+      corrupted.close();
+    }
+    controller = new WorkbenchDatabaseController({ databasePath });
+    await assert.rejects(controller.readGitArcProposalDiff(persisted), /identity does not match/u);
+    assert.equal(await controller.readGitArcProposalDiff(persisted), null);
+
+    const oversized = value("oversized", "c".repeat(40));
+    await controller.writeGitArcProposalDiff(oversized, 1);
+    assert.equal(await controller.readGitArcProposalDiff(oversized), null);
+
+    const first = value("a-first", "d".repeat(40));
+    const second = value("b-second", "e".repeat(40));
+    await controller.writeGitArcProposalDiff(first, 1_000_000);
+    await controller.writeGitArcProposalDiff(second, 1_000_000);
+    await controller.close();
+    const ageing = new Database(databasePath);
+    try {
+      ageing.prepare("UPDATE workbench_git_arc_proposal_diffs SET last_accessed_at = ? WHERE cache_key = ?").run(1, first.key);
+      ageing.prepare("UPDATE workbench_git_arc_proposal_diffs SET last_accessed_at = ? WHERE cache_key = ?").run(2, second.key);
+    } finally {
+      ageing.close();
+    }
+    controller = new WorkbenchDatabaseController({ databasePath });
+    assert.deepEqual(await controller.readGitArcProposalDiff(first), changes);
+    const third = value("c-third", "f".repeat(40));
+    await controller.writeGitArcProposalDiff(third, byteSize(first) + byteSize(third));
+    assert.deepEqual(await controller.readGitArcProposalDiff(first), changes);
+    assert.equal(await controller.readGitArcProposalDiff(second), null);
+    assert.deepEqual(await controller.readGitArcProposalDiff(third), changes);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function checkSuspension(controller: WorkbenchDatabaseController, databasePath: string) {
   const initial = await controller.start();
   await controller.suspend();

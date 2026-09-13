@@ -1,25 +1,33 @@
 /*
  * Exports:
- * - ThreadGitArcObservationProvider: provide one active thread controller's proposal observations.
- * - useThreadGitArcProposalObservation: read one proposal's source-local observation state.
+ * - ThreadGitArcObservationProvider: provide one active thread controller's proposal observations and demand action.
+ * - useThreadGitArcProposalObservation: read and demand one proposal's source-local observation state.
  */
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 
 import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
 
-const ThreadGitArcObservationContext = createContext<Readonly<Record<string, ThreadGitArcProposalObservation>> | null>(null);
+interface ThreadGitArcObservationSource {
+  observeProposal(proposalId: string): () => void;
+  proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
+}
+
+const ThreadGitArcObservationContext = createContext<ThreadGitArcObservationSource | null>(null);
 
 export function ThreadGitArcObservationProvider({
   children,
+  observeProposal,
   proposals,
 }: {
   children: ReactNode;
+  observeProposal(proposalId: string): () => void;
   proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
 }) {
+  const source = useMemo(() => ({ observeProposal, proposals }), [observeProposal, proposals]);
   return (
-    <ThreadGitArcObservationContext.Provider value={proposals}>
+    <ThreadGitArcObservationContext.Provider value={source}>
       {children}
     </ThreadGitArcObservationContext.Provider>
   );
@@ -29,6 +37,7 @@ export function useThreadGitArcProposalObservation(proposalId: string | null) {
   const proposals = useContext(ThreadGitArcObservationContext);
   return {
     isObserved: proposals !== null,
-    state: proposalId ? proposals?.[proposalId] ?? null : null,
+    observe: proposals?.observeProposal ?? null,
+    state: proposalId ? proposals?.proposals[proposalId] ?? null : null,
   };
 }

@@ -88,20 +88,26 @@ class FakeProposalRepository {
 }
 
 test("proposal summary groups read only the requested thread proposal namespaces", async () => {
-  const canonical = proposalNamespace("codex", "target-thread");
-  const legacy = legacyProposalNamespace("target-thread");
+  const canonical = proposalNamespace("codex", "wb-target-thread");
+  const canonicalLegacy = legacyProposalNamespace("wb-target-thread");
+  const provider = proposalNamespace("codex", "target-thread");
+  const providerLegacy = legacyProposalNamespace("target-thread");
   const proposedCommit = "1".repeat(40);
   const committedCommit = "2".repeat(40);
   const committedSha = "3".repeat(40);
   const repository = new FakeProposalRepository([
     { ref: `${canonical}/proposal-one`, value: proposedCommit },
-    { ref: `${legacy}/proposal-two`, value: committedCommit },
+    { ref: `${providerLegacy}/proposal-two`, value: committedCommit },
     { ref: `${proposalNamespace("codex", "unrelated-thread")}/unrelated`, value: "4".repeat(40) },
   ], new Map([
     [proposedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-one", "proposed", null)))],
     [committedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-two", "committed", committedSha)))],
   ]));
-  const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository);
+  const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository, async ({ threadId }) => (
+    threadId === "target-thread" || threadId === "wb-target-thread"
+      ? { nativeThreadId: "target-thread", threadId: "wb-target-thread" }
+      : null
+  ));
 
   const summaries = await store.readProposalSummaryGroups([{
     harness: "codex",
@@ -109,7 +115,7 @@ test("proposal summary groups read only the requested thread proposal namespaces
     threadId: "target-thread",
   }]);
 
-  assert.deepEqual(repository.namespaceReads, [[canonical, legacy]]);
+  assert.deepEqual(repository.namespaceReads, [[canonical, canonicalLegacy, provider, providerLegacy]]);
   assert.deepEqual(repository.commitReads, [[proposedCommit, committedCommit]]);
   assert.deepEqual(summaries, [[
     { committedSha: null, proposalId: "proposal-one", status: "proposed" },
@@ -127,6 +133,40 @@ test("proposal summary groups with no proposal ids do not enumerate refs", async
   ]), [[], []]);
   assert.deepEqual(repository.namespaceReads, []);
   assert.deepEqual(repository.commitReads, []);
+});
+
+test("checkpoint, proposal, and outcome writes use only the canonical WB namespace", async () => {
+  const repository = {
+    root: "C:/repo",
+    createCommitFromTree: async () => "c".repeat(40),
+    readRef: async () => null,
+    writeBlob: async () => "b".repeat(40),
+  } as unknown as WorkbenchGitRepository;
+  const store = new GitCheckpointStore(repository, async () => ({
+    nativeThreadId: "provider-thread",
+    threadId: "wb-thread",
+  }));
+  const checkpoint = await store.prepareCheckpoint("codex", "provider-thread", "a".repeat(40), null, {
+    amendedFrom: null,
+    kind: "plan",
+    scopePaths: [],
+    version: 3,
+  });
+  const outcome = await store.prepareOutcome("codex", "provider-thread", {
+    acceptedProposals: [],
+    committedSha: null,
+    proposalId: null,
+    sourceCheckpoint: "c".repeat(40),
+    status: "released",
+    successorCheckpoint: null,
+    version: 1,
+  });
+
+  assert.match(checkpoint.checkpointRef, /\/codex\/wb-thread\//u);
+  assert.equal(await store.proposalRefName("codex", "provider-thread", "proposal"), `${proposalNamespace("codex", "wb-thread")}/proposal`);
+  assert.equal(outcome.ref, outcomeRef("codex", "wb-thread", "c".repeat(40)));
+  assert.ok(!checkpoint.checkpointRef.includes("provider-thread"));
+  assert.ok(!outcome.ref.includes("provider-thread"));
 });
 
 class HistoryRepository extends WorkbenchGitRepository {

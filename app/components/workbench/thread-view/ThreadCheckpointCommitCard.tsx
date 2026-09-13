@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, Ref } from "react";
 
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { createGitArcOperationRejected, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
@@ -43,6 +43,7 @@ export default function ThreadCheckpointCommitCard({
   onIncludeNewerChange,
   onRetry,
   onTitleChange,
+  observationRef,
   paths,
   projectFilePaths,
   projectId,
@@ -66,6 +67,7 @@ export default function ThreadCheckpointCommitCard({
   onIncludeNewerChange: (value: boolean) => void;
   onRetry: () => void;
   onTitleChange: (value: string) => void;
+  observationRef?: Ref<HTMLElement>;
   paths: string[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -135,6 +137,7 @@ export default function ThreadCheckpointCommitCard({
 
   return (
     <article
+      ref={observationRef}
       aria-label="Checkpoint commit proposal"
       aria-busy={pending || undefined}
       className={compact

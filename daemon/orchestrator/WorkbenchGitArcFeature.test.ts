@@ -24,6 +24,10 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchThreadIdentityRecord } from "./database/thread-identity/workbench-thread-identity-types";
 
+function wbThreadId(harness: string, threadId: string, projectId = "project") {
+  return `wb:${projectId}:${harness}:${threadId}`;
+}
+
 function gitFixtureIdentities() {
   const records: WorkbenchThreadIdentityRecord[] = ["project", "workspace"].flatMap(projectId =>
     ["codex", "opencode"].flatMap(harness =>
@@ -141,7 +145,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
   let reportSecondBlocked!: () => void;
   const secondBlocked = new Promise<void>((resolve) => { reportSecondBlocked = resolve; });
   internal.controller.findPlanClaimCollisions = async ({ checkpointCommit, threadId }) => {
-    if (owner && owner !== threadId && threadId === "thread-two") reportSecondBlocked();
+    if (owner && owner !== threadId && threadId === wbThreadId("codex", "thread-two")) reportSecondBlocked();
     return {
       checkpointCommit: checkpointCommit ?? "a".repeat(40),
       collisions: owner && owner !== threadId ? [{
@@ -156,7 +160,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
     };
   };
   internal.controller.startArc = async ({ checkpointCommit, threadId }) => {
-    if (driftAfterRelease && threadId === "thread-two") {
+    if (driftAfterRelease && threadId === wbThreadId("codex", "thread-two")) {
       throw new GitArcStartDiagnosticError("Plan changed after publication.", {
         comparison,
         collisions: [], commitChanges: [], dirtyUnclaimedPaths: ["src/a.ts"], headMovement: "same",
@@ -193,7 +197,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
   void second.then(() => { secondFinished = true; });
   await Promise.resolve();
   assert.equal(secondFinished, false);
-  assert.equal(owner, "thread-one");
+  assert.equal(owner, wbThreadId("codex", "thread-one"));
 
   assert.equal((await feature.executeRequest({
     action: "arcRelease", cwd: "C:/Git/Project", disown: false, harness: "codex", threadId: "thread-one",
@@ -211,7 +215,7 @@ for (const driftAfterRelease of [false, true]) test(`competing Git arc waits rev
   } else {
     assert.equal(secondResponse.status, 200);
     assert.equal((await secondResponse.json() as { checkpointCommit: string }).checkpointCommit, "b".repeat(40));
-    assert.equal(owner, "thread-two");
+    assert.equal(owner, wbThreadId("codex", "thread-two"));
   }
 });
 
@@ -527,7 +531,7 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
           intentDescription: "",
           intentName: "change rendering",
           phase: "active",
-          threadId: "owner-thread",
+          threadId: wbThreadId("opencode", "owner-thread"),
           updatedAt: "2026-08-21T00:00:00.000Z",
         },
         overlaps: [{

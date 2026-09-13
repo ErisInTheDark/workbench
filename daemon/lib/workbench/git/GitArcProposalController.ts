@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcProposalController: own proposal validity, publication, acceptance and lifecycle projection.
+ * - default GitArcProposalController: own proposal validity, bounded diff hydration, publication, acceptance, and lifecycle projection.
  * - GitArcLifecycleState: active or resolved arc with ordered proposal summaries.
  * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
  * - GitCheckpointProposalReceipt: published proposal identity.
@@ -11,7 +11,11 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
-import GitArcProposalCache from "./GitArcProposalCache";
+import GitArcProposalDiffController from "./GitArcProposalDiffController";
+import {
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore, {
@@ -27,7 +31,6 @@ import {
   type GitArcHarness,
   outcomeRef,
   proposalMessage,
-  proposalNamespace,
   type ProposalMetadata,
   remapArcOutcome,
   remapProposalMetadata,
@@ -295,37 +298,30 @@ function acceptanceFailure(error: unknown) {
   );
 }
 
-const proposalFileChangesCache = new GitArcProposalCache();
-
 async function buildProposalFileChanges(
+  proposalDiffs: GitArcProposalDiffController,
   repository: WorkbenchGitRepository,
   metadata: ProposalMetadata,
   targetTree: string,
-  harness: GitArcHarness,
-  threadId: string,
   options: { baseCommit?: string | null; paths?: string[] } = {},
 ) {
   const baseCommit = options.baseCommit === undefined ? metadata.baseCommit : options.baseCommit;
   const paths = options.paths ?? metadata.paths;
   const baseTree = await repository.resolveTree(baseCommit);
-  return await proposalFileChangesCache.readOrBuild({
+  return await proposalDiffs.readOrBuild({
     baseTree,
-    build: async () => await repository.buildFileChanges(baseCommit, targetTree, paths),
-    harness,
+    build: async signal => await repository.buildFileChanges(baseCommit, targetTree, paths, signal),
     paths,
-    proposalId: metadata.proposalId,
-    rootPath: repository.root,
+    repositoryRoot: repository.root,
     targetTree,
-    threadId,
   });
 }
 
 async function buildProposalResult(
+  proposalDiffs: GitArcProposalDiffController,
   repository: WorkbenchGitRepository,
   metadata: ProposalMetadata,
   target: { tree: string } | { commit: string },
-  harness: GitArcHarness,
-  threadId: string,
   options: {
     includeNewerAvailable?: boolean;
     preparedHead?: WorkbenchGitPreparedHead;
@@ -343,9 +339,9 @@ async function buildProposalResult(
     ? { status: "available" }
     : classifiedAmendability;
   const [changes, freshChanges, amendTargetMessage] = await Promise.all([
-    buildProposalFileChanges(repository, metadata, targetTree, harness, threadId),
+    buildProposalFileChanges(proposalDiffs, repository, metadata, targetTree),
     metadata.mode === "amend" && metadata.status === "proposed" && metadata.freshCommitMessage
-      ? buildProposalFileChanges(repository, metadata, targetTree, harness, threadId, {
+      ? buildProposalFileChanges(proposalDiffs, repository, metadata, targetTree, {
         baseCommit: metadata.liveBaseCommit,
         paths: metadata.livePaths,
       })
@@ -397,13 +393,14 @@ async function persistProposalTransition(
 }
 
 async function resolveProposalState(
+  resolveThreadIdentity: GitArcThreadIdentityResolver,
   repository: WorkbenchGitRepository,
   harness: GitArcHarness,
   threadId: string,
   proposalId: string,
   options: { includeNewer: boolean; persistTransitions: boolean; snapshot?: { head: string | null; tree: string } },
 ) {
-  const store = new GitCheckpointStore(repository);
+  const store = new GitCheckpointStore(repository, resolveThreadIdentity);
   let proposal = await store.readProposal(harness, threadId, proposalId);
   const applyTransition = async (metadata: ProposalMetadata, treeish?: string) => (
     options.persistTransitions
@@ -510,6 +507,18 @@ async function resolveProposalState(
 }
 
 export default class GitArcProposalController {
+  constructor(
+    private readonly proposalDiffs = new GitArcProposalDiffController(),
+    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+  ) {}
+
+  private registry(repository: WorkbenchGitRepository) {
+    return new GitArcRegistry(repository, this.resolveThreadIdentity);
+  }
+
+  private store(repository: WorkbenchGitRepository) {
+    return new GitCheckpointStore(repository, this.resolveThreadIdentity);
+  }
   async readStatusProposals(
     input: ArcIdentityInput,
     proposalIds: string[],
@@ -519,7 +528,7 @@ export default class GitArcProposalController {
     const pending: Array<{ proposalId: string; title: string }> = [];
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
     for (const proposalId of proposalIds) {
-      const { proposal } = await resolveProposalState(repository, normalizeHarness(input.harness), input.threadId, proposalId, {
+      const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, normalizeHarness(input.harness), input.threadId, proposalId, {
         includeNewer: false, persistTransitions: false, snapshot,
       });
       const metadata = proposal.metadata;
@@ -534,9 +543,9 @@ export default class GitArcProposalController {
   async listLifecycleStates({ cwd }: { cwd: string }): Promise<GitArcLifecycleState[]> {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return [];
-    const entries = await new GitArcRegistry(repository).list();
+    const entries = await this.registry(repository).list();
     const projected = entries.map((entry) => ({ entry, lifecycle: lifecycleEntry(entry) })).filter((value) => value.lifecycle !== null);
-    const summaries = await new GitCheckpointStore(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
+    const summaries = await this.store(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
       harness: normalizeHarness(entry.harness),
       proposalIds: lifecycle!.proposalIds,
       threadId: entry.threadId,
@@ -550,11 +559,11 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.tryOpen(input.cwd);
     if (!repository) return null;
     const harness = normalizeHarness(input.harness);
-    const entry = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
+    const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
     if (!entry) return null;
     const lifecycle = lifecycleEntry(entry);
     if (!lifecycle) return null;
-    const summaries = await new GitCheckpointStore(repository).readProposalSummaries(
+    const summaries = await this.store(repository).readProposalSummaries(
       harness,
       input.threadId,
       lifecycle.proposalIds,
@@ -569,7 +578,7 @@ export default class GitArcProposalController {
   }) {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    return await new GitCheckpointStore(repository).readAcceptedOutcomes(
+    return await this.store(repository).readAcceptedOutcomes(
       harness, input.threadId, input.checkpoint ?? input.checkpointCommit,
     );
   }
@@ -577,11 +586,11 @@ export default class GitArcProposalController {
   async requireNoAcceptedReceipts(input: ArcIdentityInput & { checkpointCommit: string; repository?: WorkbenchGitRepository }) {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const outcome = await store.readOutcome(harness, input.threadId, input.checkpointCommit);
     const receipts = outcome?.acceptedProposals ?? [];
     if (receipts.length) {
-      const entry = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
+      const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
       const claimedPaths = entry?.phase === "active" && entry.checkpointCommit === input.checkpointCommit
         ? entry.claimedPaths
         : [];
@@ -601,7 +610,7 @@ export default class GitArcProposalController {
   }) {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const outcome = await new GitCheckpointStore(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
+    const outcome = await this.store(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
     return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.fallbackHead;
   }
 
@@ -615,7 +624,7 @@ export default class GitArcProposalController {
   }: ArcIdentityInput & { amendProposalId: string; description: string; title: string }): Promise<GitCheckpointProposalReceipt> {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const target = await store.readProposal(harness, threadId, amendProposalId);
     if (target.metadata.status !== "committed" || !target.metadata.committedSha) {
       throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted message amend requires a committed proposal.");
@@ -632,7 +641,7 @@ export default class GitArcProposalController {
 
     const source = await store.readCheckpoint(harness, threadId, target.metadata.sourceCheckpoint);
     const sourceMetadata = requireArcMetadata(source.metadata);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId });
     const proposalId = randomUUID();
     const metadata: ProposalMetadata = {
@@ -681,7 +690,7 @@ export default class GitArcProposalController {
       threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: `${proposalNamespace(harness, threadId)}/${proposalId}` },
+      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
     ]);
     return {
@@ -730,7 +739,7 @@ export default class GitArcProposalController {
     }
     const { active, checkpoint, harness, metadata: checkpointMetadata, registry, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
     const proposalIds = active.proposalIds ?? (active.proposalId ? [active.proposalId] : []);
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     let replacementTarget: StoredProposal | null = null;
     if (replaceProposalId) {
       replacementTarget = await store.readProposal(harness, threadId, replaceProposalId);
@@ -811,7 +820,7 @@ export default class GitArcProposalController {
     };
     commitMessage(metadata.title, metadata.description);
     const proposalCommit = await repository.createCommitFromTree(proposalTree, baseCommit, proposalMessage(metadata));
-    await buildProposalFileChanges(repository, metadata, proposalTree, harness, threadId);
+    await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
     const registryMutation = await registry.prepareSet({
       ...active,
       proposalId,
@@ -839,7 +848,7 @@ export default class GitArcProposalController {
     }
     await repository.updateRefs([
       ...(supersededProposalUpdate ? [supersededProposalUpdate] : []),
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: `${proposalNamespace(harness, threadId)}/${proposalId}` },
+      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
     ]);
     return {
@@ -858,6 +867,7 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const { currentTree, includeNewerAvailable, proposal } = await resolveProposalState(
+      this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
@@ -869,7 +879,7 @@ export default class GitArcProposalController {
       : includeNewer && includeNewerAvailable && currentTree
         ? { tree: currentTree }
         : { tree: proposal.tree };
-    return await buildProposalResult(repository, proposal.metadata, target, harness, threadId, {
+    return await buildProposalResult(this.proposalDiffs, repository, proposal.metadata, target, {
       includeNewerAvailable,
       refreshAmendability: false,
     });
@@ -878,14 +888,14 @@ export default class GitArcProposalController {
   async getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }: ArcIdentityInput & { proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const proposal = await new GitCheckpointStore(repository).readProposal(harness, threadId, proposalId);
+    const proposal = await this.store(repository).readProposal(harness, threadId, proposalId);
     return [...proposal.metadata.paths];
   }
 
   async rescindProposal(input: ArcIdentityInput & { proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.proposalId);
+    const proposal = await this.store(repository).readProposal(harness, input.threadId, input.proposalId);
     if (proposal.metadata.status === "committed") {
       throw proposalAlreadyCommitted(proposal);
     }
@@ -917,7 +927,7 @@ export default class GitArcProposalController {
     if (message.trim() === (await repository.readCommitMessage(target)).trim()) {
       throw new GitArcRejectionError({ reason: "unchangedMessage" }, "The amended commit message is unchanged.");
     }
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const supersededPrior = proposal.metadata.status === "proposed"
       ? await store.findCommittedProposalBySha(harness, threadId, target, proposal.metadata.proposalId)
       : null;
@@ -1002,7 +1012,7 @@ export default class GitArcProposalController {
       throw new Error(`Commit message was not amended. ${proposal.metadata.status === "proposed" ? "The amendment proposal remains pending. " : "The committed proposal is unchanged. "}Cause: ${cause}`, { cause });
     }
     if (!committedMetadata || !amendedCommit) throw new Error("Commit message amendment metadata was not committed.");
-    return await buildProposalResult(repository, committedMetadata, { commit: amendedCommit }, harness, threadId);
+    return await buildProposalResult(this.proposalDiffs, repository, committedMetadata, { commit: amendedCommit });
   }
 
   async commitProposal({
@@ -1024,6 +1034,7 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const resolved = await resolveProposalState(
+      this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
@@ -1052,10 +1063,10 @@ export default class GitArcProposalController {
     ) {
       throw new GitArcRejectionError({ reason: "missingFreshCommitChoice" }, "This amend proposal does not include a fresh commit choice.");
     }
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const proposalSource = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
     requireArcMetadata(proposalSource.metadata);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const active = await registry.find({ harness, threadId });
     const lifecycle = active ? lifecycleEntry(active) : null;
     if (!active || !lifecycle) {
@@ -1155,7 +1166,7 @@ export default class GitArcProposalController {
             ref: nextOutcomeRef,
           });
           replaceRefs.push(oldOutcomeRef, nextOutcomeRef);
-          committedResult = await buildProposalResult(repository, committedMetadata, { tree: targetTree }, harness, threadId, {
+          committedResult = await buildProposalResult(this.proposalDiffs, repository, committedMetadata, { tree: targetTree }, {
             preparedHead: { commit: newHead, ref: headRef },
           });
           return {
@@ -1221,7 +1232,7 @@ export default class GitArcProposalController {
       version: 1,
     });
     const headRef = await repository.symbolicHead();
-    const result = await buildProposalResult(repository, committedMetadata, { tree: targetTree }, harness, threadId, {
+    const result = await buildProposalResult(this.proposalDiffs, repository, committedMetadata, { tree: targetTree }, {
       preparedHead: { commit: committedSha, ref: headRef },
     });
     try {
@@ -1251,7 +1262,7 @@ export default class GitArcProposalController {
   }: ArcIdentityInput & { proposalIds: string[]; reason: string; repository?: WorkbenchGitRepository }) {
     const repository = existingRepository ?? await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const updates = await Promise.all(proposalIds.map(async (proposalId): Promise<GitRefUpdate | null> => {
       const proposal = await store.readProposal(harness, threadId, proposalId);
       if (proposal.metadata.status !== "proposed") return null;
@@ -1268,10 +1279,10 @@ export default class GitArcProposalController {
   private async requireActiveArc(input: ArcIdentityInput) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const active = await registry.find({ harness, threadId: input.threadId });
     if (!active || active.phase !== "active") throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
-    const checkpoint = await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, active.checkpointCommit);
+    const checkpoint = await this.store(repository).readCheckpoint(harness, input.threadId, active.checkpointCommit);
     const metadata = requireArcMetadata(checkpoint.metadata);
     if (
       metadata.scopePaths.length !== active.claimedPaths.length

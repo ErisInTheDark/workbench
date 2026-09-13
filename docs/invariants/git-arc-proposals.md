@@ -3,3 +3,5 @@
 - Git history rewrites preserve checkpoint state only within declared scope.
 - One Git arc inspection request owns one worktree snapshot per repository. Compare, diff, and unclaimed-dirt projection reuse it.
 - Thread settlement checks only live claimed paths under the worktree Git transition. It does not hydrate proposal details.
+- Git arc storage writes canonical Workbench thread IDs. Reads resolve legacy provider IDs through admitted identity; unresolved owners are orphaned, inactive, and omitted from normal projections.
+- Proposal summaries do not require diff hydration. Full proposal diffs hydrate on demand through bounded Git work; completed immutable projections may be reused only by exact tree-and-path identity.

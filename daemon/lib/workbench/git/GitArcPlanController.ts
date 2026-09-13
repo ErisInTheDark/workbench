@@ -16,6 +16,10 @@ import GitArcRegistry, {
 } from "./GitArcRegistry";
 import GitCheckpointStore, { type StoredCheckpoint } from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import {
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { type CheckpointMetadata, type GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 
@@ -191,11 +195,20 @@ function requirePlanMetadata(metadata: CheckpointMetadata | null) {
 }
 
 export default class GitArcPlanController {
+  constructor(private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver) {}
+
+  private registry(repository: WorkbenchGitRepository) {
+    return new GitArcRegistry(repository, this.resolveThreadIdentity);
+  }
+
+  private store(repository: WorkbenchGitRepository) {
+    return new GitCheckpointStore(repository, this.resolveThreadIdentity);
+  }
   async listPlanStates({ cwd }: { cwd: string }): Promise<GitArcPlanState[]> {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return [];
-    const entries = (await new GitArcRegistry(repository).list()).filter((entry) => entry.phase === "plan");
-    const store = new GitCheckpointStore(repository);
+    const entries = (await this.registry(repository).list()).filter((entry) => entry.phase === "plan");
+    const store = this.store(repository);
     return await Promise.all(entries.map(async (entry) => {
       const checkpoint = await store.readCheckpoint(normalizeHarness(entry.harness), entry.threadId, entry.checkpointCommit);
       const metadata = requirePlanMetadata(checkpoint.metadata);
@@ -220,10 +233,10 @@ export default class GitArcPlanController {
   async createPlan(input: PlanInput): Promise<GitArcPlanResult | GitArcNoopResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     const baselinePlan = current?.phase === "plan"
-      ? await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
+      ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
       : null;
     return await this.writePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
@@ -237,11 +250,11 @@ export default class GitArcPlanController {
   async editClaims(input: PlanIdentityInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; start?: boolean }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (input.inherit && !current) throw new GitArcRejectionError({ reason: "missingLifecycle" }, "This thread has no plan or arc to inherit.");
     const baselinePlan = current?.phase === "plan"
-      ? await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
+      ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
       : null;
     const existing = baselinePlan?.metadata?.scopePaths ?? (current ? liveClaims(current) : []);
     const normalise = (paths: string[] | undefined) => paths?.length ? repository.normalizePaths(paths) : [];
@@ -298,7 +311,7 @@ export default class GitArcPlanController {
   async createAndStartPlan(input: PlanInput): Promise<GitArcStartResult | GitArcNoopResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     const plan = await this.preparePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
@@ -344,7 +357,7 @@ export default class GitArcPlanController {
       scopePaths: plan.paths,
       version: 3,
     };
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const active = await store.prepareCheckpoint(
       harness,
       input.threadId,
@@ -387,11 +400,11 @@ export default class GitArcPlanController {
   async startArc(input: PlanIdentityInput & { checkpointCommit?: string }): Promise<GitArcStartResult | GitArcNoopResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     const checkpointCommit = input.checkpointCommit ?? (current?.phase === "plan" ? current.checkpointCommit : null);
     if (!checkpointCommit) throw new GitArcRejectionError({ reason: "missingInactivePlan" }, "This thread does not have a current inactive Git arc plan.");
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const plan = await store.readCheckpoint(harness, input.threadId, checkpointCommit);
     if (plan.metadata && (plan.metadata.kind === "arc" || plan.metadata.kind === "implement")) {
       const metadata = plan.metadata;
@@ -530,7 +543,7 @@ export default class GitArcPlanController {
   private async revisePlan(input: PlanIdentityInput & { paths: string[] }, operation: "add" | "adopt" | "remove") {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (!current) throw new GitArcRejectionError({ reason: "missingLifecycle" }, "This thread does not have a current Git arc or inactive plan.");
     if (current.phase === "active" && operation !== "add") {
@@ -635,7 +648,7 @@ export default class GitArcPlanController {
       scopePaths,
       version: 3,
     };
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const baselineMetadata = options.baselinePlan ? requirePlanMetadata(options.baselinePlan.metadata) : null;
     const preservedPaths = baselineMetadata
       ? overlappingBaselinePaths(baselineMetadata.scopePaths, scopePaths)
@@ -675,7 +688,7 @@ export default class GitArcPlanController {
     planPaths: string[],
   ): Promise<GitArcRegistryEntry["retainedArc"] | null> {
     if (!retainedArc || retainedArc.phase === "resolved" || !retainedArc.claimedPaths.length) return retainedArc;
-    const store = new GitCheckpointStore(repository);
+    const store = this.store(repository);
     const checkpoint = await store.readCheckpoint(harness, threadId, retainedArc.checkpointCommit);
     const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
     const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;

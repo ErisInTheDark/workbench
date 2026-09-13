@@ -4,7 +4,7 @@
  */
 import { nativeLocationKey } from "./database/thread-identity/native-location-key";
 import {
-  NativeThreadKeySchema, NativeThreadReferenceKeySchema, NativeTurnKeySchema,
+  NativeThreadKeySchema, NativeThreadReferenceKeySchema, NativeTurnKeySchema, ProjectIdSchema, ThreadReferenceSchema,
   type NativeThreadId, type NativeThreadKey, type NativeThreadReferenceKey, type NativeTurnId,
   type NativeTurnKey, type ThreadReference, type TurnReference, type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
@@ -18,6 +18,8 @@ import type {
   WorkbenchTurnIdentityMetadata,
   WorkbenchTurnIdentityRecord,
 } from "./database/thread-identity/workbench-thread-identity-types";
+import type { GitArcResolvedThreadIdentity } from "../lib/workbench/git/git-arc-thread-identity";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 export default class WorkbenchThreadIdentityController {
   private disposed = false;
@@ -68,6 +70,26 @@ export default class WorkbenchThreadIdentityController {
     const record = await this.database.resolveNativeThreadIdentity(input);
     this.assertActive();
     return record ? this.remember(record) : null;
+  }
+
+  async resolveGitArcThreadIdentity(input: {
+    harness: WorkbenchHarness;
+    projectId: string;
+    repositoryRoot: string;
+    threadId: string;
+  }): Promise<GitArcResolvedThreadIdentity | null> {
+    const identity = await this.resolve({
+      harness: input.harness,
+      projectId: ProjectIdSchema.parse(input.projectId),
+      threadId: ThreadReferenceSchema.parse(input.threadId),
+    });
+    if (!identity) return null;
+    const location = nativeLocationKey(input.repositoryRoot, this.platform);
+    const binding = identity.bindings.find(candidate => (
+      candidate.harness === input.harness
+      && nativeLocationKey(candidate.nativeLocation, this.platform) === location
+    ));
+    return binding ? { nativeThreadId: binding.nativeThreadId, threadId: identity.threadId } : null;
   }
 
   async observeTurn(input: WorkbenchTurnIdentityMetadata) {

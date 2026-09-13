@@ -45,6 +45,11 @@ import GitArcProposalController, {
   type GitArcLifecycleState,
   type GitCheckpointProposalReceipt,
 } from "./GitArcProposalController";
+import GitArcProposalDiffController from "./GitArcProposalDiffController";
+import {
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
@@ -184,8 +189,9 @@ async function readArcOutcome(
   harness: GitArcHarness,
   threadId: string,
   sourceCheckpoint: string,
+  resolveThreadIdentity: GitArcThreadIdentityResolver,
 ) {
-  return await new GitCheckpointStore(repository).readOutcome(harness, threadId, sourceCheckpoint);
+  return await new GitCheckpointStore(repository, resolveThreadIdentity).readOutcome(harness, threadId, sourceCheckpoint);
 }
 
 async function prepareArcOutcome(
@@ -193,21 +199,22 @@ async function prepareArcOutcome(
   harness: GitArcHarness,
   threadId: string,
   outcome: ArcOutcome,
+  resolveThreadIdentity: GitArcThreadIdentityResolver,
 ) {
-  return await new GitCheckpointStore(repository).prepareOutcome(harness, threadId, outcome);
+  return await new GitCheckpointStore(repository, resolveThreadIdentity).prepareOutcome(harness, threadId, outcome);
 }
 
-async function checkpointRefName(repoRoot: string, harness: GitArcHarness, threadId: string, commit: string) {
-  return await new GitCheckpointStore(new WorkbenchGitRepository(repoRoot)).checkpointRefName(harness, threadId, commit);
+async function checkpointRefName(repoRoot: string, harness: GitArcHarness, threadId: string, commit: string, resolveThreadIdentity: GitArcThreadIdentityResolver) {
+  return await new GitCheckpointStore(new WorkbenchGitRepository(repoRoot), resolveThreadIdentity).checkpointRefName(harness, threadId, commit);
 }
 
-async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string): Promise<ReadCheckpointResult> {
-  return await new GitCheckpointStore(new WorkbenchGitRepository(repoRoot)).readCheckpoint(harness, threadId, rawCommit);
+async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string, resolveThreadIdentity: GitArcThreadIdentityResolver): Promise<ReadCheckpointResult> {
+  return await new GitCheckpointStore(new WorkbenchGitRepository(repoRoot), resolveThreadIdentity).readCheckpoint(harness, threadId, rawCommit);
 }
 
-async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string) {
+async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string, resolveThreadIdentity: GitArcThreadIdentityResolver) {
   const repository = new WorkbenchGitRepository(repoRoot);
-  const checkpoint = await readCheckpoint(repoRoot, harness, threadId, rawCommit);
+  const checkpoint = await readCheckpoint(repoRoot, harness, threadId, rawCommit, resolveThreadIdentity);
   const currentHead = await repository.headOrNull();
   if (checkpoint.parent !== currentHead) throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
   return checkpoint;
@@ -226,16 +233,33 @@ function diffArtifactPath(threadId: string, artifactId: string) {
 }
 
 export default class WorkbenchGitCheckpointController {
-  private readonly plans = new GitArcPlanController();
-  private readonly proposals = new GitArcProposalController();
-  private readonly lifecycle = new GitArcLifecycleController();
+  private readonly plans: GitArcPlanController;
+  private readonly proposals: GitArcProposalController;
+  private readonly lifecycle: GitArcLifecycleController;
+
+  constructor(
+    proposalDiffs = new GitArcProposalDiffController(),
+    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+  ) {
+    this.plans = new GitArcPlanController(resolveThreadIdentity);
+    this.proposals = new GitArcProposalController(proposalDiffs, resolveThreadIdentity);
+    this.lifecycle = new GitArcLifecycleController(resolveThreadIdentity);
+  }
+
+  private registry(repository: WorkbenchGitRepository) {
+    return new GitArcRegistry(repository, this.resolveThreadIdentity);
+  }
+
+  private store(repository: WorkbenchGitRepository) {
+    return new GitCheckpointStore(repository, this.resolveThreadIdentity);
+  }
 
   async createInspectionSnapshot(cwd: string): Promise<GitArcInspectionSnapshot> {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.open(cwd);
       const [snapshot, entries] = await Promise.all([
         repository.writeWorktreeSnapshot(),
-        new GitArcRegistry(repository).list(),
+        this.registry(repository).list(),
       ]);
       return { ...snapshot, entries, repository };
     });
@@ -250,12 +274,12 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.open(cwd);
       const harness = normalizeHarness(rawHarness);
-      const registry = new GitArcRegistry(repository);
+      const registry = this.registry(repository);
       const current = await registry.find({ harness, threadId });
       const checkpointCommit = requestedCommit
         ?? (current?.phase === "plan" ? current.checkpointCommit : null);
       if (!checkpointCommit) throw new Error("This thread does not have an inactive Git arc plan.");
-      const checkpoint = await readCheckpoint(repository.root, harness, threadId, checkpointCommit);
+      const checkpoint = await readCheckpoint(repository.root, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
       if (!checkpoint.metadata || checkpoint.metadata.kind !== "plan" || !checkpoint.metadata.scopePaths.length) {
         throw new Error("The selected checkpoint is not an inactive Git arc plan.");
       }
@@ -275,14 +299,14 @@ export default class WorkbenchGitCheckpointController {
   ) {
     const repository = inspection?.repository ?? await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const active = inspection
       ? inspection.entries.find((entry) => (
         entry.harness === harness && entry.threadId === normalizeThreadId(threadId)
       )) ?? null
       : await registry.find({ harness, threadId });
     if (!active || active.phase !== "active") throw new Error("This thread does not own an active Git arc.");
-    const checkpoint = await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit);
+    const checkpoint = await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity);
     const metadata = requireArcMetadata(checkpoint);
     if (
       metadata.scopePaths.length !== active.claimedPaths.length
@@ -308,7 +332,7 @@ export default class WorkbenchGitCheckpointController {
   private async requireReleasableArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const registry = new GitArcRegistry(repository);
+    const registry = this.registry(repository);
     const active = await registry.find({ harness, threadId });
     const lifecycle = active?.phase === "plan"
       ? active.retainedArc
@@ -325,7 +349,7 @@ export default class WorkbenchGitCheckpointController {
     if (!active || !lifecycle || lifecycle.phase !== "active" || !lifecycle.claimedPaths.length) {
       throw new Error("This thread does not own any live Git arc claims.");
     }
-    const checkpoint = await readCheckpoint(repository.root, harness, threadId, lifecycle.checkpointCommit);
+    const checkpoint = await readCheckpoint(repository.root, harness, threadId, lifecycle.checkpointCommit, this.resolveThreadIdentity);
     requireArcMetadata(checkpoint);
     return { active, checkpoint, harness, lifecycle, registry, repository };
   }
@@ -361,7 +385,7 @@ export default class WorkbenchGitCheckpointController {
       }
       : { ...active, claimedPaths: [], phase: "resolved" as const };
     const registryMutation = await registry.prepareSet(releasedEntry, active.checkpointCommit);
-    const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit);
+    const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit, this.resolveThreadIdentity);
     const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
       acceptedProposals: previousOutcome?.acceptedProposals ?? [],
       committedSha: previousOutcome?.committedSha ?? null,
@@ -370,7 +394,7 @@ export default class WorkbenchGitCheckpointController {
       status: "released",
       successorCheckpoint: null,
       version: 1,
-    });
+    }, this.resolveThreadIdentity);
     await repository.updateRefs([
       outcomeUpdate,
       ...registryMutation.updates,
@@ -421,7 +445,7 @@ export default class WorkbenchGitCheckpointController {
       version: 3,
     };
     const checkpointCommit = await repository.createCommitFromTree(tree, parent, checkpointMessage(nextMetadata));
-    const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit);
+    const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
     const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
       cwd: repository.root,
       repository,
@@ -449,7 +473,7 @@ export default class WorkbenchGitCheckpointController {
       status: "continued",
       successorCheckpoint: checkpointCommit,
       version: 1,
-    });
+    }, this.resolveThreadIdentity);
     const publish = async () => await repository.updateRefs([
       ...proposalUpdates,
       { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
@@ -472,8 +496,8 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.tryOpen(cwd);
       if (!repository) return [];
-      const store = new GitCheckpointStore(repository);
-      const entries = (await new GitArcRegistry(repository).list()).filter((entry) => entry.phase === "active" && entry.claimedPaths.length > 0);
+      const store = this.store(repository);
+      const entries = (await this.registry(repository).list()).filter((entry) => entry.phase === "active" && entry.claimedPaths.length > 0);
       return await Promise.all(entries.map(async (entry) => ({
         ...entry,
         proposalStatus: entry.proposalId
@@ -487,7 +511,7 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.tryOpen(cwd);
       if (!repository) return [];
-      return (await new GitArcRegistry(repository).list()).flatMap((entry) => {
+      return (await this.registry(repository).list()).flatMap((entry) => {
         return entry.claimedPaths.length ? [{ harness: entry.harness, threadId: entry.threadId }] : [];
       });
     });
@@ -498,8 +522,8 @@ export default class WorkbenchGitCheckpointController {
       const repository = await WorkbenchGitRepository.tryOpen(cwd);
       if (!repository) return null;
       const harness = normalizeHarness(rawHarness);
-      const store = new GitCheckpointStore(repository);
-      const entry = await new GitArcRegistry(repository).find({ harness, threadId });
+      const store = this.store(repository);
+      const entry = await this.registry(repository).find({ harness, threadId });
       if (!entry || entry.phase !== "active" || !entry.claimedPaths.length) return null;
       return {
         ...entry,
@@ -521,7 +545,7 @@ export default class WorkbenchGitCheckpointController {
   async hasLiveClaimsAtRepoRoot({ cwd, harness: rawHarness, threadId }: ControllerInput) {
     return await GitObjectReadSession.run(async () => {
       const harness = normalizeHarness(rawHarness);
-      const entry = await new GitArcRegistry(new WorkbenchGitRepository(cwd)).find({ harness, threadId });
+      const entry = await this.registry(new WorkbenchGitRepository(cwd)).find({ harness, threadId });
       return Boolean(entry && getGitArcLiveClaimPaths(entry).length);
     });
   }
@@ -539,7 +563,7 @@ export default class WorkbenchGitCheckpointController {
       const repository = await WorkbenchGitRepository.tryOpen(cwd);
       if (!repository) return;
       const harness = normalizeHarness(rawHarness);
-      const registry = new GitArcRegistry(repository);
+      const registry = this.registry(repository);
       const active = await registry.find({ harness, threadId });
       if (!active) return;
       const mutation = await registry.prepareRelease(
@@ -622,12 +646,19 @@ export default class WorkbenchGitCheckpointController {
       const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
       const { repository, entries, head, tree } = inspection;
       const harness = normalizeHarness(input.harness);
-      const current = entries.find(entry => entry.harness === harness && entry.threadId === normalizeThreadId(input.threadId));
+      const owner = await this.resolveThreadIdentity({
+        harness,
+        repositoryRoot: repository.root,
+        threadId: input.threadId,
+      });
+      const current = owner
+        ? entries.find(entry => entry.harness === harness && entry.threadId === normalizeThreadId(owner.threadId))
+        : undefined;
       const claims = current ? getGitArcLiveClaimPaths(current) : [];
       const dirt = await repository.listAllChangedPaths(head, tree);
       const allClaims = entries.flatMap(getGitArcLiveClaimPaths);
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
-      const proposals = await this.proposals.readStatusProposals(input,
+      const proposals = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
         lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
       const status: GitArcStatus = {
         ...proposals,
@@ -637,7 +668,9 @@ export default class WorkbenchGitCheckpointController {
         recovery: [], unavailableRecovery: [],
       };
       if (!claims.length) {
-        const lost = await new GitArcClaimLossStore(repository).read({ harness, threadId: input.threadId });
+        const lost = owner
+          ? await new GitArcClaimLossStore(repository).read({ harness, threadId: owner.threadId })
+          : null;
         if (lost) {
           const drift = await collectGitArcDrift({
             repository, baseline: lost.commit, baseHead: lost.head, head, tree, paths: lost.paths,
@@ -781,7 +814,7 @@ export default class WorkbenchGitCheckpointController {
           if (input.paths?.length) {
             input = { ...input, ref: current.checkpointCommit };
           } else {
-            const checkpoint = await readCheckpoint(repository.root, normalizeHarness(input.harness), input.threadId, current.checkpointCommit);
+            const checkpoint = await readCheckpoint(repository.root, normalizeHarness(input.harness), input.threadId, current.checkpointCommit, this.resolveThreadIdentity);
             return {
               checkpointCommit: checkpoint.checkpointCommit, checkpointRef: checkpoint.checkpointRef,
               phase: "resolved", changes: [], scopePaths: [], hasUncommittedChanges: false,
@@ -792,7 +825,7 @@ export default class WorkbenchGitCheckpointController {
       }
       if (input.ref && !/^[a-f0-9]{7,64}$/iu.test(input.ref)) {
         const harness = normalizeHarness(input.harness);
-        const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.ref);
+        const proposal = await this.store(repository).readProposal(harness, input.threadId, input.ref);
         const paths = input.paths?.length ? repository.normalizePaths(input.paths) : repository.normalizePaths(proposal.metadata.paths);
         return {
           changes: await repository.buildFileChanges(proposal.proposalCommit, inspection.tree, paths),
@@ -807,7 +840,7 @@ export default class WorkbenchGitCheckpointController {
       if (input.ref) {
         const repoRoot = repository.root;
         const harness = normalizeHarness(input.harness);
-        const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.ref);
+        const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.ref, this.resolveThreadIdentity);
         const metadata = checkpoint.metadata;
         if (metadata?.kind === "arc") {
           const active = inspection.entries.find((entry) => (
@@ -972,14 +1005,14 @@ export default class WorkbenchGitCheckpointController {
       const repository = new WorkbenchGitRepository(repoRoot);
 
       if (!rawPaths?.length) {
-        const registry = new GitArcRegistry(repository);
+        const registry = this.registry(repository);
         const active = await registry.find({ harness, threadId });
         const owningArc = active?.phase === "active" ? active : null;
         const checkpoint = owningArc
-          ? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit)
-          : await readRestorableCheckpoint(repoRoot, harness, threadId, checkpointCommit);
+          ? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit, this.resolveThreadIdentity)
+          : await readRestorableCheckpoint(repoRoot, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
         if (owningArc && owningArc.checkpointCommit !== checkpoint.checkpointCommit) {
-          const activeCheckpoint = await readCheckpoint(repoRoot, harness, threadId, owningArc.checkpointCommit);
+          const activeCheckpoint = await readCheckpoint(repoRoot, harness, threadId, owningArc.checkpointCommit, this.resolveThreadIdentity);
           if (activeCheckpoint.metadata?.amendedFrom === checkpoint.checkpointCommit) {
             return await this.restore({
               checkpointCommit: owningArc.checkpointCommit,
@@ -1018,7 +1051,7 @@ export default class WorkbenchGitCheckpointController {
           status: "released",
           successorCheckpoint: null,
           version: 1,
-        });
+        }, this.resolveThreadIdentity);
         await repository.updateRefs([outcomeUpdate]);
         return {
           checkpointCommit: checkpoint.checkpointCommit,
@@ -1046,7 +1079,7 @@ export default class WorkbenchGitCheckpointController {
         throw new Error("Restore & unclaim must select the active arc's complete claimed file set.");
       }
       const checkpoint = releasingArc?.checkpoint
-        ?? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit);
+        ?? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
       const metadata = releasingArc?.metadata ?? checkpoint.metadata;
       if (!metadata?.scopePaths.length) throw new Error("This checkpoint does not contain a restorable file set.");
       const restoreSource = releasingArc
@@ -1091,7 +1124,7 @@ export default class WorkbenchGitCheckpointController {
           claimedPaths: [],
           phase: "resolved",
         }, releasingArc.active.checkpointCommit);
-        const previousOutcome = await readArcOutcome(releasingArc.repository, harness, threadId, checkpoint.checkpointCommit);
+        const previousOutcome = await readArcOutcome(releasingArc.repository, harness, threadId, checkpoint.checkpointCommit, this.resolveThreadIdentity);
         const outcomeUpdate = await prepareArcOutcome(releasingArc.repository, harness, threadId, {
           acceptedProposals: previousOutcome?.acceptedProposals ?? [],
           committedSha: previousOutcome?.committedSha ?? null,
@@ -1100,7 +1133,7 @@ export default class WorkbenchGitCheckpointController {
           status: "released",
           successorCheckpoint: null,
           version: 1,
-        });
+        }, this.resolveThreadIdentity);
         await releasingArc.repository.updateRefs([
           ...proposalUpdates,
           outcomeUpdate,

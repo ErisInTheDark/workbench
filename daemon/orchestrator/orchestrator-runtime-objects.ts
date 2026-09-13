@@ -126,6 +126,8 @@ export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentit
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
   readonly failure: Error | null;
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
+  readGitArcProposalDiff(identity: import("../lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheIdentity): Promise<import("workbench-shared/workbench/git/checkpoint-contracts").GitCheckpointFileChange[] | null>;
+  writeGitArcProposalDiff(value: import("../lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheValue, maxBytes: number): Promise<void>;
   readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
   readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
   readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;

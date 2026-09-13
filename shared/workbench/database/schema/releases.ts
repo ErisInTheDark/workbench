@@ -35,6 +35,7 @@ const databaseReleases = Object.freeze({
   threadOwnedLifecycle: release(25, "5489b60ed8e25419cc967cd3fa3543deb52cb65bd1f2a6b78aaa166bd121f2fd"),
   codexTranscriptCursors: release(26, "71a4c1e1180cc8ce17764e20a5d3d13b6bd7397abd8ba3739d72e8d30d12d5c9"),
   profileTurnUsage: release(27, "097a815a7f1c749221ab772c5f06ba3994c2da5e9cca3ce7f38fd89dd5dad18f"),
+  gitArcProposalDiffCache: release(28, "54d2dd92aec1de7b9aed3cf337ed2742b13468addef146b8a3bfca1c602efeeb"),
 });
 
 export default databaseReleases;
