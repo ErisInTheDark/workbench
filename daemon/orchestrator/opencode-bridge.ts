@@ -56,6 +56,8 @@ import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcrip
 import { NativeThreadIdSchema, NativeTurnIdSchema, NativeItemIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import { formatWorkbenchInstructionFilterWarning } from "../lib/workbench/instructions/instruction-context-filter";
+import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 
 export type OpenCodeBridgeOptions = {
   profiles?: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "installCreatedProfile" | "withProviderProfileAdmission">;
@@ -1063,6 +1065,7 @@ export class OpenCodeBridge {
     const publicThreadId = this.identities ? this.identities.threads.workbenchIdForNative(
       this.identities.threads.knownNativeBinding("opencode", NativeThreadIdSchema.parse(threadId)),
     ) : threadId;
+    let promptInstructions: WorkbenchPromptInstructions | null = null;
     let systemPrompt: string | null;
     const promptContext = untrustedPromptContext
       ? { ...untrustedPromptContext, harness: "opencode" as const, threadId: publicThreadId }
@@ -1079,9 +1082,9 @@ export class OpenCodeBridge {
           developerInstructions,
         });
       } else {
-        const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions(resolvedPromptContext);
+        promptInstructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions(resolvedPromptContext);
         signal.throwIfAborted();
-        systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(instructions);
+        systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(promptInstructions);
       }
     } else {
       systemPrompt = null;
@@ -1092,8 +1095,12 @@ export class OpenCodeBridge {
       available,
       field: "opencode.systemPrompt",
       harness: "opencode",
-      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      onWarning: (warning) => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
+      sourceSections: promptInstructions?.baseInstructions ? [{
+        content: promptInstructions.baseInstructions,
+        sources: promptInstructions.baseInstructionSources ?? [],
+      }] : undefined,
     });
     return this.identities
       ? this.getReloadableModules().opencodeWorkbenchInstructions.withOpenCodeWorkbenchThreadIdentity(filtered, publicThreadId)

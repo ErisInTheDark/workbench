@@ -35,6 +35,7 @@ import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import { formatWorkbenchInstructionFilterWarning } from "../lib/workbench/instructions/instruction-context-filter";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
@@ -790,8 +791,12 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
       available,
       field: "copilot.systemMessage",
       harness: "copilot",
-      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      onWarning: (warning) => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
+      sourceSections: promptInstructions?.baseInstructions ? [{
+        content: promptInstructions.baseInstructions,
+        sources: promptInstructions.baseInstructionSources ?? [],
+      }] : undefined,
     });
 
     return {

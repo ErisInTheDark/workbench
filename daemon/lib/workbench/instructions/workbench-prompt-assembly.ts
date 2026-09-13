@@ -42,6 +42,7 @@ import {
   listWorkbenchInstructionMechanics,
 } from "./workbench-instruction-mechanics";
 import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
+import type { RenderedInstructionContent } from "./instruction-file-generation";
 import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 
 export type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
@@ -231,6 +232,26 @@ function joinInstructionSections(sections: Array<string | null | undefined>) {
     .join("\n\n") || null;
 }
 
+function trimRenderedInstructionContent(rendered: RenderedInstructionContent): RenderedInstructionContent {
+  const content = rendered.content.trim();
+  const outputStart = content ? rendered.content.indexOf(content) : 0;
+  const outputEnd = outputStart + content.length;
+  return {
+    content,
+    sources: rendered.sources.flatMap((source) => {
+      const overlapStart = Math.max(source.outputStart, outputStart);
+      const overlapEnd = Math.min(source.outputEnd, outputEnd);
+      if (overlapStart >= overlapEnd) return [];
+      return [{
+        ...source,
+        outputEnd: overlapEnd - outputStart,
+        outputStart: overlapStart - outputStart,
+        sourceStart: source.sourceStart + overlapStart - source.outputStart,
+      }];
+    }),
+  };
+}
+
 async function listProjectSkillDefinitionsForPrompt(context: WorkbenchPromptContext) {
   const promptRoot = getPrimaryPromptRoot(context);
   if (!promptRoot?.rootPath.trim()) {
@@ -264,7 +285,10 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     "workspace.roots.list": formatWorkspaceRoots(context.roots),
   };
 
-  const baseInstructions = instructionFiles.render(AGENTS_FILE_NAME, slots).trim();
+  const renderedBaseInstructions = trimRenderedInstructionContent(
+    instructionFiles.renderWithSources(AGENTS_FILE_NAME, slots),
+  );
+  const baseInstructions = renderedBaseInstructions.content;
   const developerInstructions = joinInstructionSections([
     buildProjectInstructionSection(buildProjectInstructionContent(context)),
     buildInstructionPackSections(instructionPacks),
@@ -272,6 +296,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
 
   return {
     baseInstructions: baseInstructions || null,
+    baseInstructionSources: renderedBaseInstructions.sources,
     developerInstructions,
   };
 }

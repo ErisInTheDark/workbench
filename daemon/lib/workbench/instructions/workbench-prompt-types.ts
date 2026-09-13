@@ -5,6 +5,7 @@
  */
 
 import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/types";
+import type { InstructionSourceSpan } from "./instruction-file-generation";
 
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
@@ -24,5 +25,6 @@ export interface WorkbenchPromptContext {
 
 export interface WorkbenchPromptInstructions {
   readonly baseInstructions: string | null;
+  readonly baseInstructionSources?: readonly InstructionSourceSpan[];
   readonly developerInstructions: string | null;
 }

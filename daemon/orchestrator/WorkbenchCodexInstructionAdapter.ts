@@ -11,9 +11,10 @@ import { contextCompactionThreshold } from "workbench-shared/workbench/thread/th
 
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import { formatWorkbenchInstructionFilterWarning } from "../lib/workbench/instructions/instruction-context-filter";
+import type { InstructionSourceSpan } from "../lib/workbench/instructions/instruction-file-generation";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
-import { logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 
@@ -150,12 +151,17 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     // This adapter installs Workbench MCP even before native creation returns an id.
     const context = { ...promptContext, harness: "codex" as const, managedThread: true };
     const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context);
-    const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
+    const filter = (
+      value: string | null,
+      field: string,
+      sources: readonly InstructionSourceSpan[] = [],
+    ) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
       available,
       field,
       harness: "codex",
-      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      onWarning: (warning) => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
+      sourceSections: value ? [{ content: value, sources }] : undefined,
     });
     if (isPromptAugmentedTurnMethod(method)) {
       const activatedSkillCatalog = filter(
@@ -180,8 +186,15 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     return {
       ...message,
       params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, {
-        baseInstructions: filter(promptInstructions.baseInstructions, "baseInstructions"),
-        developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
+        baseInstructions: filter(
+          promptInstructions.baseInstructions,
+          "baseInstructions",
+          promptInstructions.baseInstructionSources,
+        ),
+        developerInstructions: filter(
+          promptInstructions.developerInstructions,
+          "developerInstructions",
+        ),
       }), context.cwd),
     };
   }

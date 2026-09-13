@@ -55,6 +55,27 @@ test("resolves direct, globbed, recursive, and overridden instruction files", as
   });
 });
 
+test("mapped rendering attributes imported output to the active source file", async () => {
+  await withLibrary(async (rootPath) => {
+    await Promise.all([
+      write(rootPath, "AGENTS.md", "start\n{./mechanics/*}\nend"),
+      write(rootPath, "mechanics/status.md", "base status"),
+      write(rootPath, "mechanics/status.override.md", "heading\n<available:thread-status>\nbody"),
+    ]);
+
+    const rendered = createLibraryInstructionFileGeneration({ rootPath }).renderWithSources("AGENTS.md");
+    const outputStart = rendered.content.indexOf("<available:thread-status>");
+    const source = rendered.sources.find((candidate) => (
+      candidate.outputStart <= outputStart && candidate.outputEnd > outputStart
+    ));
+
+    assert.equal(rendered.content, "start\nheading\n<available:thread-status>\nbody\nend");
+    assert.equal(source?.absolutePath, path.join(rootPath, "mechanics/status.override.md"));
+    const sourceStart = (source?.sourceStart ?? 0) + outputStart - (source?.outputStart ?? 0);
+    assert.equal(source?.sourceContent.slice(sourceStart, sourceStart + "<available:thread-status>".length), "<available:thread-status>");
+  });
+});
+
 test("runtime values remain opaque after recursive imports", async () => {
   await withLibrary(async (rootPath) => {
     await Promise.all([

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - InstructionFile/InstructionFileGeneration: active instruction file and per-generation resolver contracts. Keywords: instructions, files, generation.
+ * - InstructionSourceSpan/RenderedInstructionContent: rendered text provenance back to active source files.
  * - createInstructionFileGeneration: resolve root-bounded Markdown files, recursive imports, globs, overrides, and opaque runtime slots. Keywords: imports, glob, cycle, runtime, root.
  */
 
@@ -18,6 +19,20 @@ export interface InstructionFileGeneration {
   list(relativeDirectory: string): InstructionFile[];
   read(relativePath: string): InstructionFile;
   render(relativePath: string, slots?: Readonly<Record<string, string | null | undefined>>): string;
+  renderWithSources(relativePath: string, slots?: Readonly<Record<string, string | null | undefined>>): RenderedInstructionContent;
+}
+
+export interface InstructionSourceSpan {
+  readonly absolutePath: string;
+  readonly outputEnd: number;
+  readonly outputStart: number;
+  readonly sourceContent: string;
+  readonly sourceStart: number;
+}
+
+export interface RenderedInstructionContent {
+  readonly content: string;
+  readonly sources: readonly InstructionSourceSpan[];
 }
 
 interface InstructionFileGenerationOptions {
@@ -30,6 +45,23 @@ const OVERRIDE_SUFFIX = ".override.md";
 const TEMPLATE_SUFFIX = ".template.md";
 const RELATIVE_IMPORT = /\{(\.\/[^{}\r\n]+)\}/gu;
 const RUNTIME_SLOT = /\{([a-z][a-z0-9 .-]*)\}/giu;
+
+function sliceRenderedContent(rendered: RenderedInstructionContent, start: number, end: number): RenderedInstructionContent {
+  return {
+    content: rendered.content.slice(start, end),
+    sources: rendered.sources.flatMap((source) => {
+      const overlapStart = Math.max(source.outputStart, start);
+      const overlapEnd = Math.min(source.outputEnd, end);
+      if (overlapStart >= overlapEnd) return [];
+      return [{
+        ...source,
+        outputEnd: overlapEnd - start,
+        outputStart: overlapStart - start,
+        sourceStart: source.sourceStart + overlapStart - source.outputStart,
+      }];
+    }),
+  };
+}
 
 function compareText(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -78,8 +110,9 @@ export function createInstructionFileGeneration(
   const rootPath = path.resolve(options.rootPath);
   const realRootPath = fs.realpathSync.native(rootPath);
   const activePaths = new Map<string, string>();
-  const expandedContent = new Map<string, string>();
+  const expandedContent = new Map<string, RenderedInstructionContent>();
   const files = new Map<string, InstructionFile>();
+  const sourceMetadata = new Map<string, { contentStart: number; sourceContent: string }>();
 
   const resolveInsideRoot = (relativePath: string) => {
     const normalizedPath = normalizeRelativePath(relativePath);
@@ -138,7 +171,8 @@ export function createInstructionFileGeneration(
     if (cached) return cached;
     const { absolutePath } = resolveInsideRoot(normalizedPath);
     assertRealPathInsideRoot(absolutePath);
-    const content = fs.readFileSync(absolutePath, "utf8").replace(/\r\n?/gu, "\n").trim();
+    const sourceContent = fs.readFileSync(absolutePath, "utf8").replace(/\r\n?/gu, "\n");
+    const content = sourceContent.trim();
     const file: InstructionFile = {
       absolutePath,
       content,
@@ -147,6 +181,10 @@ export function createInstructionFileGeneration(
       relativePath: normalizedPath,
     };
     files.set(normalizedPath, file);
+    sourceMetadata.set(normalizedPath, {
+      contentStart: content ? sourceContent.indexOf(content) : 0,
+      sourceContent,
+    });
     return file;
   };
 
@@ -192,7 +230,7 @@ export function createInstructionFileGeneration(
     return resolvedPath;
   };
 
-  const expandFile = (file: InstructionFile, chain: readonly string[]): string => {
+  const expandFile = (file: InstructionFile, chain: readonly string[]): RenderedInstructionContent => {
     if (chain.includes(file.relativePath)) {
       throw formatImportFailure(
         `Instruction import cycle detected in ${options.scopeLabel}.`,
@@ -202,13 +240,37 @@ export function createInstructionFileGeneration(
     const cached = expandedContent.get(file.relativePath);
     if (cached !== undefined) return cached;
     const nextChain = [...chain, file.relativePath];
+    const metadata = sourceMetadata.get(file.relativePath);
+    if (!metadata) throw new Error(`Instruction source metadata is unavailable: ${file.relativePath}`);
     let output = "";
+    const sources: InstructionSourceSpan[] = [];
     let cursor = 0;
+    const appendSource = (start: number, end: number) => {
+      if (start >= end) return;
+      const outputStart = output.length;
+      output += file.content.slice(start, end);
+      sources.push({
+        absolutePath: file.absolutePath,
+        outputEnd: output.length,
+        outputStart,
+        sourceContent: metadata.sourceContent,
+        sourceStart: metadata.contentStart + start,
+      });
+    };
+    const appendRendered = (rendered: RenderedInstructionContent) => {
+      const outputStart = output.length;
+      output += rendered.content;
+      sources.push(...rendered.sources.map((source) => ({
+        ...source,
+        outputEnd: outputStart + source.outputEnd,
+        outputStart: outputStart + source.outputStart,
+      })));
+    };
     for (const match of file.content.matchAll(RELATIVE_IMPORT)) {
       const matchIndex = match.index;
       const importPath = match[1];
       if (matchIndex === undefined || !importPath) continue;
-      output += file.content.slice(cursor, matchIndex);
+      appendSource(cursor, matchIndex);
       const resolvedPath = resolveImportPath(file.relativePath, importPath, nextChain);
       try {
         if (resolvedPath.endsWith("/*")) {
@@ -216,9 +278,12 @@ export function createInstructionFileGeneration(
           if (!importedFiles.length) {
             throw new Error(`Instruction glob is empty in ${options.scopeLabel}: ${importPath}`);
           }
-          output += importedFiles.map((importedFile) => expandFile(importedFile, nextChain)).join("\n\n");
+          importedFiles.forEach((importedFile, index) => {
+            if (index > 0) output += "\n\n";
+            appendRendered(expandFile(importedFile, nextChain));
+          });
         } else {
-          output += expandFile(read(resolvedPath), nextChain);
+          appendRendered(expandFile(read(resolvedPath), nextChain));
         }
       } catch (error) {
         if (error instanceof Error && error.message.includes("\nImport chain:")) throw error;
@@ -229,23 +294,49 @@ export function createInstructionFileGeneration(
       }
       cursor = matchIndex + match[0].length;
     }
-    output += file.content.slice(cursor);
-    expandedContent.set(file.relativePath, output);
-    return output;
+    appendSource(cursor, file.content.length);
+    const expanded = { content: output, sources };
+    expandedContent.set(file.relativePath, expanded);
+    return expanded;
   };
 
-  const render = (
+  const renderWithSources = (
     relativePath: string,
     slots: Readonly<Record<string, string | null | undefined>> = {},
   ) => {
     const normalizedSlots = new Map(
       Object.entries(slots).map(([key, value]) => [normalizeRuntimeSlot(key), value] as const),
     );
-    return expandFile(read(relativePath), []).replace(RUNTIME_SLOT, (match, slot: string) => {
+    const expanded = expandFile(read(relativePath), []);
+    let output = "";
+    const sources: InstructionSourceSpan[] = [];
+    let cursor = 0;
+    const appendRendered = (rendered: RenderedInstructionContent) => {
+      const outputStart = output.length;
+      output += rendered.content;
+      sources.push(...rendered.sources.map((source) => ({
+        ...source,
+        outputEnd: outputStart + source.outputEnd,
+        outputStart: outputStart + source.outputStart,
+      })));
+    };
+    for (const match of expanded.content.matchAll(RUNTIME_SLOT)) {
+      const matchIndex = match.index;
+      const slot = match[1];
+      if (matchIndex === undefined || !slot) continue;
       const value = normalizedSlots.get(normalizeRuntimeSlot(slot));
-      return value === null || value === undefined ? match : value;
-    });
+      if (value === null || value === undefined) continue;
+      appendRendered(sliceRenderedContent(expanded, cursor, matchIndex));
+      output += value;
+      cursor = matchIndex + match[0].length;
+    }
+    appendRendered(sliceRenderedContent(expanded, cursor, expanded.content.length));
+    return { content: output, sources };
   };
 
-  return { list, read, render };
+  const render: InstructionFileGeneration["render"] = (relativePath, slots) => (
+    renderWithSources(relativePath, slots).content
+  );
+
+  return { list, read, render, renderWithSources };
 }
