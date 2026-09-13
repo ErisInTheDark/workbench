@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - WorkbenchContextMenuSurfaceProps: active menu placement and dismissal inputs. Keywords: context menu, placement, dismissal.
- * - default WorkbenchContextMenuSurface: render action rows, separators, and accessible grouped icon controls. Keywords: context menu, checkbox, radio, controls.
+ * - WorkbenchContextMenuSurfaceProps: active menu placement and dismissal inputs.
+ * - selectWorkbenchContextMenuControl: dispatch an enabled grouped control with its dismissal policy.
+ * - default WorkbenchContextMenuSurface: render action rows, separators, and accessible grouped icon controls.
  */
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
-import type { WorkbenchContextMenuControl, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import type { WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchMenuSurface from "./WorkbenchMenuSurface";
 import WorkbenchMenuAction from "./WorkbenchMenuAction";
 
@@ -35,6 +36,16 @@ function getControlToneClassName(tone: WorkbenchContextMenuControl["tone"]) {
   if (tone === "danger") return "!text-danger hover:!text-danger focus-visible:!text-danger";
   if (tone === "default") return "";
   return getWorkbenchThreadStatusControlClassName(tone);
+}
+
+export function selectWorkbenchContextMenuControl(
+  group: WorkbenchContextMenuControlGroup,
+  control: WorkbenchContextMenuControl,
+  onClose: () => void,
+) {
+  if (control.disabled) return;
+  if (group.closeOnSelect !== false) onClose();
+  control.onSelect();
 }
 
 export default function WorkbenchContextMenuSurface({
@@ -91,7 +102,7 @@ export default function WorkbenchContextMenuSurface({
     };
   }, [onClose]);
 
-  const select = (disabled: boolean | undefined, onSelect: () => void) => {
+  const selectAction = (disabled: boolean | undefined, onSelect: () => void) => {
     if (disabled) return;
     onClose();
     onSelect();
@@ -143,7 +154,7 @@ export default function WorkbenchContextMenuSurface({
                     data-checked={control.checked}
                     data-tone={control.tone ?? "default"}
                     className={`enabled:cursor-pointer ${controlClassName} ${getControlToneClassName(control.tone)}`}
-                    onClick={() => select(control.disabled, control.onSelect)}
+                    onClick={() => selectWorkbenchContextMenuControl(item, control, onClose)}
                   >
                     <span className="inline-flex size-4 items-center justify-center">{control.icon}</span>
                   </button>
@@ -158,7 +169,7 @@ export default function WorkbenchContextMenuSurface({
             key={item.id}
             disabled={item.disabled}
             data-tone={item.tone ?? "default"}
-            onClick={() => select(item.disabled, item.onSelect)}
+            onClick={() => selectAction(item.disabled, item.onSelect)}
           >
             {item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span> : null}
             <span className="min-w-0 truncate">{item.label}</span>

@@ -1,11 +1,10 @@
-/* No production exports. Tests protect grouped context-menu semantics and close-before-action behavior. */
+/* No production exports. Tests protect grouped context-menu semantics and selection dismissal behavior. */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import WorkbenchContextMenuSurface from "./WorkbenchContextMenuSurface";
+import WorkbenchContextMenuSurface, { selectWorkbenchContextMenuControl } from "./WorkbenchContextMenuSurface";
 
 test("context menu renders action, separator, checkbox, and radio semantics", () => {
   const icon = createElement("span", null, "icon");
@@ -52,9 +51,31 @@ test("context menu renders action, separator, checkbox, and radio semantics", ()
   assert.match(html, /role="menuitemradio" aria-checked="true" aria-label="Completed"/u);
 });
 
-test("every enabled action path closes the menu before dispatch", async () => {
-  const source = await readFile(new URL("./WorkbenchContextMenuSurface.tsx", import.meta.url), "utf8");
-  assert.match(source, /onClose\(\);\s*onSelect\(\);/u);
-  assert.match(source, /onClick=\{\(\) => select\(control\.disabled, control\.onSelect\)\}/u);
-  assert.match(source, /onClick=\{\(\) => select\(item\.disabled, item\.onSelect\)\}/u);
+test("persistent controls dispatch without closing while default and disabled controls preserve dismissal semantics", () => {
+  const events: string[] = [];
+  const control = {
+    checked: false,
+    icon: createElement("span"),
+    id: "pin",
+    label: "Pin thread",
+    onSelect: () => events.push("select"),
+  };
+  const group = {
+    controls: [control],
+    id: "priority",
+    kind: "control-group" as const,
+    label: "Priority",
+    presentation: "independent" as const,
+  };
+
+  selectWorkbenchContextMenuControl({ ...group, closeOnSelect: false }, control, () => events.push("close"));
+  assert.deepEqual(events, ["select"]);
+
+  events.length = 0;
+  selectWorkbenchContextMenuControl(group, control, () => events.push("close"));
+  assert.deepEqual(events, ["close", "select"]);
+
+  events.length = 0;
+  selectWorkbenchContextMenuControl(group, { ...control, disabled: true }, () => events.push("close"));
+  assert.deepEqual(events, []);
 });

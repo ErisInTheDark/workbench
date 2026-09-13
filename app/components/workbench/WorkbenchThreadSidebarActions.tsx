@@ -236,6 +236,7 @@ function WorkbenchThreadSidebarActionsProvider({
 
     const snoozed = group === "snoozed";
     items.push({ id: "priority-separator", kind: "separator" }, {
+      closeOnSelect: false,
       controls: [{
         checked: pinned,
         disabled: group === "archived",
@@ -268,6 +269,7 @@ function WorkbenchThreadSidebarActionsProvider({
         if (entry.lifecycle.kind !== status) mutateEntry(entry, ownerProjectId, "status/set", status);
       };
       items.push({ id: "status-separator", kind: "separator" }, {
+        closeOnSelect: false,
         controls: [{
           checked: entry.lifecycle.kind === "needsAttention",
           disabled: group === "archived" || entry.lifecycle.kind === "working",

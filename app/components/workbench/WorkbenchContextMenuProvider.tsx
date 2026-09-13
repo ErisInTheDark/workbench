@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchContextMenuProvider: own and render the active document context menu. Keywords: context menu, provider, document.
+ * - default WorkbenchContextMenuProvider: own, refresh, and render the active document context menu.
  */
 "use client";
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
 import WorkbenchContextMenuContext, {
   type WorkbenchContextMenuController,
@@ -32,10 +32,18 @@ export default function WorkbenchContextMenuProvider ({ children }: { children: 
     });
   }, []);
 
-  const controller: WorkbenchContextMenuController = {
+  const refreshContextMenu = useCallback((menu: WorkbenchContextMenuRequest["menu"]) => {
+    setActiveContextMenu((current) => {
+      if (!current || current.menu.id !== menu.id || current.menu === menu) return current;
+      return { ...current, menu };
+    });
+  }, []);
+
+  const controller = useMemo<WorkbenchContextMenuController>(() => ({
     closeContextMenu,
     openContextMenu,
-  };
+    refreshContextMenu,
+  }), [closeContextMenu, openContextMenu, refreshContextMenu]);
 
   return (
     <WorkbenchContextMenuContext.Provider value={controller}>

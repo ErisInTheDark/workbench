@@ -107,7 +107,7 @@ function renderThreads(
     {
       children: () => createElement(
         WorkbenchContextMenuContext.Provider,
-        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
             activeDragPayload,
             currentTarget: null,
@@ -140,7 +140,7 @@ function renderPinnedThreads(
     {
       children: () => createElement(
         WorkbenchContextMenuContext.Provider,
-        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
           activeDragPayload,
           actions: {
@@ -211,7 +211,7 @@ function renderHomeThreads({
     {
       children: () => createElement(
         WorkbenchContextMenuContext.Provider,
-        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchHomeThreadList, {
           actions,
           activeDragPayload,
@@ -237,7 +237,7 @@ function renderThreadItem(
 ) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
-    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
     createElement(WorkbenchThreadListItem, {
       contextMenu,
       entry,
@@ -271,7 +271,7 @@ async function renderThreadItemWithComposerDraft(
         {
           children: createElement(
             WorkbenchContextMenuContext.Provider,
-            { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+            { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
             createElement(WorkbenchThreadListItem, {
               entry,
               href: "/agent/thread/thread-one",

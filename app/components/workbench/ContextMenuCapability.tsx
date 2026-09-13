@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - ContextMenuCapabilityMenuFactory: callback used to build a context menu on demand. Keywords: context menu, capability, factory.
- * - default ContextMenuCapability: wrap children and open their document context menu on right click. Keywords: context menu, wrapper, right click.
+ * - ContextMenuCapabilityMenuFactory: callback used to build a context menu on demand.
+ * - default ContextMenuCapability: open and refresh a child's document context menu.
  */
 "use client";
 
-import type { MouseEvent, ReactNode } from "react";
+import { useEffect, type MouseEvent, type ReactNode } from "react";
 
 import {
   useWorkbenchContextMenu,
@@ -26,7 +26,11 @@ export default function ContextMenuCapability ({
   disabled?: boolean;
   menu: WorkbenchContextMenuDefinition | ContextMenuCapabilityMenuFactory | null;
 }) {
-  const { openContextMenu } = useWorkbenchContextMenu();
+  const { openContextMenu, refreshContextMenu } = useWorkbenchContextMenu();
+
+  useEffect(() => {
+    if (menu && typeof menu !== "function") refreshContextMenu(menu);
+  }, [menu, refreshContextMenu]);
 
   return (
     <span

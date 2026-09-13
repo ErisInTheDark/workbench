@@ -5,11 +5,10 @@
  * - WorkbenchContextMenuControlGroup: grouped commands, checkboxes, or radio controls.
  * - WorkbenchContextMenuSeparator: menu section divider.
  * - WorkbenchContextMenuItem: supported menu rows.
- * Keywords: context menu, action, checkbox, radio, separator.
- * - WorkbenchContextMenuDefinition/WorkbenchContextMenuRequest: contracts for document context menu content and placement. Keywords: context menu, definition, request.
- * - WorkbenchContextMenuController: controller exposed to context-menu capabilities. Keywords: context menu, controller, open, close.
- * - useWorkbenchContextMenu: read the canonical document context menu controller. Keywords: context menu, hook, controller.
- * - default WorkbenchContextMenuContext: canonical React context shared by the provider and consumers. Keywords: context menu, context, provider.
+ * - WorkbenchContextMenuDefinition/WorkbenchContextMenuRequest: document context-menu content and placement contracts.
+ * - WorkbenchContextMenuController: controller exposed to context-menu capabilities.
+ * - useWorkbenchContextMenu: read the canonical document context-menu controller.
+ * - default WorkbenchContextMenuContext: canonical React context shared by the provider and consumers.
  */
 "use client";
 
@@ -38,6 +37,7 @@ export interface WorkbenchContextMenuControl {
 }
 
 export interface WorkbenchContextMenuControlGroup {
+  closeOnSelect?: boolean;
   controls: WorkbenchContextMenuControl[];
   id: string;
   kind: "control-group";
@@ -67,6 +67,7 @@ export interface WorkbenchContextMenuRequest {
 export interface WorkbenchContextMenuController {
   closeContextMenu: () => void;
   openContextMenu: (request: WorkbenchContextMenuRequest) => void;
+  refreshContextMenu: (menu: WorkbenchContextMenuDefinition) => void;
 }
 
 const WorkbenchContextMenuContext = createContext<WorkbenchContextMenuController | null>(null);
