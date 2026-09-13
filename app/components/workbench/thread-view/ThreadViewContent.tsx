@@ -85,6 +85,7 @@ import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadLiveActivity, { type LiveThreadActivity } from "./ThreadLiveActivity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
+import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
@@ -413,6 +414,7 @@ export default memo(function ThreadViewContent ({
   );
   const transcriptSource = activeThreadController.state.transcript;
   const threadGoalControls = threads.goals;
+  const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = activeThreadController.state.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
@@ -695,12 +697,7 @@ export default memo(function ThreadViewContent ({
           renderedTurnIds: renderedHistoryTurnIds,
           nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
             && sentinelRect.bottom > viewportRect.top - 160 && sentinelRect.top < viewportRect.bottom),
-          mode: viewport.dataset.threadScrollMode === "bottom-following" ? "bottom-following" : "reading",
-          metrics: {
-            clientHeight: viewport.clientHeight,
-            scrollHeight: viewport.scrollHeight,
-            scrollTop: viewport.scrollTop,
-          },
+          scrollTop: viewport.scrollTop,
           get anchor() {
             const marker = [...root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)]
               .find((candidate) => renderedHistoryTurnIds.includes(candidate.dataset.threadHistoryTurnId ?? ""));
@@ -1066,6 +1063,9 @@ export default memo(function ThreadViewContent ({
       : activeTranscriptSource?.status === "unavailable"
         ? "The SQLite transcript source is unavailable."
         : null;
+  const initialThreadContentReady = Boolean(
+    activeThread && (!usesSqlTranscript || activeTranscriptProjection || transcriptSourceMessage),
+  );
 
   return (
     <ProjectFilePathDisplayProvider
@@ -1085,18 +1085,19 @@ export default memo(function ThreadViewContent ({
         projectId,
         proposalIntents: visibleGitArcProposalPresentation.intents,
       }}>
-      <div
-        ref={threadViewRef}
-        data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
-        data-thread-project-file-link-boundary="true"
-        className={joinClasses(
-          "mx-auto flex min-h-full w-full min-w-0 max-w-content flex-col overflow-x-clip md:overflow-x-visible",
-          mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
-          !isDraftThreadView && "justify-end",
-        )}
-        onClick={handleThreadViewClick}
-        style={{ fontSize: `${fontSizeRem}rem` }}
-      >
+      <>
+        <div
+          ref={threadViewRef}
+          data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
+          data-thread-project-file-link-boundary="true"
+          className={joinClasses(
+            "mx-auto flex min-h-full w-full min-w-0 max-w-content flex-col overflow-x-clip md:overflow-x-visible",
+            mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
+            !isDraftThreadView && "justify-end",
+          )}
+          onClick={handleThreadViewClick}
+          style={{ fontSize: `${fontSizeRem}rem` }}
+        >
         {isDraftThreadView ? (
           <>
             <div className={joinClasses(
@@ -1256,8 +1257,14 @@ export default memo(function ThreadViewContent ({
             ) : null}
           </>
         ) : null}
-        <div aria-hidden="true" className="h-px w-full" />
-      </div>
+        </div>
+        <div
+          ref={initialThreadContentReady ? threadScrollViewport.setEndTarget : null}
+          aria-hidden="true"
+          className="h-px w-full shrink-0"
+          data-thread-scroll-end={initialThreadContentReady ? "true" : undefined}
+        />
+      </>
       </ThreadGitArcPresentationContext.Provider>
       </ThreadGitArcObservationProvider>
     </ProjectFilePathDisplayProvider>

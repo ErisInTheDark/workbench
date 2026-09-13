@@ -18,7 +18,6 @@ function fixture() {
   let renderedTurnIds = ["turn-2"];
   let requestStatus: HistoryPagingView["requestStatus"];
   let nearTop = true;
-  let mode: HistoryPagingView["mode"] = "reading";
   let identity = {};
   const viewport = {};
   let loads = 0;
@@ -26,8 +25,7 @@ function fixture() {
   const writes: number[] = [];
   const controller = new ThreadHistoryPagingController({
     readView: () => ({
-      identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop, mode,
-      metrics: { scrollTop, scrollHeight, clientHeight: 500 },
+      identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop, scrollTop,
       anchor: { turnId: "turn-2", top: contentTop - scrollTop },
       anchorTop: () => contentTop - scrollTop,
     }),
@@ -76,8 +74,8 @@ function fixture() {
     },
     setNearTop(value: boolean) { nearTop = value; controller.reconcile(); },
     setSourceReady(value: boolean) { sourceReady = value; controller.reconcile(); },
+    setScrollTop(value: number) { scrollTop = value; },
     move(value: number) { controller.interrupt(); scrollTop = value; },
-    setMode(value: HistoryPagingView["mode"], offset: number) { mode = value; scrollTop = offset; },
     replace() { identity = {}; controller.reconcile(); },
     fail() {
       assert.notEqual(transaction, null);
@@ -128,13 +126,13 @@ test("sql receipt does not consume the anchor or admit another page before rende
   assert.equal(f.loads, 2);
 });
 
-test("reverse layout preserves the anchor without waiting for reading mode", () => {
+test("normal layout preserves a nonzero reader offset across prepended history", () => {
   const f = fixture();
-  f.setMode("bottom-following", -1_500);
+  f.setScrollTop(300);
   f.start();
   f.receive();
   f.render(400);
-  assert.equal(f.scrollTop, -1_100);
+  assert.equal(f.scrollTop, 700);
 });
 
 test("user scrolling relinquishes the anchor without releasing the render fence", () => {

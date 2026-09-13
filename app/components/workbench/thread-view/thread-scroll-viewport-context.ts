@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, off-screen layout preservation and composer intent.
- * - useThreadScrollViewportContext: read the nearest viewport intent boundary without host prop drilling. Keywords: thread, scroll viewport, React context.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, committed end target, and off-screen layout preservation.
+ * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  */
 
 import { createContext, useContext } from "react";
@@ -9,15 +9,13 @@ import { createContext, useContext } from "react";
 export interface ThreadScrollViewportContextValue {
   readonly getViewport: () => HTMLDivElement | null;
   readonly preserveOffscreenLayout: () => () => void;
-  readonly isWithinBottomDistance: (tolerancePx: number) => boolean;
-  readonly reportComposerArmed: (armed: boolean) => void;
+  readonly setEndTarget: (target: HTMLElement | null) => void;
 }
 
 const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue = {
   getViewport: () => null,
   preserveOffscreenLayout: () => () => {},
-  isWithinBottomDistance: () => false,
-  reportComposerArmed: () => undefined,
+  setEndTarget: () => {},
 };
 
 export const ThreadScrollViewportContext = createContext<ThreadScrollViewportContextValue>(

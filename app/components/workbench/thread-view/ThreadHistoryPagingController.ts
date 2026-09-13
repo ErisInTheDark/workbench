@@ -5,8 +5,6 @@
  * - HistoryPagingOptions: viewport, request, and scheduling boundary.
  * - default ThreadHistoryPagingController: own automatic paging and prepend restoration.
  */
-import ThreadScrollMode, { type ThreadScrollMetrics, type ThreadScrollMode as ScrollMode } from "./thread-scroll-mode";
-
 export interface HistoryPagingView {
   readonly identity: object;
   readonly viewport: object;
@@ -15,8 +13,7 @@ export interface HistoryPagingView {
   readonly sourceReady: boolean;
   readonly renderedTurnIds: readonly string[];
   readonly nearTop: boolean;
-  readonly mode: ScrollMode;
-  readonly metrics: ThreadScrollMetrics;
+  readonly scrollTop: number;
   readonly anchor: { readonly turnId: string; readonly top: number } | null;
   readonly anchorTop: (turnId: string) => number | null;
 }
@@ -91,10 +88,7 @@ export default class ThreadHistoryPagingController {
       this.#cancelScheduled();
       const top = pending.anchor ? view.anchorTop(pending.anchor.turnId) : null;
       if (pending.anchor && top !== null && Math.abs(top - pending.anchor.top) > 0.5) {
-        const offset = ThreadScrollMode.toTopOriginOffset(view.mode, view.metrics);
-        this.#options.writeScrollTop(ThreadScrollMode.scrollTopForTopOriginOffset(
-          view.mode, offset + top - pending.anchor.top, view.metrics,
-        ));
+        this.#options.writeScrollTop(view.scrollTop + top - pending.anchor.top);
       }
       const renderedTurnIds = view.renderedTurnIds;
       if (!pending.receivedTurnIds || !view.sourceReady

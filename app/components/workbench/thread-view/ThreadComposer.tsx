@@ -37,12 +37,12 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
-import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
 import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
+import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
@@ -54,7 +54,6 @@ import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
-import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -146,10 +145,6 @@ export default function ThreadComposer ({
   const pendingUserInputRequest = questionnaire.request;
   const threadQuestionnaireDraft = questionnaire.draft;
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
-  const {
-    isWithinBottomDistance,
-    reportComposerArmed,
-  } = useThreadScrollViewportContext();
   const composerTarget = useMemo<WorkbenchThreadTarget>(() => thread.isDraft
     ? threadTarget ?? { kind: "draft", draftId: thread.id }
     : { kind: "provider", harness: thread.harness, threadId: thread.id },
@@ -519,7 +514,6 @@ export default function ThreadComposer ({
                 <ThreadUserInputRequest
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   actions={stopButton}
-                  contentClassName="in-[.sticky-collapsible-sticky-slot]:pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
                   knownSkills={knownSkills}
@@ -549,7 +543,7 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className="thread-composer-mode-panel thread-composer-sticky-form-content in-[.sticky-collapsible-sticky-slot]:pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
+              className="thread-composer-mode-panel thread-composer-sticky-form-content"
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >
@@ -704,7 +698,7 @@ export default function ThreadComposer ({
       </form>
   );
   const composerContent = stickyMode ? (
-    <StickyCollapsibleSurface
+    <StickyComposerSurface
       collapseLabel="Collapse composer"
       collapsed={isStickyComposerCollapsed}
       collapsedAccessory={collapsedAttachmentPreviews.length ? (
@@ -734,13 +728,10 @@ export default function ThreadComposer ({
       collapsedContent={stickyPreviewText}
       collapsedLabel="Expand composer"
       collapsedPreviewKind={stickyPreviewKind}
-      isWithinScrollBottomDistance={isWithinBottomDistance}
-      onArmedChange={reportComposerArmed}
       onCollapsedChange={setIsStickyComposerCollapsed}
-      scrollTargetSelector='[data-thread-scroll-target="true"]'
     >
       {composerForm}
-    </StickyCollapsibleSurface>
+    </StickyComposerSurface>
   ) : composerForm;
 
   return (

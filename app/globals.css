@@ -1,6 +1,12 @@
 @import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+@custom-variant stuck {
+  @container scroll-state(stuck: bottom) {
+    @slot;
+  }
+}
+
 @utility text-fg-* {
   color: color-mix(
     in srgb,
@@ -314,68 +320,49 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
-  .sticky-collapsible-inline-slot {
-    box-sizing: border-box;
-    flex-shrink: 0;
-    min-width: 0;
-    padding-top: 1.5rem;
-    position: relative;
-  }
-
-  .sticky-collapsible-sticky-slot {
+  .sticky-composer-shell {
+    --sticky-composer-motion-duration: 220ms;
+    --sticky-composer-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --fg-bg: var(--shell-fade-bg);
+    background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
+    border-radius: 1.15rem;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+    container-type: scroll-state;
     flex-shrink: 0;
-    height: 0;
+    margin-top: 1.5rem;
     min-width: 0;
-    pointer-events: none;
     position: sticky;
     z-index: 20;
   }
 
-  .sticky-collapsible-portal-host {
-    --sticky-collapsible-motion-duration: 220ms;
-    --sticky-collapsible-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
-    min-width: 0;
+  @keyframes sticky-composer-enter {
+    from {
+      opacity: 0.72;
+      transform: translateY(0.6rem) scale(0.985);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
   }
 
-  .sticky-collapsible-inline-slot > .sticky-collapsible-portal-host {
-    pointer-events: auto;
-    position: relative;
-  }
-
-  .sticky-collapsible-sticky-slot > .sticky-collapsible-portal-host {
-    bottom: 0;
-    left: 0;
-    pointer-events: auto;
-    position: absolute;
-    right: 0;
-  }
-
-  .sticky-collapsible-host {
-    interpolate-size: allow-keywords;
-    position: relative;
-  }
-
-  .sticky-collapsible-shell {
-    --fg-bg: var(--shell-fade-bg);
-    background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
-    border-radius: 1.15rem;
-    transition:
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
-  }
-
-  .sticky-collapsible-surface {
+  .sticky-composer-surface {
     --fg-bg: color-mix(in srgb, var(--text) 4%, var(--shell-fade-bg));
+    backdrop-filter: blur(8px);
     background: color-mix(in srgb, var(--text) 4%, transparent);
     border-radius: 1.15rem;
     display: grid;
     padding: 0.75rem;
     position: relative;
-    backdrop-filter: blur(8px);
     transition:
-      border-color var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      padding var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
+      border-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      padding var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease);
+
+    @variant stuck {
+      animation: sticky-composer-enter var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease) both;
+      border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
+    }
   }
 
   .thread-composer-mode-stack {
@@ -394,9 +381,9 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     position: absolute;
     transform: translateY(0.45rem) scale(0.985);
     transition:
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      display var(--sticky-collapsible-motion-duration) allow-discrete;
+      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      display var(--sticky-composer-motion-duration) allow-discrete;
     transition-behavior: allow-discrete;
   }
 
@@ -414,13 +401,9 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       transform: translateY(0.45rem) scale(0.985);
     }
 
-    .sticky-collapsible-portal-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
   }
 
-  .sticky-collapsible-expanded {
+  .sticky-composer-expanded {
     display: grid;
     gap: 0.75rem;
     grid-area: 1 / 1;
@@ -428,28 +411,36 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     opacity: 1;
     transform: translateY(0) scale(1);
     transition:
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
+      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease);
     transition-behavior: allow-discrete;
+
+    @variant stuck {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
   }
 
-  .sticky-collapsible-collapse-button-slot,
-  .sticky-collapsible-collapsed {
+  .sticky-composer-collapse-button-slot {
     display: none;
+
+    @variant stuck {
+      display: block;
+    }
   }
 
-  .sticky-collapsible-collapsed {
+  .sticky-composer-collapsed {
+    display: none;
     grid-area: 1 / 1;
     opacity: 0;
     transform: translateY(0.35rem) scale(0.985);
     transition:
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      display var(--sticky-collapsible-motion-duration) allow-discrete;
+      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      display var(--sticky-composer-motion-duration) allow-discrete;
     transition-behavior: allow-discrete;
   }
 
-  .sticky-collapsible-collapsed-text {
+  .sticky-composer-collapsed-text {
     display: -webkit-box;
     min-width: 0;
     overflow: hidden;
@@ -457,103 +448,88 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     -webkit-line-clamp: 2;
   }
 
-  .sticky-collapsible-collapsed-text[data-preview-kind="placeholder"] {
+  .sticky-composer-collapsed-text[data-preview-kind="placeholder"] {
     color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
   }
 
-  .sticky-collapsible-collapsed-accessory {
+  .sticky-composer-collapsed-accessory {
     display: inline-flex;
     flex-shrink: 0;
     flex-wrap: nowrap;
     gap: 0.35rem;
   }
 
-  @keyframes sticky-collapsible-enter {
-    from {
-      opacity: 0.72;
-      transform: translateY(0.6rem) scale(0.985);
-    }
+  .sticky-composer-surface .thread-composer-sticky-form-content,
+  .sticky-composer-surface .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
+    transition:
+      max-height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease);
 
-    to {
+    @variant stuck {
+      max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-bottom: min(0.75rem, var(--workbench-safe-area-bottom, 0px));
+      padding-right: 0.15rem;
+      scrollbar-gutter: stable;
+    }
+  }
+
+  .sticky-composer-surface[data-collapsed="true"] .sticky-composer-expanded {
+    @variant stuck {
+      position: absolute;
+      inset: 0.75rem;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-0.25rem) scale(0.985);
+      transition:
+        opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+        transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+        visibility 0s linear var(--sticky-composer-motion-duration);
+      visibility: hidden;
+    }
+  }
+
+  .sticky-composer-surface[data-collapsed="true"] {
+    @variant stuck {
+      padding-bottom: calc(0.75rem + min(0.75rem, var(--workbench-safe-area-bottom, 0px)));
+    }
+  }
+
+  .sticky-composer-surface[data-collapsed="true"] .sticky-composer-collapsed {
+    @variant stuck {
+      align-items: center;
+      color: var(--text);
+      cursor: pointer;
+      display: grid;
+      font-size: 0.92em;
+      gap: 0.75rem;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      line-height: 1.45;
+      min-height: 2.8rem;
       opacity: 1;
+      outline: none;
       transform: translateY(0) scale(1);
     }
   }
 
-  .sticky-collapsible-portal-host[data-sticky-motion="entering"] .sticky-collapsible-shell {
-    animation: sticky-collapsible-enter var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease) both;
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-shell {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-collapse-button-slot {
-    display: block;
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-expanded {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
-    border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .thread-composer-sticky-form-content,
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
-    max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding-right: 0.15rem;
-    scrollbar-gutter: stable;
-    transition:
-      max-height var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-expanded {
-    position: absolute;
-    inset: 0.75rem;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-0.25rem) scale(0.985);
-    transition:
-      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
-      visibility 0s linear var(--sticky-collapsible-motion-duration);
-    visibility: hidden;
-  }
-
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
-    align-items: center;
-    color: var(--text);
-    cursor: pointer;
-    display: grid;
-    font-size: 0.92em;
-    gap: 0.75rem;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    line-height: 1.45;
-    min-height: 2.8rem;
-    opacity: 1;
-    outline: none;
-    transform: translateY(0) scale(1);
-  }
-
   @starting-style {
-    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
-      opacity: 0;
-      transform: translateY(0.35rem) scale(0.985);
+    .sticky-composer-surface[data-collapsed="true"] .sticky-composer-collapsed {
+      @variant stuck {
+        opacity: 0;
+        transform: translateY(0.35rem) scale(0.985);
+      }
     }
   }
 
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed:focus-visible {
-    border-radius: 0.85rem;
-    box-shadow: 0 0 0 2px var(--accent-soft);
+  .sticky-composer-surface[data-collapsed="true"] .sticky-composer-collapsed:focus-visible {
+    @variant stuck {
+      border-radius: 0.85rem;
+      box-shadow: 0 0 0 2px var(--accent-soft);
+    }
   }
 
-  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-collapsed-chevron {
+  .sticky-composer-collapsed-chevron {
     color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
     display: inline-flex;
     align-items: center;
@@ -1133,13 +1109,11 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       background-position: 50% 50%;
     }
 
-    .sticky-collapsible-portal-host,
-    .sticky-collapsible-host,
-    .sticky-collapsible-shell,
-    .sticky-collapsible-surface,
+    .sticky-composer-shell,
+    .sticky-composer-surface,
     .thread-composer-mode-panel,
-    .sticky-collapsible-expanded,
-    .sticky-collapsible-collapsed,
+    .sticky-composer-expanded,
+    .sticky-composer-collapsed,
     .thread-composer-sticky-form-content,
     .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
       animation: none;
@@ -1209,7 +1183,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   [data-thread-scroll-target="true"] {
     --thread-scroll-inline-padding: 1.25rem;
+    --thread-scroll-snap-distance: 50vh;
     overflow-anchor: none;
+    scroll-snap-type: none;
+  }
+
+  [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {
+    scroll-snap-type: y proximity;
+  }
+
+  [data-thread-scroll-end="true"] {
+    scroll-margin-block-start: var(--thread-scroll-snap-distance);
+    scroll-snap-align: end;
   }
 
   @media (min-width: 48rem) {
@@ -1219,18 +1204,16 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (hover: none) and (pointer: coarse) {
-    .sticky-collapsible-sticky-slot {
+    .sticky-composer-shell {
       bottom: 0;
     }
 
-    .sticky-collapsible-sticky-slot > .sticky-collapsible-portal-host {
-      margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px));
-    }
-
-    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-shell,
-    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
-      border-bottom-left-radius: 0;
-      border-bottom-right-radius: 0;
+    .sticky-composer-surface {
+      @variant stuck {
+        margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px));
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+      }
     }
 
     [data-thread-context-menu-trigger="true"] {

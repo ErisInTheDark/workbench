@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own atomic bottom-following and reading scroll layouts.
+ * - default ThreadScrollViewport: own normal-flow end snapping and off-screen layout preservation.
  */
 "use client";
 
@@ -8,18 +8,19 @@ import {
   forwardRef,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type ForwardedRef,
   type ReactNode,
 } from "react";
 
-import ThreadScrollMode, {
+import {
+  getInitialThreadScrollTop,
+  getPreservedThreadScrollTop,
+  resolveThreadScrollDirection,
+  type ThreadScrollDirection,
   type ThreadScrollMetrics,
-  type ThreadScrollMode as ThreadScrollModeValue,
-} from "./thread-scroll-mode";
+} from "./thread-scroll-snap";
 import {
   ThreadScrollViewportContext,
   type ThreadScrollViewportContextValue,
@@ -36,15 +37,6 @@ interface ThreadScrollViewportProps {
 interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps, "enabled" | "resetKey"> {
   forwardedRef: ForwardedRef<HTMLDivElement>;
 }
-
-interface PendingScrollModeTransition {
-  readonly mode: ThreadScrollModeValue;
-  readonly preventWheel: (event: WheelEvent) => void;
-  readonly target: HTMLDivElement;
-  readonly topOriginOffset: number;
-}
-
-const THREAD_SCROLL_QUIET_PERIOD_MS = 500;
 
 function joinClasses (...values: Array<string | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -66,225 +58,87 @@ function readScrollMetrics (viewport: HTMLDivElement): ThreadScrollMetrics {
   };
 }
 
-function releaseScrollModeTransition (transition: PendingScrollModeTransition) {
-  transition.target.removeEventListener("wheel", transition.preventWheel);
-}
-
 function ActiveThreadScrollViewport ({
   children,
   className,
   contentClassName,
   forwardedRef,
 }: ActiveThreadScrollViewportProps) {
-  const [mode, setMode] = useState<ThreadScrollModeValue>("bottom-following");
-  const composerArmedRef = useRef(false);
-  const modeRef = useRef<ThreadScrollModeValue>("bottom-following");
-  const pendingReadingModeRef = useRef(false);
-  const pendingTransitionRef = useRef<PendingScrollModeTransition | null>(null);
-  const previousMetricsRef = useRef<ThreadScrollMetrics | null>(null);
-  const scrollQuietPeriodTimeoutRef = useRef<number | null>(null);
+  const directionRef = useRef<ThreadScrollDirection>("down");
+  const endTargetRef = useRef<HTMLElement | null>(null);
+  const initialPlacementPendingRef = useRef(true);
+  const previousScrollTopRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  const placeInitialViewportAtEnd = useCallback(() => {
+    if (!initialPlacementPendingRef.current) return;
+    const viewport = viewportRef.current;
+    const endTarget = endTargetRef.current;
+    if (!viewport) return;
+    const scrollTop = getInitialThreadScrollTop(
+      Boolean(endTarget && viewport.contains(endTarget)),
+      viewport.scrollHeight,
+    );
+    if (scrollTop === null) return;
+    viewport.scrollTop = scrollTop;
+    previousScrollTopRef.current = viewport.scrollTop;
+    initialPlacementPendingRef.current = false;
+  }, []);
 
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport;
-    previousMetricsRef.current = viewport ? readScrollMetrics(viewport) : null;
+    previousScrollTopRef.current = viewport?.scrollTop ?? 0;
     assignRef(forwardedRef, viewport);
-  }, [forwardedRef]);
-
-  const transitionToMode = useCallback((nextMode: ThreadScrollModeValue) => {
-    const viewport = viewportRef.current;
-    const currentMode = modeRef.current;
-    if (!viewport || currentMode === nextMode || pendingTransitionRef.current) return;
-
-    const preventWheel = (event: WheelEvent) => {
-      event.preventDefault();
-    };
-    viewport.addEventListener("wheel", preventWheel, { passive: false });
-    const metrics = readScrollMetrics(viewport);
-    previousMetricsRef.current = metrics;
-    pendingTransitionRef.current = {
-      mode: nextMode,
-      preventWheel,
-      target: viewport,
-      topOriginOffset: ThreadScrollMode.toTopOriginOffset(currentMode, metrics),
-    };
-    setMode(nextMode);
-  }, []);
-
-  const cancelReadingTransition = useCallback(() => {
-    if (scrollQuietPeriodTimeoutRef.current !== null) {
-      window.clearTimeout(scrollQuietPeriodTimeoutRef.current);
-      scrollQuietPeriodTimeoutRef.current = null;
-    }
-  }, []);
-
-  const commitPendingReadingMode = useCallback(() => {
-    const viewport = viewportRef.current;
-    if (
-      !viewport
-      || !pendingReadingModeRef.current
-      || !composerArmedRef.current
-      || modeRef.current !== "bottom-following"
-      || pendingTransitionRef.current
-    ) {
-      return;
-    }
-
-    const metrics = readScrollMetrics(viewport);
-    if (ThreadScrollMode.isAtBottom("bottom-following", metrics)) {
-      pendingReadingModeRef.current = false;
-      cancelReadingTransition();
-      return;
-    }
-
-    pendingReadingModeRef.current = false;
-    cancelReadingTransition();
-    transitionToMode("reading");
-  }, [cancelReadingTransition, transitionToMode]);
-
-  const scheduleReadingTransition = useCallback(() => {
-    cancelReadingTransition();
-    scrollQuietPeriodTimeoutRef.current = window.setTimeout(() => {
-      scrollQuietPeriodTimeoutRef.current = null;
-      commitPendingReadingMode();
-    }, THREAD_SCROLL_QUIET_PERIOD_MS);
-  }, [cancelReadingTransition, commitPendingReadingMode]);
-
-  const reportComposerArmed = useCallback((armed: boolean) => {
-    const viewport = viewportRef.current;
-    composerArmedRef.current = armed;
-    if (!viewport) return;
-
-    const metrics = readScrollMetrics(viewport);
-    previousMetricsRef.current = metrics;
-    if (!armed || modeRef.current !== "bottom-following" || pendingTransitionRef.current) {
-      pendingReadingModeRef.current = false;
-      cancelReadingTransition();
-    }
-  }, [cancelReadingTransition]);
-
-  const isWithinBottomDistance = useCallback((tolerancePx: number) => {
-    const viewport = viewportRef.current;
-    return viewport
-      ? ThreadScrollMode.isAtBottom(modeRef.current, readScrollMetrics(viewport), tolerancePx)
-      : false;
-  }, []);
+    placeInitialViewportAtEnd();
+  }, [forwardedRef, placeInitialViewportAtEnd]);
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     getViewport: () => viewportRef.current,
     preserveOffscreenLayout: () => {
       const viewport = viewportRef.current;
-      if (!viewport || pendingTransitionRef.current) return () => {};
-      const previousHeight = viewport.scrollHeight;
-      const previousTop = viewport.scrollTop;
-      const previousMode = modeRef.current;
+      if (!viewport) return () => {};
+      const previousMetrics = readScrollMetrics(viewport);
       return () => {
-        if (viewportRef.current !== viewport || modeRef.current !== previousMode || pendingTransitionRef.current) return;
-        // Preserve distance from the bottom when content strictly above the reader changes.
-        // Reverse flex already uses that distance as its coordinate.
-        viewport.scrollTop = previousMode === "bottom-following"
-          ? previousTop
-          : previousTop + viewport.scrollHeight - previousHeight;
-        previousMetricsRef.current = readScrollMetrics(viewport);
+        if (viewportRef.current !== viewport) return;
+        const preservedScrollTop = getPreservedThreadScrollTop(previousMetrics, readScrollMetrics(viewport));
+        if (preservedScrollTop !== null) viewport.scrollTop = preservedScrollTop;
+        previousScrollTopRef.current = viewport.scrollTop;
       };
     },
-    isWithinBottomDistance,
-    reportComposerArmed,
-  }), [isWithinBottomDistance, reportComposerArmed]);
-
-  useLayoutEffect(() => {
-    const viewport = viewportRef.current;
-    const pendingTransition = pendingTransitionRef.current;
-    modeRef.current = mode;
-    if (!pendingTransition || pendingTransition.mode !== mode) return;
-
-    try {
-      if (viewport === pendingTransition.target) {
-        viewport.scrollTop = mode === "bottom-following"
-          ? 0
-          : ThreadScrollMode.scrollTopForTopOriginOffset(
-            mode,
-            pendingTransition.topOriginOffset,
-            readScrollMetrics(viewport),
-          );
-        previousMetricsRef.current = readScrollMetrics(viewport);
-      }
-    } finally {
-      pendingTransitionRef.current = null;
-      releaseScrollModeTransition(pendingTransition);
-    }
-  }, [mode]);
+    setEndTarget: (target) => {
+      endTargetRef.current = target;
+      placeInitialViewportAtEnd();
+    },
+  }), [placeInitialViewportAtEnd]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
 
     const handleScroll = () => {
-      if (pendingTransitionRef.current) return;
-      const currentMode = modeRef.current;
-      const metrics = readScrollMetrics(viewport);
-      const previousMetrics = previousMetricsRef.current;
-      previousMetricsRef.current = metrics;
-      if (currentMode === "reading") {
-        if (ThreadScrollMode.isAtBottom("reading", metrics)) {
-          pendingReadingModeRef.current = false;
-          cancelReadingTransition();
-          transitionToMode("bottom-following");
-        }
-        return;
-      }
-
-      if (ThreadScrollMode.isAtBottom("bottom-following", metrics)) {
-        pendingReadingModeRef.current = false;
-        cancelReadingTransition();
-        return;
-      }
-      if (
-        composerArmedRef.current
-        && previousMetrics
-        && ThreadScrollMode.didMoveAwayFromBottom("bottom-following", previousMetrics, metrics)
-      ) {
-        pendingReadingModeRef.current = true;
-        scheduleReadingTransition();
-      } else if (pendingReadingModeRef.current) {
-        scheduleReadingTransition();
-      }
+      const direction = resolveThreadScrollDirection(
+        directionRef.current,
+        previousScrollTopRef.current,
+        viewport.scrollTop,
+      );
+      previousScrollTopRef.current = viewport.scrollTop;
+      if (direction === directionRef.current) return;
+      directionRef.current = direction;
+      viewport.dataset.threadScrollDirection = direction;
     };
-    const refreshMetrics = () => {
-      previousMetricsRef.current = readScrollMetrics(viewport);
-    };
-    const resizeObserver = new ResizeObserver(refreshMetrics);
-    resizeObserver.observe(viewport);
-    const content = viewport.firstElementChild;
-    if (content) resizeObserver.observe(content);
 
     viewport.addEventListener("scroll", handleScroll, { passive: true });
-    refreshMetrics();
-    return () => {
-      cancelReadingTransition();
-      const pendingTransition = pendingTransitionRef.current;
-      if (pendingTransition) {
-        pendingTransitionRef.current = null;
-        releaseScrollModeTransition(pendingTransition);
-      }
-      resizeObserver.disconnect();
-      viewport.removeEventListener("scroll", handleScroll);
-    };
-  }, [
-    cancelReadingTransition,
-    scheduleReadingTransition,
-    transitionToMode,
-  ]);
+    return () => viewport.removeEventListener("scroll", handleScroll);
+  }, []);
 
   return (
     <div
       ref={setViewportRef}
       className={joinClasses(
-        "explorer-scrollbar flex min-h-0 overflow-x-hidden overflow-y-auto",
-        mode === "bottom-following" ? "flex-col-reverse" : "flex-col",
+        "explorer-scrollbar flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         className,
       )}
-      data-thread-scroll-mode={mode}
+      data-thread-scroll-direction="down"
       data-thread-scroll-target="true"
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
