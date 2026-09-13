@@ -14,6 +14,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 
+import type { ContextMenuPlacementScope } from "./context-menu-placement";
 import type { WorkbenchThreadStatusControlTone } from "./workbench-thread-status-colors";
 
 export interface WorkbenchContextMenuAction {
@@ -56,6 +57,7 @@ export interface WorkbenchContextMenuDefinition {
   id: string;
   items: WorkbenchContextMenuItem[];
   label: string;
+  placementScope?: ContextMenuPlacementScope;
 }
 
 export interface WorkbenchContextMenuRequest {

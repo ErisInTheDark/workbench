@@ -41,6 +41,10 @@ import type { FolderId, ProjectId, ThreadDisplayKey, WorkbenchThreadId } from "w
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
+import {
+  mergeContextMenuPlacementEntries,
+  useContextMenuPlacementSnapshot,
+} from "./context-menu-placement";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
@@ -67,6 +71,29 @@ function itemKey(item: WorkbenchThreadDisplayItem) {
 
 function itemThreadCount(item: WorkbenchThreadDisplayItem) {
   return item.itemKind === "folder" ? item.entries.length : 1;
+}
+
+function mergeThreadDisplayItems(
+  items: WorkbenchThreadDisplayItem[],
+  currentEntries: readonly WorkbenchThreadSidebarEntry[],
+): WorkbenchThreadDisplayItem[] {
+  type FolderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
+  const placementEntries = items.flatMap(item => item.itemKind === "folder" ? [] : [item.entry]);
+  const currentByKey = new Map(mergeContextMenuPlacementEntries(
+    placementEntries,
+    currentEntries,
+    getWorkbenchThreadDisplayKey,
+  ).map(entry => [getWorkbenchThreadDisplayKey(entry), entry]));
+  const placementFolderEntries = items.flatMap(item => item.itemKind === "folder" ? item.entries : []);
+  const currentFolderEntries = currentEntries.filter((entry): entry is FolderEntry => entry.entryKind !== "subagent");
+  const currentFolderByKey = new Map(mergeContextMenuPlacementEntries(
+    placementFolderEntries,
+    currentFolderEntries,
+    getWorkbenchThreadDisplayKey,
+  ).map(entry => [getWorkbenchThreadDisplayKey(entry), entry]));
+  return items.map(item => item.itemKind === "folder"
+    ? { ...item, entries: item.entries.map(entry => currentFolderByKey.get(getWorkbenchThreadDisplayKey(entry)) ?? entry) }
+    : { ...item, entry: currentByKey.get(getWorkbenchThreadDisplayKey(item.entry)) ?? item.entry });
 }
 
 export default function WorkbenchThreadList({
@@ -121,16 +148,36 @@ export default function WorkbenchThreadList({
   showPinnedThreadsInMain?: boolean;
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
-  const groupedEntries = groupWorkbenchThreadSidebarEntries(entries);
-  const pinnedItems = showPinnedThreadsInMain
+  const currentGroupedEntries = groupWorkbenchThreadSidebarEntries(entries);
+  const currentPinnedItems = showPinnedThreadsInMain
     ? projectWorkbenchThreadDisplaySection(entries, displayOrder, "pinned")
     : [];
-  const mainEntries = groupedEntries.mainEntries;
-  const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
-  const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
+  const currentSnoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
+  const currentSettledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
+  const placement = useContextMenuPlacementSnapshot("thread-list", {
+    displayOrder,
+    groupedEntries: currentGroupedEntries,
+    pinnedItems: currentPinnedItems,
+    settledItems: currentSettledItems,
+    snoozedItems: currentSnoozedItems,
+  });
+  const pinnedItems = mergeThreadDisplayItems(placement.pinnedItems, entries);
+  const mainEntries = mergeContextMenuPlacementEntries(
+    placement.groupedEntries.mainEntries,
+    entries,
+    getWorkbenchThreadDisplayKey,
+  );
+  const snoozedItems = mergeThreadDisplayItems(placement.snoozedItems, entries);
+  const settledItems = mergeThreadDisplayItems(placement.settledItems, entries);
+  const archivedEntries = mergeContextMenuPlacementEntries(
+    placement.groupedEntries.archivedEntries,
+    entries,
+    getWorkbenchThreadDisplayKey,
+  );
+  const archivedPlacementKeys = new Set(placement.groupedEntries.archivedEntries.map(getWorkbenchThreadDisplayKey));
   const historyItems: WorkbenchThreadDisplayItem[] = [
     ...settledItems,
-    ...groupedEntries.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const })),
+    ...archivedEntries.map(entry => ({ entry, itemKind: "thread" as const })),
   ];
   const isShiftPressed = useNonTextInputShiftKey();
   const {
@@ -169,14 +216,17 @@ export default function WorkbenchThreadList({
     reorderSection: WorkbenchThreadDisplaySection | null = null,
     dimmedOverride?: boolean,
     asTab = true,
+    placementSection?: WorkbenchThreadDragSection | "archived",
   ) => {
     const index = navigableEntries.indexOf(entry);
     const target = targetForEntry(entry);
     const selected = isWorkbenchThreadTargetSelected(target, currentTarget);
     const displayKey = getWorkbenchThreadDisplayKey(entry);
-    const dragSection: WorkbenchThreadDragSection = reorderSection
+    const frozenSection = placementSection
+      ?? reorderSection
       ?? (entry.entryKind !== "subagent" && entry.metadata.pinned ? "pinned" : "main");
-    const folder = reorderSection ? findWorkbenchThreadFolder(displayOrder, displayKey) : null;
+    const dragSection: WorkbenchThreadDragSection = frozenSection === "archived" ? "main" : frozenSection;
+    const folder = reorderSection ? findWorkbenchThreadFolder(placement.displayOrder, displayKey) : null;
     const targetIdentity = entry.entryKind === "thread" ? entry.identity : null;
     const targetReady = entry.entryKind === "thread"
       && entry.lifecycle.kind === "completed"
@@ -188,7 +238,7 @@ export default function WorkbenchThreadList({
       && activeDragPayload.ownerProjectId === projectId
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
-    const archived = entry.entryKind === "thread" && entry.metadata.archived;
+    const archived = frozenSection === "archived";
     const dragTargets = archived ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
@@ -456,7 +506,7 @@ export default function WorkbenchThreadList({
           : null}
         {priorityTarget("main")}
         {mainEntries.length
-          ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry))}</ul>
+          ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry, null, undefined, true, "main"))}</ul>
           : null}
         {snoozedItems.length ? renderReorderableSection(snoozedItems, "snoozed") : priorityTarget("snoozed")}
         {historyItems.length ? (
@@ -468,12 +518,12 @@ export default function WorkbenchThreadList({
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-fg/muted"
           >
-            {renderReorderableSection(displayedHistoryItems.filter(item => item.itemKind === "folder" || item.entry.entryKind !== "thread" || !item.entry.metadata.archived), "settled")}
-            {displayedHistoryItems.some(item => item.itemKind === "thread" && item.entry.entryKind === "thread" && item.entry.metadata.archived) ? (
+            {renderReorderableSection(displayedHistoryItems.filter(item => item.itemKind === "folder" || !archivedPlacementKeys.has(getWorkbenchThreadDisplayKey(item.entry))), "settled")}
+            {displayedHistoryItems.some(item => item.itemKind === "thread" && archivedPlacementKeys.has(getWorkbenchThreadDisplayKey(item.entry))) ? (
               <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-fg/muted">Archived threads</h3>
             ) : null}
             <ul className="m-0 flex flex-col gap-1 p-0">
-              {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && item.entry.entryKind === "thread" && item.entry.metadata.archived ? [renderEntry(item.entry)] : [])}
+              {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && archivedPlacementKeys.has(getWorkbenchThreadDisplayKey(item.entry)) ? [renderEntry(item.entry, null, undefined, true, "archived")] : [])}
             </ul>
             {remainingHistoryThreadCount > 0 ? (
               <button type="button" aria-label={`Load ${nextHistoryThreadCount} more historical threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-fg/muted`} onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + nextHistoryItemCount)}>

@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - default WorkbenchPinnedThreadList: render filtered Workbench-wide pins, mixed-project folders, rows, actions, and drag order.
- * - Local helpers: derive pinned targets and collision-safe layout keys.
  */
 "use client";
 
@@ -27,6 +26,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   type WorkbenchPinnedThreadSummaryEntry,
+  type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { PinIcon } from "./workbench-icons";
@@ -45,9 +45,12 @@ import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButt
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import type { WorkbenchThreadTarget as CanonicalThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import {
+  mergeContextMenuPlacementEntries,
+  useContextMenuPlacementSnapshot,
+} from "./context-menu-placement";
 
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
-type GlobalPinnedEntry = { entry: WorkbenchPinnedThreadSummaryEntry; project: WorkbenchProjectOption };
 type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActionsProvider.useActions>,
   | "autoFocusFolderId"
   | "getThreadContextMenu"
@@ -60,19 +63,42 @@ type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActi
   | "onSetPriority"
   | "onSnoozeUntil"
   | "pinnedDisplayOrder"
+  | "projectThreadSidebars"
   | "projectThreadSummaries"
 >;
+type GlobalPinnedListEntry = WorkbenchPinnedThreadSummaryEntry | Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
+type GlobalPinnedEntry = { entry: GlobalPinnedListEntry; project: WorkbenchProjectOption };
 
-function targetForEntry(entry: WorkbenchPinnedThreadSummaryEntry): CanonicalThreadTarget {
+function targetForEntry(entry: GlobalPinnedListEntry): CanonicalThreadTarget {
   return entry.entryKind === "draft"
-    ? { draftId: entry.draftId, kind: "draft" }
+    ? { draftId: "draftId" in entry ? entry.draftId : entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
-function displayKeyForEntry(entry: WorkbenchPinnedThreadSummaryEntry) {
+function displayKeyForEntry(entry: GlobalPinnedListEntry) {
   return entry.entryKind === "draft"
-    ? getThreadDisplayDraftKey(entry.draftId)
+    ? getThreadDisplayDraftKey("draftId" in entry ? entry.draftId : entry.draft.draftId)
     : getThreadDisplayThreadKey(entry.identity.harness, entry.identity.threadId);
+}
+
+function displayKeyForGlobalEntry({ entry, project }: GlobalPinnedEntry) {
+  return getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry));
+}
+
+function mergePinnedDisplayItems(
+  items: Array<ThreadDisplayLayoutItem<GlobalPinnedEntry>>,
+  currentEntries: readonly GlobalPinnedEntry[],
+) {
+  const placementEntries = items.flatMap(item => item.itemKind === "folder" ? item.entries : [item.entry]);
+  const mergedByKey = new Map(mergeContextMenuPlacementEntries(
+    placementEntries,
+    currentEntries,
+    displayKeyForGlobalEntry,
+  ).map(entry => [displayKeyForGlobalEntry(entry), entry]));
+  const current = (entry: GlobalPinnedEntry) => mergedByKey.get(displayKeyForGlobalEntry(entry)) ?? entry;
+  return items.map(item => item.itemKind === "folder"
+    ? { ...item, entries: item.entries.map(current) }
+    : { ...item, entry: current(item.entry) });
 }
 
 export default function WorkbenchPinnedThreadList({
@@ -97,25 +123,35 @@ export default function WorkbenchPinnedThreadList({
   const isShiftPressed = useNonTextInputShiftKey();
   const { preferences, setFolderOpen } = useWorkbenchSidebarPreferences();
   const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-  const entries = useMemo(() => actions.projectThreadSummaries.projects.flatMap((summary) => {
+  const currentlyPinnedEntries = useMemo(() => actions.projectThreadSummaries.projects.flatMap((summary) => {
     if (selectedProjectPinPlacement === "threads-section" && summary.projectId === projectId) return [];
     const project = projectsById.get(summary.projectId);
     return project ? summary.pinnedThreads.map((entry) => ({ entry, project })) : [];
   }), [actions.projectThreadSummaries.projects, projectId, projectsById, selectedProjectPinPlacement]);
-  const layoutEntries = useMemo(() => entries.map(({ entry, project }) => ({
-    key: getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry)),
+  const currentEntries = useMemo(() => actions.projectThreadSidebars.projects.flatMap((sidebar) => {
+    const project = projectsById.get(sidebar.projectId);
+    if (!project) return [];
+    return sidebar.entries.flatMap((entry): GlobalPinnedEntry[] => entry.entryKind === "subagent" ? [] : [{ entry, project }]);
+  }), [actions.projectThreadSidebars.projects, projectsById]);
+  const placement = useContextMenuPlacementSnapshot("thread-list", {
+    displayOrder: actions.pinnedDisplayOrder,
+    entries: currentlyPinnedEntries,
+  });
+  const layoutEntries = useMemo(() => placement.entries.map((entry) => ({
+    key: displayKeyForGlobalEntry(entry),
     section: "pinned" as const,
-  })), [entries]);
-  const items = useMemo(() => projectThreadDisplayLayoutSection(
-    entries,
+  })), [placement.entries]);
+  const placementItems = useMemo(() => projectThreadDisplayLayoutSection(
+    placement.entries,
     layoutEntries,
-    actions.pinnedDisplayOrder,
+    placement.displayOrder,
     "pinned",
     { preserveMissing: true },
-  ), [actions.pinnedDisplayOrder, entries, layoutEntries]);
+  ), [layoutEntries, placement.displayOrder, placement.entries]);
+  const items = mergePinnedDisplayItems(placementItems, currentEntries);
   const statusCounts = useMemo(
-    () => WorkbenchThreadStatusCounts.countPinnedStatuses(entries.map(({ entry }) => entry)),
-    [entries],
+    () => WorkbenchThreadStatusCounts.countPinnedStatuses(currentlyPinnedEntries.map(({ entry }) => entry)),
+    [currentlyPinnedEntries],
   );
   const priorityDropVisible = Boolean(
     isWorkbenchThreadRowDragPayload(activeDragPayload)
@@ -131,7 +167,7 @@ export default function WorkbenchPinnedThreadList({
     const target = targetForEntry(entry);
     const projectSourceKey = displayKeyForEntry(entry);
     const key = getProjectQualifiedThreadDisplayKey(project.id, projectSourceKey);
-    const folder = findThreadDisplayFolder(actions.pinnedDisplayOrder, key);
+    const folder = findThreadDisplayFolder(placement.displayOrder, key);
     const targetIdentity = entry.entryKind === "thread" ? entry.identity : null;
     const targetReady = entry.entryKind === "thread"
       && entry.lifecycle.kind === "completed"

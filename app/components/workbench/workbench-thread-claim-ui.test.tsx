@@ -155,6 +155,16 @@ function renderPinnedThreads(
             onSetPriority: () => undefined,
             onSnoozeUntil: () => undefined,
             pinnedDisplayOrder: {},
+            projectThreadSidebars: {
+              projects: projectThreadSummaries.projects.map(summary => ({
+                displayOrder: {},
+                entries: summary.pinnedThreads.flatMap(entry => entry.entryKind === "thread" ? [entry] : []),
+                error: "",
+                freshness: "fresh" as const,
+                projectId: summary.projectId,
+                revision: summary.revision,
+              })),
+            },
             projectThreadSummaries,
           },
           currentTarget: null,

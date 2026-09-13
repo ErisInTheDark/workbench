@@ -332,7 +332,7 @@ function WorkbenchThreadSidebarActionsProvider({
         presentation: "actions",
       });
     }
-    return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
+    return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
   }, [controls, mutateEntry, onOpenThread, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars.projects, stopThread, threadSummariesById]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({

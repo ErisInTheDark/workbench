@@ -10,6 +10,7 @@ import WorkbenchContextMenuContext, {
   type WorkbenchContextMenuController,
   type WorkbenchContextMenuRequest,
 } from "./WorkbenchContextMenuContext";
+import WorkbenchContextMenuPlacementContext from "./context-menu-placement";
 import WorkbenchContextMenuSurface from "./WorkbenchContextMenuSurface";
 
 interface ActiveWorkbenchContextMenu extends WorkbenchContextMenuRequest {
@@ -44,19 +45,25 @@ export default function WorkbenchContextMenuProvider ({ children }: { children: 
     openContextMenu,
     refreshContextMenu,
   }), [closeContextMenu, openContextMenu, refreshContextMenu]);
+  const placementLock = useMemo(() => activeContextMenu?.menu.placementScope ? {
+    generation: activeContextMenu.generation,
+    scope: activeContextMenu.menu.placementScope,
+  } : null, [activeContextMenu?.generation, activeContextMenu?.menu.placementScope]);
 
   return (
-    <WorkbenchContextMenuContext.Provider value={controller}>
-      {children}
-      {activeContextMenu ? (
-        <WorkbenchContextMenuSurface
-          generation={activeContextMenu.generation}
-          menu={activeContextMenu.menu}
-          onClose={closeContextMenu}
-          x={activeContextMenu.x}
-          y={activeContextMenu.y}
-        />
-      ) : null}
-    </WorkbenchContextMenuContext.Provider>
+    <WorkbenchContextMenuPlacementContext.Provider value={placementLock}>
+      <WorkbenchContextMenuContext.Provider value={controller}>
+        {children}
+        {activeContextMenu ? (
+          <WorkbenchContextMenuSurface
+            generation={activeContextMenu.generation}
+            menu={activeContextMenu.menu}
+            onClose={closeContextMenu}
+            x={activeContextMenu.x}
+            y={activeContextMenu.y}
+          />
+        ) : null}
+      </WorkbenchContextMenuContext.Provider>
+    </WorkbenchContextMenuPlacementContext.Provider>
   );
 }
