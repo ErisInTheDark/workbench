@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect canonical index order, adjacent-only grouping, empty-turn placement, segment ownership, and malformed-presentation refusal. Keywords: transcript, display, parity.
+ * No production exports. Tests protect canonical index order, grouping, placement, and malformed-presentation refusal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,7 +8,7 @@ import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.
 import { planCanonicalTranscriptDisplay } from "./thread-transcript-display-planner.ts";
 
 function item(id: string): ThreadItem {
-  return { type: "plan", id, text: id };
+  return { type: "contextCompaction", id };
 }
 
 test("canonical display preserves global order and gives repeated turn segments stable ownership", () => {

@@ -554,7 +554,10 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
     );
     const liveItem: WorkbenchTranscriptAtomicObservation = {
       kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"], lifecycle: "completed", observedAt: 6,
-      item: { id: "live", type: "plan", text: "fresh live content" },
+      item: {
+        id: "live", type: "agentMessage", text: "fresh live content", phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null,
+      },
     };
     await failed.record([liveItem], { source: "provider" });
     const originalTurn = observationsFor("provider-thread")[1]!;
@@ -568,8 +571,14 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
       materializedTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"], fixtureIdentityValues.WorkbenchTurnId["historical"]],
       observations: [
         ...observationsFor("provider-thread"), historicalTurn,
-        { ...liveItem, item: { id: "live", type: "plan", text: "stale compatibility content" } },
-        { ...liveItem, turnId: fixtureIdentityValues.WorkbenchTurnId.historical, item: { id: "history", type: "plan", text: "retained history" } },
+        { ...liveItem, item: {
+          id: "live", type: "agentMessage", text: "stale compatibility content", phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        } },
+        { ...liveItem, turnId: fixtureIdentityValues.WorkbenchTurnId.historical, item: {
+          id: "history", type: "agentMessage", text: "retained history", phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        } },
       ],
     }], { source: "compatibility" });
     let published = false;
@@ -577,7 +586,7 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
       id: "gapped", request: { threadId: "provider-thread", turnLimit: 2 },
       publish: (snapshot) => {
         assert.ok(snapshot);
-        assert.deepEqual(snapshot.rows.threadItemPlans.map(({ text }) => text).sort(), ["fresh live content", "retained history"]);
+        assert.deepEqual(snapshot.rows.threadItemAssistantMessages.map(({ text }) => text).sort(), ["fresh live content", "retained history"]);
         published = true;
       },
     });

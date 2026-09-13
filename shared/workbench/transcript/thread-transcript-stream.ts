@@ -18,7 +18,7 @@ import {
 } from "./workbench-transcript-projection.ts";
 
 export type TranscriptTextField =
-  | "agentMessageText" | "commandExecutionOutput" | "planText"
+  | "agentMessageText" | "commandExecutionOutput"
   | "reasoningContent" | "reasoningSummary";
 
 export interface TranscriptTextUpdate {
@@ -198,7 +198,6 @@ export function applyTranscriptStructure(
 
 export function readTranscriptText(item: WorkbenchProjectedTranscriptItem, field: TranscriptTextField, index: number | null): string {
   if (field === "agentMessageText" && item.type === "agentMessage") return item.text;
-  if (field === "planText" && item.type === "plan") return item.text;
   if (field === "commandExecutionOutput" && item.type === "commandExecution") return item.aggregatedOutput ?? "";
   if (item.type === "reasoning" && index !== null) {
     if (field === "reasoningContent") return item.content[index] ?? "";
@@ -210,7 +209,6 @@ export function readTranscriptText(item: WorkbenchProjectedTranscriptItem, field
 export function writeTranscriptText(item: WorkbenchProjectedTranscriptItem, update: TranscriptTextUpdate): string {
   const text = update.append ? readTranscriptText(item, update.field, update.index) + update.text : update.text;
   if (update.field === "agentMessageText" && item.type === "agentMessage") item.text = text;
-  else if (update.field === "planText" && item.type === "plan") item.text = text;
   else if (update.field === "commandExecutionOutput" && item.type === "commandExecution") item.aggregatedOutput = text;
   else if (item.type === "reasoning" && update.index !== null) {
     if (update.field === "reasoningContent") item.content[update.index] = text;

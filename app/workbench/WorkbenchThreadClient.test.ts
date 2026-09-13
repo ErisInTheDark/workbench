@@ -2168,7 +2168,10 @@ test("selected text deltas keep canonical snapshots current without publishing t
     durationMs: 1,
     error: null,
     id: "settled-turn",
-    items: [{ id: "settled-plan", text: "settled", type: "plan" }],
+    items: [{
+      id: "settled-message", text: "settled", type: "agentMessage",
+      phase: "final_answer", memoryCitation: null, delivery: null, questions: null,
+    }],
     itemsView: "full",
     startedAt: 0,
     status: "completed",
@@ -2471,6 +2474,41 @@ test("navigation during creation profile acknowledgement cannot select or send t
   assert.deepEqual(created, []);
   assert.notEqual(client.getSnapshot().currentThread?.id, "created");
   assert.equal(socket.requests.some(request => request.method === "turn/start" || request.method === "turn/steer"), false);
+}));
+
+test("native plan snapshots and notifications stay out while tagged agent markdown remains", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  source.turns[0]!.items = [
+    { id: "native-plan", text: "unsupported native plan", type: "plan" },
+    {
+      id: "tagged-message",
+      memoryCitation: null,
+      delivery: null,
+      questions: null,
+      phase: "final_answer",
+      text: "<plan>\n# retained tagged plan\n</plan>",
+      type: "agentMessage",
+    },
+  ];
+  client.selectThreadPayload(source);
+  assert.deepEqual(client.getSnapshot().currentThread?.turns[0]?.items.map(({ id }) => id), ["tagged-message"]);
+
+  socket.notify("item/plan/delta", {
+    delta: "streamed native plan",
+    itemId: "streaming-plan",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("item/started", {
+    item: { id: "lifecycle-plan", text: "lifecycle native plan", type: "plan" },
+    startedAtMs: 2_000,
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const items = client.getSnapshot().currentThread?.turns[0]?.items ?? [];
+  assert.deepEqual(items.map(({ id }) => id), ["tagged-message"]);
+  assert.equal(items[0]?.type === "agentMessage" ? items[0].text : null, "<plan>\n# retained tagged plan\n</plan>");
 }));
 
 test("project changes after draft turn dispatch preserve durable acceptance without stale materialization", async () => {

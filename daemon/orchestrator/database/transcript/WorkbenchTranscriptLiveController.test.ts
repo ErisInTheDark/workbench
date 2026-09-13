@@ -120,30 +120,6 @@ test("text publishes only a field update and durable completion supersedes the t
   }
 });
 
-test("plan completion replaces its streamed prefix even though the plan table has no lifecycle column", () => {
-  const { database, repository, live } = fixture();
-  const recordPlan = (text: string, lifecycle: "streaming" | "completed") => live.settle(repository.settle([{
-    kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
-    item: { type: "plan", id: "plan", text }, lifecycle, observedAt: 2,
-  }]).changes!);
-  try {
-    recordPlan("draft", "streaming");
-    const active = viewer();
-    live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), active.publish);
-    live.acceptText({
-      kind: "text", threadId: "thread", turnId: "turn", itemId: "plan",
-      field: "planText", index: null, append: true, text: " streamed",
-    });
-    recordPlan("final", "completed");
-    const item = active.read().turns[0]!.items[0]!;
-    assert.equal(item.type, "plan");
-    if (item.type === "plan") assert.equal(item.text, "final");
-  } finally {
-    live.dispose();
-    database.close();
-  }
-});
-
 test("subscription bootstrap shares event order and structural settlement does not reread its window", async () => {
   const { database, repository, live, record, delta } = fixture();
   let queue = Promise.resolve();
@@ -504,7 +480,10 @@ test("a new reasoning section is not appended again by later structural publicat
     live.acceptText({ ...delta("second section"), index: 1 });
     for (const text of ["draft", "revised"]) live.settle(repository.settle([{
       kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
-      item: { type: "plan", id: "other", text }, lifecycle: "streaming", observedAt: 3,
+      item: {
+        type: "agentMessage", id: "other", text, phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null,
+      }, lifecycle: "streaming", observedAt: 3,
     }]).changes!);
     const item = active.read().turns[0]!.items[0]!;
     assert.equal(item.type, "reasoning");

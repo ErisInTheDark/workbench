@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect the durable transcript boundary from provider-live presentation churn. Keywords: codex, transcript, routing, live, durable.
+ * No production exports. Tests protect the durable transcript boundary from provider-live presentation churn.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,7 +9,6 @@ import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-ev
 test("provider-live presentation updates do not enter durable transcript recording", () => {
   for (const method of [
     "item/agentMessage/delta",
-    "item/plan/delta",
     "item/commandExecution/outputDelta",
     "item/fileChange/outputDelta",
     "item/fileChange/patchUpdated",
@@ -18,7 +17,6 @@ test("provider-live presentation updates do not enter durable transcript recordi
     "item/reasoning/summaryTextDelta",
     "item/reasoning/textDelta",
     "turn/diff/updated",
-    "turn/plan/updated",
   ]) {
     assert.equal(shouldRecordDurableTranscriptNotification(method), false, method);
   }

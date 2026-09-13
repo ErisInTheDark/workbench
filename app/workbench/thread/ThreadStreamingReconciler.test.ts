@@ -1,6 +1,5 @@
 /*
- * Keywords: streaming, dedupe, provenance, state tags, settlement, ordering.
- * Exports: none. Tests protect streaming reconciliation semantics.
+ * No production exports. Tests protect streaming reconciliation semantics.
  */
 
 import assert from "node:assert/strict";
@@ -73,16 +72,16 @@ test("first compatible position survives replacements, empty candidates, and unr
   const reconciler = new ThreadStreamingReconciler();
   const first = message("first", "alpha one");
   const second = message("second", "alpha two");
-  const plan: ThreadItem = { id: "plan", text: "alpha", type: "plan" };
+  const search: ThreadItem = { id: "search", query: "alpha", type: "webSearch", action: null, results: null };
   const prefix = message("prefix", "alpha");
   const empty = message("empty", " \n");
   const beta = message("beta", "beta");
   const longerBeta = message("longer-beta", "beta grows");
-  const items = [first, plan, second, prefix, empty, beta, longerBeta];
+  const items = [first, search, second, prefix, empty, beta, longerBeta];
   assert.deepEqual(reconciler.pruneDuplicateItems("turn", items, keepIncoming), [
-    first, plan, second, longerBeta,
+    first, search, second, longerBeta,
   ]);
-  const unchanged = [first, plan, second, message("gamma", "gamma")];
+  const unchanged = [first, search, second, message("gamma", "gamma")];
   assert.equal(reconciler.pruneDuplicateItems("turn", unchanged, keepIncoming), unchanged);
 });
 
@@ -109,5 +108,7 @@ test("structural matching preserves whitespace prefixes, empty reasoning, and ki
   assert.equal(reconciler.isStructurallyMatchingItem(reasoning("a", [" "], ["\n"]), reasoning("b", [], [])), true);
   assert.equal(reconciler.isStructurallyMatchingItem(message("a", ""), message("b", "later")), true);
   assert.equal(reconciler.isStructurallyMatchingItem(message("a", "one"), message("b", "two")), false);
-  assert.equal(reconciler.isStructurallyMatchingItem(message("a", "same"), { id: "b", text: "same", type: "plan" }), false);
+  assert.equal(reconciler.isStructurallyMatchingItem(message("a", "same"), {
+    id: "b", query: "same", type: "webSearch", action: null, results: null,
+  }), false);
 });

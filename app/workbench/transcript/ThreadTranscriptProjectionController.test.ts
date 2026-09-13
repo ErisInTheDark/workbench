@@ -51,7 +51,7 @@ function thread(id: string, turnIds = ["turn"]): Extract<ThreadPayload, { isDraf
       completedAt: 2,
       durationMs: 1_000,
       itemCount: 1,
-      itemIds: [`plan:${turnId}`],
+      itemIds: [`message:${turnId}`],
       itemTimeline: [],
       loadState: "loaded" as const,
       startedAt: 1,
@@ -63,7 +63,10 @@ function thread(id: string, turnIds = ["turn"]): Extract<ThreadPayload, { isDraf
       durationMs: 1_000,
       error: null,
       id: turnId,
-      items: [{ id: `plan:${turnId}`, text: "planned", type: "plan" as const }],
+      items: [{
+        id: `message:${turnId}`, text: "message", type: "agentMessage" as const,
+        phase: "commentary" as const, memoryCitation: null, delivery: null, questions: null,
+      }],
       itemsView: "full" as const,
       startedAt: 1,
       status: "completed" as const,
@@ -111,10 +114,12 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
   }];
   snapshot.loadedTurnIds = ["turn"];
   snapshot.rows.threadItems = [{
-    id: 1, public_id: null, source_id: "plan:turn", thread_id: threadId, turn_id: "turn",
-    item_position: 0, type: "plan", created_at: 1, updated_at: 1,
+    id: 1, public_id: null, source_id: "message:turn", thread_id: threadId, turn_id: "turn",
+    item_position: 0, type: "assistantMessage", created_at: 1, updated_at: 1,
   }];
-  snapshot.rows.threadItemPlans = [{ item_id: 1, item_type: "plan", text: "stored" }];
+  snapshot.rows.threadItemAssistantMessages = [{
+    item_id: 1, item_type: "assistantMessage", state: "streaming", phase: "commentary", text: "stored",
+  }];
   const projected = projectWorkbenchTranscript(snapshot);
   assert.ok(projected.success);
   return {
@@ -361,10 +366,10 @@ for (const correlation of ["item", "client"] as const) {
       const first = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
       const second = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
       select();
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
       assert.deepEqual(projection().display.segments.flatMap(segment => segment.items.map(item => item.id)),
-        ["plan:turn", first.handle, second.handle]);
+        ["message:turn", first.handle, second.handle]);
       assert.equal(projection().display.segments[0]!.id, canonicalSegment);
       assert.equal(projection().turns[0]!.itemTimeline.find(entry => entry.itemId === first.handle)?.firstSeenAt, 42);
       const pendingHistory = [{
@@ -375,18 +380,18 @@ for (const correlation of ["item", "client"] as const) {
       controller.select({
         thread: inputs.apply(applySteerHistoryToThread(source, pendingHistory), pendingHistory),
       });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
       assert.ok(inputs.movePending(first.handle, "turn"));
       select();
       assert.equal(inputStates()[1]?.status, "pending", "Admission is not delivery");
       const publications = states.length;
-      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
-        field: "planText", index: null, text: " delta", append: true });
+      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+        field: "agentMessageText", index: null, text: " delta", append: true });
       select();
       assert.equal(states.length, publications, "Provider text must not republish local input");
       receive(streamBaseline("thread"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
       const unsent = correlation === "item" ? "failed" : "interrupted";
       inputs.transition(second.handle, unsent);
       select();
@@ -409,9 +414,9 @@ for (const correlation of ["item", "client"] as const) {
       assert.ok(canonical.success);
       delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
       receive(delivered);
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", deliveredId, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", deliveredId, second.handle]);
       assert.equal(inputStates()[1]?.status, "sent");
-      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), ["plan:turn", deliveredId]);
+      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), ["message:turn", deliveredId]);
       assert.equal(subscriptions, 1, "Local input changes must not resubscribe");
 
       const retained = applySteerHistoryToThread(source, [{
@@ -422,11 +427,11 @@ for (const correlation of ["item", "client"] as const) {
       controller.select({ thread: retained });
       assert.equal(inputStates().at(-1)?.status, unsent);
       controller.select({ thread: source });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn", deliveredId], "Removing local state must remove its presentation");
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", deliveredId], "Removing local state must remove its presentation");
       controller.select({ thread: thread("other") });
       await flush();
       receive(streamBaseline("other"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["plan:turn"]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn"]);
       assert.deepEqual(errors, []);
     } finally { await controller.dispose(); }
   });
@@ -479,10 +484,10 @@ test(`admitted initial input stays before provider output until canonical delive
   controller.select({ thread: inputs.apply(source, []) });
   await flush();
   receive(streamBaseline("thread"));
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "plan:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "message:turn"]);
   assert.deepEqual(
     projection().display.segments.flatMap(segment => segment.items.map(({ id }) => id)),
-    [initial.handle, "plan:turn"],
+    [initial.handle, "message:turn"],
   );
 
   const nativeInitial = {
@@ -499,7 +504,7 @@ test(`admitted initial input stays before provider output until canonical delive
   const nativeProjected = inputs.apply(source, []);
   assert.equal(nativeProjected.turns[0]!.items.some(item => item.id === initial.handle), false);
   controller.select({ thread: nativeProjected });
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "plan:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "message:turn"]);
 
   const delivered = streamBaseline("thread");
   assert.ok(delivered.kind === "structure");
@@ -536,9 +541,9 @@ test(`admitted initial input stays before provider output until canonical delive
   assert.ok(canonical.success);
   delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
   receive(delivered);
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "plan:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "message:turn"]);
   controller.select({ thread: nativeProjected });
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "plan:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "message:turn"]);
   assert.equal(subscriptions, 1);
   await controller.dispose();
 });
@@ -565,8 +570,8 @@ test("incremental SQL never reconciles provider-live state and text does not rep
     await flush();
     receive(streamBaseline("thread"));
     const count = states.length;
-    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
-      field: "planText", index: null, append: true, text: " delta" });
+    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+      field: "agentMessageText", index: null, append: true, text: " delta" });
     controller.select({ thread: thread("thread") });
     assert.deepEqual(text, ["stored delta"]);
     assert.equal(states.length, count);
@@ -578,8 +583,8 @@ test("incremental SQL never reconciles provider-live state and text does not rep
     controller.select({ thread: thread("other") });
     await flush();
     receive(streamBaseline("other"));
-    obsolete({ kind: "text", threadId: "thread", turnId: "turn", itemId: "plan:turn",
-      field: "planText", index: null, append: true, text: " stale" });
+    obsolete({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+      field: "agentMessageText", index: null, append: true, text: " stale" });
     assert.deepEqual(text, ["stored delta"]);
   } finally {
     await controller.dispose();
@@ -830,7 +835,7 @@ test("malformed SQL data becomes a source-local failure", async () => {
   await flush();
   const invalid = emptySnapshot("thread");
   invalid.rows.threadItems.push({
-    id: 1, public_id: null, source_id: "orphan", thread_id: "thread", turn_id: "missing", type: "plan",
+    id: 1, public_id: null, source_id: "orphan", thread_id: "thread", turn_id: "missing", type: "assistantMessage",
     item_position: 0, created_at: 1, updated_at: 1,
   });
   [...listeners.values()][0]?.(invalid);

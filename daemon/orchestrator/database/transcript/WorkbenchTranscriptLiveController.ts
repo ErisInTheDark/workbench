@@ -48,7 +48,6 @@ function liveFields(snapshot: WorkbenchTranscriptSnapshot): Map<number, Transcri
   for (const row of snapshot.rows.threadItemReasoning) {
     if (row.state === "streaming") fields.set(row.item_id, ["reasoningSummary", "reasoningContent"]);
   }
-  for (const row of snapshot.rows.threadItemPlans) fields.set(row.item_id, ["planText"]);
   for (const row of snapshot.rows.threadOperationProcessSources) {
     if (row.state === "inProgress") fields.set(row.item_id, ["commandExecutionOutput"]);
   }

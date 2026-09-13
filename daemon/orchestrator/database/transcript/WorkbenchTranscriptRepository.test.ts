@@ -1477,6 +1477,26 @@ test("provider settlement converts retained bodies before reconciliation without
   }
 });
 
+test("native plan item observations do not create durable transcript rows", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    repository.settle([{
+      kind: "item",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+      lifecycle: "completed",
+      observedAt: 3,
+      item: { id: "native-plan", type: "plan", text: "unsupported" },
+    }]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    assert.deepEqual(snapshot.rows.threadItems, []);
+  } finally {
+    database.close();
+  }
+});
+
 for (const repeatedSource of [false, true]) {
   test(`provider repetition preserves one admitted body and its neighbours (same source ${repeatedSource})`, (context) => {
     const { database, repository } = createRepository();
@@ -1491,7 +1511,15 @@ for (const repeatedSource of [false, true]) {
           threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
           legacyAliases: [],
         }).itemId,
-        item: withWorkbenchThreadItemIdentity({ id, type: "plan", text }, getCodexItemIdentityKind({ id })),
+        item: withWorkbenchThreadItemIdentity({
+          id,
+          memoryCitation: null,
+          delivery: null,
+          questions: null,
+          phase: "commentary",
+          text,
+          type: "agentMessage",
+        }, getCodexItemIdentityKind({ id })),
       });
       const before = observation("before", "before");
       const stored = observation("canonical", "first step");
@@ -1508,7 +1536,7 @@ for (const repeatedSource of [false, true]) {
           originalRows.map(({ id, public_id, item_position }) => ({ id, public_id, item_position })));
         const projection = projectWorkbenchTranscript(snapshot);
         assert.ok("data" in projection);
-        assert.deepEqual(projection.data.turns[0]!.items.map((item) => item.type === "plan" ? item.text : null),
+        assert.deepEqual(projection.data.turns[0]!.items.map((item) => item.type === "agentMessage" ? item.text : null),
           ["before", "first step, then second step", "after"]);
         assert.equal(identities.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(alias.item.id) })?.itemId, stored.publicItemId);
         assert.deepEqual(database.pragma("foreign_key_check"), []);

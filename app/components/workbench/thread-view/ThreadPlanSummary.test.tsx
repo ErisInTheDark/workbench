@@ -41,7 +41,7 @@ test("embedded plan markdown uses the shared copy-enabled summary", () => {
   assert.equal(countMatches(html, /data-thread-plan-copy="true"/gu), 1);
 });
 
-test("first-class plan items use the shared copy-enabled summary", () => {
+test("native plan items do not render", () => {
   const thread = {
     agentNickname: null,
     agentPath: null,
@@ -78,7 +78,7 @@ test("first-class plan items use the shared copy-enabled summary", () => {
     thread,
   }));
 
-  assert.match(html, />Plan</u);
-  assert.match(html, /aria-label="Copy plan"/u);
-  assert.equal(countMatches(html, /data-thread-plan-copy="true"/gu), 1);
+  assert.doesNotMatch(html, /first-class plan marker/u);
+  assert.doesNotMatch(html, /aria-label="Copy plan"/u);
+  assert.equal(countMatches(html, /data-thread-plan-copy="true"/gu), 0);
 });

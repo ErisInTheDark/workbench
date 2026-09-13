@@ -393,31 +393,6 @@ test("projection preserves distinct questionnaire items with one reused provider
   }
 });
 
-test("projection fails closed when a canonical root loses its required augmentation", () => {
-  const { database, repository } = createRepository();
-  try {
-    repository.settle([canonicalWindow([
-      thread(),
-      turn("turn-0", 0),
-      item("turn-0", { id: "plan", text: "planned", type: "plan" }, 2_000),
-    ], ["turn-0"])]);
-    database.prepare(`
-      DELETE FROM thread_item_plans
-      WHERE item_id = (SELECT id FROM thread_items WHERE thread_id = 'thread' AND source_id = 'plan')
-    `).run();
-    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
-    assert.ok(snapshot);
-    const issue = {
-      issues: [{ code: "missingRow", itemId: "plan", table: "threadItemPlans" }],
-      success: false,
-    } as const;
-    assert.deepEqual(projectWorkbenchTranscriptItems(snapshot.rows), issue);
-    assert.deepEqual(projectWorkbenchTranscript(snapshot), issue);
-  } finally {
-    database.close();
-  }
-});
-
 test("projection reads an augmentation collection linearly as item count grows", () => {
   const { database, repository } = createRepository();
   try {

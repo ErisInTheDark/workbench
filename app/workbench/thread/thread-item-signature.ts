@@ -1,9 +1,8 @@
 /*
- * Keywords: transcript rendering, structural signature, native output, provider compatibility.
  * Exports:
- * - getThreadItemRenderSignature: bounded signature for rendered thread item content. Keywords: thread, render, equality.
- * - getThreadItemsRenderChunkSignature: bounded signature for a render chunk made from one or more thread items. Keywords: thread, render, chunk, equality.
- * - getTurnRenderSignature: bounded signature for rendered turn metadata and item order/content. Keywords: turn, equality, hydration.
+ * - getThreadItemRenderSignature: bounded signature for rendered thread item content.
+ * - getThreadItemsRenderChunkSignature: bounded signature for one render chunk.
+ * - getTurnRenderSignature: bounded signature for turn metadata and item order/content.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -118,8 +117,6 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
         return `${item.id}:${item.type}:${item.phase ?? ""}:${item.text.length}:${item.text.slice(0, 128)}:${stableStringify(item.memoryCitation)}`;
       case "reasoning":
         return `${item.id}:${item.type}:${textArraySignature(item.summary)}:${textArraySignature(item.content)}`;
-      case "plan":
-        return `${item.id}:${item.type}:${item.text.length}:${item.text.slice(0, 128)}`;
       case "commandExecution":
         return [
           item.id,

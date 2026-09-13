@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, relational fields, secret answers, SQL.
  * Exports:
  * - transcriptQueryFields: canonical field registry shared by matching and expansion.
  * - transcriptQueryKindSql: map stored item discriminators to CLI kinds.
@@ -20,7 +19,6 @@ export const transcriptQueryFields: readonly QueryFieldSource[] = [
   { name: "user", table: "thread_user_message_parts", columns: ["text", "path", "name"], index: "part_index" },
   { name: "user", table: "thread_item_user_messages", columns: ["error_text"] },
   { name: "assistant", table: "thread_item_assistant_messages", columns: ["text"] },
-  { name: "plan", table: "thread_item_plans", columns: ["text"] },
   { name: "reasoning", table: "thread_reasoning_sections", columns: ["text"], index: "section_index" },
   { name: "process", table: "thread_operation_process_sources", columns: ["command", "cwd", "output_text", "error_text"] },
   { name: "tool", table: "thread_operation_tool_sources", columns: ["tool_name"] },

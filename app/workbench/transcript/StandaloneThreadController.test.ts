@@ -89,17 +89,19 @@ test("standalone uses bounded pages and shared SQL text projection without provi
       loadedTurnIds: ["latest"], hasPreviousTurns: true,
       rows: Object.fromEntries(Object.keys(transcriptSnapshotTables).map(name => [name, []])) as unknown as WorkbenchTranscriptSnapshotRows,
     };
-    snapshot.rows.threadItems = [{ id: 1, public_id: null, source_id: "plan", thread_id: f.threadId, turn_id: "latest",
-      item_position: 0, type: "plan", created_at: 1, updated_at: 1 }];
-    snapshot.rows.threadItemPlans = [{ item_id: 1, item_type: "plan", text: "start" }];
+    snapshot.rows.threadItems = [{ id: 1, public_id: null, source_id: "message", thread_id: f.threadId, turn_id: "latest",
+      item_position: 0, type: "assistantMessage", created_at: 1, updated_at: 1 }];
+    snapshot.rows.threadItemAssistantMessages = [{
+      item_id: 1, item_type: "assistantMessage", state: "streaming", phase: "commentary", text: "start",
+    }];
     const projected = projectWorkbenchTranscript(snapshot);
     assert.ok(projected.success);
     f.stream({ kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: true,
       layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)) });
     assert.equal(f.owner.getSnapshot().source.status, "ready");
-    f.stream({ kind: "text", threadId: f.threadId, turnId: "latest", itemId: "plan", field: "planText", index: null, append: true, text: " end" });
+    f.stream({ kind: "text", threadId: f.threadId, turnId: "latest", itemId: "message", field: "agentMessageText", index: null, append: true, text: " end" });
     assert.equal(f.owner.text.getSnapshot({
-      source: { kind: "sqlite", sourceKey: `codex:${f.threadId}` }, threadId: f.threadId, turnId: "latest", itemId: "plan", field: "planText", index: null,
+      source: { kind: "sqlite", sourceKey: `codex:${f.threadId}` }, threadId: f.threadId, turnId: "latest", itemId: "message", field: "agentMessageText", index: null,
     }), "start end");
     await f.owner.loadPrevious();
     await flush();

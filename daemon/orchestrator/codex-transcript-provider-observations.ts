@@ -24,7 +24,10 @@ import type {
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
-import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import {
+  isSupportedWorkbenchTranscriptItem,
+  normalizeThreadItems,
+} from "workbench-shared/codex/thread-item-normalization";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types.ts";
@@ -268,7 +271,7 @@ export function createCodexTranscriptProviderThreadObservations(
       turn,
       turnIndex,
     }));
-    for (const item of turn.items) {
+    for (const item of turn.items.filter(isSupportedWorkbenchTranscriptItem)) {
       if (itemOwners.get(item.id) !== turn.id) continue;
       observations.push(createCodexTranscriptProviderItemObservation({
         item,

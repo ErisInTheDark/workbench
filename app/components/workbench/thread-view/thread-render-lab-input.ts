@@ -19,7 +19,6 @@ const LabDraftIdSchema = z.string().brand<"DraftId">();
 type JsonObject = { [key: string]: JsonValue | undefined };
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type AgentMessageItem = Extract<ThreadItem, { type: "agentMessage" }>;
-type PlanItem = Extract<ThreadItem, { type: "plan" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
@@ -186,14 +185,6 @@ function createAgentMessageItem(record: JsonObject, index: number): AgentMessage
   };
 }
 
-function createPlanItem(record: JsonObject, index: number): PlanItem {
-  return {
-    type: "plan",
-    id: readString(record, "id") ?? `lab-plan-${index + 1}`,
-    text: readString(record, "text") ?? "",
-  };
-}
-
 function createReasoningItem(record: JsonObject, index: number): ReasoningItem {
   return {
     type: "reasoning",
@@ -223,6 +214,9 @@ function normalizeThreadItem(value: JsonValue, index: number): ThreadItem | null
   }
 
   const type = readString(value, "type");
+  if (type === "plan") {
+    return null;
+  }
   if (type && readString(value, "id")) {
     return value as ThreadItem;
   }
@@ -235,8 +229,6 @@ function normalizeThreadItem(value: JsonValue, index: number): ThreadItem | null
       return createUserMessageItem(value, index);
     case "agentMessage":
       return createAgentMessageItem(value, index);
-    case "plan":
-      return createPlanItem(value, index);
     case "reasoning":
       return createReasoningItem(value, index);
     case "webSearch":

@@ -1,11 +1,11 @@
 /*
- * Keywords: thread, reasoning, compaction, dedupe, transcript, provider reconciliation.
  * Exports:
- * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments and context-compaction lifecycle aliases. Keywords: thread, reasoning, compaction, dedupe, transcript.
- * - mergeThreadItem: merge same-id thread items without losing richer stored history. Keywords: thread, item, merge, history.
- * - reconcileCompleteThreadItems: reconcile one complete provider snapshot with directly recorded canonical items. Keywords: thread, provider, snapshot, identity, replacement.
- * - ReconciledCompleteThreadItem: one complete-scope result and its incoming identity evidence. Keywords: thread, provider, alias, identity.
- * - areUserInputsEquivalentForUserMessageDedupe: compare user inputs for duplicate user-message pruning. Keywords: thread, user message, image, equality.
+ * - isSupportedWorkbenchTranscriptItem: identify provider items supported by Workbench transcripts.
+ * - normalizeThreadItems: filter and dedupe supported thread items.
+ * - mergeThreadItem: merge same-id thread items without losing richer stored history.
+ * - reconcileCompleteThreadItems: reconcile one complete provider snapshot with canonical items.
+ * - ReconciledCompleteThreadItem: one reconciled item and its incoming identity evidence.
+ * - areUserInputsEquivalentForUserMessageDedupe: compare user inputs for duplicate user-message pruning.
  */
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
 import type { UserInput } from "./generated/app-server/v2/UserInput.ts";
@@ -28,6 +28,12 @@ export interface ReconciledCompleteThreadItem {
   aliases: string[];
   incomingItemId: string;
   item: ThreadItem;
+}
+
+export function isSupportedWorkbenchTranscriptItem(
+  item: ThreadItem,
+): item is Exclude<ThreadItem, { type: "plan" }> {
+  return item.type !== "plan";
 }
 
 function isNonEmptyArray<TValue>(value: TValue[] | null | undefined): value is TValue[] {
@@ -87,13 +93,6 @@ export function mergeThreadItem(incoming: ThreadItem, stored: ThreadItem): Threa
         ...incoming,
         content: mergeTextArray(incoming.content, storedItem.content),
         summary: mergeTextArray(incoming.summary, storedItem.summary),
-      };
-    }
-    case "plan": {
-      const storedItem = stored as Extract<ThreadItem, { type: "plan" }>;
-      return {
-        ...incoming,
-        text: mergeText(incoming.text, storedItem.text),
       };
     }
     case "commandExecution": {
@@ -276,8 +275,6 @@ function getTurnItemDedupeKey(item: ThreadItem) {
       return `hookPrompt:${stableStringify(item.fragments)}`;
     case "agentMessage":
       return item.text.trim() ? `agentMessage:${item.text.trim()}` : null;
-    case "plan":
-      return item.text.trim() ? `plan:${item.text.trim()}` : null;
     default:
       return null;
   }
@@ -337,10 +334,7 @@ function findEquivalentCurrentItem(
     if (currentItem.type === "userMessage" && incomingItem.type === "userMessage") {
       return areUserMessagesEquivalentForDedupe(currentItem, incomingItem);
     }
-    if (
-      (currentItem.type === "agentMessage" || currentItem.type === "plan")
-      && (incomingItem.type === "agentMessage" || incomingItem.type === "plan")
-    ) {
+    if (currentItem.type === "agentMessage" && incomingItem.type === "agentMessage") {
       const currentKey = getTurnItemDedupeKey(currentItem);
       return currentKey !== null && currentKey === getTurnItemDedupeKey(incomingItem);
     }
@@ -533,6 +527,7 @@ function removeDuplicateReasoningSegments(
 }
 
 export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThreadItemsOptions = {}): ThreadItem[] {
+  items = items.filter(isSupportedWorkbenchTranscriptItem);
   const classifyItem = options.classifyItem;
   if (classifyItem) {
     items = items.map((item) => withWorkbenchThreadItemIdentity(item, classifyItem(item)));

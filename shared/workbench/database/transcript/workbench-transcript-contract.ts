@@ -1,11 +1,12 @@
 /*
- * transcriptSnapshotTables/WorkbenchTranscriptSnapshotRows: one table-selection owner for transcript snapshot types and conformance. Keywords: transcript, database, schema, snapshot.
- * WorkbenchTranscriptSnapshot/conformWorkbenchTranscriptSnapshot: shared relational transcript wire shape and schema-derived browser conformance. Keywords: transcript, browser, compatibility.
- * WorkbenchTranscriptOperation/workbenchTranscriptOperations: shared typed request and response operation registry. Keywords: transcript, websocket, protocol.
- * WorkbenchTranscriptConformanceReport: bounded structural mismatch evidence for browser-to-orchestrator logging.
- * WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: exact server dispatch union decoded by the shared registry. Keywords: transcript, websocket, request.
- * workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: shared notification identities and payload conformance. Keywords: transcript, websocket, capability, notification.
- * WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: conformed incremental presentation notifications.
+ * Exports:
+ * - transcriptSnapshotTables/WorkbenchTranscriptSnapshotRows: transcript table selection and row types.
+ * - WorkbenchTranscriptSnapshot/conformWorkbenchTranscriptSnapshot: relational transcript wire shape and conformance.
+ * - WorkbenchTranscriptOperation/workbenchTranscriptOperations: typed request and response operation registry.
+ * - WorkbenchTranscriptConformanceReport: bounded structural mismatch evidence.
+ * - WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: decoded server dispatch union.
+ * - workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: notification contracts.
+ * - WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: incremental presentation notifications.
  */
 import { coreTables } from "../schema/core-schema.ts";
 import { evidenceTables } from "../schema/evidence-schema.ts";
@@ -35,7 +36,6 @@ export const transcriptSnapshotTables = Object.freeze({
   threadItemUserMessages: itemTables.threadItemUserMessages,
   threadUserMessageParts: itemTables.threadUserMessageParts,
   threadItemAssistantMessages: itemTables.threadItemAssistantMessages,
-  threadItemPlans: itemTables.threadItemPlans,
   threadItemReasoning: itemTables.threadItemReasoning,
   threadReasoningSections: itemTables.threadReasoningSections,
   threadItemFileChanges: itemTables.threadItemFileChanges,
@@ -510,7 +510,7 @@ function isLayoutPatch(value: unknown): value is TranscriptLayoutPatch {
 }
 
 function isTextField(value: unknown): value is TranscriptTextField {
-  return value === "agentMessageText" || value === "commandExecutionOutput" || value === "planText"
+  return value === "agentMessageText" || value === "commandExecutionOutput"
     || value === "reasoningContent" || value === "reasoningSummary";
 }
 

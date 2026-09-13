@@ -1,22 +1,15 @@
 /*
- * Keywords: canonical items, public identity, typed tool output, patch observations, schema history.
- * threadItems: current canonical thread item table. Keywords: database, schema, item.
- * threadItemUserMessages: current user-message augmentation table. Keywords: database, schema, user-message.
- * threadUserMessageParts: current ordered user-message part table. Keywords: database, schema, user-message.
- * threadItemAssistantMessages: current assistant-message augmentation table. Keywords: database, schema, assistant-message.
- * threadItemPlans: current plan augmentation table. Keywords: database, schema, plan.
- * threadItemReasoning: current reasoning augmentation table. Keywords: database, schema, reasoning.
- * threadReasoningSections: current ordered reasoning section table. Keywords: database, schema, reasoning.
- * threadItemFileChanges: current file-change augmentation table. Keywords: database, schema, file-change.
- * threadFileChanges: current ordered file change table. Keywords: database, schema, file-change.
- * threadFileChangeHunks/threadFileChangeCandidates: ordered hunk findings and candidate current lines.
- * threadItemContextCompactions: current context-compaction augmentation table. Keywords: database, schema, compaction.
- * threadItemUnknown: current opaque unknown-item augmentation table. Keywords: database, schema, unknown.
- * threadItemToolOutputs/threadToolOutputParts: native context and ordered text/image parts. Keywords: database, tool.
- * threadItemTimelines/threadItemTimelineAliases: optional semantic item timing and alias augmentations. Keywords: database, schema, timeline, alias.
- * itemTables: current item table inventory. Keywords: database, schema, item.
- * ItemSchemaRows: selected row types for current item tables. Keywords: database, schema, types.
- * itemSchemaHistory: private item table histories. Keywords: database, schema, history.
+ * Exports:
+ * - threadItems: canonical thread item roots.
+ * - threadItemUserMessages/threadUserMessageParts: user-message storage.
+ * - threadItemAssistantMessages: assistant-message storage.
+ * - threadItemReasoning/threadReasoningSections: reasoning storage.
+ * - threadItemFileChanges/threadFileChanges/threadFileChangeHunks/threadFileChangeCandidates: file-change storage.
+ * - threadItemContextCompactions/threadItemUnknown: compaction and opaque item storage.
+ * - threadItemToolOutputs/threadToolOutputParts: tool-output storage.
+ * - threadItemTimelines/threadItemTimelineAliases: item timing storage.
+ * - itemTables/ItemSchemaRows: current item inventory and row types.
+ * - itemSchemaHistory: item schema release history.
  */
 import databaseReleases from "./releases.ts";
 import {
@@ -35,8 +28,20 @@ import {
   unique,
   type SelectRow,
   type TableDefinition,
+  tableColumns,
 } from "../../../database/schema/schema-definition.ts";
-import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
+import {
+  addColumns,
+  createTable,
+  deleteRows,
+  defineSubsystemHistory,
+  defineTableHistory,
+  rebuildTable,
+  retireTableHistory,
+  tableVersion,
+} from "../../../database/schema/schema-history.ts";
+import { evidenceTables } from "./evidence-schema.ts";
+import { transcriptIdentityTables } from "./transcript-identity-schema.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion: number = databaseReleases.initialTranscript.version) {
   return defineTableHistory({
@@ -111,12 +116,69 @@ const threadItemsV3 = evolveTable(threadItemsV2, {
     ],
   }),
 });
+const threadItemsV4 = evolveTable(threadItemsV3, {
+  drop: ["type"],
+  add: { type: enumText(
+    "userMessage", "assistantMessage", "reasoning", "operation", "fileChange",
+    "webSearch", "questionnaire", "approval", "contextCompaction", "unknown", "functionCallOutput",
+  ).notNull() },
+});
 const threadItemsHistory = defineTableHistory({
-  current: threadItemsV3,
+  current: threadItemsV4,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemsV1, migration: createTable(threadItemsV1) }),
     tableVersion({ schemaVersion: databaseReleases.toolOutputParts.version, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
     tableVersion({ schemaVersion: databaseReleases.userInputKinds.version, table: threadItemsV3, migration: rebuildTable({ from: threadItemsV2, to: threadItemsV3 }) }),
+    tableVersion({
+      schemaVersion: databaseReleases.nativePlanRemoval.version,
+      table: threadItemsV4,
+      migration: [
+        deleteRows(
+          transcriptIdentityTables.itemSourceAliases.name,
+          sql`${tableColumns(transcriptIdentityTables.itemSourceAliases).item_identity_id} IN (
+            SELECT public_id FROM thread_items WHERE type = 'plan' AND public_id IS NOT NULL
+          )`,
+        ),
+        deleteRows(
+          transcriptIdentityTables.itemLegacyAliases.name,
+          sql`${tableColumns(transcriptIdentityTables.itemLegacyAliases).item_identity_id} IN (
+            SELECT public_id FROM thread_items WHERE type = 'plan' AND public_id IS NOT NULL
+          )`,
+        ),
+        deleteRows(
+          transcriptIdentityTables.itemIdentities.name,
+          sql`${tableColumns(transcriptIdentityTables.itemIdentities).id} IN (
+            SELECT public_id FROM thread_items WHERE type = 'plan' AND public_id IS NOT NULL
+          )`,
+        ),
+        deleteRows(
+          evidenceTables.transcriptNativeRecords.name,
+          sql`${tableColumns(evidenceTables.transcriptNativeRecords).item_id} IN (
+            SELECT id FROM thread_items WHERE type = 'plan'
+          )`,
+        ),
+        deleteRows(
+          evidenceTables.transcriptAssetRefs.name,
+          sql`${tableColumns(evidenceTables.transcriptAssetRefs).item_id} IN (
+            SELECT id FROM thread_items WHERE type = 'plan'
+          )`,
+        ),
+        deleteRows(
+          "thread_item_timeline_aliases",
+          sql`item_id IN (
+            SELECT id FROM thread_items WHERE type = 'plan'
+          )`,
+        ),
+        deleteRows(
+          "thread_item_timelines",
+          sql`item_id IN (
+            SELECT id FROM thread_items WHERE type = 'plan'
+          )`,
+        ),
+        deleteRows(threadItemsV3.name, sql`${tableColumns(threadItemsV3).type} = ${literal("plan")}`),
+        rebuildTable({ from: threadItemsV3, to: threadItemsV4 }),
+      ],
+    }),
   ],
 });
 export const threadItems = threadItemsHistory.current;
@@ -206,8 +268,10 @@ const threadItemPlansV1 = defineTable("thread_item_plans", {
     onDelete: "CASCADE",
   })],
 }));
-const threadItemPlansHistory = initialHistory(threadItemPlansV1);
-export const threadItemPlans = threadItemPlansHistory.current;
+const threadItemPlansHistory = retireTableHistory(
+  initialHistory(threadItemPlansV1),
+  databaseReleases.nativePlanRemoval.version,
+);
 
 const threadItemReasoningV1 = defineTable("thread_item_reasoning", {
   item_id: integer().primaryKey(),
@@ -441,7 +505,6 @@ export const itemTables = Object.freeze({
   threadItemUserMessages,
   threadUserMessageParts,
   threadItemAssistantMessages,
-  threadItemPlans,
   threadItemReasoning,
   threadReasoningSections,
   threadItemFileChanges,

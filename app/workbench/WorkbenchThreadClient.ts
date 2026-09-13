@@ -52,7 +52,11 @@ import {
     toThreadSummary,
 } from "workbench-shared/codex/thread-adapter";
 import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "workbench-shared/codex/thread-command-output";
-import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import {
+  areUserInputsEquivalentForUserMessageDedupe,
+  isSupportedWorkbenchTranscriptItem,
+  normalizeThreadItems,
+} from "workbench-shared/codex/thread-item-normalization";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
@@ -2215,13 +2219,6 @@ function WorkbenchThreadClient(
       };
     }
 
-    if (incomingItem.type === "plan" && liveItem.type === "plan") {
-      return {
-        ...incomingItem,
-        text: mergeLongerStreamingText(incomingItem.text, liveItem.text),
-      };
-    }
-
     if (
       incomingItem.type === "fileChange"
       && liveItem.type === "fileChange"
@@ -2360,7 +2357,7 @@ function WorkbenchThreadClient(
 
     return incomingTurn.status === "inProgress"
       && liveTurn.status === "inProgress"
-      && (liveItem.type === "agentMessage" || liveItem.type === "reasoning" || liveItem.type === "plan");
+      && (liveItem.type === "agentMessage" || liveItem.type === "reasoning");
   }
 
   function mergeLiveStreamingTurn(
@@ -3753,14 +3750,6 @@ function WorkbenchThreadClient(
     };
   }
 
-  function createStreamingPlanItem(itemId: string): Extract<ThreadItem, { type: "plan" }> {
-    return {
-      type: "plan",
-      id: itemId,
-      text: "",
-    };
-  }
-
   function createStreamingFileChangeItem(itemId: string): Extract<ThreadItem, { type: "fileChange" }> {
     return {
       type: "fileChange",
@@ -3922,7 +3911,6 @@ function WorkbenchThreadClient(
       .find((candidate) => candidate.id === itemId);
     if (!item) return null;
     if (field === "agentMessageText") return item.type === "agentMessage" ? item.text : null;
-    if (field === "planText") return item.type === "plan" ? item.text : null;
     if (field === "commandExecutionOutput") {
       return item.type === "commandExecution" ? item.aggregatedOutput ?? "" : null;
     }
@@ -4008,8 +3996,6 @@ function WorkbenchThreadClient(
     }> = [];
     if (item.type === "agentMessage") {
       fields.push({ field: "agentMessageText", index: null, text: item.text });
-    } else if (item.type === "plan") {
-      fields.push({ field: "planText", index: null, text: item.text });
     } else if (item.type === "commandExecution") {
       fields.push({ field: "commandExecutionOutput", index: null, text: item.aggregatedOutput ?? "" });
     } else if (item.type === "reasoning") {
@@ -4188,6 +4174,7 @@ function WorkbenchThreadClient(
         return upsertTurnMetadata(threadKey, notification.params.turn);
       case "item/started":
       case "item/completed": {
+        if (!isSupportedWorkbenchTranscriptItem(notification.params.item)) return false;
         const didDiscardAbandonedFileChanges = notification.method === "item/started"
           ? discardAbandonedStreamingFileChanges(threadKey, notification.params.turnId, notification.params.item.id)
           : false;
@@ -4228,25 +4215,6 @@ function WorkbenchThreadClient(
           ),
           delta: notification.params.delta,
           field: "agentMessageText",
-          itemId: notification.params.itemId,
-          threadId: notification.params.threadId,
-          threadKey,
-          turnId: notification.params.turnId,
-        });
-      case "item/plan/delta":
-        return acceptPresentationDelta({
-          apply: (publishSelected) => updateOrCreateThreadItem(
-            threadKey,
-            notification.params.turnId,
-            notification.params.itemId,
-            () => createStreamingPlanItem(notification.params.itemId),
-            (item) => item.type === "plan"
-              ? { ...item, text: `${item.text}${notification.params.delta}` }
-              : null,
-            { publishSelected },
-          ),
-          delta: notification.params.delta,
-          field: "planText",
           itemId: notification.params.itemId,
           threadId: notification.params.threadId,
           threadKey,
@@ -4348,6 +4316,7 @@ function WorkbenchThreadClient(
       case "hook/started":
       case "hook/completed":
       case "turn/diff/updated":
+      case "item/plan/delta":
       case "turn/plan/updated":
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":

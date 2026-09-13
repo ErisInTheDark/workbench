@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - hasThreadActiveFlag: detect structured or flattened active-thread flags. Keywords: thread status, active flag, approval.
- * - isThreadStatusActive: detect structured or flattened active thread status without requiring turns. Keywords: thread status, active, cleanup.
- * - getCurrentTurn: return the newest turn in a thread. Keywords: current turn, latest turn, ordering.
- * - getCurrentInProgressTurn: return the newest turn only when it is still running. Keywords: in progress, active turn.
- * - shouldPreserveLiveTurnItems: compare an incoming turn with an already-seen live turn. Keywords: turn merge, live items, itemsView.
- * - mergeTurnsPreservingLiveItems: merge turn lists by id while preserving richer items already seen in this browser session. Keywords: thread merge, live preservation, tool items.
- * - isCurrentTurnWaitingOnApproval: scope waiting-on-approval to the newest in-progress turn. Keywords: waitingOnApproval, current turn.
- * - hasStaleApprovalState: detect visible thread snapshots whose latest turn is complete while the thread still reports waitingOnApproval. Keywords: stale session, broken state, waitingOnApproval.
+ * - hasThreadActiveFlag: detect structured or flattened active-thread flags.
+ * - isThreadStatusActive: detect active thread status without requiring turns.
+ * - getCurrentTurn: return the newest turn.
+ * - getCurrentInProgressTurn: return the newest turn only while running.
+ * - shouldPreserveLiveTurnItems: decide whether live items supplement an incoming turn.
+ * - mergeTurnsPreservingLiveItems: merge turns while preserving richer live items.
+ * - isCurrentTurnWaitingOnApproval: scope approval waiting to the newest running turn.
+ * - hasStaleApprovalState: detect completed turns retaining an approval-wait state.
  */
 import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadActiveFlag } from "./generated/app-server/v2/ThreadActiveFlag.ts";
@@ -50,7 +50,6 @@ function countStructuredTurnItems(items: ThreadItem[]) {
 function isPreservableLiveTurnItem(item: ThreadItem) {
   switch (item.type) {
     case "agentMessage":
-    case "plan":
     case "reasoning":
       return true;
     case "commandExecution":

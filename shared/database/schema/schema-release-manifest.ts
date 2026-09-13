@@ -1,5 +1,4 @@
 /*
- * Keywords: database, release, fingerprint, immutability, node.
  * Exports:
  * - SchemaReleaseRegistry: named global releases and their independently sealed fingerprints.
  * - fingerprintSchemaReleases: describe executable history independently of source layout.
@@ -42,6 +41,8 @@ function operationShape(operation: TableMigration) {
     case "createTable": return [operation.kind, tableShape(operation.table)];
     case "addColumns": return [operation.kind, tableShape(operation.from), tableShape(operation.to), operation.columns];
     case "createIndexes": return [operation.kind, tableShape(operation.from), tableShape(operation.to), operation.names];
+    case "deleteRows": return [operation.kind, operation.tableName, operation.where];
+    case "dropTable": return [operation.kind, tableShape(operation.table)];
     case "rebuildTable": return [
       operation.kind, tableShape(operation.from), tableShape(operation.to),
       operation.copy.map(copy => [copy.targetColumn, copy.expression]),

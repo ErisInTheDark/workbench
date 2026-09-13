@@ -1,6 +1,6 @@
 /*
- * Keywords: canonical message, file change, typed patch findings, transform.
- * transformCoreTranscriptItem: convert visible message, reasoning, plan, file-change, compaction, and unknown items to relational mutations. Keywords: transcript, transform, canonical item.
+ * Exports:
+ * - transformCoreTranscriptItem: convert core transcript items to relational mutations.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -117,22 +117,6 @@ export function transformCoreTranscriptItem(
         }, {
           conflictColumns: ["item_id"],
           updateColumns: ["state", "phase", "text"],
-        }),
-      ],
-    };
-  }
-
-  if (item.type === "plan") {
-    return {
-      itemType: "plan",
-      cleanup: [],
-      mutations: [
-        upsertRow(itemTables.threadItemPlans, {
-          item_id: itemId,
-          text: item.text,
-        }, {
-          conflictColumns: ["item_id"],
-          updateColumns: ["text"],
         }),
       ],
     };

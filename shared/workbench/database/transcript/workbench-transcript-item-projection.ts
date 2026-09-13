@@ -1,5 +1,4 @@
 /*
- * Keywords: transcript, projection, item, database, validation.
  * Exports:
  * - WorkbenchProjectedInteractionItem: reconstructed questionnaire or approval.
  * - WorkbenchProjectedGenericItem: preserved provider payload available for presentation matching.
@@ -501,10 +500,6 @@ function projectItem(
         type: "agentMessage",
       };
     }
-    case "plan": {
-      const item = one(indexes.plans.get(itemId) ?? [], "threadItemPlans", itemId);
-      return { id: itemId, text: item.text, type: "plan" };
-    }
     case "reasoning": {
       one(indexes.reasoning.get(itemId) ?? [], "threadItemReasoning", itemId);
       const sections = indexedRows(
@@ -592,7 +587,6 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
     mcpContent: byItem(rows.threadCallableMcpResultContent, sourceIdsByItemId),
     mcpResults: byItem(rows.threadCallableMcpResults, sourceIdsByItemId),
     operations: byItem(rows.threadItemOperations, sourceIdsByItemId),
-    plans: byItem(rows.threadItemPlans, sourceIdsByItemId),
     processActions: byItem(rows.threadProcessCommandActions, sourceIdsByItemId),
     processSources: byItem(rows.threadOperationProcessSources, sourceIdsByItemId),
     reasoning: byItem(rows.threadItemReasoning, sourceIdsByItemId),

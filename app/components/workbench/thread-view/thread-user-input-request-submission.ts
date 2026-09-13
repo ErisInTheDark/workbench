@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - buildPendingUserInputRequestSubmissionOptions: derive durable questionnaire placement from an optional loaded thread and the pending request identity. Keywords: questionnaire, submission, transcript, placement.
+ * - buildPendingUserInputRequestSubmissionOptions: derive durable questionnaire placement from loaded thread state.
  */
 
 import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
@@ -19,7 +19,6 @@ function isQuestionnaireFallbackAnchorItem(item: ThreadPayload["turns"][number][
     case "agentMessage":
       return Boolean(item.text.trim());
     case "hookPrompt":
-    case "plan":
     case "reasoning":
     case "userMessage":
       return true;

@@ -36,6 +36,7 @@ const databaseReleases = Object.freeze({
   codexTranscriptCursors: release(26, "71a4c1e1180cc8ce17764e20a5d3d13b6bd7397abd8ba3739d72e8d30d12d5c9"),
   profileTurnUsage: release(27, "097a815a7f1c749221ab772c5f06ba3994c2da5e9cca3ce7f38fd89dd5dad18f"),
   gitArcProposalDiffCache: release(28, "54d2dd92aec1de7b9aed3cf337ed2742b13468addef146b8a3bfca1c602efeeb"),
+  nativePlanRemoval: release(29, "3512b3f17168a87e195bcbb5abe0dae212fc16d5b0ba82f369a0a5fff106362c"),
 });
 
 export default databaseReleases;

@@ -1,11 +1,10 @@
 /*
- * Keywords: thread recall, narrative, native attribution, SQLite, stable refs.
  * Exports:
- * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallMatch/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion/WorkbenchThreadRecallCursor/SqliteWorkbenchThreadRecallRef: recall projection, paging, cursor, and SQLite ref contracts. Keywords: thread recall, search, expansion, cursor, SQLite.
- * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records without embedded-plan duplication. Keywords: recall, narrative, kinds, plan, SQLite.
- * - searchWorkbenchThreadRecall/expandWorkbenchThreadRecall: page search matches and resolve one record-content page target. Keywords: search, pagination, cursor.
- * - createWorkbenchThreadRecallCursor/readWorkbenchThreadRecallCursor: encode and decode stable record-offset cursors. Keywords: cursor, offset, stable.
- * - createSqliteWorkbenchThreadRecallRef/readSqliteWorkbenchThreadRecallRef: encode and decode turn-owning SQLite record refs. Keywords: SQLite, ref, turn.
+ * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallMatch/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion/WorkbenchThreadRecallCursor/SqliteWorkbenchThreadRecallRef: recall contracts.
+ * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records.
+ * - searchWorkbenchThreadRecall/expandWorkbenchThreadRecall: search and page record content.
+ * - createWorkbenchThreadRecallCursor/readWorkbenchThreadRecallCursor: encode and decode record-offset cursors.
+ * - createSqliteWorkbenchThreadRecallRef/readSqliteWorkbenchThreadRecallRef: encode and decode SQLite record refs.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -215,19 +214,6 @@ function pushNarrativeThreadItemRecords(
           sequence: sequence.value,
           sortKey: createWorkbenchThreadContextSortKey(turnIndex, itemIndex, 20, sequence.value),
           text: item.text.trim(),
-          turnId: turn.id,
-        });
-        sequence.value += 1;
-      }
-      if (item.type === "plan" && item.text.trim()) {
-        records.push({
-          kind: "plan",
-          label: "Plan",
-          parentRef: null,
-          ref: `plan:${item.id}`,
-          sequence: sequence.value,
-          sortKey: createWorkbenchThreadContextSortKey(turnIndex, itemIndex, 20, sequence.value),
-          text: stripOuterPlanTag(item.text),
           turnId: turn.id,
         });
         sequence.value += 1;
@@ -489,19 +475,6 @@ export function buildSqliteWorkbenchThreadRecallRecords(
         sequence += 1;
       });
       continue;
-    }
-    if (item.type === "plan" && item.text.trim()) {
-      const record = sqliteRecord({
-        itemId: item.id,
-        kind: "plan",
-        label: "Plan",
-        sequence,
-        sortKey,
-        text: item.text,
-        turnId: root.turn_id,
-      });
-      if (record) records.push(record);
-      sequence += 1;
     }
   }
   records.sort((left, right) => left.sortKey.localeCompare(right.sortKey) || left.sequence - right.sequence);

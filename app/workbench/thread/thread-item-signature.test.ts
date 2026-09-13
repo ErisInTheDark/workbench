@@ -22,7 +22,7 @@ function thread(item: ThreadItem): ThreadPayload {
     model: null, reasoningEffort: null, serviceTier: null, agentPath: null, isDraft: false,
     tokenUsage: null, turnHistory: [],
     turns: [
-      turn("unchanged", [{ id: "plan", type: "plan", text: "retained plan" }]),
+      turn("unchanged", [{ id: "compaction", type: "contextCompaction" }]),
       turn("affected", [item]),
     ],
   };

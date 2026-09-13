@@ -624,52 +624,37 @@ function ThreadAgentMessageItem ({
   );
 }
 
-function ThreadPlanItem ({
+function ThreadRecallPlanItem ({
   inlineMentionSources,
-  item,
-  presentationSource,
+  markdown,
   threadCwdPath,
-  threadId = "",
-  turnId = "",
   projectFilePaths,
   projectId,
   projectRootPath,
   workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
-  item: Extract<ThreadItem, { type: "plan" }>;
-  presentationSource?: ThreadTextPresentationSource | null;
+  markdown: string;
   threadCwdPath?: string;
-  threadId?: string;
-  turnId?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const text = useThreadPresentedText({
-    canonicalText: item.text,
-    field: "planText",
-    itemId: item.id,
-    source: presentationSource,
-    threadId,
-    turnId,
-  });
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      summary={<ThreadPlanSummary markdown={text} />}
+      summary={<ThreadPlanSummary markdown={markdown} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
-        markdown={text || "No plan text captured."}
+        markdown={markdown}
         threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
-        revealAppends={Boolean(presentationSource)}
         workspaceRoots={workspaceRoots}
       />
     </ThreadDisclosure>
@@ -1285,9 +1270,9 @@ function ThreadRecallRecordItem({
       );
     case "plan":
       return (
-        <ThreadPlanItem
+        <ThreadRecallPlanItem
           inlineMentionSources={inlineMentionSources}
-          item={{ id, text: record.text, type: "plan" }}
+          markdown={record.text}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
@@ -2209,20 +2194,7 @@ function ThreadRenderableBlockViewComponent ({
         />
       );
     case "plan":
-      return (
-        <ThreadPlanItem
-          inlineMentionSources={inlineMentionSources}
-          item={block.item}
-          presentationSource={presentationSource}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          threadId={threadId}
-          turnId={turnId}
-          workspaceRoots={workspaceRoots}
-        />
-      );
+      return null;
     case "contextCompaction": {
       const timelineEntry = findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline);
       const isActive = turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);

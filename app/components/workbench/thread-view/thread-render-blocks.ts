@@ -97,10 +97,11 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
   const narrativeKeys = new Set<string>();
   let compacted = false;
   for (const item of items) {
+    if (item.type === "plan") continue;
     if (hidden.itemIds?.has(item.id)) continue;
     if (item.type === "userMessage" && (isWorkbenchHiddenSystemSteerInput(item.content)
       || (item.content.length > 0 && item.content.every(isWorkbenchActivatedSkillsInput)))) continue;
-    const text = item.type === "agentMessage" || item.type === "plan" ? item.text
+    const text = item.type === "agentMessage" ? item.text
       : item.type === "reasoning" ? [...item.summary, ...item.content].join("\n") : null;
     const normalized = text?.replace(/\s+/gu, " ").replace(/[^\p{L}\p{N}\s#`./:-]+/gu, "").trim().toLowerCase();
     const key = normalized && normalized.length >= 40 ? normalized.slice(0, 120) : null;

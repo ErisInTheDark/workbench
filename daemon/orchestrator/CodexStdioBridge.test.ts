@@ -1555,11 +1555,27 @@ test("provider-live transcript bursts bypass durable recording until item settle
       method: "turn/plan/updated",
       params: { explanation: null, plan: [], threadId: "thread", turnId: "turn" },
     });
+    await bridge.handleUpstreamMessage({
+      method: "item/plan/delta",
+      params: { delta: "native delta", itemId: "native-plan", threadId: "thread", turnId: "turn" },
+    });
+    const nativePlan: ThreadItem = { id: "native-plan", text: "native plan", type: "plan" };
+    await bridge.handleUpstreamMessage({
+      method: "item/started",
+      params: { item: nativePlan, startedAtMs: 1_500, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: { completedAtMs: 1_600, item: nativePlan, threadId: "thread", turnId: "turn" },
+    });
     await bridge.waitForIdle();
 
     assert.equal(notifications.filter((method) => method === "item/agentMessage/delta").length, 200);
     assert.equal(notifications.includes("turn/diff/updated"), true);
-    assert.equal(notifications.includes("turn/plan/updated"), true);
+    assert.equal(notifications.includes("turn/plan/updated"), false);
+    assert.equal(notifications.includes("item/plan/delta"), false);
+    assert.equal(notifications.filter((method) => method === "item/started").length, 1);
+    assert.equal(notifications.filter((method) => method === "item/completed").length, 0);
     assert.equal(sqliteBatches.length, durableBatchCount);
     const liveOnlyWindow = sql.project().projection;
     assert.equal(liveOnlyWindow?.turns[0]?.items[0]?.type, "agentMessage");

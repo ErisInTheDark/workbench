@@ -104,13 +104,17 @@ test("conversation and unclassified interaction rows break work runs", () => {
   const items: ThreadItem[] = [
     { type: "userMessage", id: "user", clientId: null, content: [{ type: "text", text: "hello", text_elements: [] }] },
     { type: "agentMessage", id: "assistant", text: "reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null },
-    { type: "plan", id: "plan", text: "a plan" },
     { type: "dynamicToolCall", id: "question", namespace: null, tool: "request_user_input", arguments: {},
       contentItems: [], durationMs: null, status: "completed", success: true },
   ];
   for (const item of items) {
     assert.deepEqual(rows([command("before"), item, command("after")]).map(row => row.eligible), [true, false, true]);
   }
+});
+
+test("native plan items are excluded from render blocks", () => {
+  const plan: ThreadItem = { type: "plan", id: "native-plan", text: "unsupported" };
+  assert.deepEqual(buildRenderableBlocks([plan]), []);
 });
 
 test("subagent creation and incoming native messages cannot enter worked groups", () => {

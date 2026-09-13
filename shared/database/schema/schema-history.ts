@@ -1,21 +1,12 @@
 /*
- * Keywords: SQLite, schema history, migration, version validation, transactions.
- * TableVersion: one immutable table shape and the explicit migration that produces it. Keywords: database, schema, version.
- * TableHistory: private table versions plus the only current branded export. Keywords: database, schema, history.
- * SubsystemSchemaHistory: ordered table histories owned by one schema subsystem. Keywords: database, schema, subsystem.
- * WorkbenchDatabaseSchema: assembled current tables and executable global history. Keywords: database, schema, migration.
- * tableVersion: declare one table version. Keywords: database, schema, version.
- * createTable: declare initial STRICT table creation. Keywords: database, schema, migration.
- * addColumns: declare a compatible SQLite column addition. Keywords: database, schema, migration.
- * createIndexes: declare compatible index additions. Keywords: database, schema, migration.
- * rebuildTable: declare a transactional table replacement. Keywords: database, schema, migration.
- * defineTableHistory: validate private versions and brand only the final table. Keywords: database, schema, history.
- * defineSubsystemHistory: combine table histories under one owner. Keywords: database, schema, subsystem.
- * defineWorkbenchDatabaseSchema: assemble and validate all subsystem histories. Keywords: database, schema, assembly.
- * applyWorkbenchDatabaseSchema: apply missing versions through an explicit target or latest, without downgrades. Keywords: database, schema, migration.
- * readWorkbenchDatabaseMigrationRange: validate a schema target and read its installed version without writes.
- * TableMigration: typed operation belonging to one ordered release.
- * readWorkbenchDatabaseSchemaHistory: expose immutable ordered releases for independent validation.
+ * Exports:
+ * - TableMigration/TableVersion/TableHistory: typed table migration history.
+ * - SubsystemSchemaHistory/WorkbenchDatabaseSchema: assembled schema contracts.
+ * - tableVersion/createTable/addColumns/createIndexes/rebuildTable/deleteRows: migration declarations.
+ * - defineTableHistory/retireTableHistory/defineSubsystemHistory: table lifecycle declarations.
+ * - defineWorkbenchDatabaseSchema: validate and assemble global schema history.
+ * - readWorkbenchDatabaseMigrationRange/readWorkbenchDatabaseSchemaHistory: inspect migration state.
+ * - applyWorkbenchDatabaseSchema: transactionally apply missing releases.
  */
 import type Database from "better-sqlite3";
 
@@ -40,7 +31,7 @@ import { sql } from "./schema-definition.ts";
 
 const SUBSYSTEM_HISTORY = Symbol("workbench-subsystem-schema-history");
 const DATABASE_SCHEMA = Symbol("workbench-database-schema");
-const subsystemHistoryData = new WeakMap<SubsystemSchemaHistory, readonly TableHistory[]>();
+const subsystemHistoryData = new WeakMap<SubsystemSchemaHistory, readonly SchemaTableHistory[]>();
 const databaseSchemaVersionData = new WeakMap<WorkbenchDatabaseSchema, ReadonlyMap<number, readonly TableMigration[]>>();
 
 interface CreateTableMigration {
@@ -74,7 +65,20 @@ interface RebuildTableMigration {
   readonly copy: readonly RebuildCopy[];
 }
 
-export type TableMigration = CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration;
+interface DeleteRowsMigration {
+  readonly kind: "deleteRows";
+  readonly tableName: string;
+  readonly where: string;
+}
+
+interface DropTableMigration {
+  readonly kind: "dropTable";
+  readonly table: TableDefinition;
+}
+
+export type TableMigration =
+  | CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration
+  | DeleteRowsMigration | DropTableMigration;
 
 export interface TableVersion<Table extends TableDefinition = TableDefinition> {
   readonly schemaVersion: number;
@@ -86,6 +90,17 @@ export interface TableHistory<Current extends TableDefinition = TableDefinition>
   readonly current: CurrentTableDefinition<Current>;
   readonly versions: readonly TableVersion[];
 }
+
+interface RetiredTableHistory {
+  readonly current: null;
+  readonly retirement: {
+    readonly schemaVersion: number;
+    readonly migration: DropTableMigration;
+  };
+  readonly versions: readonly TableVersion[];
+}
+
+type SchemaTableHistory = TableHistory | RetiredTableHistory;
 
 export interface SubsystemSchemaHistory {
   readonly [SUBSYSTEM_HISTORY]: true;
@@ -194,6 +209,12 @@ export function rebuildTable<From extends TableDefinition, To extends TableDefin
   });
 }
 
+export function deleteRows(tableName: string, where: SqlFragment<boolean>): DeleteRowsMigration {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) throw new Error(`Invalid SQLite identifier: ${tableName}`);
+  if (!where.text.trim()) throw new Error(`Row deletion for ${tableName} requires a predicate`);
+  return Object.freeze({ kind: "deleteRows", tableName, where: where.text });
+}
+
 function sameNames(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -222,14 +243,17 @@ function validateTransition(previous: TableDefinition, version: TableVersion) {
   const operations = version.migration;
   for (const operation of operations) {
     if (operation.kind === "createTable") throw new Error(`Existing table ${version.table.name} cannot use createTable again`);
+    if (operation.kind === "deleteRows") continue;
+    if (operation.kind === "dropTable") throw new Error(`Table ${version.table.name} cannot retire inside a table version`);
     if (operation.from !== previous || operation.to !== version.table) {
       throw new Error(`Migration for ${version.table.name}@${version.schemaVersion} does not use its adjacent table versions`);
     }
   }
   const rebuild = operations.filter((operation) => operation.kind === "rebuildTable");
   if (rebuild.length > 0) {
-    if (operations.length !== 1 || rebuild.length !== 1) {
-      throw new Error(`Rebuild of ${version.table.name}@${version.schemaVersion} must be the only table migration`);
+    if (rebuild.length !== 1 || operations.at(-1) !== rebuild[0]
+      || operations.some(operation => operation.kind !== "deleteRows" && operation.kind !== "rebuildTable")) {
+      throw new Error(`Rebuild of ${version.table.name}@${version.schemaVersion} must follow only row deletions`);
     }
     return;
   }
@@ -296,11 +320,26 @@ export function defineTableHistory<const Current extends TableDefinition>(input:
   });
 }
 
-export function defineSubsystemHistory(tableHistories: readonly TableHistory[]): SubsystemSchemaHistory {
+export function retireTableHistory(history: TableHistory, schemaVersion: number): RetiredTableHistory {
+  if (!Number.isSafeInteger(schemaVersion) || schemaVersion <= history.versions.at(-1)!.schemaVersion) {
+    throw new Error(`Table retirement for ${history.current.name} must follow its final schema version`);
+  }
+  return Object.freeze({
+    current: null,
+    retirement: Object.freeze({
+      schemaVersion,
+      migration: Object.freeze({ kind: "dropTable" as const, table: history.current }),
+    }),
+    versions: history.versions,
+  });
+}
+
+export function defineSubsystemHistory(tableHistories: readonly SchemaTableHistory[]): SubsystemSchemaHistory {
   const names = new Set<string>();
   for (const history of tableHistories) {
-    if (names.has(history.current.name)) throw new Error(`Duplicate subsystem table history: ${history.current.name}`);
-    names.add(history.current.name);
+    const name = history.current?.name ?? ("retirement" in history ? history.retirement.migration.table.name : "");
+    if (names.has(name)) throw new Error(`Duplicate subsystem table history: ${name}`);
+    names.add(name);
   }
   const history = Object.freeze({ [SUBSYSTEM_HISTORY]: true as const });
   subsystemHistoryData.set(history, Object.freeze([...tableHistories]));
@@ -336,7 +375,11 @@ function validateForeignKeys(tables: ReadonlyMap<string, TableDefinition>, schem
 }
 
 function migrationTarget(operation: TableMigration) {
-  return operation.kind === "createTable" ? operation.table : operation.to;
+  if (operation.kind === "createTable") return operation.table;
+  if (operation.kind === "addColumns" || operation.kind === "createIndexes" || operation.kind === "rebuildTable") {
+    return operation.to;
+  }
+  return null;
 }
 
 export function defineWorkbenchDatabaseSchema(input: {
@@ -347,7 +390,8 @@ export function defineWorkbenchDatabaseSchema(input: {
     if (!histories) throw new Error("Unknown subsystem schema history token");
     return histories;
   });
-  const currentTables = subsystemHistories.flatMap((histories) => histories.map((history) => history.current));
+  const currentTables = subsystemHistories.flatMap((histories) =>
+    histories.flatMap((history) => history.current ? [history.current] : []));
   const currentNames = new Set<string>();
   for (const table of currentTables) {
     if (currentNames.has(table.name)) throw new Error(`Duplicate current table: ${table.name}`);
@@ -362,6 +406,11 @@ export function defineWorkbenchDatabaseSchema(input: {
         operations.push(...version.migration);
         mutableVersions.set(version.schemaVersion, operations);
       }
+      if ("retirement" in history) {
+        const operations = mutableVersions.get(history.retirement.schemaVersion) ?? [];
+        operations.push(history.retirement.migration);
+        mutableVersions.set(history.retirement.schemaVersion, operations);
+      }
     }
   }
   if (mutableVersions.size === 0) throw new Error("Workbench database schema must declare at least one table version");
@@ -374,7 +423,8 @@ export function defineWorkbenchDatabaseSchema(input: {
   for (let schemaVersion = 1; schemaVersion <= currentVersion; schemaVersion += 1) {
     for (const operation of mutableVersions.get(schemaVersion)!) {
       const target = migrationTarget(operation);
-      historicalTables.set(target.name, target);
+      if (target) historicalTables.set(target.name, target);
+      else if (operation.kind === "dropTable") historicalTables.delete(operation.table.name);
     }
     validateForeignKeys(historicalTables, schemaVersion);
   }
@@ -432,6 +482,14 @@ function executeMigration(database: Database.Database, operation: TableMigration
       ...operation.to,
       indexes: operation.to.indexes.filter((tableIndex) => names.has(tableIndex.name)),
     })) database.exec(statement);
+    return;
+  }
+  if (operation.kind === "deleteRows") {
+    database.exec(`DELETE FROM ${quoteIdentifier(operation.tableName)} WHERE ${operation.where};`);
+    return;
+  }
+  if (operation.kind === "dropTable") {
+    database.exec(`DROP TABLE ${quoteIdentifier(operation.table.name)};`);
     return;
   }
   executeRebuild(database, operation, schemaVersion);

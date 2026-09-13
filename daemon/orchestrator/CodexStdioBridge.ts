@@ -24,6 +24,7 @@ import type { RequestPermissionProfile } from "workbench-shared/codex/generated/
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import { isSupportedWorkbenchTranscriptItem } from "workbench-shared/codex/thread-item-normalization";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import { readCodexContextUsage } from "./codex-thread-context-usage";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
@@ -223,11 +224,16 @@ const UNCONFIGURED_WORKBENCH_QUESTIONNAIRES: Pick<WorkbenchQuestionnaireControll
 
 const TRANSCRIPT_TEXT_NOTIFICATIONS: Readonly<Record<string, { field: TranscriptTextField; index?: string }>> = {
   "item/agentMessage/delta": { field: "agentMessageText" },
-  "item/plan/delta": { field: "planText" },
   "item/commandExecution/outputDelta": { field: "commandExecutionOutput" },
   "item/reasoning/textDelta": { field: "reasoningContent", index: "contentIndex" },
   "item/reasoning/summaryTextDelta": { field: "reasoningSummary", index: "summaryIndex" },
 };
+
+function isUnsupportedNativePlanNotification(message: JsonRpcNotification) {
+  if (message.method === "item/plan/delta" || message.method === "turn/plan/updated") return true;
+  return (message.method === "item/started" || message.method === "item/completed")
+    && extractItem(message)?.type === "plan";
+}
 
 type RequestIdAllocator = {
   next: number;
@@ -2120,6 +2126,7 @@ export default class CodexStdioBridge {
     }
 
     if (isJsonRpcNotification(message)) {
+      if (isUnsupportedNativePlanNotification(message)) return;
       if (this.identities && message.method === "thread/started") {
         const thread = asRecord(message.params)?.thread as Thread | undefined;
         if (thread?.id) await this.resolveTranscriptThreadContext(thread, true, signal);
@@ -3632,7 +3639,7 @@ export default class CodexStdioBridge {
     if (!threadId || !turnId) return [];
     if (notification.method === "item/started" || notification.method === "item/completed") {
       const item = extractItem(notification);
-      if (!item?.id) return [];
+      if (!item?.id || !isSupportedWorkbenchTranscriptItem(item)) return [];
       const providerObservedAt = notification.method === "item/started"
         ? readNotificationNumberParam(notification, "startedAtMs")
         : readNotificationNumberParam(notification, "completedAtMs");
@@ -3661,7 +3668,7 @@ export default class CodexStdioBridge {
     }
     return [
       createCodexTranscriptProviderTurnObservation({ context, threadId, turn }),
-      ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
+      ...turn.items.filter(isSupportedWorkbenchTranscriptItem).map((item) => createCodexTranscriptProviderItemObservation({
         item,
         lifecycle: notification.method === "turn/completed" ? "completed" : "streaming",
         observedAt: Math.round(
@@ -3684,7 +3691,7 @@ export default class CodexStdioBridge {
     const observedAt = Math.round((turn.startedAt ?? Date.now() / 1_000) * 1_000);
     return [
       createCodexTranscriptProviderTurnObservation({ context, threadId, turn }),
-      ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
+      ...turn.items.filter(isSupportedWorkbenchTranscriptItem).map((item) => createCodexTranscriptProviderItemObservation({
         item,
         lifecycle: "streaming",
         observedAt,

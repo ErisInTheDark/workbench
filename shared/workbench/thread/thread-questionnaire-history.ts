@@ -172,7 +172,6 @@ function isQuestionnaireHistoryAnchorItem(item: ThreadItem) {
     case "agentMessage":
       return Boolean(item.text.trim());
     case "hookPrompt":
-    case "plan":
     case "reasoning":
     case "userMessage":
       return true;

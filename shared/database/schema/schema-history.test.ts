@@ -1,6 +1,4 @@
-/*
- * No production exports. Tests protect add, rebuild, rollback, version, and foreign-key migration behavior. Keywords: database, schema, migration, test.
- */
+/* No production exports. Tests protect schema migration declarations, atomicity, rollback, versioning, and foreign keys. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -21,10 +19,12 @@ import {
   applyWorkbenchDatabaseSchema,
   createIndexes,
   createTable,
+  deleteRows,
   defineSubsystemHistory,
   defineTableHistory,
   defineWorkbenchDatabaseSchema,
   rebuildTable,
+  retireTableHistory,
   tableVersion,
 } from "./schema-history.ts";
 
@@ -142,6 +142,71 @@ test("schema history adds and deletes columns while preserving current data", ()
       "schema_history_records_kept_idx",
     ]);
     assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+  } finally {
+    database.close();
+  }
+});
+
+test("one release atomically deletes obsolete rows, rebuilds their owner, and retires a table", () => {
+  const ownerV1 = defineTable("schema_history_retirement_owner", {
+    id: integer().primaryKey(),
+    kind: text().notNull(),
+  });
+  const ownerV2 = defineTable("schema_history_retirement_owner", {
+    id: integer().primaryKey(),
+    kind: text().notNull(),
+  }, table => ({ constraints: [check(sql`${table.kind} <> 'retired'`)] }));
+  const detail = defineTable("schema_history_retirement_detail", {
+    id: integer().primaryKey(),
+    owner_id: integer().notNull().references("schema_history_retirement_owner", "id"),
+  });
+  const ownerBase = defineTableHistory({
+    versions: [tableVersion({ schemaVersion: 1, table: ownerV1, migration: createTable(ownerV1) })],
+    current: ownerV1,
+  });
+  const detailBase = defineTableHistory({
+    versions: [tableVersion({ schemaVersion: 1, table: detail, migration: createTable(detail) })],
+    current: detail,
+  });
+  const base = defineWorkbenchDatabaseSchema({
+    subsystems: [defineSubsystemHistory([ownerBase, detailBase])],
+  });
+  const current = defineWorkbenchDatabaseSchema({
+    subsystems: [defineSubsystemHistory([
+      defineTableHistory({
+        versions: [
+          ...ownerBase.versions,
+          tableVersion({
+            schemaVersion: 2,
+            table: ownerV2,
+            migration: [
+              deleteRows(detail.name, sql`owner_id IN (SELECT id FROM schema_history_retirement_owner WHERE kind = 'retired')`),
+              deleteRows(ownerV1.name, sql`kind = 'retired'`),
+              rebuildTable({ from: ownerV1, to: ownerV2 }),
+            ],
+          }),
+        ],
+        current: ownerV2,
+      }),
+      retireTableHistory(detailBase, 2),
+    ])],
+  });
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    applyWorkbenchDatabaseSchema(database, base);
+    database.exec(`
+      INSERT INTO schema_history_retirement_owner VALUES (1, 'retired'), (2, 'kept');
+      INSERT INTO schema_history_retirement_detail VALUES (1, 1);
+    `);
+    applyWorkbenchDatabaseSchema(database, current);
+    assert.deepEqual(database.prepare("SELECT * FROM schema_history_retirement_owner").all(), [{ id: 2, kind: "kept" }]);
+    assert.equal(database.prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_history_retirement_detail'",
+    ).get(), undefined);
+    assert.deepEqual(current.currentTables.map(({ name }) => name), ["schema_history_retirement_owner"]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("user_version", { simple: true }), 2);
   } finally {
     database.close();
   }
@@ -467,7 +532,7 @@ test("history declarations reject unsafe or unexplained transitions", () => {
       }),
     ],
     current: guardedAdded,
-  }), /must be the only table migration/);
+  }), /must follow only row deletions/);
   const foreignVersionColumns = tableColumns(lookalikeV1);
   assert.throws(() => rebuildTable({
     from: guardedV1,

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover identity-aware normalization and complete provider-scope reconciliation. Keywords: thread, user message, reasoning, provider, normalize, test.
+ * No production exports. Tests cover identity-aware normalization and complete provider-scope reconciliation.
  */
 
 import assert from "node:assert/strict";
@@ -21,6 +21,25 @@ import { getCodexItemIdentityKind } from "./thread-item-source.ts";
 function user(id: string, clientId: string | null, text = "same"): Extract<ThreadItem, { type: "userMessage" }> {
   return { clientId, content: [{ text, text_elements: [], type: "text" }], id, type: "userMessage" };
 }
+
+test("normalization excludes native plans without altering tagged agent markdown", () => {
+  const taggedMarkdown = "<plan>\n# retained plan\n\nkeep this exact markdown\n</plan>";
+  const items: ThreadItem[] = [
+    { id: "native-plan", text: "unsupported native plan", type: "plan" },
+    {
+      id: "tagged-agent-message",
+      memoryCitation: null,
+      delivery: null,
+      questions: null,
+      phase: "final_answer",
+      text: taggedMarkdown,
+      type: "agentMessage",
+    },
+  ];
+
+  assert.deepEqual(normalizeThreadItems(items), [items[1]]);
+  assert.equal((normalizeThreadItems(items)[0] as Extract<ThreadItem, { type: "agentMessage" }>).text, taggedMarkdown);
+});
 
 test("opaque provisional identity retains canonical reasoning and only contributes new snapshot content", () => {
   const current: ThreadItem = {
@@ -130,13 +149,11 @@ test("complete provider reconciliation reports positive narrative identity match
   const current: ThreadItem[] = [
     user("msg-user", "client", "hello"),
     { id: "msg-agent", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" },
-    { id: "plan-canonical", text: "one plan", type: "plan" },
     { id: "stale", memoryCitation: null, delivery: null, questions: null, phase: null, text: "stale", type: "agentMessage" },
   ];
   const incoming: ThreadItem[] = [
     user("item-1", "client", "hello"),
     { id: "item-2", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" },
-    { id: "item-3", text: "one plan", type: "plan" },
     { id: "new", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "done", type: "agentMessage" },
   ];
 
@@ -150,7 +167,6 @@ test("complete provider reconciliation reports positive narrative identity match
     [
       { aliases: ["item-1"], incomingItemId: "item-1", itemId: "msg-user" },
       { aliases: ["item-2"], incomingItemId: "item-2", itemId: "msg-agent" },
-      { aliases: ["item-3"], incomingItemId: "item-3", itemId: "plan-canonical" },
       { aliases: [], incomingItemId: "new", itemId: "new" },
     ],
   );
@@ -234,7 +250,10 @@ test("repeated reasoning observations combine richer content under one identity"
 });
 
 test("an alias followed by its own richer observation retains one item and all identity evidence", () => {
-  const stored: ThreadItem = { id: "canonical", type: "plan", text: "first step" };
+  const stored: ThreadItem = {
+    id: "canonical", type: "agentMessage", text: "first step", phase: "commentary",
+    memoryCitation: null, delivery: null, questions: null,
+  };
   const alias = withWorkbenchThreadItemIdentity({ ...stored, id: "alias" }, "provisional");
   const updated = { ...stored, text: "first step, then second step" };
   for (const incoming of [[alias, updated], [updated, alias]]) {

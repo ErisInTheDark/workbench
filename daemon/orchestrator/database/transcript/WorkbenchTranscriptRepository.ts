@@ -18,6 +18,7 @@ import { codexTranscriptTables } from "workbench-shared/workbench/database/schem
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import {
+  isSupportedWorkbenchTranscriptItem,
   mergeThreadItem,
   reconcileCompleteThreadItems,
 } from "workbench-shared/codex/thread-item-normalization";
@@ -1134,7 +1135,8 @@ export default class WorkbenchTranscriptRepository {
       return observation.threadId;
     }
     if (observation.kind === "item") {
-      let item = observation.item;
+      if (!isSupportedWorkbenchTranscriptItem(observation.item)) return observation.threadId;
+      let item: ThreadItem = observation.item;
       if (item.type === "functionCallOutput" || item.type === "fileChange") {
         const existing = this.#findItem(observation.threadId, observation.turnId, item.id, observation.publicItemId, canonicalIndex);
         if (item.type === "functionCallOutput" && existing?.type === "functionCallOutput") {
@@ -1673,7 +1675,6 @@ export default class WorkbenchTranscriptRepository {
       threadItemUserMessages: itemRows(itemTables.threadItemUserMessages),
       threadUserMessageParts: itemRows(itemTables.threadUserMessageParts),
       threadItemAssistantMessages: itemRows(itemTables.threadItemAssistantMessages),
-      threadItemPlans: itemRows(itemTables.threadItemPlans),
       threadItemReasoning: itemRows(itemTables.threadItemReasoning),
       threadReasoningSections: itemRows(itemTables.threadReasoningSections),
       threadItemFileChanges: itemRows(itemTables.threadItemFileChanges),

@@ -13,8 +13,14 @@ export default class ProjectTestCatalog {
   readonly tests: string[];
   readonly sources: string[];
   readonly owners = new Map<string, string[]>();
+  readonly explicitStandaloneTests: ReadonlySet<string>;
 
-  constructor(readonly root: string, readonly files: readonly string[]) {
+  constructor(
+    readonly root: string,
+    readonly files: readonly string[],
+    explicitStandaloneTests: readonly string[] = [],
+  ) {
+    this.explicitStandaloneTests = new Set(explicitStandaloneTests);
     this.tests = files.filter(file => TEST.test(file)).sort();
     this.sources = files.filter(file => !TEST.test(file)).sort();
     const byDirectory = new Map<string, string[]>();
@@ -37,6 +43,7 @@ export default class ProjectTestCatalog {
   static async read(root: string, inputs: readonly string[] = []) {
     root = path.resolve(root);
     const files = new Set<string>();
+    const explicitStandaloneTests: string[] = [];
     const walk = async (candidate: string): Promise<void> => {
       const info = await stat(candidate);
       if (info.isFile()) { files.add(candidate); return; }
@@ -56,19 +63,24 @@ export default class ProjectTestCatalog {
       const candidate = path.resolve(root, input);
       if (files.has(candidate) || candidate === root) continue;
       const info = await stat(candidate);
-      // Explicit diagnostic files still need their real neighbouring source owner.
+      // Explicit diagnostics are opt-in; neighbouring non-tests remain available as ownership context.
       if (info.isFile()) {
+        files.add(candidate);
+        if (TEST.test(candidate)) explicitStandaloneTests.push(candidate);
         const neighbours = await readdir(path.dirname(candidate), { withFileTypes: true });
-        for (const entry of neighbours) if (entry.isFile()) files.add(path.join(path.dirname(candidate), entry.name));
+        for (const entry of neighbours) {
+          if (entry.isFile() && !TEST.test(entry.name)) files.add(path.join(path.dirname(candidate), entry.name));
+        }
       } else {
         await walk(candidate);
       }
     }
-    return new ProjectTestCatalog(root, [...files].sort());
+    return new ProjectTestCatalog(root, [...files].sort(), explicitStandaloneTests);
   }
 
   validate() {
-    const unmatched = this.tests.filter(file => !this.owners.get(file)?.length);
+    const unmatched = this.tests.filter(file =>
+      !this.explicitStandaloneTests.has(file) && !this.owners.get(file)?.length);
     if (unmatched.length) throw new Error(`Tests without colocated source owners:\n${unmatched.map(file => path.relative(this.root, file)).join("\n")}`);
   }
 

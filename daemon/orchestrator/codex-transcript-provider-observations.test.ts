@@ -69,8 +69,12 @@ function providerThread(): Thread {
         delivery: null,
         questions: null,
         phase: "final_answer",
-        text: "done",
+        text: "<plan>\n# tagged plan\n</plan>",
         type: "agentMessage",
+      }, {
+        id: "native-plan",
+        text: "unsupported native plan",
+        type: "plan",
       }],
       itemsView: "full",
       startedAt: 1,
@@ -265,6 +269,9 @@ test("one completed provider turn becomes one normalized replacement scope", () 
   assert.equal(scope.kind, "providerTurnScope");
   assert.deepEqual(scope.completeTurnIds, ["turn"]);
   assert.deepEqual(scope.observations.map(({ kind }) => kind), ["turn", "item"]);
+  const item = scope.observations.find((observation) => observation.kind === "item")?.item;
+  assert.equal(item?.type, "agentMessage");
+  if (item?.type === "agentMessage") assert.equal(item.text, "<plan>\n# tagged plan\n</plan>");
 });
 
 test("one provider item lifecycle becomes one atomic observation", () => {

@@ -310,6 +310,7 @@ function createBundle(): WorkbenchThreadContextBundle {
         turn("turn-new", [
           { id: "commentary-new", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Normal commentary remembers the safe route.", type: "agentMessage" },
           { id: "plan-new", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
+          { id: "native-plan", text: "native plan must stay out of recall", type: "plan" },
           { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-unfinished"), content: createWorkbenchUnfinishedTurnInput(), id: "user-unfinished", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
@@ -340,6 +341,8 @@ test("builds one rich narrative projection and suppresses embedded plans with th
   assert.equal(records.some((record) => record.ref === "user:user-unfinished"), false);
   assert(records.some((record) => record.ref === "agent:commentary-new" && record.kind === "commentary"));
   assert(records.some((record) => record.ref === "plan-block:plan-new:0" && record.parentRef === "agent:plan-new"));
+  assert.equal(records.some((record) => record.ref === "plan:native-plan"), false);
+  assert.equal(records.some((record) => record.text.includes("native plan must stay out of recall")), false);
   assert.deepEqual(
     records.filter((record) => record.kind === "questionnaire").map((record) => record.ref),
     [
