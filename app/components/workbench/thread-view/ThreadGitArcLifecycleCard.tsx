@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcLifecycleCard: render ordered proposals and claim resolution for one durable Git arc lifecycle. Keywords: thread, git, arc, proposal, restore, resolved.
+ * - default ThreadGitArcLifecycleCard: render ordered proposals and claim resolution for one durable Git arc lifecycle.
  */
 "use client";
 
@@ -15,7 +15,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
-import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
@@ -147,21 +147,7 @@ export default function ThreadGitArcLifecycleCard({
               data-thread-git-arc-proposal-separator={index ? "true" : undefined}
               key={proposalId}
             >
-              <ThreadCheckpointCommitItem
-                commandOutcome="completed"
-                cwd={cwd}
-                embedded
-                harness={harness}
-                hoisted
-                intent={null}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                proposalId={proposalId}
-                sourceItemId={`lifecycle-proposal:${proposalId}`}
-                threadId={threadId}
-                workspaceRoots={workspaceRoots}
-              />
+              <ThreadCheckpointCommitTargetAnchor proposalId={proposalId} />
             </div>
           ))
         ) : null}

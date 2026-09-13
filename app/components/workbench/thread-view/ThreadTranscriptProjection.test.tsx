@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect canonical SQLite order, shared grouping, hidden skill transport, reasoning display, turn ownership, and Browse attachment. Keywords: transcript, SQLite, projection, grouping, skills, reasoning, Browse.
+ * No production exports. Tests protect canonical SQLite order, grouping, hidden controls, turn ownership, and Browse attachment.
  */
 import assert from "node:assert/strict";
 import { createRef } from "react";
@@ -58,6 +58,7 @@ function renderItems(
   items: ThreadItem[],
   hiddenReasoningStep: ThreadReasoningStepReference | null = null,
   durableItemCount = items.length,
+  hoistedGitArcProposalIds: ReadonlySet<string> = new Set(),
 ) {
   const turns = [turn("turn", 0, items)];
   const projection: WorkbenchTranscriptProjection = {
@@ -93,6 +94,7 @@ function renderItems(
       canLoadPreviousTurn={false}
       hiddenReasoningStep={hiddenReasoningStep}
       historySentinelRef={createRef<HTMLDivElement>()}
+      hoistedGitArcProposalIds={hoistedGitArcProposalIds}
       knownSkills={[]}
       projectFilePaths={[]}
       projectId="project"
@@ -135,6 +137,16 @@ test("standalone skill transport adds no display while visible and missing user 
     const visible = message("visible", visibleParts[0]);
     assert.notEqual(render([visible, empty]), render([visible]), "missing content is not hidden transport");
   }
+});
+
+test("canonical projection removes a proposal source while its card is hoisted", () => {
+  const proposal = {
+    ...command("proposal", 'wb git arc propose --title "Move this proposal" -- src/one.ts'),
+    aggregatedOutput: "Workbench arc proposal: proposal-one\n",
+  };
+  const html = renderItems([proposal], null, 1, new Set(["proposal-one"]));
+  assert.doesNotMatch(html, /data-thread-checkpoint-proposal-source=/u);
+  assert.doesNotMatch(html, /data-thread-checkpoint-card=/u);
 });
 
 test("native incoming messages and screenshots render once per identity after provider echo reconciliation", () => {

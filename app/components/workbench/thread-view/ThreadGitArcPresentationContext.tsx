@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default ThreadGitArcPresentationContext: identify the active harness and proposal-id set hoisted into terminal thread controls. Keywords: thread, git, arc, proposal, presentation.
- * - ThreadGitArcPresentation: live Git arc facts used by nested thread presentation. Keywords: thread, git, arc, presentation, context.
- * - getGitArcClaimReleaseAction: choose clean unclaim or dirty restore from the active comparison. Keywords: claim, compare, action.
+ * - default ThreadGitArcPresentationContext: provide active harness and thread Git arc presentation actions.
+ * - ThreadGitArcPresentation: describe live Git arc facts used by nested thread presentation.
+ * - getGitArcClaimReleaseAction: choose clean unclaim or dirty restore from the active comparison.
  */
 "use client";
 
@@ -15,9 +15,6 @@ import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/th
 export interface ThreadGitArcPresentation {
   harness: WorkbenchHarness;
   hasActiveGitArc?: boolean;
-  /** @deprecated Transitional input for pre-grouped tests and callers. */
-  hoistedProposalId?: string | null;
-  hoistedProposalIds?: ReadonlySet<string>;
   onOpenThread?: (target: WorkbenchThreadTarget) => void;
   projectId?: string | null;
   proposalIntents?: ReadonlyMap<string, GitCheckpointCommitCommandIntent>;

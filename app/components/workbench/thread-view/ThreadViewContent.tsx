@@ -79,6 +79,7 @@ import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
+import ThreadCheckpointCommitPortalLayer from "./ThreadCheckpointCommitPortalLayer";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
@@ -577,9 +578,19 @@ export default memo(function ThreadViewContent ({
   const visibleGitArcProposalPresentation = useMemo(() => getThreadGitArcProposalPresentation({
     knownSkills: workbenchSkills,
     projectRootPath,
-    turns: activeThread?.turns ?? [],
+    turns: usesSqlTranscript
+      ? activeTranscriptProjection?.turns ?? []
+      : (renderActiveThread ?? activeThread)?.turns ?? [],
     workspaceRoots: workspaceFileLinkRoots,
-  }), [activeThread?.turns, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
+  }), [
+    activeThread?.turns,
+    activeTranscriptProjection?.turns,
+    projectRootPath,
+    renderActiveThread?.turns,
+    usesSqlTranscript,
+    workbenchSkills,
+    workspaceFileLinkRoots,
+  ]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -1080,7 +1091,6 @@ export default memo(function ThreadViewContent ({
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
-        hoistedProposalIds: terminalGitArcProposalIds,
         onOpenThread,
         projectId,
         proposalIntents: visibleGitArcProposalPresentation.intents,
@@ -1125,6 +1135,20 @@ export default memo(function ThreadViewContent ({
             : "col-start-1 row-start-1 flex min-w-0 flex-col justify-end"}
         >
           <div>
+          {activeThread ? (
+            <ThreadCheckpointCommitPortalLayer
+              cwd={activeThread.cwd}
+              harness={activeThread.harness}
+              hoistedProposalIds={terminalGitArcProposalIds}
+              lifecycleProposalIds={terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              proposalSources={visibleGitArcProposalPresentation.sources}
+              threadId={activeThread.id}
+              workspaceRoots={workspaceFileLinkRoots}
+            />
+          ) : null}
           {activeThread && usesSqlTranscript && renderActiveThread && previousTurnEntry ? (
             previousTurnLoadStatus === "loading" ? (
               <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
@@ -1142,6 +1166,7 @@ export default memo(function ThreadViewContent ({
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
                     historySentinelRef={setHistorySentinel}
+                    hoistedGitArcProposalIds={terminalGitArcProposalIds}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     projectFilePaths={projectFilePaths}

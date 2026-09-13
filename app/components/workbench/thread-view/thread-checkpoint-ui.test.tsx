@@ -170,7 +170,7 @@ test("failed proposal creation stays an action, while identified proposals retai
         })),
       }));
       if (identified) {
-        assert.match(html, /data-thread-checkpoint-card=/u, transport);
+        assert.match(html, /data-thread-checkpoint-proposal-source=/u, transport);
         assert.doesNotMatch(html, /data-thread-git-arc-failure=/u);
         assert.doesNotMatch(html, /data-thread-git-arc-card="propose"/u);
       } else {
@@ -335,11 +335,11 @@ test("finished tails hide terminal reasoning and hoisted proposals from shell an
 test("finished-tail cleanup stops at visible work and preserves ineligible terminal items", () => {
   assert.deepEqual(
     hiddenTailIds([[proposalCommandItem(), reasoningItem(), messageItem("later")]]),
-    new Set(),
+    new Set(["proposal-command"]),
   );
   assert.deepEqual(
     hiddenTailIds([[proposalCommandItem(), reasoningItem()]], { hideReasoning: false }),
-    new Set(),
+    new Set(["proposal-command"]),
   );
   assert.deepEqual(
     hiddenTailIds([[proposalCommandItem(), reasoningItem()]], { hoistedProposalIds: new Set() }),

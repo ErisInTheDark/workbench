@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default getFinishedThreadTailHiddenItemIds: derive order-independent terminal reasoning and hoisted proposal visibility.
+ * - default getFinishedThreadTailHiddenItemIds: hide every hoisted proposal source and terminal reasoning.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -56,23 +56,24 @@ export default function getFinishedThreadTailHiddenItemIds({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const hiddenItemIds = new Set<string>();
+  if (hoistedProposalIds.size) {
+    for (const items of itemGroups) {
+      for (const item of items) {
+        const proposalId = getGitArcProposalId({ item, knownSkills, projectRootPath, workspaceRoots });
+        if (proposalId && hoistedProposalIds.has(proposalId)) hiddenItemIds.add(item.id);
+      }
+    }
+  }
+
   for (let groupIndex = itemGroups.length - 1; groupIndex >= 0; groupIndex -= 1) {
     const items = itemGroups[groupIndex]!;
     for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
       const item = items[itemIndex]!;
+      if (hiddenItemIds.has(item.id)) continue;
       if (hideReasoning && item.type === "reasoning") {
         hiddenItemIds.add(item.id);
         continue;
       }
-
-      const proposalId = hoistedProposalIds.size
-        ? getGitArcProposalId({ item, knownSkills, projectRootPath, workspaceRoots })
-        : null;
-      if (proposalId && hoistedProposalIds.has(proposalId)) {
-        hiddenItemIds.add(item.id);
-        continue;
-      }
-
       return hiddenItemIds;
     }
   }

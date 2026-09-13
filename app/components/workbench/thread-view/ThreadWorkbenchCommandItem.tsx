@@ -162,6 +162,7 @@ export default function ThreadWorkbenchCommandItem({
           projectId={projectId}
           projectRootPath={projectRootPath}
           proposalId={proposalId}
+          relocatable
           sourceItemId={item.id}
           threadId={threadId}
           workspaceRoots={workspaceRoots}

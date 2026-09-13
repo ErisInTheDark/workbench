@@ -1,7 +1,6 @@
 /*
- * Keywords: transcript, history, pagination, sentinel.
  * Exports:
- * - default ThreadTranscript: render the normal settled thread history while preserving one external pagination lifecycle. Keywords: transcript, thread, history, pagination.
+ * - default ThreadTranscript: render normal settled history while preserving one external pagination lifecycle.
  */
 "use client";
 
@@ -29,7 +28,6 @@ import {
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
-const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
 export default function ThreadTranscript({
   browseResultEntries,
@@ -143,9 +141,7 @@ export default function ThreadTranscript({
               turn={turn}
               workspaceRoots={workspaceRoots}
               hiddenReasoningStep={isCurrentTurn ? hiddenReasoningStep : null}
-              hoistedGitArcProposalIds={isCurrentTurn
-                ? terminalGitArcProposalIds
-                : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS}
+              hoistedGitArcProposalIds={terminalGitArcProposalIds}
               hiddenWebSearchItemIds={isCurrentTurn ? hiddenWebSearchItemIds : undefined}
               itemTimeline={entry.itemTimeline}
             />

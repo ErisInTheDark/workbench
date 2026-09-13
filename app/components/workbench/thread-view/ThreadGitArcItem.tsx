@@ -96,7 +96,6 @@ export default function ThreadGitArcItem ({
   projectFilePaths,
   projectId,
   projectRootPath,
-  proposalRedirect,
   receipt,
   statusOutput,
   workspaceRoots,
@@ -110,27 +109,10 @@ export default function ThreadGitArcItem ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
-  proposalRedirect?: { onActivate: () => void; proposalId: string; title: string };
   receipt: GitArcReceipt | null;
   statusOutput?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  if (commandIntent.action === "propose" && proposalRedirect) {
-    return (
-      <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5" data-thread-git-arc-card="propose">
-        <button
-          className="flex w-full min-w-0 items-baseline gap-2 text-left text-[0.82em] leading-[1.45] text-fg/muted hover:text-text"
-          onClick={proposalRedirect.onActivate}
-          type="button"
-        >
-          <GitArcIcon action="propose" size={16} />
-          <span>Proposed</span>
-          <span className="min-w-0 truncate font-medium text-text">{proposalRedirect.title.trim() || "Commit proposal"}</span>
-          <span className="shrink-0 font-mono text-[0.86em] text-fg/muted">{proposalRedirect.proposalId.slice(0, 8)}</span>
-        </button>
-      </article>
-    );
-  }
   const state = actionState(outcome);
   const adoptPaths = commandIntent.adoptPaths ?? [];
   const adoptPathSet = new Set(adoptPaths);

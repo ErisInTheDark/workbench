@@ -110,12 +110,12 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalObservations: {},
     proposalTurnIds: oldProposalTurns,
   }), null, "invalid or filtered proposals leave no card");
-  assert.equal(getHoistedThreadGitArc({
+  assert.ok(getHoistedThreadGitArc({
     currentTurn,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: { proposal: { status: "loading" } },
     proposalTurnIds: oldProposalTurns,
-  }), null, "loading proposals do not hoist");
+  }), "loading proposals hoist from durable lifecycle state");
   assert.equal(getHoistedThreadGitArc({
     currentTurn,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
@@ -148,7 +148,7 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     }),
     proposalObservations: { proposal: { status: "loading" } },
     proposalTurnIds: oldProposalTurns,
-  })?.proposals, [], "live claims remain visible without unresolved proposal rows");
+  })?.proposals, [{ proposalId: "proposal", status: "committed" }], "live claims show durable proposal rows while hydration loads");
   assert.ok(getHoistedThreadGitArc({
     currentTurn,
     gitArc: gitArc({

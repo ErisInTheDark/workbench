@@ -1394,6 +1394,7 @@ function ThreadCommandExecutionDetails ({
         projectId={projectId}
         projectRootPath={projectRootPath}
         proposalId={gitArcProposal?.proposalId ?? null}
+        relocatable
         sourceItemId={item.id}
         threadId={threadId}
         workspaceRoots={workspaceRoots}
@@ -2348,6 +2349,7 @@ interface ThreadTranscriptItemsDetailsProps {
   initialUserItemId?: string | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
+  hoistedGitArcProposalIds?: ReadonlySet<string>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: readonly WorkbenchProjectedTranscriptItem[];
@@ -2372,6 +2374,7 @@ export function ThreadTranscriptItemsDetails ({
   initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   hiddenReasoningStep = null,
+  hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   inlineMentionSources,
   itemTimeline,
   items,
@@ -2411,9 +2414,17 @@ export function ThreadTranscriptItemsDetails ({
   let pendingItems: ThreadItem[] = [];
   const flushItems = () => {
     if (!pendingItems.length) return;
+    const hiddenProposalItemIds = getFinishedThreadTailHiddenItemIds({
+      hideReasoning: false,
+      hoistedProposalIds: hoistedGitArcProposalIds,
+      itemGroups: [pendingItems],
+      knownSkills,
+      projectRootPath,
+      workspaceRoots,
+    });
     entries.push(...buildRenderableBlocks(
       pendingItems,
-      { reasoningStep: hiddenReasoningStep },
+      { itemIds: hiddenProposalItemIds, reasoningStep: hiddenReasoningStep },
       threadCwdPath,
     ).flatMap((block) => initialInactiveItemIds
       ? getWorkedBlockRows(block, { knownSkills, projectRootPath, workspaceRoots }).map(row => ({ ...row, kind: "block" as const }))
