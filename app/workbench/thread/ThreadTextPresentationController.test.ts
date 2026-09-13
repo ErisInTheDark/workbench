@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect exact-field isolation, ordered bounded replay, canonical reconciliation, source reset, and disposal. Keywords: thread, text, presentation, replay, lifecycle.
+ * No production exports. Tests protect exact-field isolation, smooth bounded replay, canonical reconciliation, source reset, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -20,11 +20,9 @@ function key(source: "json" | "sqlite", itemId = "item"): ThreadTextPresentation
 }
 
 function harness(options: { reducedMotion?: boolean } = {}) {
-  let now = 0;
   let scheduled: (() => void) | null = null;
   let cancellations = 0;
   const controller = new ThreadTextPresentationController({
-    now: () => now,
     reducedMotion: () => options.reducedMotion ?? false,
     scheduleFrame: (callback) => {
       scheduled = callback;
@@ -35,14 +33,16 @@ function harness(options: { reducedMotion?: boolean } = {}) {
     },
   });
   return {
-    advance(milliseconds = 16) {
-      now += milliseconds;
+    advance() {
       const callback = scheduled;
       scheduled = null;
       callback?.();
     },
     cancellations: () => cancellations,
     controller,
+    drain() {
+      while (scheduled) this.advance();
+    },
     scheduled: () => scheduled !== null,
   };
 }
@@ -61,10 +61,67 @@ test("ordered appends notify only the exact source-qualified field", () => {
   assert.equal(testHarness.controller.getSnapshot(jsonKey), "a");
   testHarness.advance();
 
+  assert.notEqual(testHarness.controller.getSnapshot(jsonKey), "a");
+  assert.equal(testHarness.controller.getSnapshot(sqliteKey), "a");
+  testHarness.drain();
   assert.equal(testHarness.controller.getSnapshot(jsonKey), "abc");
   assert.equal(testHarness.controller.getSnapshot(sqliteKey), "a");
-  assert.equal(jsonChanges, 1);
+  assert.ok(jsonChanges > 0);
   assert.equal(sqliteChanges, 0);
+});
+
+test("simultaneous fields each make bounded playback progress", () => {
+  const testHarness = harness();
+  const jsonKey = key("json");
+  const sqliteKey = key("sqlite");
+  const delta = "x".repeat(200);
+  testHarness.controller.subscribe(jsonKey, "", () => undefined);
+  testHarness.controller.subscribe(sqliteKey, "", () => undefined);
+  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: jsonKey });
+  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: sqliteKey });
+
+  testHarness.advance();
+
+  const jsonLength = testHarness.controller.getSnapshot(jsonKey)?.length ?? 0;
+  const sqliteLength = testHarness.controller.getSnapshot(sqliteKey)?.length ?? 0;
+  assert.ok(jsonLength > 0 && jsonLength < delta.length);
+  assert.ok(sqliteLength > 0 && sqliteLength < delta.length);
+});
+
+test("larger backlogs increase playback duration instead of one-frame chunk size", () => {
+  function firstFrameLength(length: number) {
+    const testHarness = harness();
+    const field = key("json");
+    const delta = "x".repeat(length);
+    testHarness.controller.subscribe(field, "", () => undefined);
+    testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
+    testHarness.advance();
+    return testHarness.controller.getSnapshot(field)?.length ?? 0;
+  }
+
+  const mediumFrame = firstFrameLength(2_000);
+  const largeFrame = firstFrameLength(20_000);
+  assert.ok(mediumFrame > 0);
+  assert.ok(largeFrame <= mediumFrame);
+});
+
+test("frame starvation with many tiny deltas retains animated playback", () => {
+  const testHarness = harness();
+  const field = key("json");
+  testHarness.controller.subscribe(field, "", () => undefined);
+  let canonicalText = "";
+  for (let index = 0; index < 1_000; index += 1) {
+    canonicalText += "x";
+    testHarness.controller.acceptDelta({ canonicalText, delta: "x", key: field });
+  }
+
+  assert.equal(testHarness.controller.getSnapshot(field), "");
+  testHarness.advance();
+  const firstFrame = testHarness.controller.getSnapshot(field) ?? "";
+  assert.ok(firstFrame.length > 0);
+  assert.ok(firstFrame.length < canonicalText.length);
+  testHarness.drain();
+  assert.equal(testHarness.controller.getSnapshot(field), canonicalText);
 });
 
 test("large backlogs catch up in bounded frame work without losing text", () => {
@@ -76,9 +133,9 @@ test("large backlogs catch up in bounded frame work without losing text", () => 
 
   testHarness.advance();
   const firstLength = testHarness.controller.getSnapshot(field)?.length ?? 0;
-  assert.ok(firstLength > 64);
+  assert.ok(firstLength > 0);
   assert.ok(firstLength < delta.length);
-  while (testHarness.scheduled()) testHarness.advance();
+  testHarness.drain();
   assert.equal(testHarness.controller.getSnapshot(field), delta);
 });
 
@@ -133,7 +190,7 @@ test("completion drains an exact narrative backlog and snaps missing text or com
   assert.equal(testHarness.controller.getSnapshot(narrative), "");
   assert.equal(testHarness.controller.getSnapshot(incompleteNarrative), "partial completion");
   assert.equal(testHarness.controller.getSnapshot(command), "command");
-  testHarness.advance();
+  testHarness.drain();
   assert.equal(testHarness.controller.getSnapshot(narrative), "narrative");
 });
 

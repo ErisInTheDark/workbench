@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - ThreadTextPresentationField/ThreadTextPresentationKey/ThreadTextPresentationSource: exact source-qualified streaming text identity. Keywords: thread, text, presentation, source, field.
- * - default ThreadTextPresentationController: owns bounded frame-paced text presentation and exact-field subscriptions. Keywords: thread, text, replay, frame, lifecycle.
+ * - ThreadTextPresentationField/ThreadTextPresentationKey/ThreadTextPresentationSource: exact source-qualified streaming text identity.
+ * - default ThreadTextPresentationController: owns bounded frame-paced text presentation and exact-field subscriptions.
  */
 
 import type { TranscriptTextField } from "workbench-shared/workbench/transcript/thread-transcript-stream";
@@ -21,26 +21,19 @@ export interface ThreadTextPresentationKey {
   turnId: string;
 }
 
-interface PendingChunk {
-  dueAt: number;
-  text: string;
-}
-
 interface FieldState {
   canonicalText: string;
   displayedText: string;
-  lastIngressAt: number;
   listeners: Set<() => void>;
-  pending: PendingChunk[];
-  pendingCharacters: number;
+  pendingText: string;
 }
 
 type ScheduleFrame = (callback: () => void) => () => void;
 
-const MAX_FIELD_PENDING_CHUNKS = 512;
 const MAX_FIELD_PENDING_CHARACTERS = 512 * 1024;
 const MAX_PASSIVE_FIELDS = 512;
-const MAX_REPLAY_GAP_MS = 120;
+const MAX_REVEAL_CHARACTERS_PER_FRAME = 32;
+const TARGET_REVEAL_FRAMES = 10;
 
 function defaultScheduleFrame(callback: () => void) {
   const frame = window.requestAnimationFrame(callback);
@@ -64,31 +57,27 @@ function sourcePrefix(source: ThreadTextPresentationSource) {
 }
 
 function revealBudget(pendingCharacters: number) {
-  if (pendingCharacters > 16_384) return 2_048;
-  if (pendingCharacters > 4_096) return 1_024;
-  if (pendingCharacters > 1_024) return 256;
-  return 64;
+  return Math.min(
+    MAX_REVEAL_CHARACTERS_PER_FRAME,
+    Math.max(1, Math.ceil(pendingCharacters / TARGET_REVEAL_FRAMES)),
+  );
 }
 
 export default class ThreadTextPresentationController {
   readonly #fields = new Map<string, FieldState>();
-  readonly #now: () => number;
   readonly #reducedMotion: () => boolean;
   readonly #scheduleFrame: ScheduleFrame;
   #cancelFrame: (() => void) | null = null;
   #disposed = false;
 
   constructor({
-    now = () => performance.now(),
     reducedMotion = () => typeof window !== "undefined"
       && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false),
     scheduleFrame = defaultScheduleFrame,
   }: {
-    now?: () => number;
     reducedMotion?: () => boolean;
     scheduleFrame?: ScheduleFrame;
   } = {}) {
-    this.#now = now;
     this.#reducedMotion = reducedMotion;
     this.#scheduleFrame = scheduleFrame;
   }
@@ -113,19 +102,15 @@ export default class ThreadTextPresentationController {
       this.#fields.set(identity, {
         canonicalText,
         displayedText: canonicalText,
-        lastIngressAt: this.#now(),
         listeners: new Set(),
-        pending: [],
-        pendingCharacters: 0,
+        pendingText: "",
       });
       return;
     }
     if (!current.listeners.size) {
       current.canonicalText = canonicalText;
       current.displayedText = canonicalText;
-      current.lastIngressAt = this.#now();
-      current.pending = [];
-      current.pendingCharacters = 0;
+      current.pendingText = "";
       return;
     }
     if (
@@ -137,22 +122,10 @@ export default class ThreadTextPresentationController {
       return;
     }
 
-    const now = this.#now();
     const state = current;
-
-    const gap = Math.min(MAX_REPLAY_GAP_MS, Math.max(0, now - state.lastIngressAt));
-    const priorDueAt = state.pending.at(-1)?.dueAt ?? now;
     state.canonicalText = canonicalText;
-    state.lastIngressAt = now;
-    state.pending.push({
-      dueAt: Math.max(now, priorDueAt + gap),
-      text: delta,
-    });
-    state.pendingCharacters += delta.length;
-    if (
-      state.pending.length > MAX_FIELD_PENDING_CHUNKS
-      || state.pendingCharacters > MAX_FIELD_PENDING_CHARACTERS
-    ) {
+    state.pendingText += delta;
+    if (state.pendingText.length > MAX_FIELD_PENDING_CHARACTERS) {
       this.#snap(identity, canonicalText);
       return;
     }
@@ -187,14 +160,12 @@ export default class ThreadTextPresentationController {
       state = {
         canonicalText,
         displayedText: canonicalText,
-        lastIngressAt: this.#now(),
         listeners: new Set(),
-        pending: [],
-        pendingCharacters: 0,
+        pendingText: "",
       };
       this.#fields.set(identity, state);
     } else if (
-      !state.pending.length
+      !state.pendingText
       && state.canonicalText !== canonicalText
       && !state.canonicalText.startsWith(canonicalText)
     ) {
@@ -206,8 +177,7 @@ export default class ThreadTextPresentationController {
     ) {
       state.canonicalText = canonicalText;
       state.displayedText = canonicalText;
-      state.pending = [];
-      state.pendingCharacters = 0;
+      state.pendingText = "";
     }
     state.listeners.add(listener);
     return () => {
@@ -247,7 +217,7 @@ export default class ThreadTextPresentationController {
 
   #schedule() {
     if (this.#cancelFrame || this.#disposed) return;
-    if (![...this.#fields.values()].some((state) => state.pending.length)) return;
+    if (![...this.#fields.values()].some((state) => state.pendingText)) return;
     this.#cancelFrame = this.#scheduleFrame(() => {
       this.#cancelFrame = null;
       this.#tick();
@@ -255,35 +225,18 @@ export default class ThreadTextPresentationController {
   }
 
   #tick() {
-    const now = this.#now();
-    let totalPending = 0;
-    for (const state of this.#fields.values()) totalPending += state.pendingCharacters;
-    let budget = revealBudget(totalPending);
-
     for (const [identity, state] of this.#fields) {
-      let changed = false;
-      while (budget > 0 && state.pending[0]?.dueAt <= now) {
-        const chunk = state.pending[0];
-        const revealLength = Math.min(budget, chunk.text.length);
-        const suffix = chunk.text.slice(0, revealLength);
-        const nextText = `${state.displayedText}${suffix}`;
-        if (!state.canonicalText.startsWith(nextText)) {
-          this.#snap(identity, state.canonicalText);
-          changed = false;
-          break;
-        }
-        state.displayedText = nextText;
-        state.pendingCharacters -= revealLength;
-        budget -= revealLength;
-        changed = true;
-        if (revealLength === chunk.text.length) {
-          state.pending.shift();
-        } else {
-          chunk.text = chunk.text.slice(revealLength);
-        }
+      const budget = revealBudget(state.pendingText.length);
+      const revealLength = Math.min(budget, state.pendingText.length);
+      if (revealLength === 0) continue;
+      const nextText = `${state.displayedText}${state.pendingText.slice(0, revealLength)}`;
+      if (!state.canonicalText.startsWith(nextText)) {
+        this.#snap(identity, state.canonicalText);
+        continue;
       }
-      if (changed) this.#notify(state);
-      if (budget === 0) break;
+      state.displayedText = nextText;
+      state.pendingText = state.pendingText.slice(revealLength);
+      this.#notify(state);
     }
     this.#schedule();
   }
@@ -294,8 +247,7 @@ export default class ThreadTextPresentationController {
     const changed = state.displayedText !== canonicalText;
     state.canonicalText = canonicalText;
     state.displayedText = canonicalText;
-    state.pending = [];
-    state.pendingCharacters = 0;
+    state.pendingText = "";
     if (changed) this.#notify(state);
     this.#cancelFrameIfIdle();
   }
@@ -305,7 +257,7 @@ export default class ThreadTextPresentationController {
   }
 
   #cancelFrameIfIdle() {
-    if ([...this.#fields.values()].some((state) => state.pending.length)) return;
+    if ([...this.#fields.values()].some((state) => state.pendingText)) return;
     this.#cancelFrame?.();
     this.#cancelFrame = null;
   }
