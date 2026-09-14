@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - ReloadDirtSourceDescriptor/ReloadDirtSourceState: current source ownership and dependant metadata. Keywords: reload, source, graph.
- * - ReloadDirtControllerState: transferable snapshots, baselines, pending scopes, and refresh lifecycle. Keywords: reload, dirt, handoff.
- * - ReloadDirtExternalSource/ReloadDirtControllerOptions: snapshot, watcher, dynamic-source, and publication ports. Keywords: reload, options, boundary.
- * - default ReloadDirtController: reconcile source content against per-scope Git baselines. Keywords: reload, dirt, Git, controller.
+ * - ReloadDirtSourceDescriptor/ReloadDirtSourceState: current source ownership and dependant metadata.
+ * - ReloadDirtControllerState: transferable snapshots, baselines, pending scopes and refresh lifecycle.
+ * - ReloadDirtExternalSource/ReloadDirtControllerOptions: snapshot, watcher and dynamic-source ports.
+ * - default ReloadDirtController: reconcile source content against per-scope Git baselines.
  */
 import { watch, type FSWatcher } from "node:fs";
 import { access } from "node:fs/promises";
@@ -47,8 +47,6 @@ export interface ReloadDirtExternalSource {
 }
 
 export interface ReloadDirtControllerOptions {
-  activateSourceState?(): ReloadDirtSourceState;
-  cancelSourceState?(): void;
   connectSourceObserver?(observe: (scope: WorkbenchReloadScope, sourcePath: string) => void): () => void;
   externalDirtSources?: readonly ReloadDirtExternalSource[];
   getSourceState(): ReloadDirtSourceState;
@@ -130,7 +128,7 @@ export default class ReloadDirtController {
 
   async start() {
     if (!this.state) {
-      const sourceState = this.options.activateSourceState?.() ?? this.options.getSourceState();
+      const sourceState = this.options.getSourceState();
       const snapshotCommit = await this.writeSnapshot("load reload node graph");
       this.state = {
         baselines: new Map(sourceState.descriptors.map(({ scope }) => [scope, snapshotCommit])),
@@ -181,7 +179,7 @@ export default class ReloadDirtController {
   async completeReload(requestedScopes: readonly WorkbenchReloadScope[]) {
     await this.enqueue(async () => {
       const state = this.requireState();
-      const sourceState = this.options.activateSourceState?.() ?? this.options.getSourceState();
+      const sourceState = this.options.getSourceState();
       const applied = new Set(sourceState.dependantClosure(requestedScopes));
       const snapshotCommit = await this.writeSnapshot(`reload ${[...applied].join(", ")}`);
       const fresh = new Map(sourceState.descriptors.map((descriptor) => [descriptor.scope, descriptor]));
@@ -200,7 +198,6 @@ export default class ReloadDirtController {
   }
 
   failReload(error: unknown) {
-    this.options.cancelSourceState?.();
     const state = this.requireState();
     state.pendingScopes = [];
     state.error = boundedError(error);

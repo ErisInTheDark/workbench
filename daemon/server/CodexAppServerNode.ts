@@ -46,6 +46,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   provides: ["codexAppServer"],
   requires: [],
   safeAll: false,
+  destructive: true,
   scope: "harness:codex",
   sources: [
     "daemon/server/CodexAppServerNode.ts",

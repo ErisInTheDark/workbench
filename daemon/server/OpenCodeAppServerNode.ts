@@ -51,6 +51,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   provides: ["openCodeAppServer"],
   requires: [],
   safeAll: false,
+  destructive: true,
   scope: "harness:opencode",
   sources: [
     "daemon/server/OpenCodeAppServerNode.ts",

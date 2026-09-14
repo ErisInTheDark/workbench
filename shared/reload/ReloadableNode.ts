@@ -6,8 +6,10 @@
  * - ReloadableNodeInstance/ReloadableNodeBuild: lifecycle, direct-parent construction and leased operation contracts.
  * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with hostile-boundary sources.
  * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host.
+ * - ReloadableNodeSourceObservation/ReloadableNodeSourceMetadata: scoped observations and discovered generation sources.
  */
 import type { WorkbenchReloadScope } from "./workbench-reload.ts";
+import type { ReloadDirtSourceState } from "./ReloadDirtController.ts";
 
 export type ReloadableNodeLifecycle = "atomic" | "handoff";
 export type ReloadableNodeAccess = "agent" | "cli" | "operator";
@@ -47,6 +49,7 @@ export interface ReloadableNodeInstance<TObjects extends object, TNotification> 
 }
 
 export interface ReloadableNodeBuild<TObjects extends object> {
+  getSourceState(): ReloadDirtSourceState;
   get<TKey extends keyof TObjects>(key: TKey): TObjects[TKey];
   run<TKey extends keyof TObjects, TResult>(
     key: TKey,
@@ -61,6 +64,7 @@ export interface ReloadableNodeBuild<TObjects extends object> {
 
 export interface ReloadableNodeOptions<TContext, TObjects extends object, TNotification> {
   access: ReloadableNodeAccess;
+  destructive?: boolean;
   boundarySources?: string;
   children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   create(context: TContext, build: ReloadableNodeBuild<TObjects>): ReloadableNodeInstance<TObjects, TNotification>;
@@ -75,6 +79,7 @@ export interface ReloadableNodeOptions<TContext, TObjects extends object, TNotif
 
 export default class ReloadableNode<TContext, TObjects extends object, TNotification> {
   readonly access: ReloadableNodeAccess;
+  readonly destructive: boolean;
   readonly boundarySources: string;
   readonly children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   readonly create: ReloadableNodeOptions<TContext, TObjects, TNotification>["create"];
@@ -88,6 +93,7 @@ export default class ReloadableNode<TContext, TObjects extends object, TNotifica
 
   constructor(options: ReloadableNodeOptions<TContext, TObjects, TNotification>) {
     this.access = options.access;
+    this.destructive = options.destructive ?? false;
     this.boundarySources = options.boundarySources ?? "";
     this.children = Object.freeze([...options.children]);
     this.create = options.create;
@@ -103,10 +109,24 @@ export default class ReloadableNode<TContext, TObjects extends object, TNotifica
 
 export interface ReloadableNodeGraph<TContext, TObjects extends object, TNotification> {
   roots: readonly ReloadableNode<TContext, TObjects, TNotification>[];
+  sourceObservations?: readonly ReloadableNodeSourceObservation[];
+  sourceMetadata?: ReloadableNodeSourceMetadata;
+}
+
+export interface ReloadableNodeSourceObservation {
+  scope: WorkbenchReloadScope;
+  path: string;
+}
+
+export interface ReloadableNodeSourceMetadata {
+  pathsByScope: ReadonlyMap<WorkbenchReloadScope, readonly string[]>;
+  topologyPaths: readonly string[];
+  processPaths: readonly string[];
 }
 
 export function defineReloadableNodeGraph<TContext, TObjects extends object, TNotification>(
   roots: readonly ReloadableNode<TContext, TObjects, TNotification>[],
+  sourceObservations: readonly ReloadableNodeSourceObservation[] = [],
 ): ReloadableNodeGraph<TContext, TObjects, TNotification> {
-  return Object.freeze({ roots: Object.freeze([...roots]) });
+  return Object.freeze({ roots: Object.freeze([...roots]), sourceObservations: Object.freeze([...sourceObservations]) });
 }

@@ -91,7 +91,7 @@ function runtime() {
     createDatabase: () => database,
     logger: new WorkbenchProcessLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
     outputDirectoryPath: "C:/workbench-output",
-    repositoryRootPath: "C:/repo",
+    repositoryRootPath: path.resolve(appDirectoryPath, ".."),
   });
 }
 
@@ -155,7 +155,7 @@ test("assigns every app server source to a reloadable node or the explicit proce
     [],
   );
 
-  assert.deepEqual(owners("app/server/state/WorkbenchAppStateRepository.ts"), ["client:database"]);
+  assert.deepEqual(owners("app/server/state/WorkbenchAppStateRepository.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateController.ts"), ["client:state"]);
   assert.deepEqual(owners("app/server/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
   assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
@@ -171,9 +171,10 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/workbench-app-settings.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
-  assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database"]);
-  assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database"]);
-  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:process"]);
+  assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database", "client:state"]);
+  assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database", "client:state"]);
+  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:database", "client:process", "client:state"]);
+  assert.equal(owners("shared/reload/ReloadableNodeHost.ts").includes("client:process"), true);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tray/src/main.rs"), ["client:process"]);
   assert.deepEqual(owners("app/tray/bin/windows-x64/workbench-tray.exe"), ["client:process"]);

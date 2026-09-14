@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { test } from "node:test";
 import ReloadableNode, { defineReloadableNodeGraph } from "./ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
+import type { ReloadDirtSourceState } from "./ReloadDirtController";
 
 function deferred() {
   let resolve!: () => void;
@@ -147,4 +148,75 @@ test("nested failure releases the drain and failed replacement restores operatio
     await reload;
     assert.equal(await f.host.run("consumer", owner => owner.read()), 1);
   } finally { proceed.resolve(); await f.host.dispose(); }
+});
+
+test("source ownership is published with its successful graph and restored after candidate failure", async () => {
+  let source = "shared/first.ts";
+  let failure: "start" | "activate" | null = null;
+  const starting = deferred();
+  const release = deferred();
+  type SourceObjects = { readSources: () => ReloadDirtSourceState };
+  const graph = () => ({
+    ...defineReloadableNodeGraph([
+      new ReloadableNode<object, SourceObjects, never>({
+        scope: "client:owner", access: "operator", description: "owner", lifecycle: "atomic",
+        provides: ["readSources"], requires: [], children: [], safeAll: false, sources: "",
+        create: (_context, build) => ({
+          registrations: { readSources: () => build.getSourceState() },
+          start: async () => {
+            if (build.mode === "replacement") { starting.resolve(); await release.promise; }
+            if (failure === "start") throw new Error("candidate failed");
+          },
+          activate: () => {
+            if (failure === "activate") {
+              assert.deepEqual(build.getSourceState().descriptors.find(({ scope }) => scope === "client:owner")?.paths, ["shared/second.ts"]);
+              throw new Error("activation failed");
+            }
+          },
+          dispose() {},
+        }),
+      }),
+      new ReloadableNode<object, SourceObjects, never>({
+        scope: "client:sibling", access: "operator", description: "sibling", lifecycle: "atomic",
+        provides: [], requires: [], children: [], safeAll: false, sources: "",
+        create: () => ({ registrations: {}, start() {}, dispose() {} }),
+      }),
+    ]),
+    sourceMetadata: {
+      pathsByScope: new Map([["client:owner", [source]], ["client:sibling", [`sibling/${source}`]]]),
+      topologyPaths: ["app/root.ts"],
+      processPaths: ["shared/reload/kernel.ts", `process/${source}`],
+    },
+  });
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    topologyScope: "client:topology",
+    processScope: {
+      descriptor: { scope: "client:process", access: "operator", description: "process", safeAll: false, destructive: true },
+      sources: "shared/reload/**",
+    },
+  });
+  const read = () => host.run("readSources", readSources => readSources());
+  const paths = (state: ReloadDirtSourceState) => state.descriptors.find(({ scope }) => scope === "client:owner")?.paths;
+  await host.start();
+  try {
+    assert.deepEqual(paths(await read()), ["shared/first.ts"]);
+    source = "shared/second.ts";
+    const reload = host.reload(["client:owner"]);
+    await starting.promise;
+    assert.deepEqual(paths(await read()), ["shared/first.ts"]);
+    release.resolve();
+    await reload;
+    assert.deepEqual(paths(await read()), ["shared/second.ts"]);
+    assert.deepEqual((await read()).descriptors.find(({ scope }) => scope === "client:sibling")?.paths, ["sibling/shared/first.ts"]);
+    assert.deepEqual(host.getReloadScopesForPaths(["shared/second.ts"]), ["client:owner"]);
+    assert.equal((await read()).descriptors.find(({ scope }) => scope === "client:process")?.paths.includes("shared/reload/kernel.ts"), true);
+    failure = "start";
+    source = "shared/failed.ts";
+    await assert.rejects(host.reload(["client:owner"]), /candidate failed/);
+    assert.deepEqual(paths(await read()), ["shared/second.ts"]);
+    failure = "activate";
+    await assert.rejects(host.reload(["client:owner"]), /activation failed/);
+    assert.deepEqual(paths(await read()), ["shared/second.ts"]);
+    assert.equal(host.getReloadScopesForPaths(["process/shared/failed.ts"]).includes("client:process"), false);
+  } finally { release.resolve(); await host.dispose(); }
 });

@@ -107,11 +107,6 @@ export default class WorkbenchAppRuntime {
           throw error;
         }
       },
-      getReloadDependantClosure: (scopes) => scopes.includes("client:process")
-        ? host.getReloadScopeCatalog().map(({ scope }) => scope)
-        : host.getDependantClosure(scopes),
-      getReloadScopeCatalog: () => host.getReloadScopeCatalog(),
-      getReloadScopesForPaths: (paths) => host.getReloadScopesForPaths(paths),
       outputDirectoryPath: options.outputDirectoryPath,
       processLogger: options.logger,
       readAppliedReactDevelopmentMode: () => {
@@ -125,8 +120,10 @@ export default class WorkbenchAppRuntime {
     const loader = createReloadableNodeModuleLoader<AppProcessContext, AppRuntimeObjects, never>(
       createRequire(import.meta.url),
       "./app-root-node.ts",
+      { repoRoot: options.repositoryRootPath },
     );
     host = new ReloadableNodeHost(context, loader, {
+      sourceExclusions: ["app/client/**"],
       onSwap: (scopes) => options.logger.line("app", `reloaded app nodes: ${scopes.join(", ")}`),
       processScope: {
         descriptor: {

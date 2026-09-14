@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import { observeReloadInstructionSource } from "./lib/workbench/reload-source-observer";
-import type { ReloadNodeSourceState } from "./reload-node-source-map";
+import type { ReloadDirtSourceState as ReloadNodeSourceState } from "workbench-shared/reload/ReloadDirtController";
 import WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 
 const run = promisify(execFile);

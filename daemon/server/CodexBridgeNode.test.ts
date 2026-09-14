@@ -69,6 +69,7 @@ test("accepted Codex steers cancel the mapped Workbench thread wait before publi
   } as unknown as DaemonProcessContext, {
     get: key => registrations[key],
     run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+    getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
     handoffState: undefined,
     isReplacing: () => false,
     lease: { isCurrent: () => true },
@@ -143,6 +144,7 @@ for (const mode of ["initial", "replacement"] as const) {
     } as unknown as DaemonProcessContext, {
       get: (key) => registrations[key],
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+      getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
       handoffState: undefined, isReplacing: () => false,
       lease: { isCurrent: () => true }, mode,
     });

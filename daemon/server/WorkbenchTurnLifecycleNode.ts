@@ -17,11 +17,6 @@ import WorkbenchDaemonReloadController, { type WorkbenchDaemonReloadControllerSt
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController, { type WorkbenchTurnRecoveryControllerState } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
-import {
-  activateReloadNodeSourceState,
-  cancelReloadNodeSourceState,
-  readReloadNodeSourceState,
-} from "./reload-node-source-map";
 
 interface WorkbenchTurnLifecycleState {
   reloadController?: WorkbenchDaemonReloadControllerState;
@@ -41,9 +36,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(state?.mcpGeneration);
     const reloadDirt = new WorkbenchReloadDirtController({
-      activateSourceState: activateReloadNodeSourceState,
-      cancelSourceState: cancelReloadNodeSourceState,
-      getSourceState: readReloadNodeSourceState,
+      getSourceState: build.getSourceState,
       repoRoot: context.legacyMigrationProjectRoot,
     }, state?.reloadDirt);
     const reloadController = new WorkbenchDaemonReloadController({

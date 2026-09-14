@@ -6,6 +6,7 @@
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ReloadDirtSourceState } from "./ReloadDirtController.ts";
 import type {
   WorkbenchReloadScope as DaemonReloadScope,
   WorkbenchReloadScopeDescriptor as DaemonReloadScopeDescriptor,
@@ -22,6 +23,7 @@ import type {
 
 interface DaemonFeatureNodeDefinition<TContext, TFeatures extends object, TNotification> {
   access: ReloadableNode<TContext, TFeatures, TNotification>["access"];
+  destructive: boolean;
   create(context: TContext, build: ReloadableNodeBuild<TFeatures>): ReloadableNodeInstance<TFeatures, TNotification>;
   dependencies: readonly string[];
   description: string;
@@ -32,6 +34,8 @@ interface DaemonFeatureNodeDefinition<TContext, TFeatures extends object, TNotif
   requires: readonly (keyof TFeatures)[];
   safeAll: boolean;
   scope: DaemonReloadScope;
+  sourcePaths: readonly string[];
+  sourcePatterns: readonly string[];
 }
 
 export interface ReloadableNodeModuleLoader<TContext, TFeatures extends object, TNotification> {
@@ -40,6 +44,7 @@ export interface ReloadableNodeModuleLoader<TContext, TFeatures extends object, 
 }
 
 export interface ReloadableNodeHostOptions {
+  sourceExclusions?: readonly string[];
   createRuntimeDrainDeadline?: (timeoutMs: number) => ReloadableNodeTransitionDeadline;
   logError?: (message: string) => void;
   now?: () => number;
@@ -121,6 +126,11 @@ function normalizeNodeId(value: string, label: string) {
 
 export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification> {
   private readonly operationContext = new AsyncLocalStorage<readonly symbol[]>();
+  private readonly sourceExclusions: readonly string[];
+  private readonly excludedSources: GitignoreMatcher;
+  private processSourcePaths: readonly string[] = [];
+  // Dirt readers can run during async activation; publish only committed graph ownership.
+  private sourceState: ReloadDirtSourceState;
   private readonly createDeadline: NonNullable<ReloadableNodeHostOptions["createRuntimeDrainDeadline"]>;
   private definitions = new Map<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
   private featureOwners = new Map<keyof TFeatures, string>();
@@ -130,7 +140,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly now: NonNullable<ReloadableNodeHostOptions["now"]>;
   private readonly onSwap: NonNullable<ReloadableNodeHostOptions["onSwap"]>;
   private readonly processScope: ReloadableNodeHostOptions["processScope"];
-  private readonly processSourceMatcher: GitignoreMatcher | null;
+  private processSourceMatcher: GitignoreMatcher | null = null;
   private readonly requiredRegistrations: readonly PropertyKey[];
   private readonly requiredScopes: readonly DaemonReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
@@ -149,24 +159,26 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     private readonly loader: ReloadableNodeModuleLoader<TContext, TFeatures, TNotification>,
     options: ReloadableNodeHostOptions = {},
   ) {
+    this.sourceExclusions = ["**/node_modules/**", "**/*.test.*", ...(options.sourceExclusions ?? [])];
+    this.excludedSources = createGitignoreMatcher(this.sourceExclusions.join("\n"));
     this.createDeadline = options.createRuntimeDrainDeadline ?? createRuntimeDrainDeadline;
     this.logError = options.logError ?? (() => undefined);
     this.now = options.now ?? Date.now;
     this.onSwap = options.onSwap ?? (() => undefined);
     this.processScope = options.processScope;
-    this.processSourceMatcher = options.processScope
-      ? createGitignoreMatcher(options.processScope.sources)
-      : null;
     this.requiredRegistrations = options.requiredRegistrations ?? [];
     this.requiredScopes = options.requiredScopes ?? [];
     this.runtimeDrainTimeoutMs = options.runtimeDrainTimeoutMs ?? DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS;
     this.topologyScope = options.topologyScope
       ?? (() => { throw new Error("A reloadable graph topology scope is required."); })();
-    const graph = this.validateGraph(this.flattenGraph(loader.load()));
+    const loaded = loader.load();
+    const graph = this.validateGraph(this.flattenGraph(loaded));
+    this.setProcessSources(loaded.sourceMetadata?.processPaths ?? []);
     this.definitions = graph.definitions;
     this.topology = graph.topology;
     this.nodes = this.createNodes(graph.definitions, graph.topology, new Map(), new Map(), new Set(), "initial");
     this.featureOwners = this.validateFeatureOwnership(this.nodes);
+    this.sourceState = this.describeSourceState();
   }
 
   get<TKey extends keyof TFeatures>(key: TKey) {
@@ -175,26 +187,76 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
 
   getReloadScopeCatalog(): readonly DaemonReloadScopeDescriptor[] {
     const graph = this.topology.map((scope) => {
-      const definition = this.definitions.get(scope)!;
+      const definition = this.requireNode(scope).definition;
       return Object.freeze({
         access: definition.access,
         description: definition.description,
         safeAll: definition.safeAll,
         scope: definition.scope,
+        ...(definition.destructive ? { destructive: true } : {}),
       });
     });
     return this.processScope ? [...graph, this.processScope.descriptor] : graph;
   }
 
+  getSourceState(): ReloadDirtSourceState {
+    return this.sourceState;
+  }
+
+  private describeSourceState(): ReloadDirtSourceState {
+    const definitions = new Map([...this.nodes].map(([scope, node]) => [scope, node.definition]));
+    const topology = this.topology;
+    const descriptors: Array<ReloadDirtSourceState["descriptors"][number]> = this.topology.map(scope => {
+      const definition = this.requireNode(scope).definition;
+      return {
+        access: definition.access,
+        description: definition.description,
+        ...(definition.destructive ? { destructive: true } : {}),
+        safeAll: definition.safeAll,
+        scope,
+        paths: definition.sourcePaths,
+        boundaryPatterns: definition.sourcePatterns,
+      };
+    });
+    if (this.processScope) descriptors.push({
+      ...this.processScope.descriptor,
+      paths: this.processSourcePaths,
+      boundaryPatterns: [
+        ...this.processScope.sources.split(/\r?\n/u).filter(Boolean),
+        ...this.sourceExclusions.map(source => `!${source}`),
+      ],
+    });
+    return {
+      descriptors,
+      dependantClosure: scopes => {
+        if (this.processScope && scopes.includes(this.processScope.descriptor.scope)) return descriptors.map(({ scope }) => scope);
+        const selected = this.selectDependants(scopes.filter(scope => definitions.has(scope)), definitions);
+        return topology.filter(scope => selected.has(scope));
+      },
+    };
+  }
+
+  private setProcessSources(paths: readonly string[]) {
+    this.processSourcePaths = [...new Set(paths)].filter(source => !this.excludedSources.matches(source)).sort();
+    this.processSourceMatcher = this.processScope
+      ? createGitignoreMatcher([
+        ...this.processSourcePaths,
+        this.processScope.sources,
+        ...this.sourceExclusions.map(source => `!${source}`),
+      ].join("\n"))
+      : null;
+  }
+
   getReloadScopesForPaths(paths: readonly string[]): DaemonReloadScope[] {
+    const admittedPaths = paths.filter(path => !this.excludedSources.matches(path));
     const scopes = this.topology.filter((scope) => {
-      const matcher = this.definitions.get(scope)!.matcher;
-      return paths.some((path) => matcher.matchesPathOrDescendant(path));
+      const matcher = this.requireNode(scope).definition.matcher;
+      return admittedPaths.some((path) => matcher.matchesPathOrDescendant(path));
     });
     if (
       this.processScope
       && this.processSourceMatcher
-      && paths.some((path) => this.processSourceMatcher!.matchesPathOrDescendant(path))
+      && admittedPaths.some((path) => this.processSourceMatcher!.matchesPathOrDescendant(path))
     ) scopes.push(this.processScope.descriptor.scope);
     return scopes;
   }
@@ -296,7 +358,10 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         this.logError,
       );
       try {
-        const fresh = await transition.step("load graph", () => this.validateGraph(this.flattenGraph(this.loader.reload())));
+        const fresh = await transition.step("load graph", () => {
+          const loaded = this.loader.reload();
+          return { ...this.validateGraph(this.flattenGraph(loaded)), processPaths: loaded.sourceMetadata?.processPaths ?? [] };
+        });
         const topologyChanged = this.hasTopologyChanged(fresh.definitions, fresh.topology);
         if (topologyChanged && !scopes.includes(this.topologyScope)) {
           throw new Error(`Reloadable node topology changed outside a ${this.topologyScope} reload. The current runtime was not changed.`);
@@ -305,7 +370,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
           ? this.changedTopologyClosure(fresh.definitions, scopes)
           : this.selectDependants(scopes, fresh.definitions);
         await this.retryRollbacks(selected, transition);
-        if (selected.size) await this.replaceGraph(fresh.definitions, fresh.topology, selected, transition);
+        if (selected.size) await this.replaceGraph(fresh.definitions, fresh.topology, selected, transition, fresh.processPaths);
       } finally {
         transition.finish();
       }
@@ -390,7 +455,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     topology: readonly DaemonReloadScope[],
     selected: ReadonlySet<string>,
     transition: ReloadableNodeTransition,
+    processPaths: readonly string[],
   ) {
+    const previousProcessPaths = this.processSourcePaths;
     const previousGraph = this.nodes;
     const previousDefinitions = this.definitions;
     const previousTopology = this.topology;
@@ -457,14 +524,17 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       this.definitions = definitions;
       this.topology = topology;
       this.featureOwners = nextOwners;
+      this.setProcessSources([...this.processSourcePaths, ...processPaths]);
       for (const id of ordered) {
         const node = candidates.get(id)!;
         activated.push(node);
         await transition.step(`${id}: activate`, () => node.instance.activate?.());
         this.assertAcceptingWork();
       }
+      this.sourceState = this.describeSourceState();
     } catch (error) {
       this.nodes = previousGraph;
+      this.setProcessSources(previousProcessPaths);
       this.definitions = previousDefinitions;
       this.topology = previousTopology;
       this.featureOwners = previousOwners;
@@ -547,6 +617,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       const token = Symbol(`workbench-feature-node:${nodeId}`);
       const visible = new Map([...dependencies, ...created]);
       const instance = definition.create(this.context, {
+        getSourceState: () => this.getSourceState(),
         get: <TKey extends keyof TFeatures>(key: TKey) => {
           if (!definition.requires.includes(key)) throw new Error(`Reloadable node ${nodeId} read undeclared parent registration ${String(key)}.`);
           return this.requireFeature(visible, this.validateFeatureOwnership(visible), key);
@@ -589,19 +660,32 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       for (const child of node.children) visit(child, scope);
     };
     for (const root of graph.roots) visit(root, null);
-    return [...nodes.values()].map((node): DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification> => ({
-      access: node.access,
-      create: node.create,
-      dependencies: [...(parents.get(node.scope) ?? [])],
-      description: node.description,
-      featureKeys: node.provides,
-      id: node.scope,
-      lifecycle: node.lifecycle,
-      matcher: createGitignoreMatcher(node.sources),
-      requires: node.requires,
-      safeAll: node.safeAll,
-      scope: node.scope,
-    }));
+    return [...nodes.values()].map((node): DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification> => {
+      const sourcePaths = [...new Set([
+        ...(graph.sourceMetadata?.pathsByScope.get(node.scope) ?? []),
+        ...(node.scope === this.topologyScope ? graph.sourceMetadata?.topologyPaths ?? [] : []),
+      ])].filter(source => !this.excludedSources.matches(source)).sort();
+      const sourcePatterns = [
+        ...`${node.sources}\n${node.boundarySources}`.split(/\r?\n/u).filter(Boolean),
+        ...this.sourceExclusions.map(source => `!${source}`),
+      ];
+      return {
+        access: node.access,
+        destructive: node.destructive,
+        create: node.create,
+        dependencies: [...(parents.get(node.scope) ?? [])],
+        description: node.description,
+        featureKeys: node.provides,
+        id: node.scope,
+        lifecycle: node.lifecycle,
+        matcher: createGitignoreMatcher([...sourcePaths, ...sourcePatterns].join("\n")),
+        requires: node.requires,
+        safeAll: node.safeAll,
+        scope: node.scope,
+        sourcePaths,
+        sourcePatterns,
+      };
+    });
   }
 
   private validateGraph(definitions: readonly DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>[]) {

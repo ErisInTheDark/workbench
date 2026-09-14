@@ -22,9 +22,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   create: (context, build) => {
     const state = build.handoffState as AppRuntimeNodeState | undefined;
     const dirt = new WorkbenchAppReloadDirtController({
-      getCatalog: context.getReloadScopeCatalog,
-      getDependantClosure: context.getReloadDependantClosure,
-      getScopesForPaths: context.getReloadScopesForPaths,
+      getSourceState: build.getSourceState,
       repositoryRootPath: context.repositoryRootPath,
     }, state?.dirt);
     const reload = new WorkbenchAppReloadController({

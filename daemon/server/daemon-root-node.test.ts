@@ -6,9 +6,9 @@ import { test } from "node:test";
 
 import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
 
-import graph from "./daemon-root-node";
-import { readReloadNodeSourceState } from "./reload-node-source-map";
-import type ReloadableNode from "./ReloadableNode";
+import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
+import ReloadableNode from "./ReloadableNode";
+import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import {
   DAEMON_PROCESS_REQUIRED_REGISTRATIONS,
   type DaemonProcessContext,
@@ -16,6 +16,33 @@ import {
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 
 type Node = ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
+const graph = createReloadableNodeModuleLoader<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>().load();
+
+function readReloadNodeSourceState() {
+  // Exercise production source declarations through the real host without constructing services.
+  const copies = new Map<Node, ReloadableNode<null, object, never>>();
+  const copy = (node: Node): ReloadableNode<null, object, never> => {
+    const existing = copies.get(node);
+    if (existing) return existing;
+    const result = new ReloadableNode<null, object, never>({
+      ...node,
+      children: node.children.map(copy),
+      provides: [] as const,
+      requires: [] as const,
+      create: () => ({ registrations: {}, start() {}, dispose() {} }),
+    });
+    copies.set(node, result);
+    return result;
+  };
+  const sources = { ...graph, roots: graph.roots.map(copy) };
+  return new ReloadableNodeHost(null, { load: () => sources, reload: () => sources }, {
+    topologyScope: "server:topology",
+    processScope: {
+      descriptor: { scope: "server:process", access: "operator", description: "Process", destructive: true, safeAll: false },
+      sources: "",
+    },
+  }).getSourceState();
+}
 
 function flattenParents(roots: readonly Node[]) {
   const nodes = new Map<string, Node>();

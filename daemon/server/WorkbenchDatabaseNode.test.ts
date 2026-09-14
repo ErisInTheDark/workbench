@@ -29,6 +29,7 @@ test("the database node proves readiness before exposing transcript work and clo
         throw new Error("The database root has no registration requirements");
       },
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+      getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
       handoffState: undefined,
       isReplacing: () => false,
       lease: { isCurrent: () => true },
@@ -58,6 +59,7 @@ test("database retirement still closes its worker when transcript disposal fails
     {
       get: () => { throw new Error("No dependencies"); },
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+      getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
       handoffState: undefined,
       isReplacing: () => false,
       lease: { isCurrent: () => true },

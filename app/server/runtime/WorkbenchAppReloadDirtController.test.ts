@@ -25,28 +25,18 @@ async function fixture(context: test.TestContext) {
     on: () => watcher,
   } as unknown as FSWatcher;
   const controller = new WorkbenchAppReloadDirtController({
-    getCatalog: () => [
-      { access: "operator", description: "HTTP", safeAll: false, scope: "client:http" },
-      { access: "operator", description: "Compiler", safeAll: false, scope: "client:compiler" },
-      { access: "operator", description: "Process", destructive: true, safeAll: false, scope: "client:process" },
-    ],
-    getScopesForPaths: (paths) => {
-      const scopes = new Set<string>();
-      for (const sourcePath of paths) {
-        if (sourcePath.startsWith("app/server/runtime/") && sourcePath.endsWith(".ts")) scopes.add("client:http");
-        if (sourcePath.startsWith("app/client/static/")) scopes.add("client:compiler");
-        if (sourcePath.startsWith("app/tray/") && !sourcePath.startsWith("app/tray/target/")) scopes.add("client:process");
-        if (sourcePath === "shared/owner.ts") {
-          scopes.add("client:http");
-        }
-      }
-      return [...scopes];
-    },
-    getDependantClosure: (scopes) => scopes.includes("client:process")
+    getSourceState: () => ({
+      descriptors: [
+        { access: "operator", description: "HTTP", safeAll: false, scope: "client:http", paths: ["shared/owner.ts"], boundaryPatterns: ["app/server/runtime/*.ts", "!**/*.test.*"] },
+        { access: "operator", description: "Compiler", safeAll: false, scope: "client:compiler", paths: [], boundaryPatterns: ["app/client/static/**"] },
+        { access: "operator", description: "Process", destructive: true, safeAll: false, scope: "client:process", paths: [], boundaryPatterns: ["app/tray/**", "!app/tray/target/**"] },
+      ],
+      dependantClosure: (scopes) => scopes.includes("client:process")
       ? ["client:http", "client:compiler", "client:process"]
       : scopes.includes("client:http")
         ? ["client:http", "client:compiler"]
         : [...scopes],
+    }),
     repositoryRootPath,
     watchSource: ((_root, _options, listener) => {
       observe = listener as typeof observe;

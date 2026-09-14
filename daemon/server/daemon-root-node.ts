@@ -5,7 +5,7 @@
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { defineReloadableNodeGraph } from "./ReloadableNode";
-import { observeReloadNodeGraphSources } from "./reload-node-source-map";
+import path from "node:path";
 import {
   beginReloadSourceGeneration,
   cancelReloadSourceGeneration,
@@ -23,7 +23,11 @@ const graph = (() => {
       require("./WorkbenchCodexInstructionNode").default,
       require("./CodexConfigurationNode").default,
     ]);
-    return observeReloadNodeGraphSources(graph, module, completeReloadSourceGeneration(generation));
+    const repoRoot = path.resolve(__dirname, "../..");
+    const observations = completeReloadSourceGeneration(generation)
+      .filter(filename => path.relative(repoRoot, filename).replace(/\\/gu, "/").startsWith("instructions/"))
+      .map(filename => ({ scope: "server:instructions" as const, path: filename }));
+    return { ...graph, sourceObservations: observations };
   } catch (error) {
     cancelReloadSourceGeneration(generation);
     throw error;

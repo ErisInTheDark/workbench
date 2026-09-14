@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - AppProcessContext: stable app-shell ports supplied to reloadable generations. Keywords: app, process, graph.
+ * - AppProcessContext: stable app-shell ports supplied to reloadable generations.
  */
-import type { WorkbenchReloadScope, WorkbenchReloadScopeDescriptor } from "workbench-shared/reload/workbench-reload";
+import type { WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
@@ -14,9 +14,6 @@ export interface AppProcessContext {
   createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
-  getReloadDependantClosure(scopes: readonly WorkbenchReloadScope[]): WorkbenchReloadScope[];
-  getReloadScopeCatalog(): readonly WorkbenchReloadScopeDescriptor[];
-  getReloadScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
   outputDirectoryPath: string;
   processLogger: WorkbenchProcessLogger;
   readAppliedReactDevelopmentMode(): boolean;

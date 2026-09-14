@@ -52,6 +52,7 @@ test("node replay maps a live pre-reload native wait to its Workbench thread", a
   } as DaemonProcessContext, {
     get: key => registrations[key],
     run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+    getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
     handoffState: undefined,
     isReplacing: () => false,
     lease: { isCurrent: () => true },
@@ -81,6 +82,7 @@ test("restoring the MCP node installs a usable executor without bumping freshnes
   } as DaemonProcessContext, {
     get: (key) => registrations[key],
     run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+    getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
     handoffState: undefined,
     isReplacing: () => true,
     lease: { isCurrent: () => true },

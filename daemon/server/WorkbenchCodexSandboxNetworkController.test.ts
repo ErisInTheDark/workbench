@@ -18,6 +18,7 @@ function createDatabaseNode(directory: string) {
         throw new Error("The database root has no registration requirements");
       },
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
+      getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
       handoffState: undefined,
       isReplacing: () => false,
       lease: { isCurrent: () => true },
