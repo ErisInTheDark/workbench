@@ -1,0 +1,55 @@
+diff --git a/sherpa-onnx/csrc/online-recognizer.h b/sherpa-onnx/csrc/online-recognizer.h
+--- a/sherpa-onnx/csrc/online-recognizer.h
++++ b/sherpa-onnx/csrc/online-recognizer.h
+@@ -24,2 +24,10 @@
++struct OnlineRecognizerHypothesis {
++  std::string text;
++  std::vector<std::string> tokens;
++  std::vector<float> timestamps;
++  double score;
++};
++
+ struct OnlineRecognizerResult {
++  std::vector<OnlineRecognizerHypothesis> hypotheses;
+   /// Recognition results.
+diff --git a/sherpa-onnx/csrc/online-recognizer-transducer-impl.h b/sherpa-onnx/csrc/online-recognizer-transducer-impl.h
+--- a/sherpa-onnx/csrc/online-recognizer-transducer-impl.h
++++ b/sherpa-onnx/csrc/online-recognizer-transducer-impl.h
+@@ -370,3 +370,19 @@
+     r.text = ApplyInverseTextNormalization(std::move(r.text));
+     r.text = ApplyHomophoneReplacer(std::move(r.text));
++    if (config_.decoding_method == "modified_beam_search") {
++      // Preserve the entire retained beam before downstream display reduction.
++      for (const auto &hyp :
++           decoder_result.hyps.GetTopK(decoder_result.hyps.Size(), false)) {
++        OnlineTransducerDecoderResult candidate;
++        candidate.tokens.assign(hyp.ys.begin() + model_->ContextSize(),
++                                hyp.ys.end());
++        candidate.timestamps = hyp.timestamps;
++        auto converted =
++            Convert(candidate, sym_, frame_shift_ms, subsampling_factor,
++                    s->GetCurrentSegment(), s->GetNumFramesSinceStart());
++        r.hypotheses.push_back(
++            {std::move(converted.text), std::move(converted.tokens),
++             std::move(converted.timestamps), hyp.TotalLogProb()});
++      }
++    }
+     return r;
+diff --git a/sherpa-onnx/csrc/online-recognizer.cc b/sherpa-onnx/csrc/online-recognizer.cc
+--- a/sherpa-onnx/csrc/online-recognizer.cc
++++ b/sherpa-onnx/csrc/online-recognizer.cc
+@@ -86,3 +86,14 @@
+   os << "\"is_eof\": " << (is_eof ? "true" : "false");
++  os << ", \"hypotheses\": [";
++  std::string separator;
++  for (const auto &hyp : hypotheses) {
++    os << separator << "{\"text\": " << std::quoted(hyp.text)
++       << ", \"tokens\": " << VecToString(hyp.tokens)
++       << ", \"timestamps\": " << VecToString(hyp.timestamps, 6)
++       << ", \"score\": " << std::defaultfloat << std::setprecision(17)
++       << hyp.score << "}";
++    separator = ", ";
++  }
++  os << "]";
+   os << "}";
+   return os.str();

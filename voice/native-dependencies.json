@@ -1,0 +1,16 @@
+{
+  "sherpa": {
+    "version": "1.13.7",
+    "commit": "917bed95c8e5c7c18aa4d69fea42e9ef8ef0a60e",
+    "sha256": "acf539e930283442c4237b7b23a06ebe3bff10cbc00694a4f09a3580e3c10e9e"
+  },
+  "model": {
+    "name": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+    "sha256": "639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282",
+    "encoder": "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+    "decoder": "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+    "joiner": "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+    "tokens": "tokens.txt"
+  }
+}

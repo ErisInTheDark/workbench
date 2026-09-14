@@ -12,6 +12,7 @@
 Thumbs.db
 node_modules
 tray/target/
+voice/target/
 tray/gen/
 .next
 *.tsbuildinfo
