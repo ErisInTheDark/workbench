@@ -1,7 +1,6 @@
 /*
- * Keywords: history, paging, scroll restoration, controlled time.
- * Tests:
- * - ThreadHistoryPagingController: pace requests and fence them behind rendered prepends.
+ * Exports:
+ * - No production exports; Node tests protect paced paging, prepend anchoring, and post-retention suppression.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -75,7 +74,7 @@ function fixture() {
     setNearTop(value: boolean) { nearTop = value; controller.reconcile(); },
     setSourceReady(value: boolean) { sourceReady = value; controller.reconcile(); },
     setScrollTop(value: number) { scrollTop = value; },
-    move(value: number) { controller.interrupt(); scrollTop = value; },
+    move(value: number, historyIntent = false) { controller.interrupt({ historyIntent }); scrollTop = value; },
     replace() { identity = {}; controller.reconcile(); },
     fail() {
       assert.notEqual(transaction, null);
@@ -104,6 +103,19 @@ test("automatic paging waits for a dwell and cancels when the reader leaves", ()
   assert.equal(f.loads, 1);
   f.controller.reconcile();
   f.advance(2_000);
+  assert.equal(f.loads, 1);
+});
+
+test("retention suppression blocks exposed-sentinel reload until upward history intent", () => {
+  const f = fixture();
+  f.controller.reconcile();
+  f.controller.suppressUntilHistoryIntent();
+  f.advance(5_000);
+  assert.equal(f.loads, 0);
+  f.move(0, true);
+  f.advance(499);
+  assert.equal(f.loads, 0);
+  f.advance(1);
   assert.equal(f.loads, 1);
 });
 

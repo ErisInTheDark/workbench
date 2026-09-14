@@ -1,5 +1,6 @@
 /*
- * No production exports. Tests protect compact plan reuse plus mounted preview and unmounted live ownership in sidebar tooltip details.
+ * Exports:
+ * - No production exports; rendering tests protect tooltip plan reuse, preview ownership, and live sidebar state.
  */
 import assert from "node:assert/strict";
 import ThreadObservationController, { getThreadObservationKey } from "../../workbench/thread/ThreadObservationController";
@@ -99,6 +100,7 @@ async function renderDetails(
   const thread = new WorkbenchThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, {
     observations: owner,
     getChild: () => { throw new Error("Unexpected child."); },
+    releaseHistoricalTurns: () => null,
     controls: {} as NonNullable<WorkbenchClientController["controls"]>,
     readNative: () => ({ document: null, pendingQuestionnaire: request, rateLimits: null }),
     subscribeNative: client.mounted!.threadRuntime.subscribe,

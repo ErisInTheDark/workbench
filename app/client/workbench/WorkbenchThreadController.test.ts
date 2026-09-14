@@ -1,5 +1,6 @@
 /*
- * Exports: none. Tests protect shared thread admission, proposal observation, source lifecycles, and child hydration through controlled adapter ports.
+ * Exports:
+ * - No production exports; Node tests protect thread admission, proposal observation, source and history lifecycles, and child hydration.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -55,6 +56,8 @@ function fixture() {
     resolve: (proposal: GitCheckpointProposal) => void;
   }> = [];
   const proposalRefreshListeners = new Set<() => void>();
+  const releasedHistoricalTurnIds: string[][] = [];
+  const transcriptSelectedTurnIds: string[][] = [];
   let publishTranscript!: (state: ThreadTranscriptProjectionState) => void;
   const ports: ThreadControllerPorts = {
     controls: {
@@ -66,6 +69,15 @@ function fixture() {
     },
     observations,
     getChild: () => { throw new Error("Unexpected child."); },
+    releaseHistoricalTurns: (turnIds) => {
+      releasedHistoricalTurnIds.push([...turnIds]);
+      if (native) {
+        const removed = new Set(turnIds);
+        native = { ...native, turns: native.turns.filter((turn) => !removed.has(turn.id)) };
+        for (const listener of listeners) listener();
+      }
+      return native;
+    },
     readNative: () => ({ document: native, pendingQuestionnaire: null, rateLimits: null }),
     subscribeNative: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     readGitArcProposal: ({ proposalId }) => new Promise<GitCheckpointProposal>((resolve, reject) => {
@@ -78,13 +90,19 @@ function fixture() {
     read: (_options, admit) => new Promise(resolve => reads.push({ admit, resolve })),
     createTranscript: publish => {
       publishTranscript = publish;
+      const controller = new ThreadTranscriptProjectionController({
+        onStateChange: publish, turnLimit: 4,
+        transcripts: {
+          subscribe: async () => {}, unsubscribe: async () => {},
+        },
+      });
+      const select = controller.select.bind(controller);
+      controller.select = (selection, options) => {
+        transcriptSelectedTurnIds.push(selection?.thread.turns.map(({ id }) => id) ?? []);
+        select(selection, options);
+      };
       return {
-        controller: new ThreadTranscriptProjectionController({
-          onStateChange: publish, turnLimit: 4,
-          transcripts: {
-            subscribe: async () => {}, unsubscribe: async () => {},
-          },
-        }),
+        controller,
         stopAvailability: () => {},
       };
     },
@@ -113,7 +131,7 @@ function fixture() {
     native = value;
     for (const listener of listeners) listener();
   }
-  return { owner, observations, document, requests, releases, reads, errors, proposalReads, proposalRefreshListeners, admit, publish, ports,
+  return { owner, observations, document, requests, releases, reads, errors, proposalReads, proposalRefreshListeners, releasedHistoricalTurnIds, transcriptSelectedTurnIds, admit, publish, ports,
     publishTranscript: (state: ThreadTranscriptProjectionState) => publishTranscript(state) };
 }
 
@@ -358,6 +376,38 @@ test("the final view release cancels its pending admission without a self-retain
   assert.equal(f.releases.length, 1);
   await cancelled;
   f.reads[0]!.resolve(null);
+  f.owner.dispose();
+});
+
+test("history retention waits for every surface and inactive release keeps only the latest page", () => {
+  const f = fixture();
+  const turns = ["oldest", "older", "previous", "current"].map((id, index) => ({
+    completedAt: index + 1, durationMs: 1, error: null, id, items: [], itemsView: "full" as const,
+    startedAt: index, status: "completed" as const,
+  }));
+  f.publish({
+    ...f.document,
+    turnHistory: turns.map((turn) => ({
+      completedAt: turn.completedAt, durationMs: turn.durationMs, itemCount: 0,
+      loadState: "loaded" as const, startedAt: turn.startedAt, status: turn.status, turnId: turn.id,
+    })),
+    turns,
+  });
+  const summary = f.owner.acquire("summary");
+  const view = f.owner.acquire("view");
+  const first = f.owner.acquireHistorySurface();
+  const second = f.owner.acquireHistorySurface();
+  first.setAtEnd(true);
+  assert.deepEqual(f.releasedHistoricalTurnIds, []);
+  second.setAtEnd(true);
+  assert.deepEqual(f.releasedHistoricalTurnIds, [["oldest", "older"]]);
+  assert.deepEqual(f.transcriptSelectedTurnIds.at(-1), ["previous", "current"]);
+  view();
+  assert.deepEqual(f.releasedHistoricalTurnIds.at(-1), ["previous"]);
+  assert.equal(f.owner.getSnapshot().document?.turns.at(-1)?.id, "current");
+  first.release();
+  second.release();
+  summary();
   f.owner.dispose();
 });
 

@@ -19,6 +19,7 @@ import type ThreadObservationController from "./thread/ThreadObservationControll
 import { getThreadObservationKey } from "./thread/ThreadObservationController";
 import type ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
 import type { ThreadTranscriptProjectionState } from "./transcript/ThreadTranscriptProjectionController";
+import ThreadHistoryRetentionController, { type ThreadHistoryRetentionSurface } from "./thread/ThreadHistoryRetentionController";
 
 export type ThreadControllerTarget = Exclude<WorkbenchThreadTarget, { kind: "new" }>;
 type ThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
@@ -49,6 +50,7 @@ export interface ThreadControllerPorts {
     threadId: string;
   }) => Promise<GitCheckpointProposal>;
   read: (options: WorkbenchReadThreadOptions, beforeCommit: () => Promise<void>, selectionBound: boolean) => Promise<ThreadPayload | null>;
+  releaseHistoricalTurns: (turnIds: readonly string[]) => ThreadPayload | null;
   readNative: () => Pick<ThreadControllerSnapshot, "document" | "pendingQuestionnaire" | "rateLimits">;
   subscribeNative: (listener: () => void) => () => void;
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
@@ -79,12 +81,17 @@ export default class WorkbenchThreadController {
   private stopGitArcProposalRefresh: (() => void) | null = null;
   private generation = 0;
   private disposed = false;
+  private readonly historyRetention: ThreadHistoryRetentionController;
   private snapshot: ThreadControllerSnapshot = {
     status: "loading", error: null, document: null, entry: null,
     gitArcProposals: {}, pendingQuestionnaire: null, rateLimits: null, subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
   };
 
-  constructor(readonly projectId: string, readonly target: ThreadControllerTarget, private readonly ports: ThreadControllerPorts) {}
+  constructor(readonly projectId: string, readonly target: ThreadControllerTarget, private readonly ports: ThreadControllerPorts) {
+    this.historyRetention = new ThreadHistoryRetentionController({
+      releaseTurns: turnIds => this.ports.releaseHistoricalTurns(turnIds),
+    });
+  }
 
   get threadId() { return this.target.kind === "draft" ? this.target.draftId : this.target.threadId; }
   get hasConsumers() { return this.consumers.size > 0; }
@@ -150,6 +157,10 @@ export default class WorkbenchThreadController {
     };
   }
 
+  acquireHistorySurface(): ThreadHistoryRetentionSurface {
+    return this.historyRetention.acquireSurface();
+  }
+
   acquire(interest: "summary" | "view" | "route" = "view") {
     if (this.disposed) throw new Error("The thread owner is disposed.");
     const consumer = {};
@@ -167,7 +178,13 @@ export default class WorkbenchThreadController {
     return () => {
       if (released) return;
       released = true;
+      const hadDocumentConsumer = [...this.consumers.values()].some(value => value !== "summary");
       this.consumers.delete(consumer);
+      const hasDocumentConsumer = [...this.consumers.values()].some(value => value !== "summary");
+      if (hadDocumentConsumer && !hasDocumentConsumer) {
+        const retained = this.historyRetention.releaseInactive();
+        if (retained) this.publish({ ...this.snapshot, document: retained });
+      }
       if (!this.consumers.size) {
         this.generation++;
         this.clearGitArcProposalObservation();
@@ -289,6 +306,7 @@ export default class WorkbenchThreadController {
     this.observation?.release();
     if (transportClosing) this.transcript?.controller.setAvailable(false);
     this.releaseTranscript();
+    this.historyRetention.dispose();
     for (const listener of this.listeners) listener();
     this.listeners.clear();
   }
@@ -329,12 +347,14 @@ export default class WorkbenchThreadController {
     this.syncRefresh(needsDocument);
     if (!needsDocument) {
       this.releaseTranscript();
+      this.historyRetention.select(native.document);
       return;
     }
     if (native.document?.harness === "codex" && !native.document.isDraft) {
       this.transcript ??= this.ports.createTranscript(transcript => this.publish({ ...this.snapshot, transcript }));
       this.transcript.controller.select({ thread: native.document });
     }
+    this.historyRetention.select(native.document);
   }
 
   private syncGitArcProposalObservation(entry: ThreadEntry | null, cwd: string | null) {

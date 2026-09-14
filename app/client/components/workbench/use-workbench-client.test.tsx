@@ -1,5 +1,6 @@
 /*
- * No production exports. Tests protect project-qualified thread state in project and global observation modes.
+ * Exports:
+ * - No production exports; rendering tests protect project-qualified state in project and global observation modes.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -65,6 +66,7 @@ const client = {
     getThreadController: (projectId, target) => new WorkbenchThreadController(projectId, target, {
       getChild: () => { throw new Error("Unexpected child."); },
       observations: new ThreadObservationController({ request: async () => { throw new Error("Unexpected observation during static rendering."); } }),
+      releaseHistoricalTurns: () => null,
       controls: {} as NonNullable<WorkbenchClientController["controls"]>,
       readNative: () => ({ document: null, pendingQuestionnaire: null, rateLimits: null }),
       subscribeNative: () => () => {},

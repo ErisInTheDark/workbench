@@ -87,6 +87,7 @@ import ThreadLiveActivity, { type LiveThreadActivity } from "./ThreadLiveActivit
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
+import { isThreadScrollAtEnd } from "./thread-scroll-snap";
 import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
@@ -438,6 +439,7 @@ export default memo(function ThreadViewContent ({
   const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
   const historyPagingRef = useRef<ThreadHistoryPagingController | null>(null);
   const historyPagingBindingsRef = useRef<HistoryPagingOptions | null>(null);
+  const previousLoadedTurnIdsRef = useRef<{ threadId: string; turnIds: readonly string[] } | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const historyLoadGenerationRef = useRef(0);
   const knownDirectSubagents = useMemo(
@@ -511,6 +513,7 @@ export default memo(function ThreadViewContent ({
       ? activeTranscriptProjection?.turns ?? []
       : renderActiveThread?.turns ?? []
   ).map(({ id }) => id), [activeTranscriptProjection?.turns, renderActiveThread?.turns, usesSqlTranscript]);
+  const loadedTurnIds = useMemo(() => activeThread?.turns.map(({ id }) => id) ?? [], [activeThread?.turns]);
   const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeHarnessUserInputRequest = activeThread
     ? activeThreadController.state.pendingQuestionnaire
@@ -690,6 +693,28 @@ export default memo(function ThreadViewContent ({
   useEffect(() => rootThreadController.owner?.acquireChildren(visibleSubagentThreadIds),
     [rootThreadController.owner, visibleSubagentThreadIds]);
 
+  useEffect(() => {
+    const owner = activeThreadController.owner;
+    const viewport = scrollViewportRef.current;
+    if (!owner || !viewport) return;
+    const surface = owner.acquireHistorySurface();
+    const report = () => surface.setAtEnd(isThreadScrollAtEnd({
+      clientHeight: viewport.clientHeight,
+      scrollHeight: viewport.scrollHeight,
+      scrollTop: viewport.scrollTop,
+    }));
+    const resizeObserver = new ResizeObserver(report);
+    resizeObserver.observe(viewport);
+    if (threadViewRef.current) resizeObserver.observe(threadViewRef.current);
+    viewport.addEventListener("scroll", report, { passive: true });
+    report();
+    return () => {
+      viewport.removeEventListener("scroll", report);
+      resizeObserver.disconnect();
+      surface.release();
+    };
+  }, [activeThreadController.owner, scrollViewportRef]);
+
   // Reconcile after every parent commit, including SQL's later prepend and skeleton removal.
   useLayoutEffect(() => {
     historyPagingBindingsRef.current = {
@@ -742,6 +767,18 @@ export default memo(function ThreadViewContent ({
     historyPagingRef.current.reconcile();
   });
 
+  useLayoutEffect(() => {
+    const threadId = activeThread?.id ?? "";
+    const previous = previousLoadedTurnIdsRef.current;
+    if (threadId && previous?.threadId === threadId) {
+      const loaded = new Set(loadedTurnIds);
+      if (previous.turnIds.some((turnId) => !loaded.has(turnId))) {
+        historyPagingRef.current?.suppressUntilHistoryIntent();
+      }
+    }
+    previousLoadedTurnIdsRef.current = threadId ? { threadId, turnIds: loadedTurnIds } : null;
+  }, [activeThread?.id, loadedTurnIds]);
+
   useLayoutEffect(() => () => {
     historyPagingRef.current?.dispose();
     historyPagingRef.current = null;
@@ -756,11 +793,19 @@ export default memo(function ThreadViewContent ({
     }
 
     const reconcile = () => historyPagingRef.current?.reconcile();
-    const interrupt = () => historyPagingRef.current?.interrupt();
+    const interrupt = (historyIntent = false) => historyPagingRef.current?.interrupt({ historyIntent });
+    const handleScroll = () => {
+      if (scrollTarget.dataset.threadScrollDirection === "up") interrupt(true);
+      else reconcile();
+    };
+    const handleWheel = (event: WheelEvent) => interrupt(event.deltaY < 0);
+    const handleTouchMove = () => interrupt();
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=true]")) return;
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) interrupt();
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+        interrupt(["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey));
+      }
     };
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target === scrollTarget) interrupt();
@@ -771,16 +816,16 @@ export default memo(function ThreadViewContent ({
       threshold: 0.1,
     });
     observer.observe(sentinel);
-    scrollTarget.addEventListener("scroll", reconcile, { passive: true });
-    scrollTarget.addEventListener("wheel", interrupt, { passive: true });
-    scrollTarget.addEventListener("touchmove", interrupt, { passive: true });
+    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
+    scrollTarget.addEventListener("wheel", handleWheel, { passive: true });
+    scrollTarget.addEventListener("touchmove", handleTouchMove, { passive: true });
     scrollTarget.addEventListener("keydown", handleKeyDown);
     scrollTarget.addEventListener("pointerdown", handlePointerDown);
     return () => {
       observer.disconnect();
-      scrollTarget.removeEventListener("scroll", reconcile);
-      scrollTarget.removeEventListener("wheel", interrupt);
-      scrollTarget.removeEventListener("touchmove", interrupt);
+      scrollTarget.removeEventListener("scroll", handleScroll);
+      scrollTarget.removeEventListener("wheel", handleWheel);
+      scrollTarget.removeEventListener("touchmove", handleTouchMove);
       scrollTarget.removeEventListener("keydown", handleKeyDown);
       scrollTarget.removeEventListener("pointerdown", handlePointerDown);
     };

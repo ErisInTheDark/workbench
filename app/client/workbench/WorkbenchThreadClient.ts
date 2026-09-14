@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
- * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks.
+ * - WorkbenchThreadClientOptions: thread-client adapters and coordinator callbacks.
  * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, questionnaire source reconciliation and answer intent submission, and notifications.
  */
 
@@ -905,6 +905,11 @@ function WorkbenchThreadClient(
         getChild: subagent => getThreadController(projectId, {
           kind: "subagent", harness: subagent.harness, parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
         }),
+        releaseHistoricalTurns: turnIds => releaseHistoricalTurns(
+          target.kind === "draft" ? "codex" : target.harness ?? getKnownThreadHarness(threadId) ?? "codex",
+          threadId,
+          turnIds,
+        ),
         readNative: () => {
           const document = threadDocuments.getDocumentByThreadId(threadId);
           return {
@@ -2135,6 +2140,63 @@ function WorkbenchThreadClient(
     optimisticInputs.deleteThread(key);
     threadRenderPipeline.delete(key);
     return didDeleteSource || didDeleteDocument;
+  }
+
+  function releaseHistoricalTurns(
+    harness: WorkbenchHarness,
+    threadId: string,
+    candidateTurnIds: readonly string[],
+  ) {
+    const key = getThreadStateKey(harness, threadId);
+    const source = threadSources.get(key);
+    if (!source || source.harness !== "codex" || source.isDraft || source.turns.length <= 1) return source;
+
+    const currentTurnId = source.turns.at(-1)?.id;
+    const releasedTurnIds = new Set(candidateTurnIds.filter((turnId) => turnId !== currentTurnId
+      && source.turns.some((turn) => turn.id === turnId)));
+    if (!releasedTurnIds.size) return source;
+
+    const turns = source.turns.filter((turn) => !releasedTurnIds.has(turn.id));
+    const retainedTurnIds = new Set(turns.map(({ id }) => id));
+    const turnHistory = source.turnHistory.map((entry) => {
+      if (!releasedTurnIds.has(entry.turnId)) return entry;
+      const { itemIds: _itemIds, itemTimeline: _itemTimeline, ...metadata } = entry;
+      return { ...metadata, loadState: "unloaded" as const };
+    });
+    const earliestRetainedHistoryIndex = turnHistory.findIndex((entry) => retainedTurnIds.has(entry.turnId));
+    const nextPageCursor = earliestRetainedHistoryIndex > 0
+      ? turnHistory[earliestRetainedHistoryIndex]!.turnId
+      : null;
+    const nextSource: ThreadPayload = {
+      ...source,
+      browseResultEntries: (source.browseResultEntries ?? []).filter((entry) => !releasedTurnIds.has(entry.turnId)),
+      nextPageCursor,
+      turnHistory,
+      turns,
+    };
+
+    function pruneEntries<TEntry extends { turnId: string }>(
+      entries: Map<string, TEntry[]>,
+      revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">,
+    ) {
+      const current = entries.get(threadId) ?? [];
+      const retained = current.filter((entry) => !releasedTurnIds.has(entry.turnId));
+      if (retained.length === current.length) return;
+      if (retained.length) entries.set(threadId, retained);
+      else entries.delete(threadId);
+      bumpOverlayRevisionForKey(key, revisionKey);
+    }
+
+    pruneEntries(state.browseResultEntriesByThreadId, "browseResultRevision");
+    pruneEntries(state.questionnaireHistoryByThreadId, "questionnaireRevision");
+    pruneEntries(state.steerHistoryByThreadId, "steerRevision");
+    threadSources.install(nextSource);
+    threadRenderPipeline.delete(key);
+    const selected = threadDocuments.getSelectedThreadKey() === key;
+    const retained = materializeFinalVisibleThread(key, { select: selected }) ?? nextSource;
+    if (selected) setProjectedCurrentThread(retained, { publishRuntime: false });
+    emit();
+    return retained;
   }
 
   function updateThreadSource(

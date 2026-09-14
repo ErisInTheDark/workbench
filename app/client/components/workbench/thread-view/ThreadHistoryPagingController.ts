@@ -1,5 +1,4 @@
 /*
- * Keywords: history, paging, scroll anchor, render commit, scheduling.
  * Exports:
  * - HistoryPagingView: current renderer and viewport measurements.
  * - HistoryPagingOptions: viewport, request, and scheduling boundary.
@@ -45,6 +44,7 @@ export default class ThreadHistoryPagingController {
   #triggeredBoundary: string | null = null;
   #pending: PendingPrepend | null = null;
   #scheduled: ScheduledHistoryLoad | null = null;
+  #historyIntentRequired = false;
   #transaction = 0;
   #disposed = false;
 
@@ -74,10 +74,16 @@ export default class ThreadHistoryPagingController {
     if (this.#pending?.transaction === transaction) this.#pending = null;
   }
 
-  interrupt() {
+  interrupt({ historyIntent = false }: { historyIntent?: boolean } = {}) {
     if (this.#pending) this.#pending.anchor = null;
+    if (historyIntent) this.#historyIntentRequired = false;
     this.#cancelScheduled();
     this.reconcile();
+  }
+
+  suppressUntilHistoryIntent() {
+    this.#historyIntentRequired = true;
+    this.#cancelScheduled();
   }
 
   reconcile() {
@@ -119,13 +125,14 @@ export default class ThreadHistoryPagingController {
 
   dispose() {
     this.#disposed = true;
+    this.#historyIntentRequired = false;
     this.#cancelScheduled();
     this.#pending = null;
   }
 
   #eligible(view: HistoryPagingView) {
     return view.nearTop && view.sourceReady && Boolean(view.boundaryKey) && !view.requestStatus
-      && !this.#pending && view.boundaryKey !== this.#triggeredBoundary;
+      && !this.#pending && !this.#historyIntentRequired && view.boundaryKey !== this.#triggeredBoundary;
   }
 
   #cancelScheduled() {
@@ -140,6 +147,7 @@ export default class ThreadHistoryPagingController {
       this.#cancelScheduled();
       this.#pending = null;
       this.#triggeredBoundary = null;
+      this.#historyIntentRequired = false;
       this.#identity = view?.identity ?? null;
       this.#viewport = view?.viewport ?? null;
     }

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, live streaming, message admission, and daemon-owned questionnaire answer intent.
+ * - No production exports; Node tests cover reads, retention, lifecycle fencing, canonical placement, streaming, admission, and questionnaire answer intent.
  */
 
 import assert from "node:assert/strict";
@@ -1304,6 +1304,113 @@ test("previous Codex pages preserve live state and merge only their scoped sidec
   assert.equal(result.status, "active");
   assert.equal(socket.requests.filter((request) => request.method === "thread/resume").length, 0);
   assert.equal(deferredPageReads.length, 2);
+}));
+
+test("mounted and inactive retention unload old Codex bodies without making the warm page stale", async () => withClient(async (client, socket) => {
+  const base = activeThread("codex", "thread", "completed");
+  const turns = ["oldest", "older", "previous", "current"].map((id, index) => ({
+    ...base.turns[0]!,
+    completedAt: index + 1,
+    id,
+    startedAt: index,
+  }));
+  const history = turns.map((turn) => ({
+    ...historyEntry(turn.id, "loaded"),
+    completedAt: turn.completedAt,
+    itemIds: [`item:${turn.id}`],
+    itemTimeline: [{
+      completedAt: turn.completedAt! * 1_000,
+      firstSeenAt: turn.startedAt! * 1_000,
+      itemId: `item:${turn.id}`,
+      lastSeenAt: turn.completedAt! * 1_000,
+      startedAt: turn.startedAt! * 1_000,
+    }],
+    startedAt: turn.startedAt,
+  }));
+  client.selectThreadPayload({
+    ...base,
+    browseResultEntries: [],
+    nextPageCursor: null,
+    turnHistory: history,
+    turns,
+  });
+  const pageRequests: SocketRequest[] = [];
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "workbench/thread/page/read" && request.params?.threadId === "thread") {
+      pageRequests.push(request);
+      return true;
+    }
+    return false;
+  };
+  for (const [cursor, turnId, nextCursor] of [
+    [null, "current", "current"],
+    ["current", "previous", "previous"],
+    ["previous", "older", "older"],
+  ] as const) {
+    const requestIndex = pageRequests.length;
+    const read = client.readThread("thread", "codex", { cursor });
+    const request = await waitForRequest(socket, "workbench/thread/page/read", requestIndex);
+    socket.respond(request.id, {
+      browseResultEntries: [browseEntry(`browse:${turnId}`, turnId)],
+      ...(cursor === null ? {} : { entryScope: { mode: "turns", turnIds: [turnId] } }),
+      nextCursor,
+      questionnaireEntries: [],
+      steerEntries: [],
+      thread: wireThreadWithHistory([turnId], history),
+    });
+    assert.ok(await read);
+  }
+  const owner = client.getThreadController("project", {
+    kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+  });
+  const releaseView = owner.acquire("view");
+  const surface = owner.acquireHistorySurface();
+  surface.setAtEnd(true);
+
+  let retained = client.getSnapshot().currentThread!;
+  assert.deepEqual(retained.turns.map(({ id }) => id), ["previous", "current"]);
+  assert.equal(retained.nextPageCursor, "previous");
+  assert.deepEqual(retained.browseResultEntries?.map(({ turnId }) => turnId), ["previous", "current"]);
+  assert.deepEqual(retained.turnHistory.slice(0, 2).map((entry) => ({
+    itemIds: entry.itemIds, itemTimeline: entry.itemTimeline, loadState: entry.loadState,
+  })), [
+    { itemIds: undefined, itemTimeline: undefined, loadState: "unloaded" },
+    { itemIds: undefined, itemTimeline: undefined, loadState: "unloaded" },
+  ]);
+
+  client.selectThreadPayload(activeThread("codex", "other", "completed"));
+  releaseView();
+  surface.release();
+  const retainedKey = client.getSnapshot().threadDocuments.keysByThreadId.thread!;
+  retained = client.getSnapshot().threadDocuments.documentsByKey[retainedKey]!;
+  assert.deepEqual(retained.turns.map(({ id }) => id), ["current"]);
+  assert.equal(retained.nextPageCursor, "current");
+
+  let pageRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "workbench/thread/page/read" && request.params?.threadId === "thread") {
+      pageRequest = request;
+      return true;
+    }
+    return false;
+  };
+  const freshnessRead = client.readThread("thread", "codex", { cursor: null });
+  await waitForRequest(socket, "workbench/thread/page/read");
+  socket.respond(pageRequest!.id, {
+    browseResultEntries: [browseEntry("browse:current", "current")],
+    nextCursor: "current",
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: wireThreadWithHistory(["current"], history.map((entry) => (
+      entry.turnId === "current" ? entry : { ...entry, itemIds: undefined, itemTimeline: undefined, loadState: "unloaded" as const }
+    ))),
+  });
+  assert.ok(await freshnessRead);
+  const refreshedKey = client.getSnapshot().threadDocuments.keysByThreadId.thread!;
+  assert.deepEqual(
+    client.getSnapshot().threadDocuments.documentsByKey[refreshedKey]?.turns.map(({ id }) => id),
+    ["current"],
+  );
 }));
 
 test("thread reads always use the harness-neutral page contract without capability negotiation", async () => withClient(async (client, socket) => {
