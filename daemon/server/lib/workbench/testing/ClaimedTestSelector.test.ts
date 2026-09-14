@@ -40,7 +40,7 @@ test("selects affected consumers and reload boundaries without unrelated depende
     assert.deepEqual(selector.select(["Child.ts"]).scopes, ["child"]);
     assert.deepEqual(selector.select(["outside.test.ts"]).files, [file("outside.test.ts")]);
     assert.deepEqual(selector.select(["."]).files, tests.map(file).sort());
-    assert.throws(() => selector.select(["deleted.ts"]), /cannot be mapped/);
+    assert.deepEqual(selector.select(["deleted.ts", "outside.ts"]).files, ["consumer.test.ts", "outer-consumer.test.ts", "outside.test.ts"].map(file));
     assert.throws(() => selector.select([]), /No live/);
     assert.throws(() => selector.select(["../escape.ts"]), /escapes/);
   } finally {

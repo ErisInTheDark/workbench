@@ -72,7 +72,6 @@ export default class ClaimedTestSelector {
     const selectedSources = new Set<string>();
     const selectedTests = new Set<string>();
     const outsideSources = new Set<string>();
-    const unmapped: string[] = [];
     const includeNode = (node: TestReloadNode) => {
       if (selectedNodes.has(node.scope)) return;
       selectedNodes.add(node.scope);
@@ -87,12 +86,10 @@ export default class ClaimedTestSelector {
         throw new Error(`Claim escapes the Workbench repository: ${claim}`);
       }
       const matching = this.catalog.files.filter(file => file === absolute || file.startsWith(`${absolute}${path.sep}`));
-      let mapped = matching.length > 0;
       for (const node of nodes.values()) {
         if (matchers.get(node.scope)!.matchesPathOrDescendant(relative || ".")
           || [...owned.get(node.scope)!].some(file => file === absolute || file.startsWith(`${absolute}${path.sep}`))) {
           includeNode(node);
-          mapped = true;
         }
       }
       for (const file of matching) {
@@ -101,9 +98,7 @@ export default class ClaimedTestSelector {
         if ([...owned.values()].some(files => files.has(file))) continue;
         outsideSources.add(file);
       }
-      if (!mapped) unmapped.push(claim);
     }
-    if (unmapped.length) throw new Error(`Claims cannot be mapped to current source or reload boundaries:\n${unmapped.join("\n")}`);
     // Reloading a consumer does not make its unchanged dependencies affected sources.
     this.catalog.companions(this.graph.closure(selectedSources, "importers")).forEach(file => selectedTests.add(file));
     if (!selectedTests.size) throw new Error("No tests match the current Workbench claims.");
