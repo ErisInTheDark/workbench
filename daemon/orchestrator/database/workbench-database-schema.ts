@@ -20,6 +20,7 @@
  * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts.
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
  * gitArcProposalDiffTables: immutable Git arc proposal diff cache table map.
+ * instructionTombstoneTables: durable retired instruction file receipt table map.
  * workbenchDatabaseTables: every current table keyed by its SQLite name.
  * workbenchDatabaseSchema: assembled history used by protected production migration.
  * validateWorkbenchDatabaseReleases: reject rewritten or unsealed releases before opening SQLite.
@@ -44,6 +45,7 @@ import { defineSidebarLayoutSchema } from "../../lib/workbench/database/schema/s
 import { defineThreadQuestionnaireSchema } from "../../lib/workbench/database/schema/thread-questionnaire-schema.ts";
 import { defineThreadGitObservationSchema } from "../../lib/workbench/database/schema/thread-git-observation-schema.ts";
 import { gitArcProposalDiffSchemaHistory } from "../../lib/workbench/database/schema/git-arc-proposal-diff-schema.ts";
+import { instructionTombstoneSchemaHistory } from "../../lib/workbench/database/schema/instruction-tombstone-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
@@ -71,6 +73,7 @@ export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/
 export { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export { gitArcProposalDiffTables } from "../../lib/workbench/database/schema/git-arc-proposal-diff-schema.ts";
+export { instructionTombstoneTables } from "../../lib/workbench/database/schema/instruction-tombstone-schema.ts";
 
 export const workbenchDatabaseSchema = defineRelationalThreadStateSchema(databaseReleases.relationalThreadState.version);
 
@@ -95,6 +98,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       defineThreadQuestionnaireSchema(schemaVersion).history,
       defineThreadGitObservationSchema(schemaVersion).history,
       gitArcProposalDiffSchemaHistory,
+      instructionTombstoneSchemaHistory,
     ],
   });
 }

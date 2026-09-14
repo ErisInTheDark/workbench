@@ -20,7 +20,6 @@ const graph = (() => {
       require("./WorkbenchDatabaseNode").default,
       require("./CodexAppServerNode").default,
       require("./OpenCodeAppServerNode").default,
-      require("./WorkbenchInstructionsNode").default,
       require("./WorkbenchCodexInstructionNode").default,
     ]);
     return observeReloadNodeGraphSources(graph, module, completeReloadSourceGeneration(generation));

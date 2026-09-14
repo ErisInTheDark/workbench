@@ -25,6 +25,7 @@ import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
+import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string; beforeMigration?(backupPath: string): void },
@@ -98,7 +99,7 @@ export default new ReloadableNode<
     "daemon/orchestrator/database/**",
     "shared/database/**",
   ].join("\n"),
-  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
+  children: [WorkbenchInstructionsNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
     const {
       CaptureGapController,

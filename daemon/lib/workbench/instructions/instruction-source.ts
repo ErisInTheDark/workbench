@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - WorkbenchInstructionSourceFile: one repository Markdown source mirrored to the Workbench Library. Keywords: instructions, source, path.
+ * - WorkbenchInstructionTombstone: one empty repository marker targeting a retired Workbench Library file. Keywords: instructions, tombstone, retirement.
  * - readWorkbenchInstructionSources: discover and read the complete repository Markdown mirror once. Keywords: instructions, markdown, discovery.
+ * - readWorkbenchInstructionTombstones: discover and validate retired instruction markers. Keywords: instructions, tombstone, discovery.
  * - ensureWorkbenchInstructionSourceFiles: refresh generated library files while preserving the user-owned default agent and overrides. Keywords: instructions, emission, freshness.
  */
 
@@ -18,11 +20,17 @@ import {
 const DEFAULT_AGENT_PATH = "agents/default.md";
 const MARKDOWN_SUFFIX = ".md";
 const OVERRIDE_SUFFIX = ".override.md";
+const TOMBSTONE_SUFFIX = ".md.tombstone";
 let sourceRefresh: Promise<void> | null = null;
 
 export interface WorkbenchInstructionSourceFile {
   readonly content: string;
   readonly relativePath: string;
+}
+
+export interface WorkbenchInstructionTombstone {
+  readonly markerRelativePath: string;
+  readonly targetRelativePath: string;
 }
 
 function compareText(left: string, right: string) {
@@ -37,14 +45,14 @@ function normalizeContent(value: string) {
   return `${value.replace(/\r\n?/gu, "\n").trim()}\n`;
 }
 
-function listMarkdownPaths(rootPath: string, relativeDirectory = ""): string[] {
+function listInstructionPaths(rootPath: string, relativeDirectory = ""): string[] {
   const directoryPath = path.join(rootPath, relativeDirectory);
   return readdirSync(directoryPath, { withFileTypes: true })
     .sort((left, right) => compareText(left.name, right.name))
     .flatMap((entry) => {
       const relativePath = path.posix.join(relativeDirectory.replaceAll("\\", "/"), entry.name);
-      if (entry.isDirectory()) return listMarkdownPaths(rootPath, relativePath);
-      if (!entry.isFile() || !entry.name.endsWith(MARKDOWN_SUFFIX)) return [];
+      if (entry.isDirectory()) return listInstructionPaths(rootPath, relativePath);
+      if (!entry.isFile() || (!entry.name.endsWith(MARKDOWN_SUFFIX) && !entry.name.endsWith(TOMBSTONE_SUFFIX))) return [];
       if (entry.name.endsWith(OVERRIDE_SUFFIX)) {
         throw new Error(`Internal Workbench instruction sources cannot define user overrides: ${relativePath}`);
       }
@@ -52,14 +60,32 @@ function listMarkdownPaths(rootPath: string, relativeDirectory = ""): string[] {
     });
 }
 
-export function readWorkbenchInstructionSources(): WorkbenchInstructionSourceFile[] {
-  const rootPath = getInstructionSourceRoot();
-  return listMarkdownPaths(rootPath).map((relativePath) => {
-    const sourcePath = path.join(rootPath, relativePath);
-    const content = readFileSync(sourcePath, "utf8").replace(/\r\n?/gu, "\n").trim();
-    observeReloadInstructionSource(sourcePath);
-    return { content, relativePath };
-  });
+export function readWorkbenchInstructionSources(rootPath = getInstructionSourceRoot()): WorkbenchInstructionSourceFile[] {
+  return listInstructionPaths(rootPath)
+    .filter((relativePath) => relativePath.endsWith(MARKDOWN_SUFFIX))
+    .map((relativePath) => {
+      const sourcePath = path.join(rootPath, relativePath);
+      const content = readFileSync(sourcePath, "utf8").replace(/\r\n?/gu, "\n").trim();
+      observeReloadInstructionSource(sourcePath);
+      return { content, relativePath };
+    });
+}
+
+export function readWorkbenchInstructionTombstones(rootPath = getInstructionSourceRoot()): WorkbenchInstructionTombstone[] {
+  return listInstructionPaths(rootPath)
+    .filter((relativePath) => relativePath.endsWith(TOMBSTONE_SUFFIX))
+    .map((markerRelativePath) => {
+      const sourcePath = path.join(rootPath, markerRelativePath);
+      if (readFileSync(sourcePath, "utf8").trim()) {
+        throw new Error(`Instruction tombstone must be empty: ${markerRelativePath}`);
+      }
+      observeReloadInstructionSource(sourcePath);
+      const targetRelativePath = markerRelativePath.slice(0, -".tombstone".length);
+      if (targetRelativePath === DEFAULT_AGENT_PATH || targetRelativePath.endsWith(OVERRIDE_SUFFIX)) {
+        throw new Error(`Instruction tombstone cannot target a user-owned file: ${targetRelativePath}`);
+      }
+      return { markerRelativePath, targetRelativePath };
+    });
 }
 
 async function readTextFile(filePath: string) {

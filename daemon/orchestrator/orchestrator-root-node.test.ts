@@ -41,7 +41,6 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:database",
     "harness:codex",
     "harness:opencode",
-    "server:instructions",
     "server:codex/instructions",
   ]);
   const { nodes, parents } = flattenParents(graph.roots);
@@ -70,6 +69,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:instructions")!], ["server:database"]);
+  assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.equal(parents.has("harness:codex"), false);
   assert.equal(parents.has("harness:opencode"), false);
@@ -149,7 +150,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
 test("server branch and topology closures never acquire harness roots", () => {
   const { dependantClosure, descriptors } = readReloadNodeSourceState();
   const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
-  for (const scope of ["server:turns", "server:database", "server:core", "server:topology", "server:codex/instructions"] as const) {
+  for (const scope of ["server:turns", "server:database", "server:core", "server:topology", "server:instructions", "server:codex/instructions"] as const) {
     const closure = dependantClosure([scope]);
     assert.equal(closure.includes("harness:codex"), false, `${scope} must preserve the Codex harness root`);
     assert.equal(closure.includes("harness:opencode"), false, `${scope} must preserve the OpenCode harness root`);
