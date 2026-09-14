@@ -587,7 +587,7 @@ export default class WorkbenchGitCheckpointController {
   }
 
   async pruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<GitArcRetentionResult> {
-    return await GitObjectReadSession.run(() => new GitArcRetentionController().pruneThread({
+    return await GitObjectReadSession.run(() => new GitArcRetentionController(this.resolveThreadIdentity).pruneThread({
       cwd,
       harness: normalizeHarness(rawHarness),
       threadId,
@@ -670,7 +670,7 @@ export default class WorkbenchGitCheckpointController {
       };
       if (!claims.length) {
         const lost = owner
-          ? await new GitArcClaimLossStore(repository).read({ harness, threadId: owner.threadId })
+          ? await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: owner.threadId })
           : null;
         if (lost) {
           const drift = await collectGitArcDrift({
@@ -796,7 +796,8 @@ export default class WorkbenchGitCheckpointController {
         const current = inspection.entries.find((entry) => entry.harness === normalizeHarness(input.harness)
           && entry.threadId === normalizeThreadId(input.threadId));
         if (!current || !getGitArcLiveClaimPaths(current).length) {
-          const lost = await new GitArcClaimLossStore(repository).read({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+          const lost = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity)
+            .read({ harness: normalizeHarness(input.harness), threadId: input.threadId });
           if (lost) {
             const paths = input.paths?.length ? repository.normalizePaths(input.paths) : lost.paths;
             return {

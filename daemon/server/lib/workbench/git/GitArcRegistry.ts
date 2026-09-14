@@ -203,7 +203,8 @@ export default class GitArcRegistry {
     const updates = update ? [update] : [];
     const previousClaims = current ? getGitArcLiveClaimPaths(current) : [];
     if (update && current && previousClaims.length && (!next || !getGitArcLiveClaimPaths(next).length)) {
-      updates.push(await new GitArcClaimLossStore(this.repository).prepare(next ?? current, previousClaims, snapshot));
+      updates.push(await new GitArcClaimLossStore(this.repository, this.resolveThreadIdentity)
+        .prepare(next ?? current, previousClaims, snapshot));
     }
     return { nextState, updates };
   }

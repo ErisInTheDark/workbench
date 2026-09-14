@@ -9,6 +9,7 @@ import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCa
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
+import type { GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 const fixtures = new GitTestFixtureCache();
 type ClaimLossFixture = GitTestFixtureCopy<Awaited<ReturnType<typeof CLAIM_LOSS_OPERATIONS_FIXTURE.prepare>>>;
@@ -76,7 +77,25 @@ async function checkLossRoutes(prepared: ClaimLossFixture) {
     const identity = { cwd: fixture.root, harness: "codex" as const, threadId: prepared.state.threadId };
     if (route === "planning") await controller.createPlan({ ...identity, intentName: "new plan", paths: ["two.txt"] });
     else if (route === "removal") await controller.editArcClaims({ ...identity, inherit: true, removePaths: ["one.txt"] });
-    else if (route === "settlement") await controller.releaseActiveClaim(identity);
+    else if (route === "settlement") {
+      await controller.releaseActiveClaim(identity);
+      const canonicalThreadId = `wb-${identity.threadId}`;
+      const resolve: GitArcThreadIdentityResolver = async ({ threadId }) => (
+        threadId === identity.threadId || threadId === canonicalThreadId
+          ? { nativeThreadId: identity.threadId, threadId: canonicalThreadId }
+          : null
+      );
+      const mappedController = new WorkbenchGitCheckpointController(undefined, resolve);
+      const canonicalIdentity = { ...identity, threadId: canonicalThreadId };
+      const status = await mappedController.readStatus(canonicalIdentity);
+      assert.deepEqual(status.unavailableRecovery, []);
+      assert.deepEqual(status.recovery[0]?.paths, ["one.txt"]);
+      assert.deepEqual((await mappedController.compare(canonicalIdentity)).changes, []);
+      const successor = await new GitArcClaimLossStore(repository, resolve).prepare(identity, ["one.txt"]);
+      assert.match(successor.ref, new RegExp(`/codex/${canonicalThreadId}/claim-loss$`, "u"));
+      await repository.updateRefs([successor]);
+      assert.equal((await new GitArcClaimLossStore(repository, resolve).read(identity))?.ref, successor.ref);
+    }
     else {
       await fs.writeFile(path.join(fixture.root, "one.txt"), "restore me\n");
       await assert.rejects(controller.releaseArc({ ...identity, disown: false }));

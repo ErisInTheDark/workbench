@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcRetentionController: expire one settled thread's refs, including claim-loss snapshots, without touching live work.
+ * - default GitArcRetentionController: expire one settled thread's canonical and compatible refs without touching live work.
  * - GitArcRetentionResult: exact thread-namespace cleanup result.
  */
 import GitArcRegistry from "./GitArcRegistry";
@@ -10,6 +10,11 @@ import {
   legacyCheckpointNamespace,
   type GitArcHarness,
 } from "workbench-shared/workbench/git/git-arc-storage";
+import {
+  gitArcThreadStorageIds,
+  passthroughGitArcThreadIdentityResolver,
+  type GitArcThreadIdentityResolver,
+} from "./git-arc-thread-identity";
 
 export interface GitArcRetentionResult {
   prunedRefCount: number;
@@ -21,6 +26,10 @@ function threadNamespace(namespace: string) {
 }
 
 export default class GitArcRetentionController {
+  constructor(
+    private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+  ) {}
+
   async pruneThread({
     cwd,
     harness,
@@ -32,15 +41,17 @@ export default class GitArcRetentionController {
   }): Promise<GitArcRetentionResult> {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return { prunedRefCount: 0, registryEntryRemoved: false };
-    const registry = new GitArcRegistry(repository);
+    const identity = await this.resolveThreadIdentity({ harness, repositoryRoot: repository.root, threadId });
+    if (!identity) throw new Error("The Git arc owner identity is unavailable.");
+    const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
     if (entry && entry.phase !== "resolved") {
       throw new Error("Git arc history cannot expire while the thread owns an active arc or plan.");
     }
-    const prefixes = [
-      threadNamespace(checkpointNamespace(harness, threadId)),
-      threadNamespace(legacyCheckpointNamespace(threadId)),
-    ];
+    const prefixes = [...new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
+      threadNamespace(checkpointNamespace(harness, storageId)),
+      threadNamespace(legacyCheckpointNamespace(storageId)),
+    ]))];
     const refs = (await repository.listRefsWithValues("refs/worktree/agents"))
       .filter(({ ref }) => prefixes.some((prefix) => ref.startsWith(`${prefix}/`)));
     const registryMutation = await registry.prepareRelease(
