@@ -20,7 +20,9 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("context capability bounds reject invalid target mutations without writing", async () => {
   const { controller, targetWrites } = createController({
-    models: { read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] },
+    providers: { get: () => ({ configuration: { modelContext: {
+      read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
+    } } }) },
   });
   const settings = { agentPath: null, agentSource: null, harness: "codex", model: "model", reasoningEffort: null, serviceTier: null };
   for (const contextWindowTokens of [127000, 1001000, 128500]) {
@@ -44,7 +46,7 @@ function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
-  models?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["models"];
+  providers?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["providers"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
   profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
@@ -61,7 +63,7 @@ function createController(options: {
   const statsRequests: object[] = [];
   let statsRefreshes = 0;
   const controller = new WorkbenchDaemonRequestController({
-    models: options.models,
+    providers: options.providers,
     threadIdentity: options.threadIdentity ?? { resolve: async () => null },
     agents: {
       listAgents: async () => ({ data: [] }),

@@ -51,6 +51,7 @@ test("node replay maps a live pre-reload native wait to its Workbench thread", a
     localDaemonOrigin: "http://127.0.0.1:4500",
   } as DaemonProcessContext, {
     get: key => registrations[key],
+    run: () => { throw new Error("Unexpected graph operation in node fixture"); },
     handoffState: undefined,
     isReplacing: () => false,
     lease: { isCurrent: () => true },
@@ -79,6 +80,7 @@ test("restoring the MCP node installs a usable executor without bumping freshnes
     localDaemonOrigin: "http://127.0.0.1:4500",
   } as DaemonProcessContext, {
     get: (key) => registrations[key],
+    run: () => { throw new Error("Unexpected graph operation in node fixture"); },
     handoffState: undefined,
     isReplacing: () => true,
     lease: { isCurrent: () => true },

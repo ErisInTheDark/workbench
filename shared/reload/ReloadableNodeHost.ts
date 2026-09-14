@@ -5,6 +5,7 @@
  * - default ReloadableNodeHost: validate topology, lease dependencies, and replace node closures.
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   WorkbenchReloadScope as DaemonReloadScope,
   WorkbenchReloadScopeDescriptor as DaemonReloadScopeDescriptor,
@@ -58,14 +59,22 @@ interface ActiveOperation {
   startedAt: number;
 }
 
+interface DrainBatch<TContext, TFeatures extends object, TNotification> {
+  nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[];
+  draining: boolean;
+}
+
 interface ActiveNode<TContext, TFeatures extends object, TNotification> {
   activeOperations: Map<symbol, ActiveOperation>;
   definition: DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>;
   disposalPhase: string | null;
   drainWaiters: Array<() => void>;
-  gate: Promise<void> | null;
+  gate: {
+    promise: Promise<void>;
+    release(): void;
+    drainBatch: DrainBatch<TContext, TFeatures, TNotification> | null;
+  } | null;
   instance: ReloadableNodeInstance<TFeatures, TNotification>;
-  releaseGate: (() => void) | null;
   runtimeDrainStartedAt: number | null;
   token: symbol;
   startController: AbortController;
@@ -111,6 +120,7 @@ function normalizeNodeId(value: string, label: string) {
 }
 
 export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification> {
+  private readonly operationContext = new AsyncLocalStorage<readonly symbol[]>();
   private readonly createDeadline: NonNullable<ReloadableNodeHostOptions["createRuntimeDrainDeadline"]>;
   private definitions = new Map<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
   private featureOwners = new Map<keyof TFeatures, string>();
@@ -206,18 +216,29 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       this.assertAcceptingWork();
       if (this.requireFeatureOwner(key) !== ownerId) continue;
       const leased = this.dependencyClosure(ownerId).map((nodeId) => this.requireNode(nodeId));
-      if (leased.some((node) => node.gate)) continue;
-      const token = Symbol("workbench-reloadable-operation");
-      const activeOperation = { label: boundedLabel(label), startedAt: this.now() };
-      for (const node of leased) node.activeOperations.set(token, activeOperation);
-      try {
-        const owner = this.requireNode(ownerId);
-        return await operation(owner.instance.registrations[key] as TFeatures[TKey]);
-      } finally {
-        for (const node of leased) {
-          node.activeOperations.delete(token);
-          this.resolveDrain(node);
-        }
+      if (leased.some((node) => !this.canEnter(node))) continue;
+      const owner = this.requireNode(ownerId);
+      return await this.withOperation(leased, label, () => operation(owner.instance.registrations[key] as TFeatures[TKey]));
+    }
+  }
+
+  private async withOperation<TResult>(
+    leased: readonly ActiveNode<TContext, TFeatures, TNotification>[],
+    label: string,
+    operation: () => Promise<TResult> | TResult,
+  ): Promise<TResult> {
+    const token = Symbol("workbench-reloadable-operation");
+    const activeOperation = { label: boundedLabel(label), startedAt: this.now() };
+    for (const node of leased) node.activeOperations.set(token, activeOperation);
+    try {
+      return await this.operationContext.run(
+        [...(this.operationContext.getStore() ?? []), token],
+        operation,
+      );
+    } finally {
+      for (const node of leased) {
+        node.activeOperations.delete(token);
+        this.resolveDrain(node);
       }
     }
   }
@@ -300,17 +321,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       await this.waitForOpenDependencyChain(nodeId);
       if (this.hardShutdownStarted) return;
       const leased = this.dependencyClosure(nodeId).map((dependencyId) => this.requireNode(dependencyId));
-      const token = Symbol("workbench-provider-notification");
-      const activeOperation = { label: boundedLabel(label), startedAt: this.now() };
-      for (const node of leased) node.activeOperations.set(token, activeOperation);
-      try {
-        await this.requireNode(nodeId).instance.observeProviderNotification?.(notification);
-      } finally {
-        for (const node of leased) {
-          node.activeOperations.delete(token);
-          this.resolveDrain(node);
-        }
-      }
+      await this.withOperation(leased, label, () => this.requireNode(nodeId).instance.observeProviderNotification?.(notification));
     }
   }
 
@@ -408,18 +419,23 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         }
       }
       if (handoffs.size) {
-        for (const node of previous) this.closeGate(node);
-        await transition.drain("feature graph: drain", async () => {
-          await Promise.all([
-            ...previous.map((node) => this.waitForDrain(node)),
-            ...[...handoffs.values()].map((handoff) => handoff.waitForIdle()),
-          ]);
-        }, () => {
-          for (const node of previous) {
-            const handoff = handoffs.get(node.definition.id);
-            if (handoff) this.expireDrain(node, handoff);
-          }
-        });
+        const batch: DrainBatch<TContext, TFeatures, TNotification> = { nodes: previous, draining: true };
+        for (const node of previous) this.closeGate(node, batch);
+        try {
+          await transition.drain("feature graph: drain", async () => {
+            await Promise.all([
+              ...previous.map((node) => this.waitForDrain(node)),
+              ...[...handoffs.values()].map((handoff) => handoff.waitForIdle()),
+            ]);
+          }, () => {
+            for (const node of previous) {
+              const handoff = handoffs.get(node.definition.id);
+              if (handoff) this.expireDrain(node, handoff);
+            }
+          });
+        } finally {
+          batch.draining = false;
+        }
         for (const node of [...previous].reverse()) {
           const handoff = handoffs.get(node.definition.id);
           if (handoff) states.set(node.definition.id, await transition.step(`${node.definition.id}: detach`, () => handoff.detach()));
@@ -535,6 +551,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
           if (!definition.requires.includes(key)) throw new Error(`Reloadable node ${nodeId} read undeclared parent registration ${String(key)}.`);
           return this.requireFeature(visible, this.validateFeatureOwnership(visible), key);
         },
+        run: (key, operation, label) => this.run(key, operation, label),
         handoffState: handoffStates.get(nodeId),
         isReplacing: (candidateId) => selected.has(candidateId),
         lease: { isCurrent: () => !this.hardShutdownStarted && !this.isUnavailable(nodeId) && this.nodes.get(nodeId)?.token === token },
@@ -542,7 +559,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       });
       created.set(nodeId, {
         activeOperations: new Map(), definition, disposalPhase: null, drainWaiters: [], gate: null,
-        instance, releaseGate: null, runtimeDrainStartedAt: null, token, startController: new AbortController(), drainExpired: false,
+        instance, runtimeDrainStartedAt: null, token, startController: new AbortController(), drainExpired: false,
       });
       const actualKeys = Object.keys(instance.registrations) as (keyof TFeatures)[];
       if (actualKeys.length !== definition.featureKeys.length || actualKeys.some((key) => !definition.featureKeys.includes(key))) {
@@ -774,21 +791,34 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       // The caller must resolve the current owner/chain again after a topology swap.
       if (!node) return;
       const gate = node.gate;
-      if (gate) await gate;
+      if (gate && !this.canEnter(node)) await gate.promise;
       const currentFailure = this.isUnavailable(dependencyId);
       if (currentFailure) throw currentFailure;
     }
   }
 
-  private closeGate(node: ActiveNode<TContext, TFeatures, TNotification>) {
+  private canEnter(node: ActiveNode<TContext, TFeatures, TNotification>) {
+    if (!node.gate) return true;
+    const batch = node.gate.drainBatch;
+    if (!batch?.draining) return false;
+    const ancestors = this.operationContext.getStore();
+    // Only a still-admitted operation can continue inside its own draining batch.
+    return ancestors?.some(token => batch.nodes.some(member => member.activeOperations.has(token))) ?? false;
+  }
+
+  private closeGate(
+    node: ActiveNode<TContext, TFeatures, TNotification>,
+    drainBatch: DrainBatch<TContext, TFeatures, TNotification> | null = null,
+  ) {
     if (node.gate) return;
-    node.gate = new Promise<void>((resolve) => { node.releaseGate = resolve; });
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    node.gate = { promise, release, drainBatch };
   }
 
   private openGate(node: ActiveNode<TContext, TFeatures, TNotification>) {
-    node.releaseGate?.();
+    node.gate?.release();
     node.gate = null;
-    node.releaseGate = null;
   }
 
   private resolveDrain(node: ActiveNode<TContext, TFeatures, TNotification>) {

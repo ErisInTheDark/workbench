@@ -21,6 +21,7 @@ const graph = (() => {
       require("./CodexAppServerNode").default,
       require("./OpenCodeAppServerNode").default,
       require("./WorkbenchCodexInstructionNode").default,
+      require("./CodexConfigurationNode").default,
     ]);
     return observeReloadNodeGraphSources(graph, module, completeReloadSourceGeneration(generation));
   } catch (error) {

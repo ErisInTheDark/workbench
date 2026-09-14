@@ -1,12 +1,11 @@
 /*
- * Keywords: reload, lifecycle, registry, handoff, startup diagnostics.
  * Exports:
- * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies. Keywords: reload, lifecycle, access.
- * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics. Keywords: lease, drain, diagnostics.
+ * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies.
+ * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics.
  * - ReloadableNodeHandoff: reversible resource transfer, separate from expirable old-work waits.
- * - ReloadableNodeInstance/ReloadableNodeBuild: runtime registration, construction and terminal shutdown contracts. Keywords: registry, factory, handoff.
- * - ReloadableNodeOptions/default ReloadableNode: parent-owned reloadable node definition with explicit hostile-boundary sources. Keywords: graph, children, scope, sources, worker, dynamic.
- * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host. Keywords: roots, topology, loader.
+ * - ReloadableNodeInstance/ReloadableNodeBuild: lifecycle, direct-parent construction and leased operation contracts.
+ * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with hostile-boundary sources.
+ * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host.
  */
 import type { WorkbenchReloadScope } from "./workbench-reload.ts";
 
@@ -49,6 +48,11 @@ export interface ReloadableNodeInstance<TObjects extends object, TNotification> 
 
 export interface ReloadableNodeBuild<TObjects extends object> {
   get<TKey extends keyof TObjects>(key: TKey): TObjects[TKey];
+  run<TKey extends keyof TObjects, TResult>(
+    key: TKey,
+    operation: (feature: TObjects[TKey]) => Promise<TResult> | TResult,
+    label?: string,
+  ): Promise<TResult>;
   handoffState: unknown;
   isReplacing(scope: string): boolean;
   lease: ReloadableNodeLease;

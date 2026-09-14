@@ -80,6 +80,7 @@ import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryControl
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
+import type WorkbenchProvider from "./WorkbenchProvider";
 
 export type DaemonReloadableModules = {
   copilotThreadState: Pick<typeof copilotThreadState, "applyCopilotEvent" | "cloneThread" | "createThreadState" | "formatPromptFromInput" | "INITIALIZE_RESULT" | "metadataToThread">;
@@ -176,6 +177,8 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  codexConfiguration: WorkbenchProvider["configuration"]["modelContext"];
+  codexProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
   browseExecution: DaemonBrowseExecution;

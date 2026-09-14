@@ -42,6 +42,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "harness:codex",
     "harness:opencode",
     "server:codex/instructions",
+    "server:codex/configuration",
   ]);
   const { nodes, parents } = flattenParents(graph.roots);
 
@@ -50,6 +51,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "harness:opencode",
     "server:browse",
     "server:codex",
+    "server:codex/configuration",
+    "server:codex/def",
     "server:codex/instructions",
     "server:commands",
     "server:core",
@@ -107,6 +110,19 @@ test("every child requirement is registered by one of its direct parents", () =>
   }
 });
 
+test("provider configuration reload owns its definition without acquiring the harness", () => {
+  const { nodes, parents } = flattenParents(graph.roots);
+  assert.deepEqual([...parents.get("server:codex/def")!], ["server:codex/configuration"]);
+  assert.equal(parents.has("server:codex/configuration"), false);
+  assert.deepEqual(nodes.get("server:codex/def")!.requires, ["codexConfiguration"]);
+  const { dependantClosure } = readReloadNodeSourceState();
+  assert.deepEqual(dependantClosure(["server:codex/def"]), ["server:codex/def"]);
+  const configurationClosure = dependantClosure(["server:codex/configuration"]);
+  assert.equal(configurationClosure.includes("server:codex/def"), true);
+  assert.equal(configurationClosure.includes("harness:codex"), false);
+  assert.equal(configurationClosure.includes("server:core"), false);
+});
+
 test("the production graph provides every registration consumed by the process shell", () => {
   const { nodes } = flattenParents(graph.roots);
   const provided = new Set([...nodes.values()].flatMap(({ provides }) => provides));
@@ -138,7 +154,9 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchUsageStatsRepository.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchClaimStatsRepository.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/WorkbenchClaimStatsController.ts"), ["server:commands"]);
-  assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), ["server:core"]);
+  assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), [
+    "server:codex/instructions", "server:commands", "server:core", "server:mcp", "server:websocket",
+  ]);
   assert.deepEqual(
     owners("daemon/server/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
     ["server:database"],

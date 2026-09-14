@@ -28,13 +28,13 @@ import type {
   DaemonRuntimeObjects,
   DaemonTranscriptRegistration,
 } from "./daemon-runtime-objects";
-import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
+import ReloadableNode, { type ReloadableNodeBuild, type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
-import CodexModelCatalog from "./CodexModelCatalog";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
@@ -126,6 +126,7 @@ function createHarnessAdapters(context: DaemonProcessContext, controller: Workbe
 
 function createWorkbenchCoreFeature(
   context: DaemonProcessContext,
+  run: ReloadableNodeBuild<DaemonRuntimeObjects>["run"],
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
@@ -313,7 +314,7 @@ function createWorkbenchCoreFeature(
     state: threadState.controller,
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
-    models: new CodexModelCatalog(),
+    providers: new WorkbenchProviderDispatcher(run),
     agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
     codexSandboxNetwork,
     files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
@@ -456,8 +457,9 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { get, lease, handoffState }) => createWorkbenchCoreFeature(
+  create: (context, { get, run, lease, handoffState }) => createWorkbenchCoreFeature(
     context,
+    run,
     lease,
     get("reloadDirt"),
     get("turnRecovery"),
@@ -478,7 +480,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     "daemon/server/WorkbenchCoreNode.ts",
     "daemon/server/WorkbenchComposerProfileStore.ts",
     "shared/workbench/state/composer-profile-state.ts",
-    "daemon/server/CodexModelCatalog.ts",
     "daemon/server/lib/codex/codex-home.ts",
     "shared/workbench/thread/thread-profile.ts",
     "shared/workbench/thread/workbench-thread-identity.ts",

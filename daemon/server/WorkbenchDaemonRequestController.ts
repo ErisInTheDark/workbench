@@ -47,7 +47,7 @@ import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
-import type CodexModelCatalog from "./CodexModelCatalog";
+import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
@@ -203,7 +203,7 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
 
   constructor(private readonly owners: {
-    models?: Pick<CodexModelCatalog, "read">;
+    providers?: Pick<WorkbenchProviderDispatcher, "get">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     codexSandboxNetwork: Pick<WorkbenchCodexSandboxNetworkController, "read" | "setGlobal" | "setProjectOverride">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
@@ -239,8 +239,8 @@ export default class WorkbenchDaemonRequestController {
       let result: object;
       switch (request.method) {
         case "models/context/read": {
-          if (!this.owners.models) throw new Error("Model context capabilities are unavailable.");
-          result = { data: await this.owners.models.read() };
+          if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
+          result = { data: await this.owners.providers.get("codex").configuration.modelContext.read() };
           break;
         }
         case "thread/identity/resolve": {
@@ -431,8 +431,8 @@ export default class WorkbenchDaemonRequestController {
     const cap = settings.contextWindowTokens;
     if (cap == null || (previous?.harness === settings.harness && previous.model === settings.model && previous.contextWindowTokens === cap)) return;
     if (settings.harness !== "codex") throw new InvalidParamsError("This provider does not support a configurable context window.");
-    if (!this.owners.models) throw new Error("Model context capabilities are unavailable.");
-    const capability = (await this.owners.models.read()).find((entry) => entry.model === settings.model);
+    if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
+    const capability = (await this.owners.providers.get("codex").configuration.modelContext.read()).find((entry) => entry.model === settings.model);
     if (!capability) throw new InvalidParamsError("This model has no configurable context capability.");
     if (cap < capability.defaultTokens || cap > capability.maximumTokens || (cap - capability.defaultTokens) % 1000 !== 0) {
       throw new InvalidParamsError("Context window must be within the model bounds in 1K steps.");

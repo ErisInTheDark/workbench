@@ -59,10 +59,10 @@ function findDefiningModules(nodes: ReadonlyMap<DaemonReloadScope, GraphNode>) {
 }
 
 function workspacePath(filename: string) {
-  const normalized = path.resolve(filename).replace(/\\/gu, "/");
-  if (normalized.includes("/node_modules/")) return null;
-  const marker = normalized.lastIndexOf("/daemon/");
-  return marker < 0 ? null : normalized.slice(marker + 1);
+  const relative = path.relative(WORKBENCH_ROOT_PATH, path.resolve(filename));
+  if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
+  const normalized = relative.replace(/\\/gu, "/");
+  return normalized.split("/").includes("node_modules") ? null : normalized;
 }
 
 function instructionWorkspacePath(filename: string) {
