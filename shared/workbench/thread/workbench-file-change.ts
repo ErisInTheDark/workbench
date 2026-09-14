@@ -5,7 +5,7 @@
  * - WorkbenchFileChangeItem/WorkbenchFileUpdateChange: Codex file-change shapes with optional Workbench presentation metadata. Keywords: codex, thread item, extension.
  * - WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX/createWorkbenchFileChangeFailureSystemMessage: identify claim denials and encode bounded attempted-change metadata. Keywords: apply_patch, claim, hook.
  * - readWorkbenchFileChangeFailureMarker: derive one synthetic failed item from an ordered Codex hook notification. Keywords: validation, hook, marker.
- * - getWorkbenchFileChangeFailureKey/withWorkbenchFileChangeFailure: identify and decorate matching file-change items. Keywords: correlation, presentation.
+ * - getWorkbenchFileChangeFailureKey: identify matching file-change attempts and live notifications. Keywords: correlation.
  * - WorkbenchFileChangeRecovery: passive feedback queue result.
  * - mergeWorkbenchFileChange: retain findings only for matching attempted changes.
  */
@@ -52,16 +52,18 @@ export type WorkbenchFileChangeItem = Omit<CodexFileChangeItem, "changes"> & {
 
 export function mergeWorkbenchFileChange(incoming: WorkbenchFileChangeItem, stored: WorkbenchFileChangeItem): WorkbenchFileChangeItem {
   const attemptedChanges = (item: WorkbenchFileChangeItem) => item.changes.map(({ path, kind, diff }) => ({ path, kind, diff }));
-  if (incoming.id !== stored.id || !areDeeplyEqual(attemptedChanges(incoming), attemptedChanges(stored))) return incoming;
+  if (incoming.id !== stored.id) return incoming;
+  const sameAttempt = areDeeplyEqual(attemptedChanges(incoming), attemptedChanges(stored));
   const workbenchFailureKind = incoming.workbenchFailureKind ?? stored.workbenchFailureKind;
-  const workbenchPolicy = incoming.workbenchPolicy ?? stored.workbenchPolicy;
-  const workbenchRecovery = incoming.workbenchRecovery ?? stored.workbenchRecovery;
+  const workbenchPolicy = incoming.workbenchPolicy ?? (sameAttempt ? stored.workbenchPolicy : undefined);
+  const workbenchRecovery = incoming.workbenchRecovery ?? (sameAttempt ? stored.workbenchRecovery : undefined);
   return {
     ...incoming,
     ...(workbenchFailureKind ? { workbenchFailureKind } : {}),
     ...(workbenchPolicy ? { workbenchPolicy } : {}),
     ...(workbenchRecovery ? { workbenchRecovery } : {}),
     changes: incoming.changes.map((change, index) => {
+      if (!sameAttempt) return change;
       const previous = stored.changes[index]!;
       const workbenchAnalysis = change.workbenchAnalysis ?? previous.workbenchAnalysis;
       return {
@@ -187,10 +189,3 @@ export function getWorkbenchFileChangeFailureKey({
   return `${threadId}\0${turnId}\0${itemId}`;
 }
 
-export function withWorkbenchFileChangeFailure(
-  item: CodexFileChangeItem,
-  kind: WorkbenchFileChangeFailureKind,
-): WorkbenchFileChangeItem {
-  const workbenchItem = item as WorkbenchFileChangeItem;
-  return workbenchItem.workbenchFailureKind === kind ? workbenchItem : { ...item, workbenchFailureKind: kind };
-}

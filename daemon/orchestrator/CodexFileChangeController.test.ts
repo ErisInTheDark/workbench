@@ -71,16 +71,11 @@ test("unclaimed prevention cannot acquire success findings from matching current
   const result = await controller.analyse({ cwd: root, roots: [root], item, threadId: "thread", turnId: "turn" });
   assert.deepEqual(result.item, item);
   assert.equal(result.recoveryText, "");
-  controller.recordFailure({ threadId: "thread", turnId: "turn", item, insertAfterItemId: null });
-  controller.recordTurnCursor({ threadId: "thread", turnId: "turn", item: { id: "later", type: "agentMessage" } });
-  controller.recordTurnCursor({ threadId: "thread", turnId: "turn", item: {
-    ...item, workbenchFailureKind: undefined,
-    changes: [{ ...item.changes[0], diff: "+already here\n", workbenchAdditions: undefined }],
-  } });
-  const retained = controller.get("thread", "turn", item.id)!;
-  assert.equal(retained.item.workbenchFailureKind, "unclaimed");
-  assert.equal(retained.insertAfterItemId, null);
-  assert.equal(retained.item.changes[0]?.workbenchAdditions, 1);
+  const marker = { threadId: "thread", turnId: "turn", item, insertAfterItemId: null };
+  assert.equal(controller.recordFailure(marker), true);
+  assert.equal(controller.recordFailure(marker), false);
+  assert.equal(controller.get("thread", "turn", item.id), undefined);
+  assert.equal(controller.state.items.size, 0);
 }));
 
 test("aggregate and path limits leave unobserved targets uncertain rather than claiming absent files", async () => withFiles(async (root, controller) => {

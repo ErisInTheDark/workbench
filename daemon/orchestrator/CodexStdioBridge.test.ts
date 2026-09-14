@@ -3070,6 +3070,11 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     await bridge.handleUpstreamMessage({ method: "item/completed", params: { item: precedingItem, threadId: "thread", turnId: "turn" } });
     providerItems = [precedingItem];
     const reloadState = await bridge.detachForReload();
+    assert.equal(
+      [...(reloadState.fileChanges?.items.values() ?? [])].some(({ item }) => item.workbenchFailureKind === "unclaimed"),
+      false,
+      "SQLite owns synthetic claim denials across reload",
+    );
     bridge = createBridge(reloadState);
     const reloadedRead = await bridge.handleBridgeRequest({ id: 2, method: "thread/context/read", params: { threadId: "thread" } });
     const reloadedItems = ((reloadedRead?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
@@ -3088,11 +3093,21 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
 
     providerItems = [precedingItem, followingItem, futureProviderItem];
     await bridge.handleUpstreamMessage({ method: "item/completed", params: { item: futureProviderItem, threadId: "thread", turnId: "turn" } });
+    await bridge.waitForIdle();
+    const afterLateCompletion = sql.project().snapshot;
+    const lateCompletionRoot = afterLateCompletion.rows.threadItems.find(row => row.source_id === anchorlessItemId);
+    assert.ok(lateCompletionRoot);
+    assert.equal(
+      afterLateCompletion.rows.threadItemFileChanges.find(row => row.item_id === lateCompletionRoot.id)?.workbench_failure_kind,
+      "unclaimed",
+      "atomic provider completion retains the SQLite-owned denial",
+    );
     const providerRead = await bridge.handleBridgeRequest({ id: 4, method: "thread/context/read", params: { threadId: "thread" } });
     const providerReadItems = ((providerRead?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
     assert.deepEqual(nativeIds(providerReadItems), [anchorlessItemId, precedingItem.id, anchoredItemId, followingItem.id]);
     assert.equal(providerReadItems[0]?.workbenchFailureKind, "unclaimed", "late provider completion retains claim denial");
     assert.equal(providerReadItems[0]?.changes[0]?.diff, futureProviderItem.changes[0]?.diff);
+    assert.equal(providerReadItems[0]?.changes[0]?.workbenchAnalysis, undefined, "blocked patches never acquire current-file success findings");
 
     await bridge.handleUpstreamMessage({
       method: "turn/completed",

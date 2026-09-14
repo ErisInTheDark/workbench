@@ -34,6 +34,16 @@ test("SQL reads select the exact window and retain answered interactions without
         phase: "commentary", memoryCitation: null, delivery: null, questions: null },
     });
   }
+  observations.push({
+    kind: "item", threadId, turnId: newer, observedAt: 5, lifecycle: "completed",
+    item: {
+      id: "blocked-change", type: "fileChange", status: "failed", workbenchFailureKind: "unclaimed",
+      changes: [{
+        path: "src/blocked.ts", diff: "", kind: { type: "update", move_path: null },
+        workbenchAdditions: 2, workbenchDeletions: 1,
+      }],
+    },
+  });
   const request = {
     id: "question", title: "", summary: "", submitLabel: "",
     questions: [{ id: "choice", header: "", question: "continue?", options: [], allowOther: false, isSecret: false }],
@@ -74,5 +84,14 @@ test("SQL reads select the exact window and retain answered interactions without
     assert.equal(history.steerEntries.length, 1);
     assert.deepEqual(repository.readContext(threadId)?.rows.threadItemAssistantMessages, []);
     assert.equal(await reader.read(metadata, { mode: "previous", beforeTurnId: "not-known" }), null);
+    const blocked = await reader.readFileChange(threadId, NativeTurnIdSchema.parse("provider-newer"), "blocked-change");
+    assert.equal(blocked?.workbenchFailureKind, "unclaimed");
+    assert.deepEqual(blocked?.changes.map(change => ({
+      path: change.path,
+      additions: change.workbenchAdditions,
+      deletions: change.workbenchDeletions,
+    })), [{ path: "src/blocked.ts", additions: 2, deletions: 1 }]);
+    assert.equal(await reader.readFileChange(threadId, newer, "message-1"), null);
+    assert.equal(await reader.readFileChange(threadId, newer, "missing"), null);
   } finally { database.close(); }
 });

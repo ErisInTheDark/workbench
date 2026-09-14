@@ -1661,6 +1661,11 @@ export default class CodexStdioBridge {
   private async analyseFailedPatch(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
     const signal = this.generation.signal;
     try {
+      await this.transcriptQueue;
+      signal.throwIfAborted();
+      const stored = await this.sqliteReader?.readFileChange(threadId, turnId, item.id);
+      signal.throwIfAborted();
+      if (stored?.workbenchFailureKind === "unclaimed") return;
       const response = await this.dispatchManagedProviderRequest({
         method: "thread/read", params: { threadId, includeTurns: false },
       }, signal);
@@ -2066,14 +2071,13 @@ export default class CodexStdioBridge {
           : undefined,
       });
     }
-    const presentedMessage = this.fileChanges.present(hydratedMessage);
     if (isPendingInternalResponse(pending)) {
-      pending.resolve(presentedMessage);
+      pending.resolve(hydratedMessage);
       return;
     }
 
     this.sendToClient(pending.client, {
-      ...presentedMessage,
+      ...hydratedMessage,
       id: pending.clientRequestId,
     });
   }
@@ -2211,8 +2215,7 @@ export default class CodexStdioBridge {
         await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, observations), signal);
       }
       signal.throwIfAborted();
-      const presentedMessage = this.fileChanges.present(message);
-      this.onNotification(presentedMessage);
+      this.onNotification(message);
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
       const textField = TRANSCRIPT_TEXT_NOTIFICATIONS[message.method!];
       if ((textField || message.method === "item/fileChange/patchUpdated") && this.onTranscriptLiveUpdate) {
@@ -2255,8 +2258,8 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(message.params)?.threadId)
           ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
         const normalisedMessage = threadId
-          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(presentedMessage, { storageRoot: this.storageRoot, threadId }))).value
-          : presentedMessage;
+          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { storageRoot: this.storageRoot, threadId }))).value
+          : message;
         const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage, settingsTurnId);
         if (syntheticFileChangeNotification) {
           providerObservations.push(

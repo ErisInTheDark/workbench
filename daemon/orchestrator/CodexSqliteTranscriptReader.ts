@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default CodexSqliteTranscriptReader: project SQL windows into the retained Codex context response.
+ * - default CodexSqliteTranscriptReader: project SQL windows and resolve typed stored file changes.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchTranscriptContextSnapshot } from "./database/transcript/workbench-transcript-types";
@@ -49,6 +50,23 @@ export default class CodexSqliteTranscriptReader {
   async history(threadId: string) {
     const snapshot = await this.readContext(threadId);
     return snapshot ? this.content(snapshot) : { questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
+  }
+
+  async readFileChange(threadId: string, turnId: string, itemId: string): Promise<WorkbenchFileChangeItem | null> {
+    const catalog = await this.catalog(threadId);
+    const turn = catalog?.turns.find(candidate => candidate.id === turnId || candidate.native_turn_id === turnId);
+    if (!catalog || !turn) return null;
+    const snapshot = await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [turn.id], turnLimit: 1 });
+    if (!snapshot) return null;
+    const root = snapshot.rows.threadItems.find(candidate => (
+      candidate.turn_id === turn.id && (candidate.public_id === itemId || candidate.source_id === itemId)
+    ));
+    if (!root) return null;
+    const projection = projectWorkbenchTranscript(snapshot);
+    if (!projection.success) throw new Error("Stored SQL transcript could not be projected.");
+    const projectedId = root.public_id ?? root.source_id;
+    const item = projection.data.turns.flatMap(candidate => candidate.items).find(candidate => candidate.id === projectedId);
+    return item?.type === "fileChange" ? item : null;
   }
 
   private content(snapshot: WorkbenchTranscriptContextSnapshot) {

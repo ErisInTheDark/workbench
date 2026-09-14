@@ -2,23 +2,19 @@
  * Keywords: patch attempt, current file evidence, recovery context, bounded read.
  * Exports:
  * - CodexFileChangeTarget: originating patch identity and validated filesystem scope.
- * - CodexFileChangeState: reload handoff for observed attempts and ordering cursors.
- * - default CodexFileChangeController: own patch observations and recovery context.
+ * - CodexFileChangeState: reload handoff for active patch attempts and ordering cursors.
+ * - default CodexFileChangeController: own active patch observations, recovery context, and live failure-notification deduplication.
  */
 import fs from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import { analyseFileChange, type FileObservation } from "workbench-shared/workbench/thread/file-change-analysis";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import {
   getWorkbenchFileChangeFailureKey,
   mergeWorkbenchFileChange,
-  withWorkbenchFileChangeFailure,
   type WorkbenchFileChangeFailureMarker,
   type WorkbenchFileChangeItem,
 } from "workbench-shared/workbench/thread/workbench-file-change";
-import type { JsonRpcNotification, JsonRpcResponse } from "./bridge-types";
 import { asRecord, asString } from "./codex-transcript-normalizers";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -180,11 +176,18 @@ function recoveryText(target: CodexFileChangeTarget, item: WorkbenchFileChangeIt
 }
 
 export default class CodexFileChangeController {
-  constructor(readonly state: CodexFileChangeState = { items: new Map(), turnCursors: new Map() }) {}
+  readonly state: CodexFileChangeState;
+  readonly #notifiedFailureKeys = new Set<string>();
+
+  constructor(state: CodexFileChangeState = { items: new Map(), turnCursors: new Map() }) {
+    const items = new Map([...state.items].filter(([, marker]) => marker.item.workbenchFailureKind !== "unclaimed"));
+    this.state = { items, turnCursors: state.turnCursors };
+  }
 
   clear() {
     this.state.items.clear();
     this.state.turnCursors.clear();
+    this.#notifiedFailureKeys.clear();
   }
 
   get(threadId: string, turnId: string, itemId: string) {
@@ -192,9 +195,9 @@ export default class CodexFileChangeController {
   }
 
   remember(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
+    if (item.workbenchFailureKind === "unclaimed") return;
     const key = getWorkbenchFileChangeFailureKey({ threadId, turnId, itemId: item.id });
     const previous = this.state.items.get(key);
-    if (previous?.item.workbenchFailureKind === "unclaimed") return;
     this.state.items.set(key, {
       threadId, turnId,
       item: previous ? mergeWorkbenchFileChange(item, previous.item) : item,
@@ -204,8 +207,14 @@ export default class CodexFileChangeController {
   }
 
   recordFailure(marker: WorkbenchFileChangeFailureMarker) {
-    if (this.get(marker.threadId, marker.turnId, marker.item.id)?.item.workbenchFailureKind === "unclaimed") return false;
-    this.remember(marker.threadId, marker.turnId, marker.item);
+    const key = getWorkbenchFileChangeFailureKey({
+      threadId: marker.threadId, turnId: marker.turnId, itemId: marker.item.id,
+    });
+    if (this.#notifiedFailureKeys.has(key)) return false;
+    this.#notifiedFailureKeys.add(key);
+    while (this.#notifiedFailureKeys.size > MAX_RETAINED_PATCHES) {
+      this.#notifiedFailureKeys.delete(this.#notifiedFailureKeys.values().next().value!);
+    }
     return true;
   }
 
@@ -228,65 +237,6 @@ export default class CodexFileChangeController {
     const threadId = asString(params?.threadId);
     const turnId = asString(asRecord(params?.turn)?.id);
     if (threadId && turnId) this.state.turnCursors.delete(`${threadId}\0${turnId}`);
-  }
-
-  present<TMessage extends JsonRpcNotification | JsonRpcResponse>(message: TMessage): TMessage {
-    const decorate = (item: WorkbenchFileChangeItem, marker: WorkbenchFileChangeFailureMarker) => (
-      marker.item.workbenchFailureKind === "unclaimed" && item.status === "failed"
-        ? withWorkbenchFileChangeFailure(item, "unclaimed")
-        : mergeWorkbenchFileChange(item, marker.item)
-    );
-    if ("method" in message && (message.method === "item/completed" || message.method === "item/started")) {
-      const params = asRecord(message.params);
-      const item = asRecord(params?.item);
-      if (item?.type !== "fileChange") return message;
-      const threadId = asString(params?.threadId);
-      const turnId = asString(params?.turnId);
-      const itemId = asString(item.id);
-      if (!threadId || !turnId || !itemId) return message;
-      const marker = this.get(threadId, turnId, itemId);
-      return marker ? { ...message, params: { ...params, item: decorate(item as WorkbenchFileChangeItem, marker) } } as TMessage : message;
-    }
-    if (!("result" in message)) return message;
-    const result = asRecord(message.result);
-    const thread = asRecord(result?.thread) as Thread | null;
-    if (!thread?.id) return message;
-    const markersByTurnId = new Map<string, WorkbenchFileChangeFailureMarker[]>();
-    for (const marker of this.state.items.values()) {
-      if (marker.threadId !== thread.id || (!marker.item.workbenchFailureKind && !marker.item.workbenchPolicy && !marker.item.changes.some((change) => change.workbenchAnalysis))) continue;
-      const entries = markersByTurnId.get(marker.turnId) ?? [];
-      entries.push(marker);
-      markersByTurnId.set(marker.turnId, entries);
-    }
-    if (!markersByTurnId.size) return message;
-    const turns = thread.turns.map((turn) => {
-      const markers = markersByTurnId.get(turn.id);
-      if (!markers?.length) return turn;
-      const markerById = new Map(markers.map((marker) => [marker.item.id, marker]));
-      const items = turn.items.map((item) => {
-        const marker = markerById.get(item.id);
-        return marker && item.type === "fileChange" ? decorate(item, marker) : item;
-      });
-      const itemIds = new Set(items.map((item) => item.id));
-      const byAnchor = new Map<string | null, WorkbenchFileChangeFailureMarker[]>();
-      const orphaned: WorkbenchFileChangeFailureMarker[] = [];
-      for (const marker of markers.filter((entry) => !itemIds.has(entry.item.id))) {
-        if (marker.insertAfterItemId !== null && !itemIds.has(marker.insertAfterItemId)) {
-          orphaned.push(marker);
-          continue;
-        }
-        const entries = byAnchor.get(marker.insertAfterItemId) ?? [];
-        entries.push(marker);
-        byAnchor.set(marker.insertAfterItemId, entries);
-      }
-      const ordered: ThreadItem[] = (byAnchor.get(null) ?? []).map((marker) => marker.item);
-      for (const item of items) {
-        ordered.push(item, ...(byAnchor.get(item.id) ?? []).map((marker) => marker.item));
-      }
-      ordered.push(...orphaned.map((marker) => marker.item));
-      return { ...turn, items: ordered };
-    });
-    return { ...message, result: { ...result, thread: { ...thread, turns } } } as TMessage;
   }
 
   async analyse(target: CodexFileChangeTarget) {
