@@ -218,6 +218,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("proposalState"),
     includeNewer: z.boolean(),
+    includeUnclaimed: z.boolean().optional(),
     proposalId: nonEmptyString,
     ...checkpointBaseRequest,
   }),
@@ -225,6 +226,10 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("proposalCommit"),
     description: z.string(),
     includeNewer: z.boolean(),
+    unclaimedSelection: z.object({
+      paths: checkpointPaths,
+      tree: checkpointSha,
+    }).strict().optional(),
     mode: z.enum(["amend", "commit"]).optional(),
     proposalId: nonEmptyString,
     title: nonEmptyString,
@@ -308,6 +313,11 @@ export const GitCheckpointProposalSchema = z.object({
   description: z.string(),
   freshChanges: z.array(GitCheckpointFileChangeSchema).nullable().optional().default(null),
   includeNewerAvailable: z.boolean(),
+  unclaimedDirtAvailable: z.boolean().default(false).optional(),
+  unclaimedDirt: z.object({
+    changes: z.array(GitCheckpointFileChangeSchema),
+    tree: checkpointSha,
+  }).nullable().default(null).optional(),
   mode: z.enum(["amend", "commit"]),
   paths: checkpointPaths,
   proposalId: nonEmptyString,

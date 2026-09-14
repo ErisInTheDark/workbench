@@ -18,6 +18,7 @@ import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
   GitCheckpointProposal,
+  GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
@@ -943,10 +944,11 @@ export default class WorkbenchGitCheckpointController {
     cwd,
     harness: rawHarness,
     includeNewer,
+    includeUnclaimed,
     proposalId,
     threadId,
-  }: ControllerInput & { includeNewer: boolean; proposalId: string }): Promise<GitCheckpointProposal> {
-    return await GitObjectReadSession.run(() => this.proposals.getProposal({ cwd, harness: rawHarness, includeNewer, proposalId, threadId }));
+  }: ControllerInput & { includeNewer: boolean; includeUnclaimed?: boolean; proposalId: string }): Promise<GitCheckpointProposal> {
+    return await GitObjectReadSession.run(() => this.proposals.getProposal({ cwd, harness: rawHarness, includeNewer, includeUnclaimed, proposalId, threadId }));
   }
 
   async getProposalPaths({
@@ -967,6 +969,7 @@ export default class WorkbenchGitCheckpointController {
     description,
     harness: rawHarness,
     includeNewer,
+    unclaimedSelection,
     mode,
     proposalId,
     threadId,
@@ -974,11 +977,12 @@ export default class WorkbenchGitCheckpointController {
   }: ControllerInput & {
     description: string;
     includeNewer: boolean;
+    unclaimedSelection?: Extract<GitCheckpointRequest, { action: "proposalCommit" }>["unclaimedSelection"];
     mode?: "amend" | "commit";
     proposalId: string;
     title: string;
   }): Promise<GitCheckpointProposal> {
-    return await GitObjectReadSession.run(() => this.proposals.commitProposal({ cwd, description, harness: rawHarness, includeNewer, mode, proposalId, threadId, title }));
+    return await GitObjectReadSession.run(() => this.proposals.commitProposal({ cwd, description, harness: rawHarness, includeNewer, unclaimedSelection, mode, proposalId, threadId, title }));
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {

@@ -4,7 +4,6 @@
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
- * - Local helpers: format paths, summary labels, lifecycle rows, and change totals for thread file changes.
  */
 "use client";
 
@@ -18,6 +17,7 @@ import {
   type ParsedUnifiedDiff,
 } from "workbench-shared/workbench/thread/unified-diff";
 import ProjectFilePath from "../ProjectFilePath";
+import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
@@ -49,6 +49,7 @@ export interface ThreadFileChangeListChange {
   sourceItemId?: string;
   staticMarker?: boolean;
   summaryTotals?: { additions: number; deletions: number };
+  selection?: { checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void };
 }
 
 interface FileChangePresentation {
@@ -342,9 +343,17 @@ function ThreadFileChangeRows ({
     };
   });
 
-  return parsedChanges.map((change) => {
+  return parsedChanges.map((change, index) => {
     const key = `${change.sourceItemId}:change:${change.displayPath}:${change.movePathDisplay ?? ""}`;
-    const summary = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+    const selection = changes[index].selection;
+    const content = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+    const summary = selection ? <WorkbenchCheckbox
+      checked={selection.checked}
+      className="-ml-2 -my-1 min-w-0 max-w-full !text-[1em]"
+      disabled={selection.disabled}
+      label={content}
+      onChange={selection.onChange}
+    /> : content;
     return change.detailsAvailable ? (
       <ThreadDisclosure
         key={key}

@@ -732,10 +732,11 @@ export default class WorkbenchGitArcFeature {
       }));
       case "proposalRescind": return Response.json(await this.controller.rescindProposal({ ...common, proposalId: input.proposalId }));
       case "proposalState": return Response.json(await this.controller.getProposal({
-        ...common, includeNewer: input.includeNewer, proposalId: input.proposalId,
+        ...common, includeNewer: input.includeNewer, includeUnclaimed: input.includeUnclaimed, proposalId: input.proposalId,
       }));
       case "proposalCommit": return Response.json(await this.controller.commitProposal({
         ...common, description: input.description, includeNewer: input.includeNewer,
+        mode: input.mode, unclaimedSelection: input.unclaimedSelection,
         proposalId: input.proposalId, title: input.title,
       }));
       case "readDiffArtifact": return new Response(await this.controller.readLegacyDiffArtifact({

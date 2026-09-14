@@ -48,7 +48,7 @@ export const CONTROLLER_PARTIAL_READY_FIXTURE = {
 export const CONTROLLER_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "controller-shared-states",
-  revision: 1,
+  revision: 8,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const registry = { root: repositoryRoot, relativeRoot: "repo" };
@@ -145,14 +145,21 @@ export const CONTROLLER_OPERATIONS_FIXTURE = {
     const status = await fork("s", claims.root);
     const partial = await fork("p", claims.root);
     const replacement = await fork("x", claims.root);
+    await controller.addToArc({ cwd: status.root, harness: "codex", threadId: "partial-thread", paths: ["added.txt"] });
     await write(status.root, "one.txt", "proposed content\n");
-    const statusProposal = await propose(status.root, ["one.txt"], "change one");
+    await write(status.root, "added.txt", "proposed addition\n");
+    const statusProposal = await propose(status.root, ["added.txt", "one.txt"], "change one");
     await write(partial.root, "one.txt", "committed one\n");
     const firstProposal = await propose(partial.root, ["one.txt"], "commit one");
     const retained = await fork("t", partial.root);
     await write(partial.root, "two.txt", "remaining two\n");
     const secondProposal = await propose(partial.root, ["two.txt"], "commit two");
     await write(retained.root, "two.txt", "retained two\n");
+    const retainedProposal = await controller.createProposal({
+      cwd: retained.root, harness: "codex", threadId: "partial-thread",
+      amend: true, replaceProposalId: firstProposal.proposalId, paths: ["one.txt"],
+      title: "amend one", description: "", freshTitle: "commit one separately",
+    });
 
     await controller.addToArc({ cwd: replacement.root, harness: "codex", threadId: "partial-thread", paths: ["three.txt"] });
     await write(replacement.root, "one.txt", "replace one\n");
@@ -187,7 +194,7 @@ export const CONTROLLER_OPERATIONS_FIXTURE = {
       claims: { root: claims.relativeRoot },
       status: { root: status.relativeRoot, proposalId: statusProposal.proposalId },
       partial: { root: partial.relativeRoot, firstProposalId: firstProposal.proposalId, secondProposalId: secondProposal.proposalId },
-      retained: { root: retained.relativeRoot, proposalId: firstProposal.proposalId },
+      retained: { root: retained.relativeRoot, proposalId: retainedProposal.proposalId },
       replacement: {
         root: replacement.relativeRoot, replaceTargetProposalId: replaceTarget.proposalId,
         rescindTargetProposalId: rescindTarget.proposalId, commitTargetProposalId: commitTarget.proposalId,

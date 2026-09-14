@@ -16,6 +16,7 @@ import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckp
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import { CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./GitArcControllerTestFixtures";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { proposalMessage } from "workbench-shared/workbench/git/git-arc-storage";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 
@@ -76,7 +77,7 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   const before = await repository.listRefsWithValues("refs/worktree");
   const pending = await controller.readStatus(identity);
   assert.deepEqual(pending.pending, [{ proposalId: proposal.proposalId, title: "change one" }]);
-  assert.deepEqual(pending.dirtyClaims, ["one.txt"]);
+  assert.deepEqual(pending.dirtyClaims, ["added.txt", "one.txt"]);
   assert.deepEqual(pending.cleanClaims, ["two.txt"]);
   const resolvedIds: string[] = [];
   const mappedController = new WorkbenchGitCheckpointController(undefined, async ({ threadId }) => {
@@ -93,7 +94,14 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   assert.ok(resolvedIds.includes("partial-thread"));
   assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), before);
   await fs.writeFile(path.join(source, "one.txt"), "one\n");
-  assert.deepEqual((await controller.readStatus(identity)).pending, []);
+  await fs.unlink(path.join(source, "added.txt"));
+  assert.deepEqual((await controller.readStatus(identity)).pending, pending.pending);
+  const cancelled = await controller.getProposal({ ...identity, ...proposal, includeNewer: true });
+  assert.equal(cancelled.status, "proposed");
+  assert.deepEqual(cancelled.changes, []);
+  await assert.rejects(controller.commitProposal({
+    ...identity, ...proposal, includeNewer: true, title: "cancelled changes", description: "",
+  }), /no changes/i);
   await fs.writeFile(path.join(source, "one.txt"), "proposed content\n");
   await checkProposalReadPurity(fixture);
   const acceptedHead = await repository.currentHead();
@@ -847,6 +855,9 @@ controllerTest("partial", "partial acceptance, local reads and message amendment
   ]);
   assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), refsBeforeScope);
   await fs.writeFile(path.join(source, "one.txt"), "newer one\n");
+  await fs.writeFile(path.join(source, "loose.txt"), "selected dirt\n");
+  await fs.writeFile(path.join(source, "unchecked.txt"), "keep staged\n");
+  await git(source, ["add", "--", "unchecked.txt"]);
   const headBeforeLock = await repository.currentHead();
   const lockPath = path.resolve(source, (await git(source, ["rev-parse", "--git-path", "index.lock"])).trim());
   await fs.writeFile(lockPath, "locked\n", "utf8");
@@ -861,22 +872,36 @@ controllerTest("partial", "partial acceptance, local reads and message amendment
     title: "commit one",
   }), /Commit was not published[\s\S]*proposal remains pending[\s\S]*index\.lock/u);
   assert.equal(await repository.currentHead(), headBeforeLock);
-  assert.equal((await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: firstProposal.proposalId, threadId: "partial-thread",
-  })).status, "proposed");
+  const inspected = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, includeUnclaimed: true, proposalId: firstProposal.proposalId, threadId: "partial-thread",
+  });
+  assert.equal(inspected.status, "proposed");
+  assert.ok(inspected.unclaimedDirt);
+  assert.deepEqual(inspected.unclaimedDirt.changes.map(change => change.path), ["loose.txt", "unchecked.txt"]);
   const locked = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(locked?.phase, "active");
   assert.deepEqual(locked?.claimedPaths, ["one.txt", "two.txt"]);
   await fs.rm(lockPath, { force: true });
-  await controller.commitProposal({
+  const acceptance = {
     cwd: source,
     description: "",
-    harness: "codex",
+    harness: "codex" as const,
     includeNewer: false,
     proposalId: firstProposal.proposalId,
     threadId: "partial-thread",
     title: "commit one",
-  });
+    unclaimedSelection: { paths: ["loose.txt"], tree: inspected.unclaimedDirt.tree },
+  };
+  await fs.writeFile(path.join(source, "loose.txt"), "changed since inspection\n");
+  await assert.rejects(controller.commitProposal(acceptance), /changed|inspect/i);
+  await fs.writeFile(path.join(source, "loose.txt"), "selected dirt\n");
+  await assert.rejects(controller.commitProposal({
+    ...acceptance, unclaimedSelection: { ...acceptance.unclaimedSelection, paths: ["two.txt"] },
+  }), /unclaimed/i);
+  assert.equal(await repository.currentHead(), headBeforeLock);
+  await fs.writeFile(path.join(source, "unchecked.txt"), "unchecked drift\n");
+  const firstAccepted = await controller.commitProposal(acceptance);
+  assert.deepEqual(firstAccepted.changes.map(change => change.path), ["loose.txt", "one.txt"]);
   const [partial, one, two, compared] = await Promise.all([
     new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }),
     fs.readFile(path.join(source, "one.txt"), "utf8"),
@@ -899,7 +924,13 @@ controllerTest("partial", "partial acceptance, local reads and message amendment
   assert.deepEqual(continued.scopePaths, ["one.txt", "two.txt"]);
 
   await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
-  await controller.commitProposal({
+  await fs.unlink(path.join(source, "loose.txt"));
+  const remainingDirt = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, includeUnclaimed: true, proposalId: secondProposal.proposalId, threadId: "partial-thread",
+  });
+  assert.ok(remainingDirt.unclaimedDirt);
+  assert.equal(remainingDirt.unclaimedDirt.changes.find(change => change.path === "loose.txt")?.kind.type, "delete");
+  const secondAccepted = await controller.commitProposal({
     cwd: source,
     description: "",
     harness: "codex",
@@ -907,7 +938,11 @@ controllerTest("partial", "partial acceptance, local reads and message amendment
     proposalId: secondProposal.proposalId,
     threadId: "partial-thread",
     title: "commit two",
+    unclaimedSelection: { paths: ["loose.txt"], tree: remainingDirt.unclaimedDirt.tree },
   });
+  assert.equal(secondAccepted.changes.find(change => change.path === "loose.txt")?.kind.type, "delete");
+  assert.equal(await git(source, ["show", ":unchecked.txt"]), "keep staged\n");
+  assert.equal(await fs.readFile(path.join(source, "unchecked.txt"), "utf8"), "unchecked drift\n");
   const resolved = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(resolved?.phase, "resolved");
   assert.deepEqual(resolved?.claimedPaths, []);
@@ -940,6 +975,10 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
   const receipt = { proposalId: state.proposalId };
   const store = new GitCheckpointStore(repository);
   const stored = await store.readProposal("codex", "partial-thread", receipt.proposalId);
+  const unavailable = await repository.createCommitFromTree(stored.tree, stored.metadata.baseCommit, proposalMessage({
+    ...stored.metadata, status: "unavailable", unavailableReason: "added.txt no longer has working-tree changes.",
+  }));
+  await repository.updateRef(stored.proposalRef, unavailable, stored.proposalCommit);
   const proposalRefBefore = await repository.readRef(stored.proposalRef);
   const advancedHead = await advanceHead(repository, "advance without touching proposal paths");
   await fs.writeFile(path.join(source, "one.txt"), "newer worktree content\n", "utf8");
@@ -956,8 +995,9 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
   assert.equal(defaultCard.baseCommit, advancedHead);
   assert.equal(defaultCard.status, "proposed");
   assert.equal(defaultCard.includeNewerAvailable, true);
-  assert.match(defaultCard.changes[0]?.diff ?? "", /proposed content/u);
-  assert.doesNotMatch(defaultCard.changes[0]?.diff ?? "", /newer worktree content/u);
+  assert.deepEqual(defaultCard.changes.map(change => change.path), ["added.txt", "one.txt"]);
+  assert.match(defaultCard.changes.find(change => change.path === "one.txt")?.diff ?? "", /proposed content/u);
+  assert.doesNotMatch(defaultCard.changes.find(change => change.path === "one.txt")?.diff ?? "", /newer worktree content/u);
   assert.equal(await repository.succeeds(["cat-file", "-e", newerBlob]), false);
   assert.equal(await repository.readRef(stored.proposalRef), proposalRefBefore);
 
@@ -969,9 +1009,11 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
     threadId: "partial-thread",
   });
   assert.match(newerCard.changes[0]?.diff ?? "", /newer worktree content/u);
+  assert.deepEqual(newerCard.changes.map(change => change.path), ["one.txt"]);
   assert.equal(await repository.succeeds(["cat-file", "-e", newerBlob]), true);
   assert.equal(await repository.readRef(stored.proposalRef), proposalRefBefore);
 
+  await fs.unlink(path.join(source, "one.txt"));
   const committed = await controller.commitProposal({
     cwd: source,
     description: "",
@@ -983,7 +1025,9 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
   });
   assert.equal(committed.status, "committed");
   assert.notEqual(await repository.readRef(stored.proposalRef), proposalRefBefore);
-  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "newer worktree content\n");
+  assert.deepEqual(committed.changes.map(change => [change.path, change.kind.type]), [["one.txt", "delete"]]);
+  await assert.rejects(fs.stat(path.join(source, "one.txt")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(source, "added.txt")), { code: "ENOENT" });
 }
 
 async function checkLocalReadsAndMessageAmendments(fixture: ControllerBranch<"partial">, commitTargetProposalId: string) {
@@ -1205,7 +1249,7 @@ controllerTest("replacement", "replacement plans target prior pending and commit
   });
   const laterHead = await advanceHead(repository, "advance after content proposal");
   const proposed = await controller.getProposal({
-    cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
+    cwd: source, harness: "codex", includeNewer: false, includeUnclaimed: true, proposalId: amendment.proposalId, threadId: "partial-thread",
   });
   assert.equal(proposed.mode, "amend");
   assert.equal(proposed.amendTargetSha, state.committedSha);
@@ -1216,6 +1260,8 @@ controllerTest("replacement", "replacement plans target prior pending and commit
   });
   assert.deepEqual(proposed.changes.map(({ path: filePath }) => filePath), ["one.txt", "three.txt", "two.txt"]);
   assert.deepEqual(proposed.freshChanges?.map(({ path: filePath }) => filePath), ["one.txt", "two.txt"]);
+  assert.ok(proposed.unclaimedDirt);
+  assert.deepEqual(proposed.unclaimedDirt.changes.map(change => change.path), [".gitignore"]);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "one.txt")?.diff ?? "", /replace one/u);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "two.txt")?.diff ?? "", /rescind two/u);
   assert.deepEqual(
@@ -1225,17 +1271,21 @@ controllerTest("replacement", "replacement plans target prior pending and commit
   const pendingPlan = await controller.createPlan({
     cwd: source, harness: "codex", intentName: "next work", paths: successor.scopePaths, threadId: "partial-thread",
   });
+  await fs.writeFile(path.join(source, "one.txt"), "replace one\nnewer correction\n");
   const committedFresh = await controller.commitProposal({
     cwd: source,
     description: "Preserve the accepted commit.",
     harness: "codex",
-    includeNewer: false,
+    includeNewer: true,
+    unclaimedSelection: { paths: [".gitignore"], tree: proposed.unclaimedDirt.tree },
     mode: "commit",
     proposalId: amendment.proposalId,
     threadId: "partial-thread",
     title: "add committed target correction",
   });
   assert.equal(committedFresh.mode, "commit");
+  assert.ok(committedFresh.paths.includes(".gitignore"));
+  assert.match(committedFresh.changes.find(change => change.path === "one.txt")?.diff ?? "", /newer correction/);
   const [retainedPlan, parent, title, originalTarget] = await Promise.all([
     controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" }),
     git(source, ["rev-parse", `${committedFresh.committedSha}^`]),
@@ -1372,10 +1422,19 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   const revised = await controller.addToPlan({
     cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
   });
-  await controller.commitProposal({
+  await fs.writeFile(path.join(source, "loose.txt"), "amended dirt\n");
+  const inspected = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, includeUnclaimed: true, proposalId: proposal.proposalId, threadId: "partial-thread",
+  });
+  assert.ok(inspected.unclaimedDirt);
+  assert.deepEqual(inspected.unclaimedDirt.changes.map(change => change.path), ["loose.txt"]);
+  const amended = await controller.commitProposal({
     cwd: source, description: "", harness: "codex", includeNewer: false, proposalId: proposal.proposalId,
     threadId: "partial-thread", title: "commit one",
+    unclaimedSelection: { paths: ["loose.txt"], tree: inspected.unclaimedDirt.tree },
   });
+  assert.equal(amended.mode, "amend");
+  assert.ok(amended.paths.includes("loose.txt"));
 
   await assert.rejects(controller.createPlan({
     cwd: source, harness: "codex", intentName: "omit retained dirt", paths: ["one.txt"], threadId: "partial-thread",
@@ -1386,7 +1445,8 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
 
   let registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(registryEntry?.phase, "plan");
-  assert.equal(registryEntry?.checkpointCommit, revised.checkpointCommit);
+  const retainedPlan = await controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(retainedPlan?.scopePaths, revised.scopePaths);
   assert.equal(registryEntry?.intentName, replacement.intentName);
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["two.txt"]);
   await assert.rejects(controller.removeFromPlan({

@@ -69,6 +69,32 @@ function waitFeature() {
   });
 }
 
+test("proposal dispatch preserves on-demand inspection and inspected selection", async () => {
+  const feature = waitFeature();
+  const internal = feature as unknown as {
+    controller: {
+      getProposal: (input: object) => Promise<object>;
+      commitProposal: (input: object) => Promise<object>;
+    };
+  };
+  internal.controller.getProposal = async input => input;
+  internal.controller.commitProposal = async input => input;
+  const common = {
+    cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread",
+    proposalId: "proposal-one", includeNewer: false,
+  };
+  const response = await feature.executeRequest({ ...common, action: "proposalState", includeUnclaimed: true });
+  assert.equal((await response.json() as { includeUnclaimed?: boolean }).includeUnclaimed, true);
+  const unclaimedSelection = { paths: ["loose.txt"], tree: "a".repeat(40) };
+  const committed = await feature.executeRequest({
+    ...common, action: "proposalCommit", description: "", title: "commit",
+    mode: "commit", unclaimedSelection,
+  });
+  const result = await committed.json() as { unclaimedSelection?: typeof unclaimedSelection; mode?: string };
+  assert.deepEqual(result.unclaimedSelection, unclaimedSelection);
+  assert.equal(result.mode, "commit");
+});
+
 test("startup claim reconciliation seeds current scopes at observation time", async () => {
   const snapshots: WorkbenchGitClaimSnapshot[] = [];
   const feature = new WorkbenchGitArcFeature({

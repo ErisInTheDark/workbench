@@ -10,6 +10,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
@@ -70,6 +71,13 @@ function ThreadCheckpointCommitController({
 }) {
   const daemon = useWorkbenchDaemonClient();
   const [includeNewer, setIncludeNewer] = useState(false);
+  const [includeUnclaimed, setIncludeUnclaimed] = useState(false);
+  // Keep the inspected content with the choice so refresh cannot silently approve changed files.
+  const [unclaimedSelection, setUnclaimedSelection] = useState<{
+    proposalId: string;
+    tree: string;
+    changes: GitCheckpointProposal["changes"];
+  } | null>(null);
   const initialMode = intent?.amend ? "amend" : "commit";
   const [commitMode, setCommitMode] = useState<"amend" | "commit">(initialMode);
   const [amendTitle, setAmendTitle] = useState(intent?.title ?? "");
@@ -156,6 +164,14 @@ function ThreadCheckpointCommitController({
   }, [intent]);
 
   const acceptProposal = useCallback((proposal: GitCheckpointProposal) => {
+    setUnclaimedSelection(current => {
+      if (!current) return current;
+      const dirt = proposal.unclaimedDirt;
+      if (current.proposalId !== proposal.proposalId || proposal.status !== "proposed" || !dirt) return null;
+      const changes = current.changes.filter(change =>
+        dirt.changes.some(next => areDeeplyEqual(change, next)));
+      return changes.length ? { proposalId: proposal.proposalId, tree: dirt.tree, changes } : null;
+    });
     if (proposal.mode === "amend") {
       if (!amendTitleHydrated.current || proposal.status !== "proposed") setAmendTitle(proposal.title);
       if (!amendDescriptionHydrated.current || proposal.status !== "proposed") setAmendDescription(proposal.description);
@@ -178,7 +194,7 @@ function ThreadCheckpointCommitController({
     try {
       const proposal = await daemon.requestGitArc(
         "git/arc/proposal/read",
-        { cwd, harness, includeNewer, proposalId, threadId },
+        { cwd, harness, includeNewer, includeUnclaimed, proposalId, threadId },
       );
       if (signal?.aborted) return;
       acceptProposal(proposal);
@@ -194,10 +210,10 @@ function ThreadCheckpointCommitController({
         status: "error",
       });
     }
-  }, [acceptProposal, cwd, daemon, harness, includeNewer, proposalId, threadId]);
+  }, [acceptProposal, cwd, daemon, harness, includeNewer, includeUnclaimed, proposalId, threadId]);
 
   useEffect(() => {
-    if (!isProposalObserved || includeNewer) return;
+    if (!isProposalObserved || includeNewer || includeUnclaimed) return;
     if (!proposalId) {
       setState({ status: "idle" });
       return;
@@ -216,10 +232,10 @@ function ThreadCheckpointCommitController({
       return;
     }
     acceptProposal(proposalObservation.proposal);
-  }, [acceptProposal, includeNewer, isProposalObserved, proposalId, proposalObservation]);
+  }, [acceptProposal, includeNewer, includeUnclaimed, isProposalObserved, proposalId, proposalObservation]);
 
   useEffect(() => {
-    if (isProposalObserved && !includeNewer) return;
+    if (isProposalObserved && !includeNewer && !includeUnclaimed) return;
     if (!proposalId) {
       setState({ status: "idle" });
       return;
@@ -232,7 +248,7 @@ function ThreadCheckpointCommitController({
       controller.abort();
       window.removeEventListener("focus", refreshOnFocus);
     };
-  }, [includeNewer, isProposalObserved, loadProposal, proposalId]);
+  }, [includeNewer, includeUnclaimed, isProposalObserved, loadProposal, proposalId]);
 
   const commit = async () => {
     if (!proposalId || !title.trim() || committing) return;
@@ -245,6 +261,12 @@ function ThreadCheckpointCommitController({
           description,
           harness,
           includeNewer,
+          ...(unclaimedSelection?.proposalId === proposalId && unclaimedSelection.changes.length ? {
+            unclaimedSelection: {
+              paths: unclaimedSelection.changes.map(change => change.path),
+              tree: unclaimedSelection.tree,
+            },
+          } : {}),
           ...(state.status === "loaded" && state.proposal.mode === "amend" && commitMode === "commit"
             ? { mode: "commit" as const }
             : {}),
@@ -262,6 +284,7 @@ function ThreadCheckpointCommitController({
         setCommitDescription(proposal.description);
       }
       setState({ proposal, status: "loaded" });
+      setUnclaimedSelection(null);
     } catch (error) {
       const failure = error instanceof GitArcFailureException
         ? error.failure
@@ -285,6 +308,17 @@ function ThreadCheckpointCommitController({
       commitDescriptionHydrated.current = true;
       setCommitDescription(value);
     }
+  };
+  const changeUnclaimed = (path: string, checked: boolean) => {
+    if (committing || state.status !== "loaded" || state.proposal.status !== "proposed") return;
+    const dirt = state.proposal.unclaimedDirt;
+    if (!dirt || !proposalId) return;
+    setUnclaimedSelection(current => {
+      const selected = current?.proposalId === proposalId ? current.changes.map(change => change.path) : [];
+      const paths = checked ? [...selected, path] : selected.filter(candidate => candidate !== path);
+      const changes = dirt.changes.filter(change => paths.includes(change.path));
+      return changes.length ? { proposalId, tree: dirt.tree, changes } : null;
+    });
   };
   const changeTitle = (value: string) => {
     if (commitMode === "amend") {
@@ -312,6 +346,9 @@ function ThreadCheckpointCommitController({
       onCommitModeChange={setCommitMode}
       onDescriptionChange={changeDescription}
       onIncludeNewerChange={setIncludeNewer}
+      onUnclaimedOpen={() => setIncludeUnclaimed(true)}
+      onUnclaimedChange={changeUnclaimed}
+      selectedUnclaimedPaths={unclaimedSelection?.proposalId === proposalId ? unclaimedSelection.changes.map(change => change.path) : []}
       onRetry={() => void loadProposal()}
       onTitleChange={changeTitle}
       observationRef={setObservationTarget}

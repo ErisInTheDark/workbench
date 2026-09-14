@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
-import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcProposalDiffController from "./GitArcProposalDiffController";
@@ -17,7 +17,8 @@ import {
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 import GitArcPublishState from "./GitArcPublishState";
-import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
+import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import GitCheckpointStore, {
   type GitArcProposalSummary,
   type StoredCheckpoint,
@@ -264,7 +265,7 @@ async function prepareAcceptedClaimTransition({
     retainedArc: null,
   }, {
     commitRemaps,
-    expectedCheckpointCommit: active.checkpointCommit,
+    expectedCheckpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
     ...(currentTree ? { claimLossSnapshot: { head: acceptedHead, tree: currentTree } } : {}),
   });
   updates.push(...registryMutation.updates);
@@ -360,6 +361,7 @@ async function buildProposalResult(
     description: metadata.description,
     freshChanges,
     includeNewerAvailable: options.includeNewerAvailable ?? false,
+    unclaimedDirtAvailable: metadata.status === "proposed" && !metadata.messageOnly,
     mode: metadata.mode,
     paths: metadata.paths,
     proposalId: metadata.proposalId,
@@ -412,7 +414,9 @@ async function resolveProposalState(
     && proposal.metadata.unavailableReason?.startsWith("Proposed paths changed in committed history:");
   const branchChangeUnavailable = proposal.metadata.status === "unavailable"
     && proposal.metadata.unavailableReason === BRANCH_CHANGED_UNAVAILABLE_REASON;
-  if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason || branchChangeUnavailable) {
+  const worktreeChangeUnavailable = proposal.metadata.status === "unavailable"
+    && proposal.metadata.livePaths.some(filePath => proposal.metadata.unavailableReason === `${filePath} no longer has working-tree changes.`);
+  if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason || branchChangeUnavailable || worktreeChangeUnavailable) {
     const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths, proposal.metadata.liveBaseCommit, options.snapshot?.head);
     const replayableBranchReplacement = headMovement.kind === "incompatible"
       && proposal.metadata.mode === "commit"
@@ -438,7 +442,7 @@ async function resolveProposalState(
     const canRebaseCommit = proposal.metadata.mode === "commit"
       && !unavailableReason
       && (headMovement.kind === "fast-forward" || replayableBranchReplacement);
-    if ((proposal.metadata.status === "proposed" || branchChangeUnavailable) && canRebaseCommit) {
+    if ((proposal.metadata.status === "proposed" || branchChangeUnavailable || worktreeChangeUnavailable) && canRebaseCommit) {
       const rebasedTree = await repository.writeTreeWithPathsFromSource(
         headMovement.currentHead,
         proposal.proposalCommit,
@@ -457,7 +461,7 @@ async function resolveProposalState(
         ...proposal.metadata,
         liveBaseCommit: headMovement.currentHead,
       });
-    } else if (branchChangeUnavailable && !unavailableReason) {
+    } else if ((branchChangeUnavailable || worktreeChangeUnavailable) && !unavailableReason) {
       proposal = await applyTransition({
         ...proposal.metadata,
         status: "proposed",
@@ -467,18 +471,9 @@ async function resolveProposalState(
     }
     let changedFromProposal: string[] = [];
     if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
-      const [changedFromBase, changedSinceProposal] = await Promise.all([
-        options.snapshot
-          ? repository.listChangedPaths(proposal.metadata.liveBaseCommit, options.snapshot.tree, proposal.metadata.livePaths)
-          : repository.listWorktreeChangedPaths(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths),
-        options.snapshot
-          ? repository.listChangedPaths(proposal.tree, options.snapshot.tree, proposal.metadata.livePaths)
-          : repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths),
-      ]);
-      const changedNow = new Set(changedFromBase);
-      changedFromProposal = changedSinceProposal;
-      const cleanPath = proposal.metadata.livePaths.find((filePath) => !changedNow.has(filePath));
-      if (cleanPath) unavailableReason = `${cleanPath} no longer has working-tree changes.`;
+      changedFromProposal = options.snapshot
+        ? await repository.listChangedPaths(proposal.tree, options.snapshot.tree, proposal.metadata.livePaths)
+        : await repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths);
     }
     const unavailableReasonCode = committedOutsideProposal ? "committed-outside-proposal" : null;
     if (unavailableReason && (
@@ -496,10 +491,12 @@ async function resolveProposalState(
     const includeNewerAvailable = proposal.metadata.status === "proposed"
       && changedFromProposal.length > 0;
     if (options.includeNewer && includeNewerAvailable) {
-      currentTree = await repository.writeScopedWorktreeTree(
-        proposal.metadata.livePaths,
-        proposal.metadata.liveBaseCommit,
-      );
+      currentTree = options.snapshot
+        ? await repository.writeTreeWithPathsFromSource(proposal.metadata.liveBaseCommit, options.snapshot.tree, proposal.metadata.livePaths)
+        : await repository.writeScopedWorktreeTree(
+          proposal.metadata.livePaths,
+          proposal.metadata.liveBaseCommit,
+        );
     }
     return { currentTree, includeNewerAvailable, proposal };
   }
@@ -863,26 +860,42 @@ export default class GitArcProposalController {
     };
   }
 
-  async getProposal({ cwd, harness: rawHarness, includeNewer, proposalId, threadId }: ArcIdentityInput & { includeNewer: boolean; proposalId: string }) {
+  private async unclaimedPaths(repository: WorkbenchGitRepository, snapshot: { head: string | null; tree: string }, excludedPaths: string[]) {
+    const [changedPaths, entries] = await Promise.all([
+      repository.listAllChangedPaths(snapshot.head, snapshot.tree),
+      this.registry(repository).list(),
+    ]);
+    const excluded = [...excludedPaths, ...entries.flatMap(getGitArcLiveClaimPaths)];
+    return changedPaths.filter(candidate => !excluded.some(claim => gitArcPathsOverlap(candidate, claim)));
+  }
+
+  async getProposal({ cwd, harness: rawHarness, includeNewer, includeUnclaimed, proposalId, threadId }: ArcIdentityInput & { includeNewer: boolean; includeUnclaimed?: boolean; proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
+    const snapshot = includeUnclaimed ? await repository.writeWorktreeSnapshot() : undefined;
     const { currentTree, includeNewerAvailable, proposal } = await resolveProposalState(
       this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
       proposalId,
-      { includeNewer, persistTransitions: false },
+      { includeNewer, persistTransitions: false, snapshot },
     );
     const target = (proposal.metadata.status === "committed" || proposal.metadata.status === "superseded") && proposal.metadata.committedSha
       ? { commit: proposal.metadata.committedSha }
       : includeNewer && includeNewerAvailable && currentTree
         ? { tree: currentTree }
         : { tree: proposal.tree };
-    return await buildProposalResult(this.proposalDiffs, repository, proposal.metadata, target, {
+    const result = await buildProposalResult(this.proposalDiffs, repository, proposal.metadata, target, {
       includeNewerAvailable,
       refreshAmendability: false,
     });
+    if (!snapshot || !result.unclaimedDirtAvailable) return result;
+    const paths = await this.unclaimedPaths(repository, snapshot, proposal.metadata.paths);
+    const changes = paths.length ? await buildProposalFileChanges(this.proposalDiffs, repository, proposal.metadata, snapshot.tree, {
+      baseCommit: snapshot.head, paths,
+    }) : [];
+    return { ...result, unclaimedDirt: { changes, tree: snapshot.tree } };
   }
 
   async getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }: ArcIdentityInput & { proposalId: string }) {
@@ -1020,6 +1033,7 @@ export default class GitArcProposalController {
     description,
     harness: rawHarness,
     includeNewer,
+    unclaimedSelection,
     mode,
     proposalId,
     threadId,
@@ -1027,21 +1041,50 @@ export default class GitArcProposalController {
   }: ArcIdentityInput & {
     description: string;
     includeNewer: boolean;
+    unclaimedSelection?: Extract<GitCheckpointRequest, { action: "proposalCommit" }>["unclaimedSelection"];
     mode?: "amend" | "commit";
     proposalId: string;
     title: string;
   }): Promise<GitCheckpointProposal> {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
+    const snapshot = unclaimedSelection ? await repository.writeWorktreeSnapshot() : undefined;
     const resolved = await resolveProposalState(
       this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
       proposalId,
-      { includeNewer, persistTransitions: true },
+      { includeNewer, persistTransitions: true, snapshot },
     );
-    const proposal = resolved.proposal;
+    let proposal = resolved.proposal;
+    if (unclaimedSelection && snapshot) {
+      if (proposal.metadata.status !== "proposed" || proposal.metadata.messageOnly) {
+        throw new GitArcRejectionError({ reason: "proposalUnavailable" }, "This proposal cannot include unclaimed changes.");
+      }
+      const paths = repository.normalizePaths(unclaimedSelection.paths);
+      const eligible = new Set(await this.unclaimedPaths(repository, snapshot, proposal.metadata.paths));
+      const unavailable = paths.filter(candidate => !eligible.has(candidate));
+      if (!paths.length || unavailable.length) {
+        throw new GitArcRejectionError({ reason: "adoptionRequiresUnclaimed", paths: unavailable }, "Selected files must still be dirty and unclaimed. Inspect the unclaimed changes again.");
+      }
+      const changed = await repository.listChangedPaths(unclaimedSelection.tree, snapshot.tree, paths);
+      if (changed.length) {
+        throw new GitArcRejectionError({ reason: "baselineChanged", paths: changed }, "Selected unclaimed files changed after inspection. Inspect them again before committing.");
+      }
+      proposal = {
+        ...proposal,
+        tree: await repository.writeTreeWithPathsFromSource(proposal.tree, snapshot.tree, paths),
+        metadata: {
+          ...proposal.metadata,
+          paths: [...new Set([...proposal.metadata.paths, ...paths])].sort(),
+          livePaths: [...new Set([...proposal.metadata.livePaths, ...paths])].sort(),
+        },
+      };
+      if (resolved.currentTree) {
+        resolved.currentTree = await repository.writeTreeWithPathsFromSource(resolved.currentTree, snapshot.tree, paths);
+      }
+    }
     if (proposal.metadata.status === "committed") {
       return await this.commitMessageAmendment({ description, harness, proposal, repository, threadId, title });
     }
@@ -1190,6 +1233,9 @@ export default class GitArcProposalController {
     const targetTree = committingFresh && !(includeNewer && resolved.includeNewerAvailable)
       ? await repository.writeTreeWithPathsFromSource(baseCommit, selectedTree, proposal.metadata.livePaths)
       : selectedTree;
+    if (targetTree === await repository.resolveTree(baseCommit)) {
+      throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected result has no changes to commit.");
+    }
     const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message);
     const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = proposal.metadata;
     const committedMetadata: ProposalMetadata = {

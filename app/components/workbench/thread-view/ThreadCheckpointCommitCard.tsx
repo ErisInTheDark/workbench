@@ -36,11 +36,14 @@ export default function ThreadCheckpointCommitCard({
   embedded = false,
   freshCommitAvailable,
   includeNewer,
+  selectedUnclaimedPaths = [],
   messageAvailability,
   onCommit,
   onCommitModeChange,
   onDescriptionChange,
   onIncludeNewerChange,
+  onUnclaimedOpen,
+  onUnclaimedChange,
   onRetry,
   onTitleChange,
   observationRef,
@@ -60,11 +63,14 @@ export default function ThreadCheckpointCommitCard({
   embedded?: boolean;
   freshCommitAvailable: boolean;
   includeNewer: boolean;
+  selectedUnclaimedPaths?: readonly string[];
   messageAvailability?: { title: boolean; description: boolean };
   onCommit: () => void;
   onCommitModeChange: (value: "amend" | "commit") => void;
   onDescriptionChange: (value: string) => void;
   onIncludeNewerChange: (value: boolean) => void;
+  onUnclaimedOpen?: () => void;
+  onUnclaimedChange?: (path: string, checked: boolean) => void;
   onRetry: () => void;
   onTitleChange: (value: string) => void;
   observationRef?: Ref<HTMLElement>;
@@ -111,6 +117,7 @@ export default function ThreadCheckpointCommitCard({
     : "Arc changes";
   const canCommit = !committing
     && Boolean(title.trim())
+    && !(proposal?.status === "proposed" && commitMode === "commit" && !displayedChanges.length && !selectedUnclaimedPaths.length)
     && Boolean(compactCanCommit
       ? proposal?.status === "proposed"
       : !compact && (proposal?.status === "proposed" || (committedAmendable && messageChanged)));
@@ -372,6 +379,47 @@ export default function ThreadCheckpointCommitCard({
               The arc&apos;s claimed changes will appear here.
             </p>
           )}
+          {proposal?.status === "proposed" && proposal.unclaimedDirtAvailable ? (
+            <ThreadDisclosure
+              className="py-1"
+              contentClassName="pl-6"
+              summary="Unclaimed dirt"
+              summaryClassName="text-[0.82em] leading-[1.5]"
+              onToggle={event => {
+                if (event.target === event.currentTarget && event.currentTarget.open) onUnclaimedOpen?.();
+              }}
+            >
+              {proposal.unclaimedDirt ? proposal.unclaimedDirt.changes.length ? (
+                <ThreadFileChangeList
+                  changes={proposal.unclaimedDirt.changes.map((change, index) => ({
+                    change: {
+                      diff: change.diff,
+                      kind: change.kind.type === "update"
+                        ? { move_path: change.kind.move_path ?? null, type: "update" as const }
+                        : change.kind,
+                      path: change.path,
+                    },
+                    detailsAvailable: !compact,
+                    sourceChangeIndex: index,
+                    sourceItemId: `${sourceItemId}:unclaimed`,
+                    selection: {
+                      checked: selectedUnclaimedPaths.includes(change.path),
+                      disabled: committing || compactPreview || !onUnclaimedChange,
+                      onChange: checked => onUnclaimedChange?.(change.path, checked),
+                    },
+                  }))}
+                  projectFilePaths={projectFilePaths}
+                  projectId={projectId}
+                  projectRootPath={projectRootPath}
+                  workspaceRoots={workspaceRoots}
+                />
+              ) : (
+                <p className="m-0 py-2 text-[0.82em] text-fg/muted">No unclaimed changes.</p>
+              ) : (
+                <p className="m-0 py-2 text-[0.82em] text-fg/muted" role="status">Loading unclaimed changes...</p>
+              )}
+            </ThreadDisclosure>
+          ) : null}
         </ThreadDisclosure>}
       </div>
     </article>

@@ -295,6 +295,22 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
   }).success, true);
 });
 
+test("proposal dirt selections retain inspected identity and reject incomplete input", () => {
+  const request = {
+    action: "proposalCommit", cwd: "C:/workspace", harness: "codex", threadId: "thread",
+    description: "", includeNewer: false, proposalId: "proposal", title: "accept",
+  };
+  const selection = { paths: ["added.txt"], tree: "a".repeat(40) };
+  const parsed = GitCheckpointRequestSchema.parse({ ...request, unclaimedSelection: selection });
+  assert.equal(parsed.action, "proposalCommit");
+  if (parsed.action !== "proposalCommit") throw new Error("Wrong action");
+  assert.deepEqual(parsed.unclaimedSelection, selection);
+  assert.equal(GitCheckpointRequestSchema.safeParse(request).success, true);
+  for (const invalid of [{ paths: ["added.txt"] }, { paths: [], tree: selection.tree }, { paths: ["added.txt"], tree: "not-a-tree" }]) {
+    assert.equal(GitCheckpointRequestSchema.safeParse({ ...request, unclaimedSelection: invalid }).success, false);
+  }
+});
+
 test("proposal contracts keep paths explicit and terminal metadata complete", () => {
   const compatibleProposal = GitCheckpointProposalSchema.safeParse({
     amendTargetSha: null,
