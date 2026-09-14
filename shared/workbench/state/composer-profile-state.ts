@@ -11,6 +11,7 @@ import type {
 } from "../../types.ts";
 import { z } from "zod";
 import { normalizeWorkbenchAgentPath } from "../agent-paths.ts";
+import { ProviderKeySchema } from "../provider/provider-key.ts";
 
 const ProfileChangesSchema = z.object({
   contextWindowTokens: z.number().int().positive().nullable(),
@@ -32,7 +33,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeHarness(value: unknown): WorkbenchHarness | null {
-  return value === "codex" || value === "copilot" || value === "opencode" ? value : null;
+  const parsed = ProviderKeySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function normalizeDescription(value: unknown) {

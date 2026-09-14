@@ -8,6 +8,7 @@
  * - default WorkbenchWebSocketRequestController: route feature requests and own event-stream health.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import {
   NativeThreadIdSchema,
   NativeTurnIdSchema,
@@ -612,8 +613,8 @@ export default class WorkbenchWebSocketRequestController {
             request: pending ? { id: pending.id, identity: pending.identity } : undefined,
             streamEvent,
             eventMethod,
-            eventHarness: eventHarness === "codex" || eventHarness === "copilot" || eventHarness === "opencode"
-              ? eventHarness : eventMethod?.startsWith("workbench/") ? "workbench" : "unknown",
+            eventHarness: ProviderKeySchema.safeParse(eventHarness).success
+              ? eventHarness as WorkbenchHarness : eventMethod?.startsWith("workbench/") ? "workbench" : "unknown",
             outcome: error ? "send-error" : responseIsError(message) ? "error" : "ok",
             processMs,
             jsonMs,

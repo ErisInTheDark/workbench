@@ -23,6 +23,7 @@ import type {
   WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
 } from "./workbench-thread-state-persistence.ts";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStoredThreadTitleHistory } from "../../WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateLayoutRepository, { type WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository.ts";
 
@@ -32,7 +33,7 @@ type SqlRow = Record<string, SqlValue>;
 interface ThreadStateRow {
   thread_id: WorkbenchThreadId;
   thread_kind: "topLevel" | "subagent";
-  harness_id: "codex" | "copilot" | "opencode";
+  harness_id: WorkbenchHarness;
   title: string;
   activity_at: number;
   provider_observed: 0 | 1;
@@ -613,7 +614,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     });
     const profile = this.database.prepare("SELECT * FROM workbench_thread_profiles WHERE thread_id = ?").get(row.thread_id) as {
       selection_kind: "custom" | "profile"; profile_id: string | null;
-      agent_path: string | null; agent_source: "library" | "project" | null; harness_id: "codex" | "copilot" | "opencode";
+      agent_path: string | null; agent_source: "library" | "project" | null; harness_id: WorkbenchHarness;
       model: string; reasoning_effort: string | null; service_tier: "fast" | null; context_window_tokens: number | null;
     } | undefined;
     const questionnaires = this.questionnaires.read(row.thread_id);
@@ -625,7 +626,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       FROM workbench_thread_snooze_dependencies dependency
       JOIN workbench_thread_states target ON target.thread_id = dependency.target_thread_id
       JOIN workbench_threads thread ON thread.id = target.thread_id WHERE dependency.source_thread_id = ?
-    `).get(row.thread_id) as { thread_id: WorkbenchThreadId; harness_id: "codex" | "copilot" | "opencode"; project_id: ProjectId } | undefined;
+    `).get(row.thread_id) as { thread_id: WorkbenchThreadId; harness_id: WorkbenchHarness; project_id: ProjectId } | undefined;
     const common = {
       identity: { harness: row.harness_id, threadId: row.thread_id }, title: row.title,
       activityAt: row.activity_at, lifecycle, providerObserved: Boolean(row.provider_observed),

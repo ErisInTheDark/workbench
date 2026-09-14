@@ -8,6 +8,7 @@
  * - formatWebSocketSendFailure: report bounded send context without serialising payload bodies.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 const ANSI_DIM = "\u001b[2m";
 const ANSI_RESET = "\u001b[0m";
@@ -45,7 +46,7 @@ export function formatWebSocketSendFailure(message: unknown, error: unknown) {
   const harness = envelope?.workbenchHarness;
   const method = typeof envelope?.method === "string" ? bounded(envelope.method) : "response";
   const label = webSocketMethodLabel(
-    harness === "codex" || harness === "copilot" || harness === "opencode" ? harness : "workbench",
+    ProviderKeySchema.safeParse(harness).success ? harness as WorkbenchHarness : "workbench",
     method,
   );
   const context = Object.entries({

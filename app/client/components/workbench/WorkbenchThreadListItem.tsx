@@ -7,7 +7,7 @@
 
 import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   getThreadSidebarGroup,
@@ -100,7 +100,7 @@ function ThreadTooltipContent({
   status: string;
   statusClassName: string;
   title: string;
-  identity?: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId };
+  identity?: { harness: WorkbenchHarness; threadId: WorkbenchThreadId };
 }) {
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">

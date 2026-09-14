@@ -25,6 +25,28 @@ async function temporaryDatabase(context: TestContext) {
   return path.join(directory, "state.sqlite3");
 }
 
+test("favourite provider references retain standalone favourites across the upgrade", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 7 });
+  old.prepare("INSERT INTO model_preferences(harness, model_id, favourite, deleted, revision) VALUES ('copilot', 'retained', 1, 0, 8)").run();
+  const before = old.prepare("SELECT * FROM model_preferences").all();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.deepEqual(repository.query(selectRows(appStateTables.modelPreferences)), before);
+    assert.throws(() => repository.executeTransaction([
+      insertRow(appStateTables.modelPreferences, { harness: "codex", model_id: "unadmitted", favourite: 1, deleted: 0, revision: 9 }),
+    ]), /FOREIGN KEY/);
+    const stored = new Database(databasePath, { readonly: true });
+    try {
+      assert.deepEqual(stored.prepare("SELECT id FROM workbench_harnesses").all(), [{ id: "copilot" }]);
+      assert.deepEqual(stored.pragma("foreign_key_check"), []);
+    } finally { stored.close(); }
+  } finally { await repository.close(); }
+});
+
 test("model preferences upgrade v6 without losing existing preferences or the backup", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

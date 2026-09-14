@@ -7,6 +7,7 @@
  */
 "use client";
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
@@ -148,7 +149,7 @@ export default function ThreadProfileEditor ({
       {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
         {!profile && canToggleHarness && slot.kind !== "thread"
           ? onHarnessSelect
-            ? <div className="grid gap-2">{(["codex", "copilot", "opencode"] as const).map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
+            ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
             : <button type="button" className="rounded-md px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]" onClick={onHarnessToggle}>Change provider</button>
           : <p className="m-0">The provider is fixed for this {profile ? "stored profile" : "thread"}.</p>}
       </div>)}

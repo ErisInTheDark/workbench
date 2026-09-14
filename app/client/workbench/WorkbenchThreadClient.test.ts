@@ -831,16 +831,16 @@ test("existing-thread sends preserve provider routes without publishing browser 
 
   FakeWebSocket.intercept = null;
 
-  for (const harness of ["copilot", "opencode"] as const) {
+  for (const harness of ["copilot", "opencode", "future-provider"] as const) {
     const provider = activeThread(harness, `${harness}-thread`);
     client.selectThreadPayload(provider);
-    const providerResult = await client.sendThreadMessage(provider, [{ text: harness, text_elements: [], type: "text" }]);
-    assert.equal(providerResult?.harness, harness);
-    const providerSteer = socket.requests.find((request) => request.method === "turn/steer" && request.params?.threadId === provider.id);
-    assert.equal(providerSteer?.params?.clientUserMessageId, undefined);
-    assert.equal(providerSteer?.workbenchHarness, harness);
-    assert.equal(socket.requests.some((request) => request.method === "workbench/thread-state/intent/accept"
-      && (request.params?.identity as { threadId?: string } | undefined)?.threadId === provider.id), false);
+    const before = socket.requests.length;
+    await assert.rejects(client.sendThreadMessage(provider, [{ text: harness, text_elements: [], type: "text" }]), /not installed/u);
+    await assert.rejects(client.listModels(harness), /not installed/u);
+    assert.deepEqual(socket.requests.slice(before).filter(request =>
+      ["model/list", "thread/start", "thread/resume", "turn/start", "turn/steer", "workbench/codex/message/admit"].includes(request.method)
+      && request.workbenchHarness === harness), []);
+    assert.equal(client.getSnapshot().currentThread?.harness, harness);
   }
 }));
 
@@ -1886,17 +1886,9 @@ test("malformed general acknowledgements render exact failed evidence before rej
     if (request.method !== "turn/steer") {
       return false;
     }
-    queueMicrotask(() => target.respond(request.id, request.workbenchHarness === "copilot" ? { ok: false } : { turnId: " " }));
+    queueMicrotask(() => target.respond(request.id, { turnId: " " }));
     return true;
   };
-
-  const copilot = activeThread("copilot", "copilot-failure");
-  client.selectThreadPayload(copilot);
-  await assert.rejects(
-    client.sendThreadMessage(copilot, [{ text: "copilot", text_elements: [], type: "text" }]),
-    /did not acknowledge/u,
-  );
-  assert.equal(getWorkbenchInputState(client.getSnapshot().currentThread!.turns.at(-1)!.items.at(-1)!)?.status, "failed");
 
   const codex = { ...activeThread("codex", "codex-failure"), status: "active:waitingOnUserInput" };
   client.selectThreadPayload(codex);
@@ -2538,8 +2530,8 @@ test("project reset fences a late rate-limit success from the previous project",
   assert.equal(client.getSnapshot().rateLimits, null);
 }));
 
-test("project changes during draft materialization prevent stale general dispatch without list polling", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("copilot", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
+test("project changes during draft materialization prevent stale dispatch without list polling", async () => withClient(async (client, socket) => {
+  const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);
   let startRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
@@ -2560,7 +2552,7 @@ test("project changes during draft materialization prevent stale general dispatc
 }));
 
 test("navigation during creation profile acknowledgement cannot select or send the old draft", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("copilot", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
+  const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);
   FakeWebSocket.intercept = (target, request) => {
     if (request.method === "thread/start") {

@@ -6,6 +6,7 @@
  * - GitCheckpointProposalReceipt: published proposal identity.
  */
 import { randomUUID } from "node:crypto";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 import type { GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -69,8 +70,8 @@ export interface GitArcLifecycleState {
 }
 
 function normalizeHarness(harness: string | undefined): GitArcHarness {
-  const normalized = String(harness ?? "codex").trim().toLowerCase();
-  if (normalized === "codex" || normalized === "copilot" || normalized === "opencode") return normalized;
+  const parsed = ProviderKeySchema.safeParse(harness ?? "codex");
+  if (parsed.success) return parsed.data;
   throw new GitArcRejectionError({ reason: "invalidHarness" }, "A valid checkpoint harness is required.");
 }
 

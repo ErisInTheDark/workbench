@@ -187,7 +187,8 @@ async function mapThreadDisplayKey(
   const qualified = projectId ? null : parseProjectQualifiedThreadDisplayKey(key);
   const localKey = qualified?.threadKey ?? key;
   const ownerProjectId = qualified?.projectId ?? projectId;
-  const reference = /^(codex|copilot|opencode):(.+)$/u.exec(localKey);
+  if (localKey.startsWith("folder:") || localKey.startsWith("draft:")) return key;
+  const reference = /^([^:]+):(.+)$/u.exec(localKey);
   if (!reference) return key;
   const harness = WorkbenchHarnessSchema.parse(reference[1]);
   const thread = await resolveNativeReference(owners, { harness, threadId: reference[2]! }, ownerProjectId);

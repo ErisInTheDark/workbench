@@ -43,6 +43,10 @@ function operationShape(operation: TableMigration) {
     case "createIndexes": return [operation.kind, tableShape(operation.from), tableShape(operation.to), operation.names];
     case "deleteRows": return [operation.kind, operation.tableName, operation.where];
     case "dropTable": return [operation.kind, tableShape(operation.table)];
+    case "copyDistinctValues": return [
+      operation.kind, tableShape(operation.from), operation.sourceColumn,
+      tableShape(operation.to), operation.targetColumn,
+    ];
     case "rebuildTable": return [
       operation.kind, tableShape(operation.from), tableShape(operation.to),
       operation.copy.map(copy => [copy.targetColumn, copy.expression]),

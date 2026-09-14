@@ -28,7 +28,9 @@ Both daemon and app-server graphs expose this generic port. Construction `get` r
 4. Use the handle from daemon consumers. Do not retain raw graph registrations.
 5. Test replacement, operation failure and any cancellation/lifecycle behaviour at the owning boundary.
 
-`provider-registrations.ts` maps installed keys to definition registrations. It is composition metadata, not runtime availability state.
+`shared/workbench/provider/provider-registrations.ts` maps installed keys to definition registrations. It is composition metadata, not runtime availability state. Only Codex is installed.
+
+Stored keys use `provider-key.ts`, independently of installed definitions. Daemon `workbench_harnesses` and its app-local equivalent retain provider identity through foreign keys. Uninstalling an implementation never deletes its rows, profiles or favourites. Dependent writes admit provider keys in their own transaction. A stored row grants no execution capability; unavailable-provider operations fail locally without dispatching or replacing their identity with Codex.
 
 Codex configuration owns the local model catalog. Its definition depends directly on configuration, not harness readiness. Native runtime APIs may instead need a `harness:<provider>` parent.
 

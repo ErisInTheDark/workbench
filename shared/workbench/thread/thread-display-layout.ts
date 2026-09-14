@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import type { ProviderKey } from "../provider/provider-key.ts";
 import {
   ProjectIdSchema, ProjectThreadDisplayKeySchema, ThreadDisplayKeySchema,
   type DraftId, type FolderId, type ProjectId, type ThreadDisplayKey, type WorkbenchThreadId,
@@ -50,7 +51,7 @@ export function getThreadDisplayFolderKey(folderId: FolderId) {
   return ThreadDisplayKeySchema.parse(`folder:${folderId}`);
 }
 
-export function getThreadDisplayThreadKey(harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId) {
+export function getThreadDisplayThreadKey(harness: ProviderKey, threadId: WorkbenchThreadId) {
   return ThreadDisplayKeySchema.parse(`${harness}:${threadId}`);
 }
 

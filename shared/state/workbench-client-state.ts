@@ -11,7 +11,8 @@
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 
-export type WorkbenchHarnessValue = "codex" | "copilot" | "opencode";
+export type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider/provider-key.ts";
+import type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider/provider-key.ts";
 export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";

@@ -5,6 +5,7 @@
  * - WorkbenchThreadLayoutReferences: canonical identity boundary for display keys.
  */
 import { randomUUID } from "node:crypto";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
@@ -187,7 +188,7 @@ export default class WorkbenchThreadStateLayoutRepository {
             const separator = local.threadKey.indexOf(":");
             const harness = local.threadKey.slice(0, separator);
             const threadId = local.threadKey.slice(separator + 1);
-            if ((harness !== "codex" && harness !== "copilot" && harness !== "opencode") || !threadId) {
+            if (!ProviderKeySchema.safeParse(harness).success || !threadId) {
               throw new Error("Layout thread reference is invalid.");
             }
             const canonicalId = this.references.resolveThread(local.projectId, harness, ThreadReferenceSchema.parse(threadId));

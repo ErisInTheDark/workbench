@@ -16,11 +16,6 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexHealthMonitor from "./CodexHealthMonitor";
-import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
-import * as copilotThreadState from "./copilot-thread-state";
-import * as opencodeLiveThreadState from "./opencode-live-thread-state";
-import * as opencodeThreadState from "./opencode-thread-state";
-import * as opencodeWorkbenchInstructions from "./opencode-workbench-instructions";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type {
   DaemonDatabaseRegistration,
@@ -61,11 +56,11 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 function createModules(): DaemonReloadableModules {
-  return { copilotThreadState, opencodeLiveThreadState, opencodeThreadState, opencodeWorkbenchInstructions, project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
+  return { project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
 }
 
 function createRecoveryCapability(
-  harness: "codex" | "opencode",
+  harness: string,
   controller: WorkbenchTurnRecoveryController,
 ): WorkbenchHarnessAdapter["recovery"] {
   return {
@@ -74,17 +69,6 @@ function createRecoveryCapability(
     observeRequest: (request) => controller.observeRequest(harness, request),
     recoverAvailable: async signal => await controller.recoverAvailable(harness, undefined, undefined, signal),
     resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
-  };
-}
-
-function createObservationCapability(
-  harness: "copilot",
-  controller: WorkbenchTurnRecoveryController,
-): WorkbenchHarnessAdapter["recovery"] {
-  return {
-    kind: "observe",
-    observeNotification: (notification) => controller.observeNotification(harness, notification),
-    observeRequest: (request) => controller.observeRequest(harness, request),
   };
 }
 
@@ -103,23 +87,6 @@ function createHarnessAdapters(context: DaemonProcessContext, controller: Workbe
         "thread/name/set",
         "workbench/notification/broadcast",
       ],
-    },
-    {
-      browse: ports.copilot,
-      browser: ports.copilot,
-      id: "copilot",
-      internal: ports.copilot,
-      readLoadedThreads: ports.copilot.readLoadedThreads,
-      recovery: createObservationCapability("copilot", controller),
-      serverMethods: ["thread/name/set"],
-    },
-    {
-      browse: ports.opencode,
-      browser: ports.opencode,
-      id: "opencode",
-      internal: ports.opencode,
-      recovery: createRecoveryCapability("opencode", controller),
-      serverMethods: ["thread/name/set"],
     },
   ];
 }
@@ -456,7 +423,7 @@ function createWorkbenchCoreFeature(
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>({
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState }) => createWorkbenchCoreFeature(
     context,
     run,

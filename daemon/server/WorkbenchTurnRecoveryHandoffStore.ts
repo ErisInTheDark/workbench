@@ -1,20 +1,21 @@
 /*
  * Exports:
- * - WorkbenchObservedTurnCandidate: live harness-neutral turn-start state. Keywords: recovery, observation, lifecycle.
- * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned provider-neutral manual-resume state. Keywords: recovery, handoff, persistence.
- * - createCodexTurnRecoveryResumeRequest: derive a compatible cold-resume request from a captured turn start. Keywords: codex, resume, compatibility.
- * - WorkbenchRecoveryHarness: supported automatic recovery provider set. Keywords: recovery, harness, provider.
- * - default WorkbenchTurnRecoveryHandoffStore: atomically validate, update, and remove bounded recovery handoffs. Keywords: recovery, atomic, runtime.
+ * - WorkbenchObservedTurnCandidate: live provider-neutral turn-start state.
+ * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned manual-resume state.
+ * - createCodexTurnRecoveryResumeRequest: derive a cold-resume request from a captured turn start.
+ * - WorkbenchRecoveryHarness: retained provider identity, independent of recovery availability.
+ * - default WorkbenchTurnRecoveryHandoffStore: validate, update and remove bounded recovery handoffs atomically.
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { JsonRpcRequest } from "./bridge-types";
 import { WORKBENCH_THREAD_RECOVERY_ID_PREFIX } from "workbench-shared/workbench/thread/thread-recovery-message";
 
-export type WorkbenchRecoveryHarness = "codex" | "opencode";
+export type WorkbenchRecoveryHarness = WorkbenchHarness;
 
 export interface WorkbenchObservedTurnCandidate {
   goalOwned?: boolean;
@@ -82,7 +83,7 @@ export function createCodexTurnRecoveryResumeRequest(request: JsonRpcRequest, th
 function readCandidate(value: unknown): WorkbenchTurnRecoveryHandoffCandidate | null {
   if (!isRecord(value)) return null;
   const harness = value.harness;
-  if (harness !== "codex" && harness !== "opencode") return null;
+  if (!ProviderKeySchema.safeParse(harness).success) return null;
   if (
     typeof value.key !== "string"
     || !Number.isFinite(value.lastEventAt)

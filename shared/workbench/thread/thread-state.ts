@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchHarnessSchema/WorkbenchHarnessId: supported provider identities.
+ * - WorkbenchHarnessSchema/WorkbenchHarnessId: stored provider identities, independent of installation.
  * - WorkbenchComposerSettingsState/WorkbenchComposerProfileSelectionState: shared composer settings and selected profile types.
  * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active and resolved Git work.
@@ -48,6 +48,7 @@
  */
 
 import { z } from "zod";
+import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
 import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings } from "../../types.ts";
@@ -64,7 +65,7 @@ import {
   type WorkbenchThreadDisplayOrder,
 } from "./thread-display-order.ts";
 
-export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
+export { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
 export const WorkbenchThreadPrioritySchema = z.enum(["pinned", "main", "snoozed"]);
 export type WorkbenchThreadPriority = z.infer<typeof WorkbenchThreadPrioritySchema>;

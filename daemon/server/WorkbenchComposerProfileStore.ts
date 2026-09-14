@@ -10,6 +10,7 @@ import { deleteRows, insertRow, selectRows, updateRows, upsertRow, type Workbenc
 import type { SelectRow } from "workbench-shared/database/schema/schema-definition";
 import { applyComposerProfileMutation, normalizeComposerProfile, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
 import { composerProfileImports, composerProfiles } from "./lib/workbench/database/schema/composer-profile-schema";
+import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 
 export interface WorkbenchComposerProfileDatabase {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<{ changes: number }>;
@@ -80,6 +81,7 @@ export default class WorkbenchComposerProfileStore {
       const profile = mutation.kind === "upsert" ? profiles.find((entry) => entry.id === mutation.profile.id) : null;
       if (profile && validate) await validate(profile, previous.find((entry) => entry.id === profile.id) ?? null);
       await this.write([
+        ...(profile ? [upsertRow(workbenchHarnesses, { id: profile.harness }, { conflictColumns: ["id"], updateColumns: ["id"] })] : []),
         mutation.kind === "delete"
           ? deleteRows(composerProfiles, { id: mutation.profileId })
           : upsertRow(composerProfiles, row(profile!), {
@@ -143,6 +145,8 @@ export default class WorkbenchComposerProfileStore {
       return profile;
     });
     await this.write([
+      ...[...new Set(profiles.map(profile => profile.harness))].map(id =>
+        upsertRow(workbenchHarnesses, { id }, { conflictColumns: ["id"], updateColumns: ["id"] })),
       ...profiles.map((profile) => insertRow(composerProfiles, row(profile))),
       insertRow(composerProfileImports, { id: "legacy-json" }),
     ]);

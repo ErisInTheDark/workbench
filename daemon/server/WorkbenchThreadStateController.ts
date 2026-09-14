@@ -9,6 +9,7 @@
  * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative SQLite state, durable display order, provider observation, and local/cross-project sidebar projection.
  */
 import { z } from "zod";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -104,7 +105,7 @@ import {
 
 export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { namedTitle?: string };
 
-interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
+interface StoredThreadMetadata { archived: boolean; harness: WorkbenchHarness; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 type ProjectObservation =
   | { pinnedThreadKeys: Set<string>; projectId: ProjectId; scope: "project"; version: 1 | 2 | 3 | 4 | 5 }
@@ -641,7 +642,7 @@ export default class WorkbenchThreadStateController {
     else await this.close(connectionId);
   }
 
-  async acceptIntent(connectionId: string, input: { draftId?: DraftId; harness: "codex" | "copilot" | "opencode"; projectId: ProjectId; threadId: WorkbenchThreadId; title?: string; turnId: WorkbenchTurnId }) {
+  async acceptIntent(connectionId: string, input: { draftId?: DraftId; harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId; title?: string; turnId: WorkbenchTurnId }) {
     const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
     if (
       !this.isObservedProjectAuthorized(connectionId, input.projectId)
@@ -681,7 +682,7 @@ export default class WorkbenchThreadStateController {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId });
   }
 
-  async reportRecoveryFailed(projectId: ProjectId, harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId) {
+  async reportRecoveryFailed(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "recoveryFailed" });
   }
 
@@ -876,7 +877,7 @@ export default class WorkbenchThreadStateController {
 
   async applyLifecycle(
     projectId: ProjectId,
-    harness: "codex" | "copilot" | "opencode",
+    harness: WorkbenchHarness,
     threadId: WorkbenchThreadId,
     event: WorkbenchLifecycleEvent,
     providerEntry?: WorkbenchObservedThreadEntry,
@@ -1112,7 +1113,7 @@ export default class WorkbenchThreadStateController {
     return this.observeLifecycle(harness, threadId, event, projectId);
   }
 
-  async observeLifecycle(harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId, event: WorkbenchObservedLifecycleEvent, selectedProjectId?: ProjectId) {
+  async observeLifecycle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, event: WorkbenchObservedLifecycleEvent, selectedProjectId?: ProjectId) {
     const key = `${harness}:${threadId}`;
     const projectIds = [...this.projects.entries()].filter(([id, state]) => (!selectedProjectId || id === selectedProjectId) && state.entries.has(key)).map(([projectId]) => projectId);
     let lifecycle: WorkbenchThreadLifecycle | null = null;
@@ -1168,7 +1169,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  async observeActivity(harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId, turnStartedAt?: number | null, selectedProjectId?: ProjectId) {
+  async observeActivity(harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnStartedAt?: number | null, selectedProjectId?: ProjectId) {
     if (selectedProjectId) await this.getProject(selectedProjectId);
     const key = `${harness}:${threadId}`;
     for (const [projectId, state] of this.projects) {
@@ -1204,14 +1205,14 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  async observeTitle(harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId, title: string) {
+  async observeTitle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, title: string) {
     const key = `${harness}:${threadId}`;
     for (const [projectId, state] of this.projects) {
       if (state.entries.has(key)) await this.setTitle(projectId, harness, threadId, title);
     }
   }
 
-  async setTitle(projectId: ProjectId, harness: "codex" | "copilot" | "opencode", threadId: WorkbenchThreadId, title: string) {
+  async setTitle(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, title: string) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => await this.setTitleOwned(projectId, state, key, title));

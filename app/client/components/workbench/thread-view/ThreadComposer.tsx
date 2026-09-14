@@ -5,6 +5,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
@@ -177,14 +178,14 @@ export default function ThreadComposer ({
   const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
-  const isCopilotAuthRequired = thread.harness === "copilot" && rateLimits?.limitId === "copilot:auth";
+  const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const hasEffectiveProfile = !profileSlot || Boolean(composerProfileController.resolveSettings(profileSlot)?.model);
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
-  const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
-  const isSendDisabled = isInputDisabled || (!isActiveThread && !hasEffectiveProfile);
+  const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
+  const isSendDisabled = isInputDisabled || isProviderUnavailable || (!isActiveThread && !hasEffectiveProfile);
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
     canSnoozeQuestionnaire: sidebarEntry?.entryKind === "thread" && !sidebarEntry.metadata.archived && !isApprovalBlocked,
@@ -192,15 +193,15 @@ export default function ThreadComposer ({
   });
   const isStopDisabled = stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
-  const helperText = !hasEffectiveProfile
+  const helperText = isProviderUnavailable
+      ? `Provider ${thread.harness} is not installed. Saved input is retained.`
+      : !hasEffectiveProfile
       ? composerProfileSnapshot.error
       : hasVisiblePendingUserInputRequest
       ? "\xa0"
       : isAttaching
         ? "Attaching pasted image..."
-        : isCopilotAuthRequired
-          ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
-          : isThreadStateBroken
+        : isThreadStateBroken
             ? "Thread state is out of sync. Sending is disabled here."
             : isApprovalBlocked
               ? ""
@@ -231,8 +232,8 @@ export default function ThreadComposer ({
     ? "Write a comment..."
     : isThreadStateBroken
     ? "New messages are disabled for this thread."
-    : isCopilotAuthRequired
-      ? "Sign in to Copilot CLI to send messages."
+    : isProviderUnavailable
+      ? "This provider is not installed."
       : isActiveThread
         ? "Message the current turn..."
         : thread.isDraft

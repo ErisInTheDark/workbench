@@ -10,13 +10,7 @@
     "test": "pnpm --dir .. test"
   },
   "dependencies": {
-    "@github/copilot": "1.0.36",
-    "@github/copilot-sdk": "0.3.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@opencode-ai/cli": "0.0.0-tui-v2-202606261840",
-    "@opencode-ai/client": "0.0.0-beta-17498",
-    "@opencode-ai/plugin": "0.0.0-beta-17498",
-    "@opencode-ai/sdk": "1.17.11",
     "better-sqlite3": "13.0.3",
     "browse": "^0.9.1",
     "js-tiktoken": "1.0.21",

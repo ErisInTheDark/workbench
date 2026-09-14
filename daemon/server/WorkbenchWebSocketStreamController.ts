@@ -8,6 +8,7 @@
  * - default WorkbenchWebSocketStreamController: own provider-event sequencing, receipts, stream health, lag reports, reload handoff, and cleanup.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
   type WorkbenchEventStreamHealth,
@@ -191,7 +192,7 @@ function providerEventIdentity(message: unknown) {
   if (!record || "id" in record || !("params" in record)) return null;
   const method = typeof record.method === "string" && record.method ? record.method : null;
   const harness = record[WORKBENCH_HARNESS_FIELD];
-  if (!method || (harness !== "codex" && harness !== "copilot" && harness !== "opencode")) return null;
+  if (!method || typeof harness !== "string" || !ProviderKeySchema.safeParse(harness).success) return null;
   return { harness: harness satisfies WorkbenchHarness, method, record };
 }
 

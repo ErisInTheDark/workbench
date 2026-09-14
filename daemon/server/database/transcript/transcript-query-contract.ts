@@ -5,13 +5,14 @@
  * - TranscriptQueryError: expected invalid query or stale-reference failure.
  */
 import { z } from "zod";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 const text = z.string().min(1).max(4096);
 export const TranscriptQuerySchema = z.object({
   action: z.enum(["projects", "threads", "turns", "search", "read", "show", "stats"]),
   threads: z.array(text).max(50).default([]),
   project: text.nullable().default(null),
-  harness: z.enum(["codex", "copilot", "opencode"]).nullable().default(null),
+  harness: ProviderKeySchema.nullable().default(null),
   turn: text.nullable().default(null),
   kinds: z.array(z.enum(["user-message", "user-steer", "assistant-message", "plan", "reasoning", "process", "tool", "collaboration", "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown"])).default([]),
   phase: z.enum(["commentary", "finalAnswer", "unknown"]).nullable().default(null),

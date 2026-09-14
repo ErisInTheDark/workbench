@@ -16,7 +16,6 @@ import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/t
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
-import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
@@ -93,7 +92,6 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (pending?.kind !== "commandSequence") { flush(); pending = { kind: "commandSequence", items: [] }; }
     pending.items.push(item);
   };
-  const hasQuestionnaire = items.some(isSyntheticQuestionnaireHistoryItem);
   const narrativeKeys = new Set<string>();
   let compacted = false;
   for (const item of items) {
@@ -161,8 +159,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       pending.items.push(item);
       continue;
     }
-    if (item.type === "dynamicToolCall" && (hidden.dynamicToolCallIds?.has(item.id)
-      || (hasQuestionnaire && item.namespace === "opencode" && item.tool === "question"))) { flush(); continue; }
+    if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
     flush();
     blocks.push({ kind: "item", item });
   }

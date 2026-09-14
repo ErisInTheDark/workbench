@@ -4,7 +4,7 @@
  * - WorkbenchProviderOperation: graph entry for one awaited provider operation.
  */
 import type { WorkbenchModelContextCapability } from "workbench-shared/types";
-import type { WorkbenchProviderRegistration } from "./provider-registrations";
+import type { WorkbenchProviderRegistration } from "workbench-shared/workbench/provider/provider-registrations";
 
 export default interface WorkbenchProvider {
   readonly configuration: {

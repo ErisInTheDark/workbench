@@ -107,7 +107,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Show preserves full values across continuation pages. Text output omits empty preview fields; matching cwd displays as '.'.",
       "SQLite only: no provider materialisation, native transcript files, imports or writes. Coverage describes stored thread bodies.",
       "All projects, archived and settled threads are included by default. --thread uses exact Workbench ids, not provider ids.",
-      "Common: --project <id> --harness <codex|copilot|opencode> --archived <true|false> --settled <true|false>.",
+      "Common: --project <id> --harness <provider-key> --archived <true|false> --settled <true|false>.",
       "Time: --since/--until <UTC-date|ISO-with-timezone|epoch-ms>, inclusive. Thread lists use activity time; items use creation time.",
       "Search/read/stats: --turn <id> --kind <kind>... --phase <commentary|finalAnswer|unknown> --tool <exact-name> --file <path-substring>.",
       "Kinds: user-message, user-steer, assistant-message, plan, reasoning, process, tool, collaboration, tool-output, file-change, web-search, questionnaire, approval, compaction, unknown.",

@@ -12,6 +12,7 @@
  * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise cross-generation reload re-entry.
  */
 import { z } from "zod";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -85,7 +86,7 @@ export function createWorkbenchAgentMcpRuntimeReloadInterruption() {
 
 export function managedWorkbenchAgentCommandBody({ callerHarness, callerThreadId, cwd }: Pick<WorkbenchAgentCommandContext, "callerHarness" | "callerThreadId" | "cwd">) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-  if (callerHarness !== "codex" && callerHarness !== "copilot" && callerHarness !== "opencode") {
+  if (!ProviderKeySchema.safeParse(callerHarness).success) {
     throw new Error("A managed Workbench harness identity is required.");
   }
   return { cwd, harness: callerHarness, threadId: callerThreadId };

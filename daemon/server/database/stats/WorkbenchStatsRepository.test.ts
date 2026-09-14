@@ -41,6 +41,23 @@ function createDatabase() {
   return database;
 }
 
+test("live claims admit their provider without a thread and repeated snapshots do not duplicate facts", () => {
+  const database = createDatabase();
+  try {
+    const repository = new WorkbenchStatsRepository(database);
+    const snapshot = {
+      projectId: fixtureIdentityValues.ProjectId.project, threadId: "future-thread", harness: "future-provider",
+      observedAt: Date.UTC(2026, 8, 4), roots: [{ rootId: "root", paths: ["src/file.ts"] }],
+    };
+    repository.recordClaimSnapshot(snapshot);
+    repository.recordClaimSnapshot(snapshot);
+    assert.deepEqual(database.prepare("SELECT harness_id, thread_id FROM git_claim_thread_file_days").all(), [
+      { harness_id: "future-provider", thread_id: "future-thread" },
+    ]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 function seedTurn(database: Database.Database, now: number) {
   const observations: WorkbenchTranscriptAtomicObservation[] = [{
     activityAt: now, createdAt: now, kind: "thread", projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/project",

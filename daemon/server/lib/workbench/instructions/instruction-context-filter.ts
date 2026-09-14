@@ -7,6 +7,7 @@
  */
 
 import os from "node:os";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
@@ -142,7 +143,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 }
 
 function isKnownValue(axis: SelectorAxis, value: string) {
-  if (axis === "harness") return value === "codex" || value === "copilot" || value === "opencode";
+  if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
   if (axis === "shell") return value === "pwsh" || value === "bash";
   return AVAILABLE_VALUE.test(value) && KNOWN_AVAILABLE_VALUES.has(value);
 }

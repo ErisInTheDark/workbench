@@ -9,6 +9,7 @@
  * - createSourceDigest: fingerprint source documents and relationship state.
  */
 import { createHash } from "node:crypto";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
@@ -53,7 +54,7 @@ export interface SourceProject {
 
 const StoredDraftIdentitySchema = z.object({
   draftId: z.uuid(),
-  harness: z.enum(["codex", "copilot", "opencode"]),
+  harness: ProviderKeySchema,
 }).passthrough();
 
 export function asRecord(value: unknown): Record<string, unknown> {

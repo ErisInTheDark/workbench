@@ -20,7 +20,7 @@ export interface GitClaimHistoryDiscovery {
 }
 
 function parseIdentity(ref: string): { harness: WorkbenchHarness; threadId: string } | null {
-  const canonical = /^refs\/worktree\/agents\/(codex|copilot|opencode)\/([^/]+)\/checkpoints\//u.exec(ref);
+  const canonical = /^refs\/worktree\/agents\/([a-z][a-z0-9_-]*)\/([^/]+)\/checkpoints\//u.exec(ref);
   if (canonical) return { harness: canonical[1] as WorkbenchHarness, threadId: canonical[2]! };
   const legacy = /^refs\/worktree\/agents\/([^/]+)\/checkpoints\//u.exec(ref);
   return legacy ? { harness: "codex", threadId: legacy[1]! } : null;

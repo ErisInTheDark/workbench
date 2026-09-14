@@ -3,6 +3,8 @@
  * - CodexAppServerClient: persistent WebSocket transport for provider and Workbench notifications with fenced reconnects.
  */
 import type { WorkbenchHarness } from "../types.ts";
+import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
+import reportClientSchemaError from "../workbench/report-client-schema-error.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "../workbench/stats/workbench-stats-contract.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
@@ -300,7 +302,12 @@ export class CodexAppServerClient {
 
     if (isCodexAppServerNotification(parsed)) {
       const rawHarness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness;
-      const harness = rawHarness === "copilot" || rawHarness === "opencode" ? rawHarness : "codex";
+      const provider = ProviderKeySchema.safeParse(rawHarness ?? "codex");
+      if (!provider.success) {
+        reportClientSchemaError("provider notification identity", provider.error);
+        return;
+      }
+      const harness = provider.data;
       let notification = parsed;
       if (harness === "codex" && (parsed.method === "item/started" || parsed.method === "item/completed")) {
         const item = withWorkbenchThreadItemIdentity(parsed.params.item, getCodexItemIdentityKind(parsed.params.item));

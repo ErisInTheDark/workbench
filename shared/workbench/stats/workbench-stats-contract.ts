@@ -15,7 +15,7 @@ const finiteNonNegative = z.number().finite().nonnegative();
 const timestamp = z.number().finite().nonnegative();
 const boundedText = z.string().max(500);
 const count = z.number().int().nonnegative();
-const harness = z.enum(["codex", "copilot", "opencode"]);
+import { ProviderKeySchema as harness } from "../provider/provider-key.ts";
 const MAX_GRAPH_BUCKETS = 90;
 
 export const WORKBENCH_STATS_IMPORT_UPDATED_METHOD = "workbench/stats/import/updated";

@@ -1,5 +1,4 @@
 /*
- * Keywords: thread state, relational shadow, identity, constraints, schema evolution.
  * Exports:
  * - workbenchThreadStateProjects: authoritative project documents.
  * - workbenchThreadStateGlobals: authoritative global documents.
@@ -39,6 +38,7 @@
  * - threadStateSchemaHistory: private table histories.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import {
   booleanInteger,
   check,
@@ -59,6 +59,7 @@ import {
 } from "workbench-shared/database/schema/schema-definition";
 import {
   createTable,
+  copyDistinctValues,
   defineSubsystemHistory,
   defineTableHistory,
   rebuildTable,
@@ -240,6 +241,10 @@ const workbenchThreadStateProviderIdentitiesV3 = defineTable("workbench_thread_s
     }),
   ],
 }));
+const workbenchThreadStateProviderIdentitiesV4 = evolveTable(workbenchThreadStateProviderIdentitiesV3, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
 const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
   versions: [
     tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateProviderIdentitiesV1, migration: createTable(workbenchThreadStateProviderIdentitiesV1) }),
@@ -258,8 +263,15 @@ const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
       schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateProviderIdentitiesV3,
       migration: rebuildTable({ from: workbenchThreadStateProviderIdentitiesV2, to: workbenchThreadStateProviderIdentitiesV3 }),
     }),
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: workbenchThreadStateProviderIdentitiesV4,
+      migration: [
+        copyDistinctValues({ from: workbenchThreadStateProviderIdentitiesV3, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: workbenchThreadStateProviderIdentitiesV3, to: workbenchThreadStateProviderIdentitiesV4 }),
+      ],
+    }),
   ],
-  current: workbenchThreadStateProviderIdentitiesV3,
+  current: workbenchThreadStateProviderIdentitiesV4,
 });
 export const workbenchThreadStateProviderIdentities = workbenchThreadStateProviderIdentitiesHistory.current;
 
@@ -399,6 +411,10 @@ const workbenchThreadStateSubagentParentsV1 = defineTable("workbench_thread_stat
 const workbenchThreadStateSubagentParentsV2 = evolveTable(workbenchThreadStateSubagentParentsV1, {
   add: { legacy_id: text().unique() },
 });
+const workbenchThreadStateSubagentParentsV3 = evolveTable(workbenchThreadStateSubagentParentsV2, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
 const workbenchThreadStateSubagentParentsHistory = defineTableHistory({
   versions: [
     tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStateSubagentParentsV1, migration: createTable(workbenchThreadStateSubagentParentsV1) }),
@@ -406,8 +422,15 @@ const workbenchThreadStateSubagentParentsHistory = defineTableHistory({
       schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateSubagentParentsV2,
       migration: rebuildTable({ from: workbenchThreadStateSubagentParentsV1, to: workbenchThreadStateSubagentParentsV2 }),
     }),
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: workbenchThreadStateSubagentParentsV3,
+      migration: [
+        copyDistinctValues({ from: workbenchThreadStateSubagentParentsV2, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: workbenchThreadStateSubagentParentsV2, to: workbenchThreadStateSubagentParentsV3 }),
+      ],
+    }),
   ],
-  current: workbenchThreadStateSubagentParentsV2,
+  current: workbenchThreadStateSubagentParentsV3,
 });
 export const workbenchThreadStateSubagentParents = workbenchThreadStateSubagentParentsHistory.current;
 
@@ -526,7 +549,23 @@ const workbenchThreadStateProfilesV1 = defineTable("workbench_thread_state_profi
     OR (${table.selection_kind} = ${literal("profile")} AND ${table.profile_id} IS NOT NULL)
   `)],
 }));
-const workbenchThreadStateProfilesHistory = initialHistory(workbenchThreadStateProfilesV1);
+const workbenchThreadStateProfilesV2 = evolveTable(workbenchThreadStateProfilesV1, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
+const workbenchThreadStateProfilesHistory = defineTableHistory({
+  current: workbenchThreadStateProfilesV2,
+  versions: [
+    ...initialHistory(workbenchThreadStateProfilesV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: workbenchThreadStateProfilesV2,
+      migration: [
+        copyDistinctValues({ from: workbenchThreadStateProfilesV1, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: workbenchThreadStateProfilesV1, to: workbenchThreadStateProfilesV2 }),
+      ],
+    }),
+  ],
+});
 export const workbenchThreadStateProfiles = workbenchThreadStateProfilesHistory.current;
 
 const workbenchThreadStateProjectProfilesV1 = defineTable("workbench_thread_state_project_profiles", {
@@ -538,7 +577,23 @@ const workbenchThreadStateProjectProfilesV1 = defineTable("workbench_thread_stat
     OR (${table.selection_kind} = ${literal("profile")} AND ${table.profile_id} IS NOT NULL)
   `)],
 }));
-const workbenchThreadStateProjectProfilesHistory = initialHistory(workbenchThreadStateProjectProfilesV1);
+const workbenchThreadStateProjectProfilesV2 = evolveTable(workbenchThreadStateProjectProfilesV1, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
+const workbenchThreadStateProjectProfilesHistory = defineTableHistory({
+  current: workbenchThreadStateProjectProfilesV2,
+  versions: [
+    ...initialHistory(workbenchThreadStateProjectProfilesV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: workbenchThreadStateProjectProfilesV2,
+      migration: [
+        copyDistinctValues({ from: workbenchThreadStateProjectProfilesV1, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: workbenchThreadStateProjectProfilesV1, to: workbenchThreadStateProjectProfilesV2 }),
+      ],
+    }),
+  ],
+});
 export const workbenchThreadStateProjectProfiles = workbenchThreadStateProjectProfilesHistory.current;
 
 const workbenchThreadStateSnoozeDependenciesV1 = defineTable("workbench_thread_state_snooze_dependencies", {
@@ -582,7 +637,23 @@ const workbenchThreadStateDraftsV1 = defineTable("workbench_thread_state_drafts"
 }, (table) => ({
   constraints: [check(sql`NOT (${table.pinned} = ${literal(1)} AND ${table.snoozed} = ${literal(1)})`)],
 }));
-const workbenchThreadStateDraftsHistory = initialHistory(workbenchThreadStateDraftsV1);
+const workbenchThreadStateDraftsV2 = evolveTable(workbenchThreadStateDraftsV1, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
+const workbenchThreadStateDraftsHistory = defineTableHistory({
+  current: workbenchThreadStateDraftsV2,
+  versions: [
+    ...initialHistory(workbenchThreadStateDraftsV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: workbenchThreadStateDraftsV2,
+      migration: [
+        copyDistinctValues({ from: workbenchThreadStateDraftsV1, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: workbenchThreadStateDraftsV1, to: workbenchThreadStateDraftsV2 }),
+      ],
+    }),
+  ],
+});
 export const workbenchThreadStateDrafts = workbenchThreadStateDraftsHistory.current;
 
 const workbenchThreadStateDraftAttachmentsV1 = defineTable("workbench_thread_state_draft_attachments", {

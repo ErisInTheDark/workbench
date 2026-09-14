@@ -52,7 +52,7 @@ test("loads project reload definitions without starting their services and selec
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
   const catalog = await ProjectTestCatalog.read(root);
   const selector = await ClaimedTestSelector.load(catalog);
-  const owner = path.join(root, "daemon/server/opencode-bridge.ts");
+  const owner = path.join(root, "daemon/server/CodexStdioBridge.ts");
   const selection = selector.select([path.relative(root, owner)]);
   assert.ok(selection.scopes.length > 0);
   for (const companion of catalog.companions([owner])) assert.ok(selection.files.includes(companion));

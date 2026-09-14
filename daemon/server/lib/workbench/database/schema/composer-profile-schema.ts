@@ -5,8 +5,9 @@
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import { check, defineTable, enumText, evolveTable, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
-import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
+import { addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "workbench-shared/database/schema/schema-history";
 
 const profiles = defineTable("workbench_composer_profiles", {
   id: text().primaryKey(),
@@ -35,8 +36,12 @@ const imports = defineTable("workbench_composer_profile_imports", {
 });
 const contextProfiles = evolveTable(profiles, { add: { context_window_tokens: integer().nonNegative() } });
 const usageProfiles = evolveTable(contextProfiles, { add: { last_used_at: integer().nonNegative() } });
+const providerProfiles = evolveTable(usageProfiles, {
+  drop: ["harness"],
+  add: { harness: text().notNull().references("workbench_harnesses", "id") },
+});
 const profileHistory = defineTableHistory({
-  current: usageProfiles,
+  current: providerProfiles,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: profiles, migration: createTable(profiles) }),
     tableVersion({
@@ -46,6 +51,13 @@ const profileHistory = defineTableHistory({
     tableVersion({
       schemaVersion: databaseReleases.profileTurnUsage.version, table: usageProfiles,
       migration: addColumns({ from: contextProfiles, to: usageProfiles, columns: ["last_used_at"] }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: providerProfiles,
+      migration: [
+        copyDistinctValues({ from: usageProfiles, sourceColumn: "harness", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: usageProfiles, to: providerProfiles }),
+      ],
     }),
   ],
 });

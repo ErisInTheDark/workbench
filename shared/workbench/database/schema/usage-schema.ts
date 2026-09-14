@@ -1,5 +1,4 @@
 /*
- * Keywords: database, schema, stats, usage.
  * Exports:
  * - threadTurnUsage: observed model context and cumulative turn counters.
  * - threadContextUsage: latest reported context measurement, independent of cumulative accounting.
@@ -15,6 +14,7 @@
  * - usageSchemaHistory: additive and conversion steps.
  */
 import databaseReleases from "./releases.ts";
+import { workbenchHarnesses } from "./core-schema.ts";
 import {
   booleanInteger,
   check,
@@ -34,6 +34,7 @@ import {
 import {
   addColumns,
   createTable,
+  copyDistinctValues,
   defineSubsystemHistory,
   defineTableHistory,
   rebuildTable,
@@ -226,7 +227,23 @@ const gitClaimThreadFileDaysV1 = defineTable("git_claim_thread_file_days", {
   ])],
   indexes: [index("git_claim_thread_file_days_range_idx", [table.project_id, table.claimed_day, table.claimed_path])],
 }));
-const gitClaimThreadFileDaysHistory = initialHistory(gitClaimThreadFileDaysV1, databaseReleases.usageAttribution.version);
+const gitClaimThreadFileDaysV2 = evolveTable(gitClaimThreadFileDaysV1, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
+const gitClaimThreadFileDaysHistory = defineTableHistory({
+  current: gitClaimThreadFileDaysV2,
+  versions: [
+    ...initialHistory(gitClaimThreadFileDaysV1, databaseReleases.usageAttribution.version).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: gitClaimThreadFileDaysV2,
+      migration: [
+        copyDistinctValues({ from: gitClaimThreadFileDaysV1, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: gitClaimThreadFileDaysV1, to: gitClaimThreadFileDaysV2 }),
+      ],
+    }),
+  ],
+});
 export const gitClaimThreadFileDays = gitClaimThreadFileDaysHistory.current;
 
 const gitClaimImportsV1 = defineTable("git_claim_imports", {
@@ -252,7 +269,23 @@ const gitClaimImportsV1 = defineTable("git_claim_imports", {
   ],
   indexes: [index("git_claim_imports_queue_idx", [table.state, table.observed_at])],
 }));
-const gitClaimImportsHistory = initialHistory(gitClaimImportsV1, databaseReleases.usageAttribution.version);
+const gitClaimImportsV2 = evolveTable(gitClaimImportsV1, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
+const gitClaimImportsHistory = defineTableHistory({
+  current: gitClaimImportsV2,
+  versions: [
+    ...initialHistory(gitClaimImportsV1, databaseReleases.usageAttribution.version).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: gitClaimImportsV2,
+      migration: [
+        copyDistinctValues({ from: gitClaimImportsV1, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: gitClaimImportsV1, to: gitClaimImportsV2 }),
+      ],
+    }),
+  ],
+});
 export const gitClaimImports = gitClaimImportsHistory.current;
 
 const threadUsageImportsV1 = defineTable("thread_usage_imports", {
@@ -298,8 +331,12 @@ const threadUsageImportsV2 = defineTable("thread_usage_imports", {
   ],
   indexes: [index("thread_usage_imports_queue_idx", [table.state, table.source_activity_at])],
 }));
+const threadUsageImportsV3 = evolveTable(threadUsageImportsV2, {
+  drop: ["harness_id"],
+  add: { harness_id: text().notNull().references("workbench_harnesses", "id") },
+});
 const threadUsageImportsHistory = defineTableHistory({
-  current: threadUsageImportsV2,
+  current: threadUsageImportsV3,
   versions: [
     tableVersion({ migration: createTable(threadUsageImportsV1), schemaVersion: databaseReleases.usageImports.version, table: threadUsageImportsV1 }),
     tableVersion({
@@ -310,6 +347,13 @@ const threadUsageImportsHistory = defineTableHistory({
       }),
       schemaVersion: databaseReleases.usageImportDetails.version,
       table: threadUsageImportsV2,
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.providerReferences.version, table: threadUsageImportsV3,
+      migration: [
+        copyDistinctValues({ from: threadUsageImportsV2, sourceColumn: "harness_id", to: workbenchHarnesses, targetColumn: "id" }),
+        rebuildTable({ from: threadUsageImportsV2, to: threadUsageImportsV3 }),
+      ],
     }),
   ],
 });

@@ -6,6 +6,7 @@
  * - WorkbenchHarnessControllerOptions: turn admission and public identity boundary.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadTurnsListResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListResponse";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
@@ -140,7 +141,7 @@ export default class WorkbenchHarnessController {
 
   resolveHarness(value: unknown, options: { defaultToCodex?: boolean } = {}) {
     if ((value === undefined || value === null || value === "") && options.defaultToCodex) return "codex" as const;
-    if (typeof value !== "string" || !this.adaptersById.has(value as WorkbenchHarness)) {
+    if (!ProviderKeySchema.safeParse(value).success || !this.adaptersById.has(value as WorkbenchHarness)) {
       throw new Error(`Unknown Workbench harness: ${typeof value === "string" && value ? value : "missing"}.`);
     }
     return value as WorkbenchHarness;

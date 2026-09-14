@@ -38,6 +38,7 @@ const databaseReleases = Object.freeze({
   gitArcProposalDiffCache: release(28, "54d2dd92aec1de7b9aed3cf337ed2742b13468addef146b8a3bfca1c602efeeb"),
   nativePlanRemoval: release(29, "3512b3f17168a87e195bcbb5abe0dae212fc16d5b0ba82f369a0a5fff106362c"),
   instructionTombstones: release(30, "5fda5dca74274fde0d216a45a4dec4613f2907d89572bb91ff335a837cb7c3c7"),
+  providerReferences: release(31, "81716764a09af1f52c187c7b4f29c82293e4f26be482b7f61a2216956afebda0"),
 });
 
 export default databaseReleases;

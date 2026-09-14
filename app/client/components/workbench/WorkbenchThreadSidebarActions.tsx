@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { ThreadSummary, WorkbenchControls } from "workbench-shared/types";
+import type { ThreadSummary, WorkbenchControls, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
@@ -82,7 +82,7 @@ interface WorkbenchThreadSidebarActionsValue {
   onProjectFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
   onPinnedFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetKey: ThreadDisplayKey, destinationFolderId: string | null) => void;
   onSetPriority: (payload: WorkbenchThreadRowDragPayload, priority: WorkbenchThreadPriority) => void;
-  onSnoozeUntil: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId }) => void;
+  onSnoozeUntil: (payload: WorkbenchThreadRowDragPayload, targetProjectId: ProjectId, targetIdentity: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }) => void;
   onHomeMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderKey: string | null, beforeKey: string | null) => void;
   onPinnedMove: (sourceKey: string, destinationFolderId: string | null, beforeKey: string | null) => void;
   onRenamePinnedFolder: (folderId: string, title: string) => Promise<string>;

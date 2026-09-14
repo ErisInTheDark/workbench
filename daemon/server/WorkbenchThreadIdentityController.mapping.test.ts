@@ -31,13 +31,7 @@ import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTransc
 import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository";
 import WorkbenchThreadStateQuestionnaireRepository from "./database/thread-state/WorkbenchThreadStateQuestionnaireRepository";
 import type { NativeTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
-import { OpenCodeBridge } from "./opencode-bridge";
-import * as opencodeThreadState from "./opencode-thread-state";
-import * as opencodeLiveThreadState from "./opencode-live-thread-state";
-import type { DaemonReloadableModules } from "./daemon-runtime-objects";
-import type OpenCodeAppServer from "./OpenCodeAppServer";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
-import type { V2Event } from "@opencode-ai/sdk/v2";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
@@ -179,7 +173,7 @@ test("accepted-intent ingress resolves canonical ownership before publishing lif
   }
 });
 
-test("Git arc mutations keep native registry addresses separate from canonical state callbacks", async () => {
+test("Git arc mutations and state callbacks share the canonical Workbench owner", async () => {
   const { database, owners, native, parent } = await setup();
   const contexts: string[] = [];
   const refreshed: string[] = [];
@@ -210,13 +204,13 @@ test("Git arc mutations keep native registry addresses separate from canonical s
       threadId: parent.threadId, intentName: "identity boundary", paths: ["src/example.ts"],
     });
     assert.equal(response.status, 200, await response.text());
-    assert.deepEqual(registryOwners, [native.nativeThreadId]);
+    assert.deepEqual(registryOwners, [parent.threadId]);
     assert.deepEqual(contexts, [parent.threadId, parent.threadId]);
     assert.deepEqual(refreshed, [parent.threadId]);
     const registry = (feature as unknown as { workspaceController: WorkbenchWorkspaceGitArcController }).workspaceController;
     const base = {
       checkpointCommit: "a".repeat(40), harness: "codex", intentDescription: "", intentName: "identity boundary",
-      threadId: native.nativeThreadId, updatedAt: "2026-09-10T00:00:00.000Z",
+      threadId: parent.threadId, updatedAt: "2026-09-10T00:00:00.000Z",
     };
     const member = { ...base, repoRoot: native.nativeLocation, rootId: parent.projectId, rootIds: [parent.projectId] };
     const lifecycle = {
@@ -224,11 +218,11 @@ test("Git arc mutations keep native registry addresses separate from canonical s
       members: [{ ...member, phase: "active" as const, claimedPaths: ["src/example.ts"], proposals: [] }],
     };
     const plan = { ...base, scopePaths: ["src/example.ts"], members: [{ ...member, scopePaths: ["src/example.ts"] }] };
-    registry.findLifecycleState = async (_project, _harness, threadId) => threadId === native.nativeThreadId ? lifecycle : null;
-    registry.findPlanState = async (_project, _harness, threadId) => threadId === native.nativeThreadId ? plan : null;
+    registry.findLifecycleState = async (_project, _harness, threadId) => threadId === parent.threadId ? lifecycle : null;
+    registry.findPlanState = async (_project, _harness, threadId) => threadId === parent.threadId ? plan : null;
     registry.listLifecycleStates = async () => [lifecycle];
     registry.listPlanStates = async () => [plan];
-    registry.hasLiveClaims = async (_project, _harness, threadId) => threadId === native.nativeThreadId;
+    registry.hasLiveClaims = async (_project, _harness, threadId) => threadId === parent.threadId;
     const pruned: string[] = [];
     registry.pruneThreadHistories = async (_project, identities) => {
       pruned.push(...identities.map(identity => identity.threadId));
@@ -244,7 +238,7 @@ test("Git arc mutations keep native registry addresses separate from canonical s
     assert.equal(listedPlan?.threadId, parent.threadId);
     assert.equal(listedPlan?.members[0]?.threadId, parent.threadId);
     await feature.pruneThreadHistories(native.nativeLocation, [{ harness: "codex", threadId: parent.threadId }]);
-    assert.deepEqual(pruned, [native.nativeThreadId]);
+    assert.deepEqual(pruned, [parent.threadId]);
   } finally {
     feature.dispose();
     owners.threads.dispose();
@@ -420,104 +414,6 @@ test("cold native thread lookup admits exact metadata before public request rout
     assert.equal(requests.length, 1);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_items").get() as { count: number }).count, 0);
   } finally { database.close(); }
-});
-
-test("OpenCode metadata and live events share admitted identity across bridge handoff", async () => {
-  const { database, owners } = await setup();
-  let activeOwners = owners;
-  const published: ServerNotification[] = [];
-  const create = (initialState?: Awaited<ReturnType<OpenCodeBridge["detachForReload"]>>) => new OpenCodeBridge({
-    appServer: {} as OpenCodeAppServer,
-    getReloadableModules: () => ({ opencodeThreadState, opencodeLiveThreadState }) as DaemonReloadableModules,
-    projectRoot: "C:/repo", identities: activeOwners, initialState,
-    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
-    onNotification: (notification) => published.push(mapProviderNotification(activeOwners, { harness: "opencode", nativeLocation: "C:/repo" }, notification as ServerNotification)),
-  });
-  let bridge = create();
-  const handle = (event: V2Event) => (bridge as unknown as { handleEvent(event: V2Event): Promise<void> }).handleEvent(event);
-  try {
-    await handle({ type: "session.created", data: {
-      sessionID: "session", info: { id: "session", directory: "C:/repo", title: "Title", version: "test", time: { created: 1_000, updated: 1_000 } },
-    } } as V2Event);
-    await handle({ type: "session.next.text.delta", data: {
-      sessionID: "session", assistantMessageID: "message", textID: "text", timestamp: 2_000, delta: "first",
-    } } as V2Event);
-    const handoff = await bridge.detachForReload();
-    owners.items.dispose();
-    owners.threads.dispose();
-    const repository = new WorkbenchThreadIdentityRepository(database);
-    const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
-    let lookups = 0;
-    activeOwners = {
-      threads: new WorkbenchThreadIdentityController({
-        listThreadIdentities: async () => repository.list(),
-        observeThreadIdentities: async (inputs) => repository.observeMany(inputs),
-        observeTurnIdentities: async (inputs) => repository.observeTurns(inputs),
-        resolveThreadIdentity: async (input) => { lookups++; return repository.resolve(input); },
-        resolveNativeThreadIdentity: async (input) => { lookups++; return repository.resolveNative(input); },
-        resolveTurnIdentity: async (input) => { lookups++; return repository.resolveTurn(input); },
-      }),
-      items: new WorkbenchTranscriptIdentityController({
-        admitTranscriptItemIdentities: async (inputs) => itemRepository.admitMany(inputs),
-        resolveTranscriptItemIdentity: async (input) => { lookups++; return itemRepository.resolve(input); },
-      }),
-    };
-    await activeOwners.threads.start();
-    bridge = create(handoff);
-    await (bridge as unknown as { restoreLiveIdentities(): Promise<void> }).restoreLiveIdentities();
-    const beforeLookups = lookups;
-    const before = database.prepare("SELECT total_changes() AS count").get();
-    await handle({ type: "session.next.text.delta", data: {
-      sessionID: "session", assistantMessageID: "message", textID: "text", timestamp: 2_001, delta: "second",
-    } } as V2Event);
-    assert.deepEqual(database.prepare("SELECT total_changes() AS count").get(), before);
-    assert.equal(lookups, beforeLookups);
-    const deltas = published.filter((event) => event.method === "item/agentMessage/delta");
-    assert.deepEqual(deltas.map((event) => event.params.delta), ["first", "second"]);
-    assert.equal(deltas[0]!.params.itemId, deltas[1]!.params.itemId);
-    assert.equal(deltas[0]!.params.threadId, activeOwners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["session"] }));
-    assert.notEqual(deltas[0]!.params.itemId, "opencode:agent:message:text");
-  } finally {
-    await bridge.stop();
-    activeOwners.items.dispose();
-    activeOwners.threads.dispose();
-    database.close();
-  }
-});
-
-test("OpenCode identity failure reports the affected thread without publishing an unadmitted item", async () => {
-  const { database, owners } = await setup();
-  const published: ServerNotification[] = [];
-  const bridge = new OpenCodeBridge({
-    appServer: {} as OpenCodeAppServer,
-    getReloadableModules: () => ({ opencodeThreadState, opencodeLiveThreadState }) as DaemonReloadableModules,
-    projectRoot: "C:/repo", identities: owners,
-    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
-    onNotification: (event) => published.push(mapProviderNotification(owners, { harness: "opencode", nativeLocation: "C:/repo" }, event as ServerNotification)),
-  });
-  const handle = (event: V2Event) => (bridge as unknown as { handleEvent(event: V2Event): Promise<void> }).handleEvent(event);
-  try {
-    await handle({ type: "session.created", data: {
-      sessionID: "session", info: { id: "session", directory: "C:/repo", title: "Title", version: "test", time: { created: 1_000, updated: 1_000 } },
-    } } as V2Event);
-    published.length = 0;
-    owners.items.admit = async () => { throw new Error("Identity write failed"); };
-    await assert.rejects(handle({ type: "session.next.text.delta", data: {
-      sessionID: "session", assistantMessageID: "message", textID: "text", timestamp: 2_000, delta: "first",
-    } } as V2Event), /Identity write failed/u);
-    assert.deepEqual(published, [{
-      method: "thread/status/changed",
-      params: {
-        threadId: owners.threads.workbenchIdForNative({ harness: "opencode", nativeLocation: "C:/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["session"] }),
-        status: { type: "systemError" },
-      },
-    }]);
-  } finally {
-    await bridge.stop();
-    owners.items.dispose();
-    owners.threads.dispose();
-    database.close();
-  }
 });
 
 test("managed message routing preserves the steer template and rejects explicit cross-thread targets", async () => {

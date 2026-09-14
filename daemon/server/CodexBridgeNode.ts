@@ -341,7 +341,5 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/workbench-agent-mcp-request-registry.ts",
     "daemon/server/CodexBridgeTransitionController.ts",
     "daemon/server/CodexRecoverySupervisor.ts",
-    "daemon/server/copilot-bridge.ts",
-    "daemon/server/copilot-thread-state.ts",
   ].join("\n"),
 });

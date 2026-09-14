@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import Database from "better-sqlite3";
 
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
@@ -40,6 +41,20 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
   ));
 }
 
+test("standalone provider favourites survive repeated saves and controller restart", async context => {
+  const fixture = await controllerFixture(context);
+  const record = { kind: "modelPreference" as const, harness: "future-provider", modelId: "future-model", favourite: true };
+  try {
+    await fixture.controller.mutate({ action: "put", record });
+    await fixture.controller.mutate({ action: "put", record });
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(projectedRecords(restarted.read()).filter(row => row.kind === "modelPreference"), [record]);
+  } finally { await restarted.close(); }
+});
+
 async function controllerFixture(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-controller-"));
   context.after(() => fs.rm(directory, { force: true, recursive: true }));
@@ -47,8 +62,26 @@ async function controllerFixture(context: TestContext) {
   const create = () => new WorkbenchAppStateController(new WorkbenchAppStateRepository({ databasePath }));
   const controller = create();
   const daemonRegistrationId = await controller.start();
-  return { controller, create, daemonRegistrationId };
+  return { controller, create, daemonRegistrationId, databasePath };
 }
+
+test("a failed favourite write rolls back its provider admission and revision", async context => {
+  const fixture = await controllerFixture(context);
+  const database = new Database(fixture.databasePath);
+  try {
+    const before = fixture.controller.read();
+    database.exec(`CREATE TRIGGER reject_favourite BEFORE INSERT ON model_preferences
+      BEGIN SELECT RAISE(ABORT, 'test favourite failure'); END`);
+    await assert.rejects(fixture.controller.mutate({ action: "put", record: {
+      kind: "modelPreference", harness: "future-provider", modelId: "future-model", favourite: true,
+    } }), /test favourite failure/u);
+    assert.deepEqual(fixture.controller.read(), before);
+    assert.deepEqual(database.prepare("SELECT id FROM workbench_harnesses").all(), []);
+  } finally {
+    database.close();
+    await fixture.controller.close();
+  }
+});
 
 test("mutations return a revision delta and survive controller restart", async (context) => {
   const fixture = await controllerFixture(context);

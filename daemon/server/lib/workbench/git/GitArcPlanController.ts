@@ -7,6 +7,7 @@
  * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: plan and activation results.
  */
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
 import GitArcRegistry, {
@@ -147,8 +148,8 @@ export function createGitArcNoopResult(
 }
 
 function normalizeHarness(harness: string | undefined): GitArcHarness {
-  const normalized = String(harness ?? "codex").trim().toLowerCase();
-  if (normalized === "codex" || normalized === "copilot" || normalized === "opencode") return normalized;
+  const parsed = ProviderKeySchema.safeParse(harness ?? "codex");
+  if (parsed.success) return parsed.data;
   throw new GitArcRejectionError({ reason: "invalidHarness" }, "A valid checkpoint harness is required.");
 }
 

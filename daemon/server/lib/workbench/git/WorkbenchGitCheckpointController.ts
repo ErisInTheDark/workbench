@@ -11,6 +11,7 @@
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: controller results.
  */
 import fs from "node:fs/promises";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import path from "node:path";
 
 import { projectRoot } from "../../project";
@@ -180,8 +181,8 @@ async function resolveRepoRoot(cwd: string) {
 }
 
 function normalizeHarness(harness: string | undefined): GitArcHarness {
-  const normalized = String(harness ?? "codex").trim().toLowerCase();
-  if (normalized === "codex" || normalized === "copilot" || normalized === "opencode") return normalized;
+  const parsed = ProviderKeySchema.safeParse(harness ?? "codex");
+  if (parsed.success) return parsed.data;
   throw new Error("A valid checkpoint harness is required.");
 }
 

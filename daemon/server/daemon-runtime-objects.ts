@@ -47,12 +47,6 @@ import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type CodexHealthMonitor from "./CodexHealthMonitor";
 import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
-import type OpenCodeAppServer from "./OpenCodeAppServer";
-import type { OpenCodeBridge } from "./opencode-bridge";
-import * as copilotThreadState from "./copilot-thread-state";
-import * as opencodeLiveThreadState from "./opencode-live-thread-state";
-import * as opencodeThreadState from "./opencode-thread-state";
-import * as opencodeWorkbenchInstructions from "./opencode-workbench-instructions";
 import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
@@ -83,10 +77,6 @@ import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 import type WorkbenchProvider from "./WorkbenchProvider";
 
 export type DaemonReloadableModules = {
-  copilotThreadState: Pick<typeof copilotThreadState, "applyCopilotEvent" | "cloneThread" | "createThreadState" | "formatPromptFromInput" | "INITIALIZE_RESULT" | "metadataToThread">;
-  opencodeLiveThreadState: Pick<typeof opencodeLiveThreadState, "applyOpenCodeLiveEvent" | "createOpenCodeLiveThreadState">;
-  opencodeThreadState: Pick<typeof opencodeThreadState, "cloneThread" | "createOpenCodeLegacyPermissionRequest" | "createOpenCodePermissionRequest" | "createOpenCodeQuestionRequest" | "EMPTY_OPENCODE_RATE_LIMITS" | "formatPromptFromInput" | "mapOpenCodeModelsToWorkbenchOptions" | "OPENCODE_INITIALIZE_RESULT" | "opencodeSessionToThread">;
-  opencodeWorkbenchInstructions: Pick<typeof opencodeWorkbenchInstructions, "buildOpenCodeWorkbenchSystemPrompt" | "ensureOpenCodeWorkbenchConfigDirectory" | "withOpenCodeWorkbenchThreadIdentity">;
   project: Pick<typeof project, "isPathWithinRoot" | "readUserInvocableAgentDefinition" | "resolveProjectRoot">;
   threadBootstrap: Pick<typeof threadBootstrap, "buildThreadTitleBootstrapInstructions" | "normalizeThreadTitle">;
   workbenchLibrary: Pick<typeof workbenchLibrary, "buildWorkbenchLibraryBootstrapInstructions">;
@@ -196,8 +186,6 @@ export interface DaemonRuntimeObjects {
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
   mcp: WorkbenchAgentMcpController;
   modules: DaemonReloadableModules;
-  openCodeAppServer: OpenCodeAppServer;
-  openCodeBridge: OpenCodeBridge;
   daemonHttp: WorkbenchDaemonHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;

@@ -4,7 +4,7 @@
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
-import providerRegistrations, { type WorkbenchProviderKey } from "./provider-registrations";
+import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
 export default class WorkbenchProviderHandle implements WorkbenchProvider {
   constructor(

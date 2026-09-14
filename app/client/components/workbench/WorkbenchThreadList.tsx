@@ -4,6 +4,7 @@
  */
 "use client";
 
+import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -142,7 +143,7 @@ export default function WorkbenchThreadList({
   onProjectFolderDrop?: (payload: WorkbenchThreadRowDragPayload, targetKey: ThreadDisplayKey, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
   onRenameFolder?: (folderId: string, title: string) => Promise<string>;
   onSetPriority?: (payload: WorkbenchThreadRowDragPayload, priority: WorkbenchThreadPriority) => void;
-  onSnoozeUntil?: (payload: WorkbenchThreadRowDragPayload, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: WorkbenchThreadId }) => void;
+  onSnoozeUntil?: (payload: WorkbenchThreadRowDragPayload, targetIdentity: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }) => void;
   projectId: ProjectId;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   showPinnedThreadsInMain?: boolean;

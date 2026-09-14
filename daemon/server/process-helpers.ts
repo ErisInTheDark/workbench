@@ -2,18 +2,12 @@
  * Exports:
  * - ProcessSpec/RunningProcess: small process manager contracts for daemon child processes.
  * - log/logError: tagged stdout and stderr logging for daemon modules.
- * - appendCopilotEventLog: persist raw Copilot session events as JSONL for bridge debugging.
  * - pipeChildStream/getSpawnDescriptor/createSpawnOptions/killProcessTree/killProcessTreeAsync: platform-safe process helpers for spawned child processes.
  * - ProcessTreeRetirementOptions: platform and termination-command ports for owned process retirement.
  */
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { appendFile, mkdir } from "node:fs/promises";
-import path from "node:path";
-
-import type { SessionEvent } from "@github/copilot-sdk";
 import LinuxProcessGroupRetirement from "./LinuxProcessGroupRetirement";
 
-const COPILOT_EVENT_LOG_MAX_STRING_LENGTH = 1024;
 const ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS = 5_000;
 
 export type ProcessSpec = {
@@ -34,35 +28,6 @@ export function log(name: string, message: string) {
 
 export function logError(name: string, message: string) {
   process.stderr.write(`[${name}] ${message}\n`);
-}
-
-export async function appendCopilotEventLog(
-  projectRoot: string,
-  sessionId: string,
-  source: "history" | "live",
-  event: SessionEvent,
-) {
-  const debugDir = path.join(projectRoot, ".debug", "copilot-events");
-  const logFilePath = path.join(debugDir, `${sessionId}.jsonl`);
-  const record = {
-    event,
-    loggedAt: new Date().toISOString(),
-    sessionId,
-    source,
-  };
-
-  try {
-    await mkdir(debugDir, { recursive: true });
-    await appendFile(logFilePath, `${JSON.stringify(record, (_key, value) => {
-      if (typeof value === "string" && value.length > COPILOT_EVENT_LOG_MAX_STRING_LENGTH) {
-        return `<content clipped (${value.length} chars)>`;
-      }
-
-      return value;
-    })}\n`, "utf8");
-  } catch (error) {
-    logError("copilot-debug", error instanceof Error ? error.message : String(error));
-  }
 }
 
 export function pipeChildStream(

@@ -7,7 +7,6 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import { recoverCodexTurn } from "./codex-turn-recovery";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
-import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import WorkbenchCodexMcpGenerationController, { type WorkbenchCodexMcpGenerationState } from "./WorkbenchCodexMcpGenerationController";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
@@ -31,7 +30,7 @@ function record(value: unknown) {
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode],
+  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(state?.mcpGeneration);
@@ -45,8 +44,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       hardReload: context.hardReload,
       initialState: state?.reloadController,
     });
-    const recoverOpenCodeTurn = context.harnessPorts.opencode.recoverInterruptedTurn;
-    if (!recoverOpenCodeTurn) throw new Error("OpenCode is missing its declared turn-recovery port.");
     let turnRecovery!: WorkbenchTurnRecoveryController;
     turnRecovery = new WorkbenchTurnRecoveryController(
       new WorkbenchTurnRecoveryHandoffStore(context.legacyMigrationProjectRoot),
@@ -74,7 +71,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
             return response;
           },
         }),
-        opencode: recoverOpenCodeTurn,
       },
       async (label, task) => await context.runTurnRecoveryTask(turnRecovery, label, task),
     );

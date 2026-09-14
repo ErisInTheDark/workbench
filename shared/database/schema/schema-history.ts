@@ -3,6 +3,7 @@
  * - TableMigration/TableVersion/TableHistory: typed table migration history.
  * - SubsystemSchemaHistory/WorkbenchDatabaseSchema: assembled schema contracts.
  * - tableVersion/createTable/addColumns/createIndexes/rebuildTable/deleteRows: migration declarations.
+ * - copyDistinctValues: admit retained column values into a unique reference key before a rebuild.
  * - defineTableHistory/retireTableHistory/defineSubsystemHistory: table lifecycle declarations.
  * - defineWorkbenchDatabaseSchema: validate and assemble global schema history.
  * - readWorkbenchDatabaseMigrationRange/readWorkbenchDatabaseSchemaHistory: inspect migration state.
@@ -71,6 +72,14 @@ interface DeleteRowsMigration {
   readonly where: string;
 }
 
+interface CopyDistinctValuesMigration {
+  readonly kind: "copyDistinctValues";
+  readonly from: TableDefinition;
+  readonly sourceColumn: string;
+  readonly to: TableDefinition;
+  readonly targetColumn: string;
+}
+
 interface DropTableMigration {
   readonly kind: "dropTable";
   readonly table: TableDefinition;
@@ -78,7 +87,7 @@ interface DropTableMigration {
 
 export type TableMigration =
   | CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration
-  | DeleteRowsMigration | DropTableMigration;
+  | DeleteRowsMigration | DropTableMigration | CopyDistinctValuesMigration;
 
 export interface TableVersion<Table extends TableDefinition = TableDefinition> {
   readonly schemaVersion: number;
@@ -209,6 +218,28 @@ export function rebuildTable<From extends TableDefinition, To extends TableDefin
   });
 }
 
+export function copyDistinctValues<From extends TableDefinition, To extends TableDefinition>(input: {
+  from: From;
+  sourceColumn: keyof From["columns"] & string;
+  to: To;
+  targetColumn: keyof To["columns"] & string;
+}): CopyDistinctValuesMigration {
+  const source = input.from.columns[input.sourceColumn];
+  const target = input.to.columns[input.targetColumn];
+  if (!source || !target || source.runtime.storageType !== target.runtime.storageType) {
+    throw new Error("Distinct-value copy requires compatible source and target columns");
+  }
+  if (!uniqueTargets(input.to).some(columns => sameNames(columns, [input.targetColumn]))) {
+    throw new Error("Distinct-value copy requires a unique target column");
+  }
+  for (const [name, column] of Object.entries(input.to.columns)) {
+    if (name !== input.targetColumn && column.runtime.notNull && !column.runtime.hasDefault) {
+      throw new Error(`Distinct-value copy cannot supply required target column ${name}`);
+    }
+  }
+  return Object.freeze({ kind: "copyDistinctValues", ...input });
+}
+
 export function deleteRows(tableName: string, where: SqlFragment<boolean>): DeleteRowsMigration {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) throw new Error(`Invalid SQLite identifier: ${tableName}`);
   if (!where.text.trim()) throw new Error(`Row deletion for ${tableName} requires a predicate`);
@@ -244,6 +275,10 @@ function validateTransition(previous: TableDefinition, version: TableVersion) {
   for (const operation of operations) {
     if (operation.kind === "createTable") throw new Error(`Existing table ${version.table.name} cannot use createTable again`);
     if (operation.kind === "deleteRows") continue;
+    if (operation.kind === "copyDistinctValues") {
+      if (operation.from !== previous) throw new Error("Distinct-value copy must read the preceding table version");
+      continue;
+    }
     if (operation.kind === "dropTable") throw new Error(`Table ${version.table.name} cannot retire inside a table version`);
     if (operation.from !== previous || operation.to !== version.table) {
       throw new Error(`Migration for ${version.table.name}@${version.schemaVersion} does not use its adjacent table versions`);
@@ -252,8 +287,8 @@ function validateTransition(previous: TableDefinition, version: TableVersion) {
   const rebuild = operations.filter((operation) => operation.kind === "rebuildTable");
   if (rebuild.length > 0) {
     if (rebuild.length !== 1 || operations.at(-1) !== rebuild[0]
-      || operations.some(operation => operation.kind !== "deleteRows" && operation.kind !== "rebuildTable")) {
-      throw new Error(`Rebuild of ${version.table.name}@${version.schemaVersion} must follow only row deletions`);
+      || operations.some(operation => operation.kind !== "deleteRows" && operation.kind !== "copyDistinctValues" && operation.kind !== "rebuildTable")) {
+      throw new Error(`Rebuild of ${version.table.name}@${version.schemaVersion} may accompany only row deletions and distinct-value copies`);
     }
     return;
   }
@@ -422,6 +457,12 @@ export function defineWorkbenchDatabaseSchema(input: {
   const historicalTables = new Map<string, TableDefinition>();
   for (let schemaVersion = 1; schemaVersion <= currentVersion; schemaVersion += 1) {
     for (const operation of mutableVersions.get(schemaVersion)!) {
+      if (operation.kind === "copyDistinctValues") {
+        const target = historicalTables.get(operation.to.name);
+        if (!target || !sameTableDefinition(target, operation.to)) {
+          throw new Error(`Distinct-value copy target ${operation.to.name} must already exist at schema ${schemaVersion}`);
+        }
+      }
       const target = migrationTarget(operation);
       if (target) historicalTables.set(target.name, target);
       else if (operation.kind === "dropTable") historicalTables.delete(operation.table.name);
@@ -467,6 +508,14 @@ function executeRebuild(database: Database.Database, operation: RebuildTableMigr
 }
 
 function executeMigration(database: Database.Database, operation: TableMigration, schemaVersion: number) {
+  if (operation.kind === "copyDistinctValues") {
+    const source = quoteIdentifier(operation.sourceColumn);
+    const target = quoteIdentifier(operation.targetColumn);
+    database.exec(`INSERT INTO ${quoteIdentifier(operation.to.name)} (${target})
+      SELECT DISTINCT ${source} FROM ${quoteIdentifier(operation.from.name)}
+      WHERE ${source} IS NOT NULL ON CONFLICT (${target}) DO NOTHING;`);
+    return;
+  }
   if (operation.kind === "createTable") {
     database.exec(renderCreateTable(operation.table));
     for (const statement of renderCreateIndexes(operation.table)) database.exec(statement);

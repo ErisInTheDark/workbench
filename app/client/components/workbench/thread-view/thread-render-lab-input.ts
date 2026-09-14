@@ -4,6 +4,7 @@
  */
 
 import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -292,7 +293,7 @@ function createLabThreadPayload(turns: Turn[], cwd = "c:/git/web/workbench"): Th
 
 function readHarness(record: JsonObject, key: string): WorkbenchHarness {
   const value = readString(record, key);
-  return value === "copilot" || value === "opencode" ? value : "codex";
+  return ProviderKeySchema.parse(value ?? "codex");
 }
 
 function normalizeTurn(value: JsonValue, index = 0): Turn | null {

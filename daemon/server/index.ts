@@ -7,8 +7,6 @@ import path from "node:path";
 
 import { WebSocketServer } from "ws";
 
-import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
@@ -21,8 +19,6 @@ import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/th
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import type CodexStdioBridge from "./CodexStdioBridge";
-import { CopilotBridge } from "./copilot-bridge";
-import type { OpenCodeBridge } from "./opencode-bridge";
 import {
     log,
     logError,
@@ -103,21 +99,6 @@ const featureHost = new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeOb
     runtimeDrainTimeoutMs: 30_000,
   },
 );
-
-const copilotBridge = new CopilotBridge({
-  profiles: {
-    captureCreationProfile: (harness, cwd, source) => featureHost.run("threadState", owner => owner.captureCreationProfile(harness, cwd, source), "Copilot profile creation"),
-    installCreatedProfile: (harness, thread, selection) => featureHost.run("threadState", owner => owner.installCreatedProfile(harness, thread, selection), "Copilot profile installation"),
-    withProviderProfileAdmission: (harness, thread, admit, signal, refresh) => featureHost.run("threadState", owner => owner.withProviderProfileAdmission(harness, thread, admit, signal, refresh), "Copilot profile admission"),
-  },
-  getReloadableModules: () => featureHost.get("modules"),
-  admitThreads: (threads) => featureHost.run("harnesses", (owner) => owner.admitThreads("copilot", threads), "Copilot thread identity"),
-  admitNotifications: (threadId, notifications) => featureHost.run("harnesses", (owner) => owner.admitNotifications("copilot", NativeThreadIdSchema.parse(threadId), notifications), "Copilot event identity"),
-  onNotification: (notification) => {
-    broadcastToClients("copilot", notification);
-  },
-  projectRoot: DAEMON_PACKAGE_ROOT,
-});
 
 codexRecoverySupervisor = createCodexRecoverySupervisor();
 
@@ -217,7 +198,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
-  const closures = [featureHost.dispose(), copilotBridge.stop()];
+  const closures = [featureHost.dispose()];
 
   for (const client of bridgeConnections) {
     client.close();
@@ -258,7 +239,6 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
       },
     },
     { name: "feature graph", notify: () => featureHost.beginHardShutdown() },
-    { name: "Copilot bridge", notify: async () => await copilotBridge.stop() },
   ];
 }
 
@@ -311,10 +291,6 @@ function createDaemonFeatureContext(): DaemonProcessContext {
       sendToClient: (client, message) => sendJsonToClient(client, message),
       storageRoot: PROJECT_ROOT,
     }),
-    openCodeBridgeOptions: {
-      onNotification: (notification) => broadcastToClients("opencode", notification),
-      projectRoot: PROJECT_ROOT,
-    },
     executeBrowseRequest: async (body, signal) => await featureHost.run("browseExecution", (execution) => execution.executeBrowseRequest(body, signal), "Browse command request"),
     executeBrowseSessionRequest: async (request, signal) => await featureHost.run("browseExecution", (execution) => execution.executeSessionRequest(request, signal), "Browse session request"),
     executeReloadScopes,
@@ -348,9 +324,6 @@ function createDaemonFeatureContext(): DaemonProcessContext {
     onCodexBridgeUnavailable: (restartingAppServer) => {
       if (!restartingAppServer) return;
       closeBridgeClients(1012, "Codex app-server is reloading; reconnect shortly.");
-    },
-    openCodeAppServerOptions: {
-      getReloadableModules: () => featureHost.get("modules"),
     },
     publishThreadState,
     reportWebSocketDelivery: (delivery) => {
@@ -436,33 +409,6 @@ function requireHarnessAdmission() {
   if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The daemon is hard reloading; new harness work is temporarily unavailable.");
 }
 
-function readGenericBrowseThread(harness: "copilot" | "opencode", threadId: string) {
-  return requestGenericBrowseHarness<ThreadReadResponse>(harness, {
-    id: 0,
-    method: "thread/read",
-    params: { includeTurns: true, threadId },
-  });
-}
-
-async function requestGenericBrowseHarness<TValue>(harness: "copilot" | "opencode", message: JsonRpcRequest): Promise<TValue> {
-  requireHarnessAdmission();
-  const response = harness === "copilot"
-    ? await copilotBridge.handleRequest(message)
-    : await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(message));
-  if (response.error) throw new Error(response.error.message);
-  return response.result as TValue;
-}
-
-async function steerGenericBrowseTurn(harness: "copilot" | "opencode", threadId: string, expectedTurnId: string, input: UserInput[]) {
-  const result = await requestGenericBrowseHarness<{ turnId?: string } | { ok?: boolean }>(harness, {
-    id: 0,
-    method: "turn/steer",
-    params: { expectedTurnId, input, threadId },
-  });
-  const resultRecord = asRecord(result);
-  return typeof resultRecord?.turnId === "string" ? resultRecord.turnId : null;
-}
-
 function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimePort> {
   return {
     codex: {
@@ -508,37 +454,6 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
       },
       steerTurn: async (threadId, expectedTurnId, input) => await runAfterCodexBridgeReload((bridge) => bridge.steerTurnForBrowse(threadId, expectedTurnId, input)),
     },
-    copilot: {
-      handleBrowserMessage: async (message, client) => {
-        if (!("id" in message)) return;
-        requireHarnessAdmission();
-        sendJsonToClient(client, await copilotBridge.handleRequest(message));
-      },
-      readThread: async (threadId) => await readGenericBrowseThread("copilot", threadId),
-      readLoadedThreads: () => copilotBridge.readLoadedThreads(),
-      request: async (request) => {
-        requireHarnessAdmission();
-        return await copilotBridge.handleRequest(request);
-      },
-      steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("copilot", threadId, expectedTurnId, input),
-    },
-    opencode: {
-      handleBrowserMessage: async (message, client) => {
-        if (!("id" in message)) return;
-        requireHarnessAdmission();
-        sendJsonToClient(client, await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(message)));
-      },
-      readThread: async (threadId) => await readGenericBrowseThread("opencode", threadId),
-      request: async (request) => {
-        requireHarnessAdmission();
-        return await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(request));
-      },
-      recoverInterruptedTurn: async (candidate, signal) => await runAfterOpenCodeBridgeReload((bridge) => {
-        signal?.throwIfAborted();
-        return bridge.recoverInterruptedTurn(candidate, signal);
-      }),
-      steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("opencode", threadId, expectedTurnId, input),
-    },
   };
 }
 
@@ -568,10 +483,6 @@ function closeBridgeClients(code: number, reason: string) {
 async function recoverCodexBridge(reason: string) {
   await featureHost.reload(["harness:codex"]);
   log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
-}
-
-async function runAfterOpenCodeBridgeReload<TValue>(task: (bridge: OpenCodeBridge) => TValue | Promise<TValue>) {
-  return await featureHost.run("openCodeBridge", task, "OpenCode bridge operation");
 }
 
 async function executeReloadScopes(scopes: DaemonReloadScope[]) {
@@ -785,7 +696,7 @@ function startBridgeServer() {
   });
 
   bridgeServer.listen(port, host, () => {
-    log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio, Copilot SDK, or OpenCode SDK`);
+    log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio`);
   });
 }
 
@@ -831,10 +742,7 @@ async function startDaemon() {
   const codexReadiness = ensureCodexReady(startupBridge);
   void codexReadiness
     .then(() => {
-      void Promise.all([
-        featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("codex"), "Codex persisted turn recovery"),
-        featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("opencode"), "OpenCode persisted turn recovery"),
-      ]).catch((error) => {
+      void featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("codex"), "Codex persisted turn recovery").catch((error) => {
         logError("turn-recovery", `startup manual-resume recovery failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     })

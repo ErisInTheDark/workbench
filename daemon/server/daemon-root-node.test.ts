@@ -67,7 +67,6 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:turns",
     "server:database",
     "harness:codex",
-    "harness:opencode",
     "server:codex/instructions",
     "server:codex/configuration",
   ]);
@@ -75,7 +74,6 @@ test("the root knows only direct roots and parents declare every dependant", () 
 
   assert.deepEqual([...nodes.keys()].sort(), [
     "harness:codex",
-    "harness:opencode",
     "server:browse",
     "server:codex",
     "server:codex/configuration",
@@ -86,7 +84,6 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:database",
     "server:instructions",
     "server:mcp",
-    "server:opencode",
     "server:topology",
     "server:turns",
     "server:websocket",
@@ -96,14 +93,12 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/instructions", "server:core", "server:database", "server:turns"]);
   assert.equal(parents.has("server:codex/instructions"), false);
-  assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:instructions")!], ["server:database"]);
   assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.equal(parents.has("harness:codex"), false);
-  assert.equal(parents.has("harness:opencode"), false);
   assert.deepEqual({
     lifecycle: nodes.get("server:turns")!.lifecycle,
     provides: nodes.get("server:turns")!.provides,
@@ -198,11 +193,9 @@ test("server branch and topology closures never acquire harness roots", () => {
   for (const scope of ["server:turns", "server:database", "server:core", "server:topology", "server:instructions", "server:codex/instructions"] as const) {
     const closure = dependantClosure([scope]);
     assert.equal(closure.includes("harness:codex"), false, `${scope} must preserve the Codex harness root`);
-    assert.equal(closure.includes("harness:opencode"), false, `${scope} must preserve the OpenCode harness root`);
     assert.equal(closure.includes("server:process"), false, `${scope} must not become a process restart`);
   }
   assert.equal(catalog.get("harness:codex")!.destructive, true);
-  assert.equal(catalog.get("harness:opencode")!.destructive, true);
   assert.equal(catalog.get("server:process")!.destructive, true);
   assert.deepEqual(
     dependantClosure(["server:process"]),

@@ -86,7 +86,7 @@ await new Promise((resolve, reject) => {
     const title = `live diagnostic ${randomUUID()}`;
     await runtime.request("thread/name/set", { threadId, name: title });
     const cli = await IsolatedWorkbench.command("bash", [
-      path.join(runtime.project, "daemon/node_modules/.bin/wb"), "thread", "title", "get",
+      path.join(runtime.project, "daemon/node_modules/.bin/wb"), "task", "get",
     ], runtime.project, { ...process.env, WORKBENCH_THREAD_ID: threadId, CODEX_THREAD_ID: nativeThreadId }, t.signal);
     assert.ok(cli.includes(title), "CLI must resolve its managed WB caller identity");
     const errors: Error[] = [];

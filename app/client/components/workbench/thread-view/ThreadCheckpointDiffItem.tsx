@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default ThreadCheckpointDiffItem: render checkpoint diff command output from legacy inline diffs or compact full-diff artifacts. Keywords: thread, checkpoint, diff, artifact.
+ * - default ThreadCheckpointDiffItem: render inline checkpoint diffs or full-diff artifacts.
  */
 "use client";
 
 import { useContext, useEffect, useMemo, useState } from "react";
 
 import type { FileUpdateChange } from "workbench-shared/codex/generated/app-server/v2/FileUpdateChange";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   createGitArcOperationRejected,
@@ -36,7 +37,7 @@ function buildFullDiffRequestBody({
 }: {
   cwd: string;
   diffArtifactId: string;
-  harness: "codex" | "copilot" | "opencode";
+  harness: WorkbenchHarness;
   threadId: string;
 }) {
   return {

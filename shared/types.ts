@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchHarness: supported agent harness identity.
+ * - WorkbenchHarness: stored provider identity, independent of installation.
  * - DaemonReloadScope: reloadable daemon subsystem identity.
  * - DaemonReloadState: daemon reload lifecycle state.
  * - DaemonReloadRequest: daemon reload request contract.
@@ -176,7 +176,8 @@ import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread
 import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
 import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
 
-export type WorkbenchHarness = "codex" | "copilot" | "opencode";
+export type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
+import type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
 export type {
   DaemonReloadRequest,
   DaemonReloadResponse,

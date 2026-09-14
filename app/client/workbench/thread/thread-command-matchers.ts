@@ -30,7 +30,6 @@ import {
     parseBrowseSequenceCommandOutput,
 } from "./command-matchers/browse";
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
-import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
 import {
     getGitArcMatcherAction,
@@ -362,7 +361,6 @@ function computeThreadCommandDisplay({
     commonMatchers: [
       ...WORKBENCH_CLI_COMMAND_MATCHERS,
       ...THREAD_CONTEXT_COMMAND_MATCHERS,
-      ...COPILOT_COMMAND_MATCHERS,
       ...GIT_COMMAND_MATCHERS,
       ...GIT_CHECKPOINT_COMMAND_MATCHERS,
       ...BROWSE_COMMAND_MATCHERS,

@@ -7,6 +7,7 @@
  * - projectWorkbenchThreadStateEntry: derive the public sidebar projection.
  */
 import { z } from "zod";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
@@ -37,7 +38,7 @@ export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
 export type WorkbenchThreadStateEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> | WorkbenchThreadStateRecord;
 export interface WorkbenchThreadSnoozeTarget {
   identity: {
-    harness: "codex" | "copilot" | "opencode";
+    harness: WorkbenchHarness;
     threadId: WorkbenchThreadId;
   };
   projectId: ProjectId;

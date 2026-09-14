@@ -13,6 +13,18 @@ import WorkbenchTurnRecoveryController, { MAX_AUTOMATIC_RECOVERY_THREADS } from 
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
 import { WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 
+test("future provider handoffs survive persistence without entering another provider's recovery", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-future-recovery-"));
+  const store = new WorkbenchTurnRecoveryHandoffStore(root);
+  const controller = new WorkbenchTurnRecoveryController(store, () => undefined);
+  controller.observeRequest("future-provider", { id: "start", method: "turn/start", params: { input: [], threadId: "future-thread" } });
+  controller.observeNotification("future-provider", { method: "turn/started", params: { threadId: "future-thread", turn: { id: "future-turn" } } });
+  const { candidate } = await controller.persistManualResume("future-provider", "future-thread");
+  assert.deepEqual((await new WorkbenchTurnRecoveryHandoffStore(root).load())?.candidates, [candidate]);
+  assert.deepEqual(controller.capture(["codex"]), []);
+  assert.deepEqual(controller.capture(["future-provider"]), [candidate]);
+});
+
 for (const cancelledOwner of ["controller", "bridge"] as const) {
 test(`${cancelledOwner} expiry cannot settle a late provider result after rollback resumes the owner`, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-expiry-"));

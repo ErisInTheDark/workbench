@@ -3,6 +3,7 @@
  * - default GitArcClaimLossStore: write canonical and read canonical-first compatible claim-loss snapshots.
  */
 import { GitArcClaimLossSchema, type GitArcClaimLoss } from "workbench-shared/workbench/git/git-arc-status";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
@@ -20,7 +21,7 @@ export default class GitArcClaimLossStore {
   ) {}
 
   private ref(identity: Identity) {
-    if (!["codex", "copilot", "opencode"].includes(identity.harness)) throw new Error("Invalid claim-loss harness.");
+    if (!ProviderKeySchema.safeParse(identity.harness).success) throw new Error("Invalid claim-loss harness.");
     return `refs/worktree/agents/${identity.harness}/${normalizeThreadId(identity.threadId)}/claim-loss`;
   }
 

@@ -29,7 +29,7 @@ export default class IsolatedWorkbench {
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
   private closed = false;
-  private constructor(readonly root: string, readonly project: string, readonly origin: string, private readonly openCodePort: number, readonly signal: AbortSignal, private readonly codexIdentity: boolean) {}
+  private constructor(readonly root: string, readonly project: string, readonly origin: string, readonly signal: AbortSignal, private readonly codexIdentity: boolean) {}
 
   get processIds() { return { daemon: this.child?.pid, app: this.appChild?.pid }; }
   get output() { return this.log; }
@@ -92,13 +92,7 @@ export default class IsolatedWorkbench {
     const address = listener.address();
     assert.ok(address && typeof address !== "string");
     const port = address.port;
-    const providerListener = net.createServer();
-    providerListener.listen(0, "127.0.0.1");
-    await once(providerListener, "listening", { signal });
-    const providerAddress = providerListener.address();
-    assert.ok(providerAddress && typeof providerAddress !== "string");
     await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
-    await new Promise<void>((resolve, reject) => providerListener.close((error) => error ? reject(error) : resolve()));
     if (options.codexIdentity && process.platform === "win32") {
       // Convex-lab's sharing boundary: reuse the existing Windows identity, not
       // its sessions or the whole .sandbox directory. Never initialise another.
@@ -117,7 +111,7 @@ export default class IsolatedWorkbench {
         throw error;
       }
     }
-    return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, providerAddress.port, signal, options.codexIdentity);
+    return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, signal, options.codexIdentity);
   }
 
   async start(profileDocument: object = { version: 1, profiles: {} }, prefixProof = "lifecycle") {
@@ -186,7 +180,6 @@ export default class IsolatedWorkbench {
       CODEX_APP_SERVER_URL: this.origin.replace("http:", "ws:"),
       XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
       XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
-      OPENCODE_SERVER_PORT: String(this.openCodePort),
     };
     // These children represent a separate installation, never the agent's live caller.
     for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT"]) delete env[key];

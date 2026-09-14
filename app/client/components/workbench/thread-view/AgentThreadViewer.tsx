@@ -5,6 +5,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
@@ -26,7 +27,7 @@ function normalizeThreadId(value: string | null | undefined) {
 }
 
 function normalizeHarness(value: string | null | undefined): WorkbenchHarness {
-  return value === "copilot" || value === "opencode" ? value : "codex";
+  return ProviderKeySchema.parse(value ?? "codex");
 }
 
 function isThreadStatusActive(status: string) {

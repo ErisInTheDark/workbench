@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadRateLimits: render leading composer controls, harness, account quota windows, auth hints, and optional trailing status content. Keywords: thread, rate limits, harness, composer, project.
+ * - default ThreadRateLimits: render composer controls, provider, quota windows and trailing status.
  */
 "use client";
 
@@ -49,71 +49,17 @@ export default function ThreadRateLimits ({
   showsHarnessControl?: boolean;
   trailingContent?: ReactNode;
 }) {
-  if (!leadingContent && !trailingContent && !canToggleHarness && harness !== "copilot" && harness !== "opencode" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (!leadingContent && !trailingContent && !canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return null;
   }
 
   const harnessControl = showsHarnessControl ? <ThreadHarnessControl canToggle={canToggleHarness} harness={harness} onToggle={onHarnessToggle} /> : null;
   const leadingControl = showsHarnessControl ? leadingContent : null;
 
-  if (canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
         <div className="flex items-center gap-3">{leadingControl}{harnessControl}</div>
-        {trailingContent}
-      </div>
-    );
-  }
-
-  if (harness === "copilot") {
-    const isAuthRequired = rateLimits?.limitId === "copilot:auth";
-
-    return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {leadingControl}
-          <div className="flex justify-center">{harnessControl}</div>
-          <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
-            {isAuthRequired ? (
-              <span className="inline-flex flex-wrap items-baseline gap-2">
-                <span>{rateLimits?.limitName ?? "Sign in to Copilot CLI."}</span>
-                <span>Run</span>
-                <span className="font-mono text-text">copilot</span>
-                <span>then</span>
-                <span className="font-mono text-text">/login</span>
-              </span>
-            ) : rateLimits?.limitName && rateLimits.primary ? (
-              <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-                <span className="font-semibold text-text">{rateLimits.limitName}</span>
-                <span>{formatUsedPercent(100 - rateLimits.primary.usedPercent)} ({rateLimits.secondary?.usedPercent ?? "-"})</span>
-                {rateLimits.primary.resetsAt && rateLimits.primary.resetsAt * 1000 > Date.now() ? (
-                  <span>{formatRateLimitResetTime(rateLimits.primary.resetsAt * 1_000)}</span>
-                ) : null}
-              </span>
-            ) : (
-              <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-                <span>Premium quota unavailable</span>
-              </span>
-            )}
-          </p>
-        </div>
-        {trailingContent}
-      </div>
-    );
-  }
-
-  if (harness === "opencode") {
-    return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {leadingControl}
-          <div className="flex justify-center">{harnessControl}</div>
-          <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
-            <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-              <span>OpenCode bridge</span>
-            </span>
-          </p>
-        </div>
         {trailingContent}
       </div>
     );

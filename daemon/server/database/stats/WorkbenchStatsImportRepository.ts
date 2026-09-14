@@ -1,12 +1,11 @@
 /*
- * Keywords: stats, import, usage, claims, SQLite, checkpoints.
  * Exports:
  * - WorkbenchStatsUsageImportCandidate: queued usage import.
  * - WorkbenchGitClaimImportCandidate: queued claim import.
  * - WorkbenchGitClaimImportDiscovery: discovered claim source.
  * - WorkbenchGitClaimImportSettlement: settled claim import.
  * - WorkbenchStatsUsageImportSettlement: settled usage import.
- * - default WorkbenchStatsImportRepository: own versioned SQLite usage/claim queues, settlements, facts, and progress. Keywords: stats, import, SQLite, version.
+ * - default WorkbenchStatsImportRepository: own versioned SQLite usage/claim queues, settlements, facts, and progress.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -96,13 +95,17 @@ export default class WorkbenchStatsImportRepository {
           AND (run_id IS NULL OR run_id != ?)
       `).run(now, ...harnesses, runId);
       this.database.prepare(`
+        INSERT INTO workbench_harnesses(id)
+        SELECT DISTINCT harness_id FROM git_claim_sessions WHERE harness_id IS NOT NULL
+        ON CONFLICT(id) DO NOTHING
+      `).run();
+      this.database.prepare(`
         INSERT OR IGNORE INTO git_claim_thread_file_days (
           project_id, root_id, harness_id, thread_id, claimed_path, claimed_day
         )
         SELECT project_id, root_id, harness_id, thread_id, claimed_path,
           claimed_at - (claimed_at % ${DAY_MS})
         FROM git_claim_sessions
-        WHERE harness_id IN ('codex', 'copilot', 'opencode')
       `).run();
     })();
   }
@@ -128,6 +131,7 @@ export default class WorkbenchStatsImportRepository {
     `);
     this.database.transaction(() => {
       for (const discovery of discoveries) {
+        this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(discovery.harness);
         insert.run(
           discovery.projectId,
           discovery.rootId,

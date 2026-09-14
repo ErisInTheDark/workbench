@@ -9,6 +9,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ThreadDisplayKeySchema,
   ThreadReferenceSchema, TurnReferenceSchema,
@@ -180,7 +181,7 @@ export default class WorkbenchThreadStateMigration {
           id: string; document_json: string;
         }[];
         const titleRows = this.database.prepare("SELECT * FROM workbench_thread_title_history").all() as {
-          project_id: ProjectId; harness_id: "codex" | "copilot" | "opencode"; thread_id: string; title: string; used_at: number;
+          project_id: ProjectId; harness_id: WorkbenchHarness; thread_id: string; title: string; used_at: number;
         }[];
         for (const project of projects) for (const record of project.document.records) this.admitRecord(project.projectId, record);
         for (const parent of relationships) {
@@ -334,7 +335,7 @@ export default class WorkbenchThreadStateMigration {
     });
   }
 
-  private requireThread(threadId: string, projectId?: ProjectId, harness?: "codex" | "copilot" | "opencode") {
+  private requireThread(threadId: string, projectId?: ProjectId, harness?: WorkbenchHarness) {
     const identity = this.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId, harness });
     if (!identity) throw new Error("Thread-state source has unresolved thread ownership.");
     return identity;
@@ -390,10 +391,10 @@ export default class WorkbenchThreadStateMigration {
 
   private mapLayout(layout: ThreadDisplayLayout, projectId?: ProjectId): ThreadDisplayLayout {
     const key = (value: string): string => {
-      if (value.startsWith("folder:")) return value;
+      if (value.startsWith("folder:") || value.startsWith("draft:")) return value;
       const qualified = projectId ? { projectId, threadKey: value } : parseProjectQualifiedThreadDisplayKey(value);
       if (!qualified) throw new Error("Global layout has an unqualified member.");
-      const match = /^(codex|copilot|opencode):(.+)$/u.exec(qualified.threadKey);
+      const match = /^(?!folder:|draft:)([^:]+):(.+)$/u.exec(qualified.threadKey);
       const mapped = match
         ? getThreadDisplayThreadKey(WorkbenchHarnessSchema.parse(match[1]), this.requireThread(match[2]!, qualified.projectId, WorkbenchHarnessSchema.parse(match[1])).threadId)
         : ThreadDisplayKeySchema.parse(qualified.threadKey);

@@ -15,8 +15,6 @@ import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history.ts"
 import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
-const OPENCODE_QUESTION_TOOL_NAMESPACE = "opencode";
-const OPENCODE_QUESTION_TOOL_NAME = "question";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -35,14 +33,8 @@ function isWorkbenchQuestionnaireToolCallItem(item: ThreadItem): item is Dynamic
     && item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME;
 }
 
-function isOpenCodeQuestionToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
-  return item.type === "dynamicToolCall"
-    && item.namespace === OPENCODE_QUESTION_TOOL_NAMESPACE
-    && item.tool === OPENCODE_QUESTION_TOOL_NAME;
-}
-
 function isQuestionnaireToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
-  return isWorkbenchQuestionnaireToolCallItem(item) || isOpenCodeQuestionToolCallItem(item);
+  return isWorkbenchQuestionnaireToolCallItem(item);
 }
 
 function readQuestionnaireHistoryResponseText(item: DynamicToolCallItem) {

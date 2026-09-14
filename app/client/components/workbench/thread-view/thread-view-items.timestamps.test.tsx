@@ -73,12 +73,12 @@ test("relational questionnaire answers use resolution rather than request time",
   assert.ok(timestamps(html).every((value) => value === iso(item.resolvedAt)));
 });
 
-test("native questionnaire answers use completion time and unanswered requests stay unstamped", () => {
+test("Workbench questionnaire tools use completion time and unanswered requests stay unstamped", () => {
   const item: Extract<ThreadItem, { type: "dynamicToolCall" }> = {
     arguments: { questions: [{ id: "choice", question: "Which?", options: [] }] },
     contentItems: [{ type: "inputText", text: JSON.stringify({ answers: { choice: { answers: ["answer"] } } }) }],
-    durationMs: null, id: "native-question", namespace: "opencode", status: "completed",
-    success: true, tool: "question", type: "dynamicToolCall",
+    durationMs: null, id: "question-tool", namespace: "workbench", status: "completed",
+    success: true, tool: "workbench_request_user_input", type: "dynamicToolCall",
   };
   const render = (question: typeof item) => renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
     items: [question], itemTimeline: [timing(item.id, 1_000, 8_000)],

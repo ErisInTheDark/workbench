@@ -1,11 +1,11 @@
 /*
- * No production exports. Keywords: releases, immutable history, conversion, indexes, constraints, coordinated changes.
+ * No production exports. Tests protect sealed executable migration history.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { check, defineTable, index, integer, sql, text } from "./schema-definition.ts";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema,
+  copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema,
   rebuildTable, tableVersion, type WorkbenchDatabaseSchema,
 } from "./schema-history.ts";
 import {
@@ -55,6 +55,31 @@ function seal(schema: WorkbenchDatabaseSchema): SchemaReleaseRegistry {
   return Object.fromEntries(fingerprintSchemaReleases(schema).map(release => [`release${release.version}`, release]));
 }
 
+test("changing a reference backfill changes only its own release fingerprint", () => {
+  const providers = defineTable("providers", { id: text().primaryKey() });
+  const old = defineTable("records", { id: integer().primaryKey(), provider: text(), alternative: text() });
+  const next = defineTable("records", {
+    id: integer().primaryKey(), provider: text().references("providers", "id"), alternative: text(),
+  });
+  const build = (sourceColumn: "provider" | "alternative") => defineWorkbenchDatabaseSchema({
+    subsystems: [defineSubsystemHistory([
+      defineTableHistory({ current: providers, versions: [
+        tableVersion({ schemaVersion: 1, table: providers, migration: createTable(providers) }),
+      ] }),
+      defineTableHistory({ current: next, versions: [
+        tableVersion({ schemaVersion: 1, table: old, migration: createTable(old) }),
+        tableVersion({ schemaVersion: 2, table: next, migration: [
+          copyDistinctValues({ from: old, sourceColumn, to: providers, targetColumn: "id" }),
+          rebuildTable({ from: old, to: next }),
+        ] }),
+      ] }),
+    ])],
+  });
+  const original = build("provider");
+  const changed = build("alternative");
+  assert.deepEqual(fingerprintSchemaReleases(original)[0], fingerprintSchemaReleases(changed)[0]);
+  assert.throws(() => assertSchemaReleaseManifest(changed, seal(original), "fixture"), /changed/);
+});
 test("independently reconstructed declarations retain their release fingerprints", () => {
   const releases = seal(fixture());
   assert.doesNotThrow(() => assertSchemaReleaseManifest(fixture(), releases, "fixture"));

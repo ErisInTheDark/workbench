@@ -273,17 +273,9 @@ export default class WorkbenchQuestionnaireResponseController {
       if (!binding) throw new Error("The questionnaire thread has no native provider binding.");
       const response = await this.sendMapped(input.harness, {
         method: "turn/start",
-        ...(input.harness === "opencode" ? {
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
-            cwd: binding.nativeLocation,
-            projectId: input.projectId,
-            threadId: input.threadId,
-          },
-        } : {}),
         params: {
           cwd: binding.nativeLocation,
           input: turnInput,
-          ...(input.harness === "copilot" ? { projectId: input.projectId } : {}),
           threadId: input.threadId,
         },
       });

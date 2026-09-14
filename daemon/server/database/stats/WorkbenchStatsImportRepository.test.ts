@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect versioned resumable usage imports, fenced claim queues, and deduplicated claim facts. Keywords: stats, import, version, sqlite, test.
+ * No production exports. Tests protect resumable usage imports, fenced claim queues and deduplicated claim facts.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,11 +8,36 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchStatsImportRepository from "./WorkbenchStatsImportRepository.ts";
 import { WORKBENCH_STATS_USAGE_IMPORT_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 
+test("claim discovery admits future providers independently of thread admission and remains repeat-safe", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    const repository = new WorkbenchStatsImportRepository(database);
+    const discovery = {
+      checkpointCommit: "a".repeat(40), checkpointRef: "refs/worktree/agents/future-provider/thread/checkpoints/one",
+      harness: "future-provider", observedAt: Date.UTC(2026, 8, 4), projectId: "project",
+      repositoryRoot: "C:/project", rootId: "root", threadId: "thread", workspaceRoot: "C:/project",
+    };
+    repository.addClaimDiscoveries("run", [discovery, discovery], 1);
+    const claim = repository.claimClaims("run", 2);
+    assert.ok(claim);
+    repository.settleClaims("run", claim, { paths: ["src/file.ts"], state: "completed" }, 3);
+    repository.addClaimDiscoveries("run", [discovery], 4);
+    assert.equal(repository.claimClaims("run", 5), null);
+    assert.deepEqual(database.prepare("SELECT harness_id, thread_id FROM git_claim_thread_file_days").all(), [
+      { harness_id: "future-provider", thread_id: "thread" },
+    ]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 test("usage and claim imports resume safely and isolate failed work", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
   database.exec(`
+    INSERT INTO workbench_harnesses(id) VALUES ('codex');
     INSERT INTO workbench_thread_state_threads
       (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed, created_at, updated_at, activity_at, order_at)
     VALUES ('thread', 'project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 20, NULL);

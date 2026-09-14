@@ -44,10 +44,6 @@ function threadIdFrom(value: unknown) {
   return typeof params?.threadId === "string" ? params.threadId : typeof turn?.threadId === "string" ? turn.threadId : null;
 }
 
-function isRecoveryCandidate(candidate: WorkbenchObservedTurnCandidate): candidate is WorkbenchTurnRecoveryHandoffCandidate {
-  return candidate.harness === "codex" || candidate.harness === "opencode";
-}
-
 export default class WorkbenchTurnRecoveryController {
   private readonly candidates = new Map<string, WorkbenchObservedTurnCandidate>();
   private readonly generationId: string;
@@ -204,7 +200,6 @@ export default class WorkbenchTurnRecoveryController {
   capture(harnesses: readonly WorkbenchRecoveryHarness[]) {
     const allowed = new Set(harnesses);
     const eligible = [...this.candidates.values()]
-      .filter(isRecoveryCandidate)
       .filter((candidate) => allowed.has(candidate.harness))
       .filter((candidate) => candidate.harness !== "codex" || !this.goalOwnedThreads.has(candidate.threadId))
       .sort((left, right) => right.lastEventAt - left.lastEventAt);
@@ -311,7 +306,6 @@ export default class WorkbenchTurnRecoveryController {
   async persistManualResume(harness: WorkbenchRecoveryHarness, threadId: string) {
     const candidate = this.candidates.get(`${harness}:${threadId}`);
     if (!candidate) throw new Error("The current managed turn has no captured start request to resume.");
-    if (!isRecoveryCandidate(candidate)) throw new Error(`Manual thread resume is unavailable for ${candidate.harness} threads.`);
     if (!candidate.turnId) throw new Error("The current managed turn has not started yet.");
     const captured = structuredClone(candidate);
     const handoff: WorkbenchTurnRecoveryHandoff = {

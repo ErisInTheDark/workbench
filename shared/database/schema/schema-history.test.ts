@@ -19,6 +19,7 @@ import {
   applyWorkbenchDatabaseSchema,
   createIndexes,
   createTable,
+  copyDistinctValues,
   deleteRows,
   defineSubsystemHistory,
   defineTableHistory,
@@ -82,6 +83,64 @@ const version1Schema = defineWorkbenchDatabaseSchema({
 
 const currentSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([currentHistory])],
+});
+
+test("reference backfill preserves duplicates and existing parents and rolls back with a failed rebuild", () => {
+  for (const fail of [false, true]) {
+    const providers = defineTable("copy_providers", { id: text().primaryKey() });
+    const old = defineTable("copy_records", { id: integer().primaryKey(), provider: text() });
+    const next = evolveTable(old, {
+      drop: ["provider"],
+      add: { provider: text().references("copy_providers", "id") },
+    });
+    const schema = defineWorkbenchDatabaseSchema({
+      subsystems: [defineSubsystemHistory([
+        defineTableHistory({
+          current: providers,
+          versions: [tableVersion({ schemaVersion: 1, table: providers, migration: createTable(providers) })],
+        }),
+        defineTableHistory({
+          current: next,
+          versions: [
+            tableVersion({ schemaVersion: 1, table: old, migration: createTable(old) }),
+            tableVersion({
+              schemaVersion: 2, table: next,
+              migration: [
+                copyDistinctValues({ from: old, sourceColumn: "provider", to: providers, targetColumn: "id" }),
+                rebuildTable({
+                  from: old, to: next,
+                  ...(fail ? { map: () => ({ provider: sql.text`missing_copy_test_function()` }) } : {}),
+                }),
+              ],
+            }),
+          ],
+        }),
+      ])],
+    });
+    const database = new Database(":memory:");
+    try {
+      database.pragma("foreign_keys = ON");
+      applyWorkbenchDatabaseSchema(database, schema, { targetVersion: 1 });
+      database.exec(`
+        INSERT INTO copy_providers VALUES ('existing');
+        INSERT INTO copy_records VALUES (1, 'existing'), (2, 'future'), (3, 'future'), (4, NULL);
+      `);
+      const before = database.prepare("SELECT * FROM copy_records ORDER BY id").all();
+      if (fail) {
+        assert.throws(() => applyWorkbenchDatabaseSchema(database, schema), /missing_copy_test_function/);
+        assert.deepEqual(database.prepare("SELECT * FROM copy_providers").all(), [{ id: "existing" }]);
+        assert.equal(database.pragma("user_version", { simple: true }), 1);
+      } else {
+        applyWorkbenchDatabaseSchema(database, schema);
+        applyWorkbenchDatabaseSchema(database, schema);
+        assert.deepEqual(database.prepare("SELECT * FROM copy_providers ORDER BY id").all(), [{ id: "existing" }, { id: "future" }]);
+        assert.throws(() => database.exec("INSERT INTO copy_records VALUES (5, 'unadmitted')"), /FOREIGN KEY/);
+      }
+      assert.deepEqual(database.prepare("SELECT * FROM copy_records ORDER BY id").all(), before);
+      assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    } finally { database.close(); }
+  }
 });
 
 test("explicit historical installation upgrades through the same history without losing data", () => {
@@ -532,7 +591,7 @@ test("history declarations reject unsafe or unexplained transitions", () => {
       }),
     ],
     current: guardedAdded,
-  }), /must follow only row deletions/);
+  }), /Rebuild of schema_history_guarded@2/);
   const foreignVersionColumns = tableColumns(lookalikeV1);
   assert.throws(() => rebuildTable({
     from: guardedV1,

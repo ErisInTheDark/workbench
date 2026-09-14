@@ -62,6 +62,7 @@ export default class WorkbenchStatsRepository {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `);
     this.database.transaction(() => {
+      this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(snapshot.harness);
       for (const root of snapshot.roots) {
         for (const path of root.paths) {
           insert.run(snapshot.projectId, root.rootId, snapshot.harness, snapshot.threadId, path, claimedDay);

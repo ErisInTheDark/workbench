@@ -207,7 +207,7 @@ export function HarnessIcon({ harness, ...props }: IconProps & { harness: Workbe
     return <OpenCodeIcon {...props} />;
   }
 
-  return <CodexIcon {...props} />;
+  return harness === "codex" ? <CodexIcon {...props} /> : <BotIcon {...props} />;
 }
 
 export function SaveIcon(props: IconProps) {

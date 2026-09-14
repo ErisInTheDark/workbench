@@ -13,6 +13,7 @@
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  */
 import { z } from "zod";
+import { ProviderKeySchema } from "../provider/provider-key.ts";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
 import { GitArcStatusFullSchema } from "./git-arc-status";
 import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
@@ -96,7 +97,7 @@ export type GitArcMoveRequest = z.infer<typeof GitArcMoveRequestSchema>;
 
 const checkpointBaseRequest = {
   cwd: nonEmptyString,
-  harness: z.enum(["codex", "copilot", "opencode"]).default("codex"),
+  harness: ProviderKeySchema.default("codex"),
   threadId: nonEmptyString,
 };
 

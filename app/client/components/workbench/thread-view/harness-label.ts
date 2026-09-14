@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - formatHarnessLabel: format Workbench harness identifiers for composer UI. Keywords: harness, label, composer.
+ * - formatHarnessLabel: display known brands without renaming other providers.
  */
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 
 export function formatHarnessLabel(harness: WorkbenchHarness) {
-  return harness === "codex" ? "Codex" : harness === "copilot" ? "Copilot" : "OpenCode";
+  return harness === "codex" ? "Codex" : harness === "copilot" ? "Copilot" : harness === "opencode" ? "OpenCode" : harness;
 }

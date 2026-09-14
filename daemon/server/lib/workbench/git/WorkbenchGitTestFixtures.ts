@@ -19,6 +19,7 @@
  * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: prepare selected repository copies and clean them after all pools finish.
  */
 import fs from "node:fs/promises";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import path from "node:path";
 
 import { APP_RELOAD_DIRT_FIXTURE } from "../../../../../app/server/runtime/AppReloadDirt.test.fixtures";
@@ -73,7 +74,7 @@ async function write(root: string, relativePath: string, contents: string) {
 
 async function createTranscript(
   repositoryRoot: string,
-  harness: "codex" | "copilot" | "opencode",
+  harness: WorkbenchHarness,
   threadId: string,
 ) {
   const threadDirectory = path.join(

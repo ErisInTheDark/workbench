@@ -2480,7 +2480,7 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
 test("continuous settlement prunes once per durable epoch, retries failures, and resets on restore", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-retention-"));
   let now = 1_000;
-  const pruned: Array<Array<{ harness: "codex" | "copilot" | "opencode"; threadId: string }>> = [];
+  const pruned: Array<Array<{ harness: string; threadId: string }>> = [];
   let rejectNextPrune = false;
   const providerEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,

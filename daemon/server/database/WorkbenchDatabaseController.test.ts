@@ -457,7 +457,7 @@ test("schema constraints reject invalid thread state and mismatched item augment
     `).run();
     const itemId = Number(database.prepare(`
       INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
-      VALUES ('item','thread','turn',0,'plan',1,1)
+      VALUES ('item','thread','turn',0,'reasoning',1,1)
     `).run().lastInsertRowid);
     assert.throws(
       () => database.prepare("INSERT INTO thread_item_assistant_messages(item_id,state,phase,text) VALUES (?,'completed','commentary','nope')").run(itemId),
@@ -540,7 +540,7 @@ test("database requests share one evolving relational fixture", async (context) 
 
 async function checkTransactions(controller: WorkbenchDatabaseController) {
     await controller.executeTransaction([
-      insertRow(coreTables.workbenchHarnesses, { id: "codex" }),
+      upsertRow(coreTables.workbenchHarnesses, { id: "codex" }, { conflictColumns: ["id"], updateColumns: ["id"] }),
       insertRow(coreTables.workbenchHarnesses, { id: "opencode2" }),
     ]);
     assert.deepEqual(

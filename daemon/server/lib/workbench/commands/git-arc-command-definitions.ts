@@ -3,6 +3,7 @@
  * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP.
  */
 import { z } from "zod";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcStatusFullSchema } from "workbench-shared/workbench/git/git-arc-status";
@@ -29,7 +30,7 @@ function requireCallerThreadId(callerThreadId: string | null) {
 }
 
 function requireCallerHarness(callerHarness: string) {
-  if (callerHarness === "codex" || callerHarness === "copilot" || callerHarness === "opencode") return callerHarness;
+  if (ProviderKeySchema.safeParse(callerHarness).success) return callerHarness;
   throw new GitArcRejectionError({ reason: "invalidHarness" }, "A managed Workbench harness identity is required.");
 }
 

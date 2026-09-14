@@ -1,16 +1,11 @@
 /*
  * Exports:
- * - getWorkbenchThreadHarnessCandidates: order provider-owned thread harness candidates while honoring exact local knowledge. Keywords: thread, harness, routing, candidates, opencode, codex.
+ * - getWorkbenchThreadHarnessCandidates: preserve known identity or discover through installed providers.
  */
 import type { WorkbenchHarness } from "../../types.ts";
+import { installedProviderKeys } from "../provider/provider-registrations.ts";
 
-const THREAD_HARNESSES = ["codex", "copilot", "opencode"] as const satisfies readonly WorkbenchHarness[];
-
-export function getWorkbenchThreadHarnessCandidates(threadId: string, knownHarness?: WorkbenchHarness | null) {
+export function getWorkbenchThreadHarnessCandidates(_threadId: string, knownHarness?: WorkbenchHarness | null) {
   if (knownHarness) return [knownHarness];
-  const preferredHarness: WorkbenchHarness = threadId.startsWith("ses_") ? "opencode" : "codex";
-  return [
-    preferredHarness,
-    ...THREAD_HARNESSES.filter((candidateHarness) => candidateHarness !== preferredHarness),
-  ];
+  return [...installedProviderKeys];
 }

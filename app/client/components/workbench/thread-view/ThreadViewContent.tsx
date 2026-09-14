@@ -4,6 +4,7 @@
  */
 "use client";
 import { useWorkbenchThread } from "../use-workbench-thread";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
@@ -482,6 +483,7 @@ export default memo(function ThreadViewContent ({
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
   const canSelectHarness = Boolean(activeThread?.isDraft && activeProfileSlot
+    && (installedProviderKeys.length > 1 || !installedProviderKeys.some(harness => harness === activeThread.harness))
     && composerProfileController.getSelection(activeProfileSlot).kind === "custom");
   void composerProfileSnapshot;
   useEffect(() => {
@@ -551,16 +553,7 @@ export default memo(function ThreadViewContent ({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: activityTurn,
   }), [activePendingUserInputRequest, activityTurn]);
-  const hiddenDynamicToolCallItemIds = useMemo(() => {
-    if (!currentTurn || activePendingUserInputRequest?.harness !== "opencode") {
-      return EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
-    }
-
-    const itemIds = currentTurn.items
-      .filter((item) => item.type === "dynamicToolCall" && item.namespace === "opencode" && item.tool === "question")
-      .map((item) => item.id);
-    return itemIds.length ? Array.from(new Set(itemIds)) : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
-  }, [activePendingUserInputRequest?.harness, currentTurn]);
+  const hiddenDynamicToolCallItemIds = EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -1014,8 +1007,8 @@ export default memo(function ThreadViewContent ({
   };
   const handleComposerHarnessToggle = () => {
     if (!activeThread?.isDraft) return;
-    const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-    const nextHarness = harnesses[(harnesses.indexOf(activeThread.harness) + 1) % harnesses.length] ?? "codex";
+    const harnesses = installedProviderKeys;
+    const nextHarness = harnesses[(harnesses.findIndex(harness => harness === activeThread.harness) + 1) % harnesses.length] ?? "codex";
     handleComposerHarnessSelect(nextHarness);
   };
   const composerStatus = activeThread ? (

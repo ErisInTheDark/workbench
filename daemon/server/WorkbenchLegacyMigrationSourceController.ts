@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - LegacyMigrationHarnessRequest/LegacyMigrationProjectResolution/WorkbenchLegacyMigrationSourceControllerOptions: injected live-bridge and validated-project boundaries. Keywords: migration, source, capability, project.
- * - LegacyMigrationSnapshotError: safe typed selected-thread failure with exact durable import identity. Keywords: migration, diagnostics, terminal, identity.
- * - default WorkbenchLegacyMigrationSourceController: serve one bounded catalog page or one selected normalized thread snapshot, owning Codex unloaded-session resume. Keywords: migration, readonly, lazy, resume, bridge.
+ * - LegacyMigrationHarnessRequest/LegacyMigrationProjectResolution/WorkbenchLegacyMigrationSourceControllerOptions: injected live-bridge and validated-project boundaries.
+ * - LegacyMigrationSnapshotError: typed selected-thread failure with exact durable import identity.
+ * - default WorkbenchLegacyMigrationSourceController: serve bounded catalogue pages and selected snapshots, owning Codex unloaded-session resume.
  */
 import type http from "node:http";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -173,7 +174,7 @@ export default class WorkbenchLegacyMigrationSourceController {
     const operation = body?.operation;
     const harness = body?.harness;
     if (operation !== "catalogPage" && operation !== "threadSnapshot") throw new Error("Legacy migration source operation is unsupported.");
-    if (harness !== "codex" && harness !== "copilot" && harness !== "opencode") throw new Error("Legacy migration source harness is unsupported.");
+    if (typeof harness !== "string" || !ProviderKeySchema.safeParse(harness).success) throw new Error("Legacy migration source harness is invalid.");
     const cwd = requireString(body.cwd, "Legacy migration cwd");
     const projectId = requireString(body.projectId, "Legacy migration projectId");
     const timeoutMs = body.timeoutMs === undefined ? 10_000 : body.timeoutMs;

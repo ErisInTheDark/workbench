@@ -95,6 +95,16 @@ test("persists acknowledged profile mutations across store restarts", async (con
   assert.deepEqual((await create().read()).profiles, [profile("beta", 4)]);
 });
 
+test("standalone future-provider profiles survive repeated saves and reopening", async context => {
+  const { create } = await fixture(context);
+  const store = create();
+  const saved = { ...profile("future", 2), harness: "future-provider" };
+  await store.mutate({ kind: "upsert", profile: saved });
+  await store.mutate({ kind: "upsert", profile: saved });
+  await store.dispose();
+  assert.deepEqual((await create().read()).profiles, [saved]);
+});
+
 test("rejects malformed profile mutations", async (context) => {
   const { create } = await fixture(context);
   await assert.rejects(
@@ -167,9 +177,10 @@ test("imports once and does not resurrect deleted profiles from the retained leg
   const { create, root } = await fixture(context);
   const file = path.join(root, ".workbench", "runtime", "composer-profiles.json");
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ version: 1, profiles: { old: profile("old", 3) } }));
+  const imported = { ...profile("old", 3), harness: "future-provider" };
+  await writeFile(file, JSON.stringify({ version: 1, profiles: { old: imported } }));
   const first = create();
-  assert.deepEqual((await first.read()).profiles, [profile("old", 3)]);
+  assert.deepEqual((await first.read()).profiles, [imported]);
   await first.mutate({ kind: "delete", profileId: "old" });
   await first.dispose();
   assert.deepEqual((await create().read()).profiles, []);
@@ -214,7 +225,9 @@ test("failed legacy transactions roll back both imported rows and the completion
     query: database.query.bind(database),
     executeTransaction: async (statements) => {
       // Fail inside SQLite after the rows and marker, not before the transaction starts.
-      return await database.executeTransaction([...statements, statements[0]!]);
+      const marker = statements.find(statement => statement.tableName === "workbench_composer_profile_imports");
+      assert.ok(marker);
+      return await database.executeTransaction([...statements, marker]);
     },
   });
   await assert.rejects(failing.start(), /unique|constraint/iu);

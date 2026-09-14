@@ -12,8 +12,6 @@ import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeOptions, CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { CodexHealthMonitorOptions } from "./CodexHealthMonitor";
-import type { OpenCodeBridgeOptions } from "./opencode-bridge";
-import type { OpenCodeAppServerOptions } from "./OpenCodeAppServer";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
 import type { WorkbenchHardReloadOptions } from "./WorkbenchDaemonReloadController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -28,7 +26,6 @@ export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
   "codexBridge",
   "harnesses",
   "modules",
-  "openCodeBridge",
   "daemonHttp",
   "projectCatalog",
   "reloadController",
@@ -63,8 +60,6 @@ export interface DaemonProcessContext {
   onCodexBridgeReady(bridge: CodexStdioBridge): Promise<void>;
   onCodexBridgeUnavailable(restartingAppServer: boolean): void;
   onCodexFatalExit(reason: string, bridge: CodexStdioBridge | null): void;
-  openCodeAppServerOptions: OpenCodeAppServerOptions;
-  openCodeBridgeOptions: Omit<OpenCodeBridgeOptions, "appServer" | "getReloadableModules" | "initialState">;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   reportWebSocketDelivery(delivery: WorkbenchWebSocketDelivery): void;
   reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;

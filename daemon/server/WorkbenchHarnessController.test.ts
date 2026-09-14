@@ -64,6 +64,19 @@ function createController(calls: string[] = []) {
   ]);
 }
 
+test("future registered providers dispatch while unavailable identities cannot dispatch", async () => {
+  const calls: string[] = [];
+  const controller = new WorkbenchHarnessController([
+    createAdapter("codex", calls),
+    createAdapter("future-provider", calls),
+  ]);
+  await controller.handleBrowserMessage("future-provider", { id: 1, method: "thread/read" }, {} as never);
+  assert.deepEqual(calls, ["recovery:future-provider:thread/read", "browser:future-provider:thread/read"]);
+  calls.length = 0;
+  await assert.rejects(async () => controller.handleBrowserMessage("not-installed", { id: 2, method: "thread/read" }, {} as never));
+  assert.deepEqual(calls, []);
+});
+
 test("rejects invalid duplicate registrations and requires the default Codex adapter", () => {
   assert.throws(() => new WorkbenchHarnessController([createAdapter("copilot")]), /default Codex/u);
   assert.throws(() => new WorkbenchHarnessController([createAdapter("codex"), createAdapter("codex")]), /registered more than once/u);

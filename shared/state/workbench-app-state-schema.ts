@@ -12,6 +12,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   literal,
@@ -25,6 +26,7 @@ import {
 } from "../database/schema/schema-definition.ts";
 import {
   createTable,
+  copyDistinctValues,
   defineSubsystemHistory,
   defineTableHistory,
   defineWorkbenchDatabaseSchema,
@@ -590,16 +592,37 @@ const modelPreferences = defineTable("model_preferences", {
   constraints: [primaryKey([table.harness, table.model_id])],
 }));
 
+const workbenchHarnesses = defineTable("workbench_harnesses", { id: text().primaryKey() });
+const workbenchHarnessesHistory = defineTableHistory({
+  current: workbenchHarnesses,
+  versions: [tableVersion({
+    schemaVersion: appStateReleases.providerReferences.version,
+    table: workbenchHarnesses,
+    migration: createTable(workbenchHarnesses),
+  })],
+});
+const providerModelPreferences = evolveTable(modelPreferences, {
+  drop: ["harness"],
+  add: { harness: text().notNull().references("workbench_harnesses", "id") },
+});
 const modelPreferencesHistory = defineTableHistory({
-  current: modelPreferences,
+  current: providerModelPreferences,
   versions: [tableVersion({
     migration: createTable(modelPreferences),
     schemaVersion: appStateReleases.modelPreferences.version,
     table: modelPreferences,
+  }), tableVersion({
+    schemaVersion: appStateReleases.providerReferences.version,
+    table: providerModelPreferences,
+    migration: [
+      copyDistinctValues({ from: modelPreferences, sourceColumn: "harness", to: workbenchHarnesses, targetColumn: "id" }),
+      rebuildTable({ from: modelPreferences, to: providerModelPreferences }),
+    ],
   })],
 });
 
 const histories = [
+  workbenchHarnessesHistory,
   modelPreferencesHistory,
   appStateMetadataHistory,
   daemonRegistrationsHistory,
@@ -636,6 +659,7 @@ export const appStateClientTables = Object.freeze({
 });
 
 export const appStateTables = Object.freeze({
+  workbenchHarnesses: workbenchHarnessesHistory.current,
   appStateMetadata: appStateMetadataHistory.current,
   daemonRegistrations: daemonRegistrationsHistory.current,
   ...appStateClientTables,

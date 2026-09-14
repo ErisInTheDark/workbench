@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 const URL_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
 type WorkbenchRuntimeEnvironment = Record<string, string | undefined>;
 type WorkbenchRuntimeListener = {
-  key: "bridge" | "openCode";
+  key: "bridge";
   label: string;
   port: number;
 };
@@ -19,14 +19,6 @@ function requiredValue(environment: WorkbenchRuntimeEnvironment, field: string, 
   const value = environment[field] ?? fallback;
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(`Workbench runtime topology requires ${field}.`);
   return value.trim();
-}
-
-function integerPort(environment: WorkbenchRuntimeEnvironment, field: string, fallback: string) {
-  const value = requiredValue(environment, field, fallback);
-  if (!/^\d+$/u.test(value)) throw new Error(`Workbench runtime topology ${field} must be an integer port.`);
-  const port = Number(value);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) throw new Error(`Workbench runtime topology ${field} port is outside 1..65535.`);
-  return port;
 }
 
 function urlPort(environment: WorkbenchRuntimeEnvironment, field: string, fallback: string) {
@@ -61,16 +53,7 @@ export function deriveWorkbenchRuntimeTopology(environment: WorkbenchRuntimeEnvi
   const listeners: WorkbenchRuntimeListener[] = [
     { key: "bridge", label: "Workbench bridge", port: urlPort({ CODEX_APP_SERVER_URL: bridgeUrl }, "CODEX_APP_SERVER_URL", bridgeUrl) },
   ];
-  if (!(typeof environment.OPENCODE_SERVER_URL === "string" && environment.OPENCODE_SERVER_URL.trim())) {
-    listeners.unshift({ key: "openCode", label: "OpenCode", port: integerPort(environment, "OPENCODE_SERVER_PORT", "4096") });
-  }
-  const seen = new Map();
-  for (const listener of listeners) {
-    const prior = seen.get(listener.port);
-    if (prior) throw new Error(`Workbench runtime topology has duplicate port ${listener.port} for ${prior} and ${listener.label}.`);
-    seen.set(listener.port, listener.label);
-    Object.freeze(listener);
-  }
+  for (const listener of listeners) Object.freeze(listener);
   return Object.freeze({
     endpoints: Object.freeze({ bridge: bridgeUrl }),
     listeners: Object.freeze(listeners),

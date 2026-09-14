@@ -53,14 +53,8 @@ const PRICES: readonly ModelPrice[] = [
   { aliases: [/^daybreak-red$/u], id: "daybreak-red", longContext: false, standard: rates(12.5, 1.25, 75) },
 ];
 
-const DEFAULT_MODEL_BY_PROVIDER = {
-  codex: "gpt-5.6-sol",
-  copilot: "gpt-5.6-sol",
-  opencode: "gpt-5.6-sol",
-} as const satisfies Record<WorkbenchHarness, string>;
-
-export function defaultApiPricingModel(provider: WorkbenchHarness) {
-  return DEFAULT_MODEL_BY_PROVIDER[provider];
+export function defaultApiPricingModel(_provider: WorkbenchHarness) {
+  return "gpt-5.6-sol";
 }
 
 function safeTokens(value: number) {

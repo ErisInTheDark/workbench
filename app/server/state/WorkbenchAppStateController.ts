@@ -133,9 +133,12 @@ export default class WorkbenchAppStateController {
   #put(record: WorkbenchClientStateRecord, revision: number): WorkbenchDatabaseMutation[] {
     switch (record.kind) {
       case "modelPreference":
-        return [upsertRow(appStateTables.modelPreferences, {
+        return [
+          upsertRow(appStateTables.workbenchHarnesses, { id: record.harness }, { conflictColumns: ["id"], updateColumns: ["id"] }),
+          upsertRow(appStateTables.modelPreferences, {
           harness: record.harness, model_id: record.modelId, favourite: Number(record.favourite) as 0 | 1, deleted: 0, revision,
-        }, { conflictColumns: ["harness", "model_id"], updateColumns: ["favourite", "deleted", "revision"] })];
+          }, { conflictColumns: ["harness", "model_id"], updateColumns: ["favourite", "deleted", "revision"] }),
+        ];
       case "globalPreference":
         return [upsertRow(appStateTables.globalPreferences, {
           ...scalarColumns(record.preference),

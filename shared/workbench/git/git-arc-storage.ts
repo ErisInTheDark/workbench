@@ -1,5 +1,4 @@
 /*
- * Keywords: git, metadata, refs, checkpoints, proposals, outcomes, unborn.
  * Exports:
  * - CHECKPOINT_METADATA_MARKER/PROPOSAL_METADATA_MARKER: identify stored metadata messages.
  * - CheckpointKind: checkpoint lifecycle kind.
@@ -21,7 +20,8 @@ export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
 const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 
 export type CheckpointKind = "arc" | "implement" | "plan";
-export type GitArcHarness = "codex" | "copilot" | "opencode";
+export type { ProviderKey as GitArcHarness } from "../provider/provider-key.ts";
+import type { ProviderKey as GitArcHarness } from "../provider/provider-key.ts";
 export type GitArcProposalStatus = "committed" | "proposed" | "rescinded" | "superseded" | "unavailable";
 export type GitArcProposalUnavailableReasonCode = "committed-outside-proposal";
 
