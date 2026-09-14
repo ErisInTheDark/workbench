@@ -14,6 +14,9 @@ node_modules
 tray/target/
 voice/target/
 tray/gen/
+app/tray/target/
+app/voice/target/
+app/tray/gen/
 .next
 *.tsbuildinfo
 shared/codex/generated/

@@ -12,12 +12,12 @@ import {
   GitCheckpointRequestSchema,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { remapArcOutcome } from "workbench-shared/workbench/git/git-arc-storage";
-import type { GitArcRegistryEntry } from "../../../daemon/lib/workbench/git/GitArcRegistry";
+import type { GitArcRegistryEntry } from "../../../daemon/server/lib/workbench/git/GitArcRegistry";
 import { readGitArcValidationRejection } from "workbench-shared/workbench/git/git-arc-rejections";
 
 const require = createRequire(import.meta.url);
-const { default: GitArcRegistry } = require("../../../daemon/lib/workbench/git/GitArcRegistry") as typeof import("../../../daemon/lib/workbench/git/GitArcRegistry");
-const { default: WorkbenchGitCheckpointController } = require("../../../daemon/lib/workbench/git/WorkbenchGitCheckpointController") as typeof import("../../../daemon/lib/workbench/git/WorkbenchGitCheckpointController");
+const { default: GitArcRegistry } = require("../../../daemon/server/lib/workbench/git/GitArcRegistry") as typeof import("../../../daemon/server/lib/workbench/git/GitArcRegistry");
+const { default: WorkbenchGitCheckpointController } = require("../../../daemon/server/lib/workbench/git/WorkbenchGitCheckpointController") as typeof import("../../../daemon/server/lib/workbench/git/WorkbenchGitCheckpointController");
 
 function registryFromState(entries: object[]) {
   let nextBlob = 0;
@@ -497,9 +497,9 @@ test("checkpoint facade exposes the complete plan, proposal, and lifecycle owner
 
 test("checkpoint, plan, and proposal responsibilities have dedicated owners", async () => {
   const modules = await Promise.allSettled([
-    import("../../../daemon/lib/workbench/git/GitCheckpointStore"),
-    import("../../../daemon/lib/workbench/git/GitArcPlanController"),
-    import("../../../daemon/lib/workbench/git/GitArcProposalController"),
+    import("../../../daemon/server/lib/workbench/git/GitCheckpointStore"),
+    import("../../../daemon/server/lib/workbench/git/GitArcPlanController"),
+    import("../../../daemon/server/lib/workbench/git/GitArcProposalController"),
   ]);
   assert.deepEqual(modules.map((result) => result.status), ["fulfilled", "fulfilled", "fulfilled"]);
 });

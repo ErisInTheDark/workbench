@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchProcessLogger: frame Workbench process lines, preserve producer styling, and derive producer-formatted views. Keywords: logging, ANSI, timestamp, stream.
+ * - WorkbenchProcessLogger: frame Workbench process lines, preserve producer styling, and derive producer-formatted views.
  */
 const ANSI_BLUE = "\u001b[34m";
 const ANSI_CYAN = "\u001b[36m";
@@ -11,7 +11,7 @@ const ANSI_RESET = "\u001b[0m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
 
-type WorkbenchProcessLogDomain = "app" | "client" | "esbuild" | "http" | "orchestrator" | "runner" | "tailwind";
+type WorkbenchProcessLogDomain = "app" | "client" | "esbuild" | "http" | "daemon" | "host" | "tailwind";
 
 interface WorkbenchProcessLoggerOptions {
   color?: boolean;
@@ -26,8 +26,8 @@ const domainColors: Record<WorkbenchProcessLogDomain, string> = {
   client: ANSI_RED,
   esbuild: ANSI_GREEN,
   http: ANSI_BLUE,
-  orchestrator: ANSI_CYAN,
-  runner: ANSI_YELLOW,
+  daemon: ANSI_CYAN,
+  host: ANSI_YELLOW,
   tailwind: ANSI_YELLOW,
 };
 

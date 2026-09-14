@@ -1,15 +1,15 @@
 /*
  * Exports:
- * - DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT: fallback websocket bridge port for browser clients when no public override is configured. Keywords: codex, websocket, port, fallback.
- * - DEFAULT_CODEX_APP_SERVER_URL: fallback local websocket URL for non-browser contexts. Keywords: codex, websocket, localhost, fallback.
- * - CODEX_CLIENT_INFO: stable workbench client identity for the app-server handshake. Keywords: codex, client info, initialize.
- * - getCodexAppServerPort: resolve the public browser websocket port from explicit config or defaults. Keywords: codex, websocket, port, env.
- * - getCodexAppServerUrl: resolve the browser websocket URL, preferring explicit public config and otherwise reusing the current page host with the bridge port. Keywords: codex, websocket, browser host, mobile.
- * - getCodexAppServerHttpOrigin: derive the HTTP health-check origin from the resolved websocket URL. Keywords: codex, readyz, healthz, origin.
- * - getCodexAppServerReadyUrl: resolve the bridge readiness endpoint. Keywords: codex, readyz.
- * - getCodexAppServerHealthUrl: resolve the bridge health endpoint. Keywords: codex, healthz.
- * - getCodexTranscriptAssetUrl: map canonical transcript storage keys to the daemon HTTP asset route. Keywords: transcript, asset, daemon.
- * - getWorkbenchProjectIconUrl: map one project identity to the daemon HTTP icon route. Keywords: project, icon, asset, daemon.
+ * - DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT: fallback websocket bridge port for browser clients when no public override is configured.
+ * - DEFAULT_CODEX_APP_SERVER_URL: fallback local websocket URL for non-browser contexts.
+ * - CODEX_CLIENT_INFO: stable workbench client identity for the app-server handshake.
+ * - getCodexAppServerPort: resolve the public browser websocket port from explicit config or defaults.
+ * - getCodexAppServerUrl: resolve the browser websocket URL, preferring explicit public config and otherwise reusing the current page host with the bridge port.
+ * - getCodexAppServerHttpOrigin: derive the HTTP health-check origin from the resolved websocket URL.
+ * - getCodexAppServerReadyUrl: resolve the bridge readiness endpoint.
+ * - getCodexAppServerHealthUrl: resolve the bridge health endpoint.
+ * - getCodexTranscriptAssetUrl: map canonical transcript storage keys to the daemon HTTP asset route.
+ * - getWorkbenchProjectIconUrl: map one project identity to the daemon HTTP icon route.
  */
 export const DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT = "4500";
 export const DEFAULT_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT}`;
@@ -102,10 +102,10 @@ export function getCodexAppServerHealthUrl() {
 export function getCodexTranscriptAssetUrl(value: string) {
   const assetUrl = value.trim();
   return assetUrl.startsWith("/api/transcript-assets/")
-    ? `${getCodexAppServerHttpOrigin()}/orchestrator/transcript-assets/${assetUrl.slice("/api/transcript-assets/".length)}`
+    ? `${getCodexAppServerHttpOrigin()}/daemon/transcript-assets/${assetUrl.slice("/api/transcript-assets/".length)}`
     : value;
 }
 
 export function getWorkbenchProjectIconUrl(projectId: string, assetKey: string) {
-  return `${getCodexAppServerHttpOrigin()}/orchestrator/project-icons/${encodeURIComponent(projectId)}?asset=${encodeURIComponent(assetKey)}`;
+  return `${getCodexAppServerHttpOrigin()}/daemon/project-icons/${encodeURIComponent(projectId)}?asset=${encodeURIComponent(assetKey)}`;
 }

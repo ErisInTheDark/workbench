@@ -37,10 +37,10 @@ CRITICAL INSTRUCTION EDITING RULES:
 - Do not add arbitrary short timeouts to production work. A timeout is valid only when completion after its deadline is itself a product failure; if late completion would still be correct or useful, keep the work lifecycle-owned and expose progress or caller-owned cancellation instead of manufacturing a timeout failure. Every real deadline must name its owner, reason, failure behavior, and regression proof.
 - Do not swallow, bury, or silently discard unexpected failures. Surface every unexpected failure at its owning boundary as a bounded sanitized warning/error and preserve typed failure propagation or durable failure state where the caller or product needs it. Silence is allowed only for an explicitly expected condition whose handling is complete and regression-tested; empty catches, ignored rejections, and quiet fallback paths are not error handling.
 - Project-scoped agent endpoints derive ownership from the agent's validated `cwd`, never a caller-supplied `projectId`. Keep `projectId` as UI/app selection state and resolved response/storage identity only.
-- Keep the app server thin. It owns static SPA serving, app-local state, reload and port controls, and bounded client log admission. It must not own orchestrator domain behaviour.
-- Keep the browser client thinner. It owns rendering and interaction to apply intent into the app server or orchestrator server.
-- Keep browser-to-orchestrator RPC on the shared typed WebSocket. Use orchestrator HTTP only for CLI/MCP ingress, health, assets, and HTTP streaming. Do not create per-request WebSocket clients.
-- Make long-lived orchestrator changes reload-capable in the same changeset. When a scoped reload or full restart will be needed, prominently tell the user which. You must be confident about what reloads will be required, this is a required step of inspection. Reloads and restarts are user-owned. Never include them in agent work or plans, run them, or request permission.
+- Keep the app server thin. It owns static SPA serving, app-local state, reload and port controls, and bounded client log admission. It must not own daemon domain behaviour.
+- Keep the browser client thinner. It owns rendering and interaction to apply intent into the app server or daemon server.
+- Keep browser-to-daemon RPC on the shared typed WebSocket. Use daemon HTTP only for CLI/MCP ingress, health, assets, and HTTP streaming. Do not create per-request WebSocket clients.
+- Make long-lived daemon changes reload-capable in the same changeset. When a scoped reload or full restart will be needed, prominently tell the user which. You must be confident about what reloads will be required, this is a required step of inspection. Reloads and restarts are user-owned. Never include them in agent work or plans, run them, or request permission.
 - Keep project discovery coalesced and `cwd`-validated with watcher invalidation and a bounded soft refresh. Do not reintroduce per-request project walks, and keep explorer tree snapshot caching separate from project discovery.
 - Give every new long-lived subsystem an explicit reload/disposal boundary.
 - Treat the reloadable projects as dependency graphs. Parents provide registrations to direct children, and reloading a node replaces its dependant closure. Put each subsystem at the lowest reloadable ancestor that spans its dependants; do not move cross-branch lifecycle into the projects' `index.ts` entrypoints or other non-reloadable imports.
@@ -48,7 +48,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ## Commands and Permission Boundaries
 
-Run `pnpm test` and `pnpm typecheck` from the repository root.
+Run `wb test` and `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 
@@ -71,5 +71,4 @@ A direct user request to perform a specific bounded action counts as explicit pe
 
 ### Forbidden Shortcuts
 
-- Do not run any `pnpm` script other than `test` or `typecheck` for agent validation.
-- Do not invoke `tsx` or another ad hoc test runner directly; use the project-owned `pnpm test` script.
+- Do not run random `pnpm` scripts because they seem related. Know what you're doing before you do things.

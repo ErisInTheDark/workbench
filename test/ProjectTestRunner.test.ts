@@ -10,7 +10,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import type { ChildProcess } from "node:child_process";
 
-import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/lib/workbench/WorkbenchTemporaryDirectory";
+import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunner from "./ProjectTestRunner";
 
 test("rejects all orphaned tests before acquiring fixtures or launching children", async () => {

@@ -6,7 +6,7 @@
   },
   "scripts": {
     "dev": "pnpm --dir .. dev",
-    "dev:orchestrator": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
+    "dev:daemon": "node --env-file-if-exists=.env.local --import tsx server/index.ts",
     "test": "pnpm --dir .. test"
   },
   "dependencies": {

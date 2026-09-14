@@ -36,7 +36,7 @@ test("reports only complete non-empty child lines as activity", () => {
     now: () => new Date(2026, 0, 1, 1, 2, 3),
     writeOutput: (value) => output.push(value),
   });
-  const stream = logger.createLineStream("orchestrator", false, () => { activity += 1; });
+  const stream = logger.createLineStream("daemon", false, () => { activity += 1; });
 
   stream.write("partial");
   stream.write(" line\n\nsecond");
@@ -45,8 +45,8 @@ test("reports only complete non-empty child lines as activity", () => {
 
   assert.equal(activity, 2);
   assert.deepEqual(output, [
-    "01:02:03 orchestrator partial line\n",
-    "01:02:03 orchestrator second\n",
+    "01:02:03 daemon partial line\n",
+    "01:02:03 daemon second\n",
   ]);
 });
 
@@ -57,9 +57,9 @@ test("derived coloured views preserve producer ANSI and share the original sinks
     writeOutput: (value) => output.push(value),
   }).withMessageFormatter((message) => `app:${message}`);
 
-  logger.line("orchestrator", "\u001b[32mok\u001b[0m");
+  logger.line("daemon", "\u001b[32mok\u001b[0m");
 
   assert.deepEqual(output, [
-    "\u001b[90m01:02:03\u001b[0m \u001b[36morchestrator\u001b[0m app:\u001b[32mok\u001b[0m\n",
+    "\u001b[90m01:02:03\u001b[0m \u001b[36mdaemon\u001b[0m app:\u001b[32mok\u001b[0m\n",
   ]);
 });

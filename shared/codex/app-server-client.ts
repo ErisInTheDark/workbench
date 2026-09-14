@@ -3,7 +3,7 @@
  * - CodexAppServerClient: persistent WebSocket transport for provider and Workbench notifications with fenced reconnects.
  */
 import type { WorkbenchHarness } from "../types.ts";
-import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload.ts";
+import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "../workbench/stats/workbench-stats-contract.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
 import {

@@ -12,7 +12,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const voice = path.join(root, "voice");
+const voice = path.join(root, "app", "voice");
 const cache = path.join(root, ".workbench", "native-voice");
 const lockPath = path.join(voice, "native-dependencies.json");
 const args = new Set(process.argv.slice(2));

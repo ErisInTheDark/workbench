@@ -13,12 +13,12 @@ import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcrip
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
-} from "../../../daemon/orchestrator/database/transcript/workbench-transcript-types";
+} from "../../../daemon/server/database/transcript/workbench-transcript-types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const require = createRequire(import.meta.url);
-const { installWorkbenchDatabaseSchema } = require("../../../daemon/orchestrator/database/workbench-database-schema") as typeof import("../../../daemon/orchestrator/database/workbench-database-schema");
-const { default: WorkbenchTranscriptRepository } = require("../../../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository") as typeof import("../../../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository");
+const { installWorkbenchDatabaseSchema } = require("../../../daemon/server/database/workbench-database-schema") as typeof import("../../../daemon/server/database/workbench-database-schema");
+const { default: WorkbenchTranscriptRepository } = require("../../../daemon/server/database/transcript/WorkbenchTranscriptRepository") as typeof import("../../../daemon/server/database/transcript/WorkbenchTranscriptRepository");
 
 const fixtureIdentityValues = {
   NativeThreadId: {

@@ -1,5 +1,4 @@
 /*
- * Keywords: lifecycle diagnostic, explicit opt-in, isolated processes.
  * No exports. Run one lifecycle integration test outside normal discovery.
  */
 import path from "node:path";
@@ -16,7 +15,7 @@ if (args.length && (args.length !== 1 || args[0] !== file)) {
   process.chdir(path.join(root, "daemon"));
   process.env.WORKBENCH_LIFECYCLE_TEST_FILE = file;
   const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
-  console.log("Isolated lifecycle diagnostic: real app/orchestrator, no model turns.");
+  console.log("Isolated lifecycle diagnostic: real app/daemon, no model turns.");
   // Ten minutes for the scenario, then two independent process cleanup budgets.
   const result = await new ProjectTestRunner(root, {
     testConcurrency: 1, testTimeoutMs: 720_000,

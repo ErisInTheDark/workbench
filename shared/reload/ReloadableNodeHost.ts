@@ -1,5 +1,4 @@
 /*
- * Keywords: graph, reload, registry, handoff, rollback, deadline.
  * Exports:
  * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions.
  * - ReloadableNodeHostOptions: process-owned deadline, clock, logging, and swap ports.
@@ -7,8 +6,8 @@
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import type {
-  WorkbenchReloadScope as OrchestratorReloadScope,
-  WorkbenchReloadScopeDescriptor as OrchestratorReloadScopeDescriptor,
+  WorkbenchReloadScope as DaemonReloadScope,
+  WorkbenchReloadScopeDescriptor as DaemonReloadScopeDescriptor,
 } from "./workbench-reload.ts";
 import type ReloadableNode from "./ReloadableNode.ts";
 import ReloadableNodeTransition, { type ReloadableNodeTransitionDeadline } from "./ReloadableNodeTransition.ts";
@@ -20,7 +19,7 @@ import type {
   ReloadableNodeLifecycle,
 } from "./ReloadableNode.ts";
 
-interface OrchestratorFeatureNodeDefinition<TContext, TFeatures extends object, TNotification> {
+interface DaemonFeatureNodeDefinition<TContext, TFeatures extends object, TNotification> {
   access: ReloadableNode<TContext, TFeatures, TNotification>["access"];
   create(context: TContext, build: ReloadableNodeBuild<TFeatures>): ReloadableNodeInstance<TFeatures, TNotification>;
   dependencies: readonly string[];
@@ -31,7 +30,7 @@ interface OrchestratorFeatureNodeDefinition<TContext, TFeatures extends object, 
   matcher: GitignoreMatcher;
   requires: readonly (keyof TFeatures)[];
   safeAll: boolean;
-  scope: OrchestratorReloadScope;
+  scope: DaemonReloadScope;
 }
 
 export interface ReloadableNodeModuleLoader<TContext, TFeatures extends object, TNotification> {
@@ -45,13 +44,13 @@ export interface ReloadableNodeHostOptions {
   now?: () => number;
   onSwap?: (nodeIds: readonly string[]) => Promise<void> | void;
   processScope?: {
-    descriptor: OrchestratorReloadScopeDescriptor;
+    descriptor: DaemonReloadScopeDescriptor;
     sources: string;
   };
   requiredRegistrations?: readonly PropertyKey[];
-  requiredScopes?: readonly OrchestratorReloadScope[];
+  requiredScopes?: readonly DaemonReloadScope[];
   runtimeDrainTimeoutMs?: number;
-  topologyScope?: OrchestratorReloadScope;
+  topologyScope?: DaemonReloadScope;
 }
 
 interface ActiveOperation {
@@ -61,7 +60,7 @@ interface ActiveOperation {
 
 interface ActiveNode<TContext, TFeatures extends object, TNotification> {
   activeOperations: Map<symbol, ActiveOperation>;
-  definition: OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>;
+  definition: DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>;
   disposalPhase: string | null;
   drainWaiters: Array<() => void>;
   gate: Promise<void> | null;
@@ -113,7 +112,7 @@ function normalizeNodeId(value: string, label: string) {
 
 export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification> {
   private readonly createDeadline: NonNullable<ReloadableNodeHostOptions["createRuntimeDrainDeadline"]>;
-  private definitions = new Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
+  private definitions = new Map<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
   private featureOwners = new Map<keyof TFeatures, string>();
   private hardShutdownStarted = false;
   private hardShutdownPromise: Promise<void> | null = null;
@@ -123,7 +122,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly processScope: ReloadableNodeHostOptions["processScope"];
   private readonly processSourceMatcher: GitignoreMatcher | null;
   private readonly requiredRegistrations: readonly PropertyKey[];
-  private readonly requiredScopes: readonly OrchestratorReloadScope[];
+  private readonly requiredScopes: readonly DaemonReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private readonly candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private reloadTail = Promise.resolve();
@@ -132,8 +131,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly runtimeDrainTimeoutMs: number;
   private started = false;
   private starting: Promise<void> | null = null;
-  private topology: readonly OrchestratorReloadScope[] = [];
-  private readonly topologyScope: OrchestratorReloadScope;
+  private topology: readonly DaemonReloadScope[] = [];
+  private readonly topologyScope: DaemonReloadScope;
 
   constructor(
     private readonly context: TContext,
@@ -164,7 +163,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return this.requireFeature(this.nodes, this.featureOwners, key);
   }
 
-  getReloadScopeCatalog(): readonly OrchestratorReloadScopeDescriptor[] {
+  getReloadScopeCatalog(): readonly DaemonReloadScopeDescriptor[] {
     const graph = this.topology.map((scope) => {
       const definition = this.definitions.get(scope)!;
       return Object.freeze({
@@ -177,7 +176,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return this.processScope ? [...graph, this.processScope.descriptor] : graph;
   }
 
-  getReloadScopesForPaths(paths: readonly string[]): OrchestratorReloadScope[] {
+  getReloadScopesForPaths(paths: readonly string[]): DaemonReloadScope[] {
     const scopes = this.topology.filter((scope) => {
       const matcher = this.definitions.get(scope)!.matcher;
       return paths.some((path) => matcher.matchesPathOrDescendant(path));
@@ -190,7 +189,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return scopes;
   }
 
-  getDependantClosure(scopes: readonly OrchestratorReloadScope[]) {
+  getDependantClosure(scopes: readonly DaemonReloadScope[]) {
     const selected = this.selectDependants(scopes, this.definitions);
     return this.topology.filter((scope) => selected.has(scope));
   }
@@ -258,11 +257,11 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     }
   }
 
-  validateReloadScopes(scopes: readonly OrchestratorReloadScope[]) {
+  validateReloadScopes(scopes: readonly DaemonReloadScope[]) {
     this.selectDependants(scopes, this.definitions);
   }
 
-  async reload(scopes: readonly OrchestratorReloadScope[]) {
+  async reload(scopes: readonly DaemonReloadScope[]) {
     this.assertAcceptingWork();
     const operation = this.reloadTail.then(async () => {
       this.assertAcceptingWork();
@@ -376,8 +375,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private async replaceGraph(
-    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    topology: readonly OrchestratorReloadScope[],
+    definitions: Map<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    topology: readonly DaemonReloadScope[],
     selected: ReadonlySet<string>,
     transition: ReloadableNodeTransition,
   ) {
@@ -519,7 +518,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private createNodes(
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
     ordered: readonly string[],
     dependencies: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
     handoffStates: ReadonlyMap<string, unknown>,
@@ -573,7 +572,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       for (const child of node.children) visit(child, scope);
     };
     for (const root of graph.roots) visit(root, null);
-    return [...nodes.values()].map((node): OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification> => ({
+    return [...nodes.values()].map((node): DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification> => ({
       access: node.access,
       create: node.create,
       dependencies: [...(parents.get(node.scope) ?? [])],
@@ -588,9 +587,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     }));
   }
 
-  private validateGraph(definitions: readonly OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>[]) {
+  private validateGraph(definitions: readonly DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>[]) {
     if (!definitions.length) throw new Error("At least one reloadable feature node is required.");
-    const byId = new Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
+    const byId = new Map<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
     for (const definition of definitions) {
       const id = normalizeNodeId(definition.id, "Feature node id");
       normalizeNodeId(definition.scope, `Feature node ${id} scope`);
@@ -625,7 +624,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         if (!parentKeys.has(key)) throw new Error(`Feature node ${definition.id} requires ${String(key)} without a direct parent provider.`);
       }
     }
-    const topology: OrchestratorReloadScope[] = [];
+    const topology: DaemonReloadScope[] = [];
     const visiting = new Set<string>();
     const visited = new Set<string>();
     const visit = (nodeId: string, path: readonly string[]) => {
@@ -642,16 +641,16 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private hasTopologyChanged(
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    topology: readonly OrchestratorReloadScope[],
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    topology: readonly DaemonReloadScope[],
   ) {
     if (topology.length !== this.topology.length || topology.some((scope) => !this.definitions.has(scope))) return true;
     return topology.some((scope) => this.nodeTopologySignature(this.definitions.get(scope)!) !== this.nodeTopologySignature(definitions.get(scope)!));
   }
 
   private changedTopologyClosure(
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    scopes: readonly OrchestratorReloadScope[],
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    scopes: readonly DaemonReloadScope[],
   ) {
     const selected = new Set<string>();
     const requested = new Set(scopes);
@@ -663,7 +662,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       const candidate = definitions.get(scope);
       if (!previous || !candidate || this.nodeTopologySignature(previous) !== this.nodeTopologySignature(candidate)) selected.add(scope);
     }
-    const expand = (source: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>) => {
+    const expand = (source: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>) => {
       let changed = true;
       while (changed) {
         changed = false;
@@ -680,7 +679,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return selected;
   }
 
-  private nodeTopologySignature(definition: OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>) {
+  private nodeTopologySignature(definition: DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>) {
     return [
       definition.scope,
       definition.lifecycle,
@@ -693,8 +692,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private selectDependants(
-    scopes: readonly OrchestratorReloadScope[],
-    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    scopes: readonly DaemonReloadScope[],
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
   ) {
     const requested = new Set(scopes);
     const selected = new Set<string>();

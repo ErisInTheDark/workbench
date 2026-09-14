@@ -8,9 +8,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import { installWorkbenchDatabaseSchema } from "../daemon/orchestrator/database/workbench-database-schema";
-import WorkbenchThreadIdentityRepository from "../daemon/orchestrator/database/thread-identity/WorkbenchThreadIdentityRepository";
-import WorkbenchTranscriptRepository from "../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository";
+import { installWorkbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
+import WorkbenchThreadIdentityRepository from "../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchTranscriptRepository from "../daemon/server/database/transcript/WorkbenchTranscriptRepository";
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectIdSchema, ThreadReferenceSchema } from "../shared/workbench/identity";
 

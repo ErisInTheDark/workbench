@@ -17,7 +17,7 @@ import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } f
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
 import { toThreadPayload } from "../shared/codex/thread-adapter";
 import { WorkbenchThreadIdSchema } from "../shared/workbench/identity";
-import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../app/workbench/transcript/ThreadTranscriptProjectionController";
+import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../app/client/workbench/transcript/ThreadTranscriptProjectionController";
 import type { WorkbenchTranscriptProjection } from "../shared/workbench/transcript/workbench-transcript-projection";
 
 test("current Workbench admits luna.low, preserves managed identity and records a real turn", {

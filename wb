@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Root Workbench dispatcher. Keep orchestrator-backed commands on the shell fast path.
+# Root Workbench dispatcher. Keep daemon-backed commands on the shell fast path.
 set -u
 
 if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
@@ -11,9 +11,9 @@ fi
 unset WORKBENCH_CWD_REDIRECTED
 
 workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-orchestrator_cli="$workbench_root/daemon/lib/workbench/cli/workbench-agent-cli.sh"
+daemon_cli="$workbench_root/daemon/server/lib/workbench/cli/workbench-agent-cli.sh"
 thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
-desktop_entry="$workbench_root/app/desktop.ts"
+desktop_entry="$workbench_root/app/server/desktop.ts"
 hook_mode=0
 shortcut_mode=0
 if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
@@ -25,16 +25,16 @@ elif [[ "$#" -eq 1 && "${1:-}" == "shortcut" ]]; then
 fi
 
 if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || { (( "$#" > 0 )) && (( shortcut_mode == 0 )); }; then
-  if [[ ! -f "$orchestrator_cli" ]]; then
-    printf '%s\n' "Workbench orchestrator CLI is unavailable: $orchestrator_cli" >&2
+  if [[ ! -f "$daemon_cli" ]]; then
+    printf '%s\n' "Workbench daemon CLI is unavailable: $daemon_cli" >&2
     exit 1
   fi
   export WORKBENCH_ORIGIN="${WORKBENCH_ORIGIN:-http://127.0.0.1:4500}"
-  exec bash "$orchestrator_cli" "$@"
+  exec bash "$daemon_cli" "$@"
 fi
 
 tsx_cli="$workbench_root/app/node_modules/tsx/dist/cli.mjs"
-app_entry="$workbench_root/app/index.ts"
+app_entry="$workbench_root/app/server/index.ts"
 if [[ ! -f "$tsx_cli" || ! -f "$app_entry" || ! -f "$desktop_entry" ]]; then
   printf '%s\n' 'Workbench app dependencies are unavailable. Install the checkout dependencies first.' >&2
   exit 1

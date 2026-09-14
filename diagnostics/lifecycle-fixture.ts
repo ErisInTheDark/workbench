@@ -10,10 +10,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "../shared/workbench/identity";
-import WorkbenchThreadIdentityRepository from "../daemon/orchestrator/database/thread-identity/WorkbenchThreadIdentityRepository";
-import WorkbenchTranscriptIdentityRepository from "../daemon/orchestrator/database/transcript/WorkbenchTranscriptIdentityRepository";
-import WorkbenchTranscriptRepository from "../daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository";
-import externalizeCodexTranscriptInlineImages from "../daemon/orchestrator/codex-transcript-image-assets";
+import WorkbenchThreadIdentityRepository from "../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchTranscriptIdentityRepository from "../daemon/server/database/transcript/WorkbenchTranscriptIdentityRepository";
+import WorkbenchTranscriptRepository from "../daemon/server/database/transcript/WorkbenchTranscriptRepository";
+import externalizeCodexTranscriptInlineImages from "../daemon/server/codex-transcript-image-assets";
 
 export async function seedLifecycleTranscript(project: string) {
   const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });
@@ -136,7 +136,7 @@ exports.instrument = (instance, scope, mode) => {
   await fs.appendFile(node, '\nimport { instrument } from "./lifecycle-probe.cjs";\n');
 }
 
-export async function appendLifecycleMigration(project: string, owner: "app" | "orchestrator", version: number) {
+export async function appendLifecycleMigration(project: string, owner: "app" | "daemon", version: number) {
   const table = `lifecycle_${owner}_candidate`;
   const declaration = `
 const lifecycleTable = defineTable("${table}", { value: text().primaryKey() });
@@ -146,19 +146,19 @@ const lifecycleHistory = defineTableHistory({
 });
 `;
   const fingerprintImport = 'import { fingerprintSchemaReleases } from "workbench-shared/database/schema/schema-release-manifest";\n';
-  if (owner === "orchestrator") {
-    const schema = path.join(project, "daemon/orchestrator/database/workbench-database-schema.ts");
+  if (owner === "daemon") {
+    const schema = path.join(project, "daemon/server/database/workbench-database-schema.ts");
     await fs.appendFile(schema, '\nimport { defineTable, text } from "workbench-shared/database/schema/schema-definition";\n'
       + 'import { defineSubsystemHistory, defineTableHistory, tableVersion, createTable } from "workbench-shared/database/schema/schema-history";\n'
       + fingerprintImport);
     await replaceOnce(schema, "export const workbenchDatabaseSchema =", declaration + "\nexport const workbenchDatabaseSchema =");
     await replaceOnce(schema, "subsystems: [", "subsystems: [defineSubsystemHistory([lifecycleHistory]),");
-    await replaceOnce(schema, 'workbenchDatabaseSchema, databaseReleases, "orchestrator"',
-      'workbenchDatabaseSchema, { ...databaseReleases, lifecycle: fingerprintSchemaReleases(workbenchDatabaseSchema).at(-1)! }, "orchestrator"');
+    await replaceOnce(schema, 'workbenchDatabaseSchema, databaseReleases, "daemon"',
+      'workbenchDatabaseSchema, { ...databaseReleases, lifecycle: fingerprintSchemaReleases(workbenchDatabaseSchema).at(-1)! }, "daemon"');
   } else {
     const schema = path.join(project, "shared/state/workbench-app-state-schema.ts");
     await replaceOnce(schema, "const histories = [", declaration + "\nconst histories = [lifecycleHistory,");
-    const repository = path.join(project, "app/state/WorkbenchAppStateRepository.ts");
+    const repository = path.join(project, "app/server/state/WorkbenchAppStateRepository.ts");
     await fs.appendFile(repository, "\n" + fingerprintImport);
     await replaceOnce(repository, 'appStateSchema, appStateReleases, "app"',
       'appStateSchema, { ...appStateReleases, lifecycle: fingerprintSchemaReleases(appStateSchema).at(-1)! }, "app"');

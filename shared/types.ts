@@ -1,14 +1,14 @@
 /*
  * Exports:
  * - WorkbenchHarness: supported agent harness identity.
- * - OrchestratorReloadScope: reloadable orchestrator subsystem identity.
- * - OrchestratorReloadState: orchestrator reload lifecycle state.
- * - OrchestratorReloadRequest: orchestrator reload request contract.
- * - OrchestratorReloadResponse: orchestrator reload response contract.
+ * - DaemonReloadScope: reloadable daemon subsystem identity.
+ * - DaemonReloadState: daemon reload lifecycle state.
+ * - DaemonReloadRequest: daemon reload request contract.
+ * - DaemonReloadResponse: daemon reload response contract.
  * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: shared app and daemon reload dirt.
  * - WorkbenchFrontendGeneration: JavaScript and stylesheet identities for one browser build snapshot.
  * - WorkbenchAppRuntimeSnapshot/WorkbenchAppRuntimeStore: browser-facing app reload and tab-freshness observation port.
- * - WorkbenchOrchestratorRuntimeStore: browser-facing orchestrator reload observation and command port.
+ * - WorkbenchDaemonRuntimeStore: browser-facing daemon reload observation and command port.
  * - WorkbenchLocalCapabilitySettings: local capability settings contract.
  * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
  * - WorkbenchLocalCapabilitySettingsUpdateRequest: local capability update request.
@@ -169,7 +169,7 @@ import type { Turn } from "./codex/generated/app-server/v2/Turn.ts";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput.ts";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route.ts";
 import type WorkbenchDaemonClient from "./workbench/daemon/WorkbenchDaemonClient.ts";
-import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "./workbench/orchestrator-reload.ts";
+import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon-reload.ts";
 import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
@@ -178,11 +178,11 @@ import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type {
-  OrchestratorReloadRequest,
-  OrchestratorReloadResponse,
-  OrchestratorReloadScope,
-  OrchestratorReloadState,
-} from "./workbench/orchestrator-reload.ts";
+  DaemonReloadRequest,
+  DaemonReloadResponse,
+  DaemonReloadScope,
+  DaemonReloadState,
+} from "./workbench/daemon-reload.ts";
 
 export type WorkbenchReloadDirtScope = SharedWorkbenchReloadDirtScope;
 export type WorkbenchReloadDirtSnapshot = SharedWorkbenchReloadDirtSnapshot;
@@ -199,9 +199,9 @@ export interface WorkbenchAppRuntimeStore {
 
 export type { WorkbenchFrontendGeneration };
 
-export interface WorkbenchOrchestratorRuntimeStore {
+export interface WorkbenchDaemonRuntimeStore {
   getSnapshot(): WorkbenchReloadDirtSnapshot;
-  reloadScopes(scopes: readonly OrchestratorReloadScope[]): Promise<OrchestratorReloadResponse>;
+  reloadScopes(scopes: readonly DaemonReloadScope[]): Promise<DaemonReloadResponse>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -1176,7 +1176,7 @@ export interface WorkbenchControls {
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
-  orchestratorRuntime: WorkbenchOrchestratorRuntimeStore;
+  daemonRuntime: WorkbenchDaemonRuntimeStore;
   refreshRateLimits: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;

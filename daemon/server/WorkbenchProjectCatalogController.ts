@@ -1,0 +1,442 @@
+/*
+ * Exports:
+ * - WorkbenchProjectCatalogControllerOptions: injected discovery, resolution, watcher, clock, logging, and TTL controls.
+ * - default WorkbenchProjectCatalogController: own catalog discovery, icon assets, snapshot replay, durable CWD resolution, and invalidation.
+ */
+import fs from "node:fs";
+import fileSystem from "node:fs/promises";
+import type http from "node:http";
+import path from "node:path";
+
+import { discoverProjects, isPathWithinRoot, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "./lib/project";
+import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench-shared/types";
+import {
+  resolveAgentEndpointProjectFromProjects,
+  type AgentEndpointProjectResolution,
+} from "./lib/workbench/project/agent-endpoint-project";
+import { logError as defaultLogError } from "./process-helpers";
+
+const DEFAULT_CACHE_TTL_MS = 15_000;
+const MAX_PROJECT_ICON_BYTES = 4 * 1024 * 1024;
+const IGNORED_DISCOVERY_SEGMENTS = new Set([".next", "build", "coverage", "dist", "node_modules"]);
+
+type CatalogCacheState = "coalesced" | "hit" | "miss" | "stale";
+
+interface ProjectWatcher {
+  close: () => void;
+  on: (event: "error", listener: () => void) => ProjectWatcher;
+}
+
+interface ProjectCatalogSnapshot {
+  data: WorkbenchProjectOption[];
+  payload: WorkbenchProjectsPayload;
+  serialized: string;
+}
+
+type ResolveProjectFromCatalog = (
+  projects: readonly WorkbenchProjectOption[],
+  cwd: string | null | undefined,
+  options?: { endpointName?: string },
+) => Promise<AgentEndpointProjectResolution>;
+
+type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
+
+export interface WorkbenchProjectCatalogControllerOptions {
+  initialSnapshot?: WorkbenchProjectsPayload;
+  cacheTtlMs?: number;
+  createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
+  discoverProjects?: typeof discoverProjects;
+  logError?: (message: string) => void;
+  now?: () => number;
+  projectsRootPath?: string;
+  resolveProjectByIdFromCatalog?: ResolveProjectByIdFromCatalog;
+  resolveProjectFromCatalog?: ResolveProjectFromCatalog;
+}
+
+function sanitizeRefreshError(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/gu, "[path]")
+    .replace(/\b(Bearer\s+)[^\s,]+/giu, "$1[redacted]")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 500) || "unknown error";
+}
+
+function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
+  return fs.watch(rootPath, { recursive }, listener);
+}
+
+function normalizeWatchPath(filename: string | Buffer | null) {
+  return normalizeRelativePath(Buffer.isBuffer(filename) ? filename.toString("utf8") : filename ?? "")
+    .replace(/^\/+|\/+$/gu, "");
+}
+
+function hasIgnoredSegment(relativePath: string, ignoredSegments: ReadonlySet<string>) {
+  return relativePath.split("/").some((segment) => ignoredSegments.has(segment));
+}
+
+function isRelevantGitPath(relativePath: string) {
+  const segments = relativePath.split("/");
+  const gitIndex = segments.indexOf(".git");
+  if (gitIndex < 0) return false;
+  const gitPath = segments.slice(gitIndex + 1).join("/");
+  return !gitPath
+    || gitPath === "HEAD"
+    || gitPath === "index"
+    || gitPath === "packed-refs"
+    || gitPath.startsWith("refs/");
+}
+
+function shouldInvalidateProjects(eventType: string, filename: string | Buffer | null) {
+  const relativePath = normalizeWatchPath(filename);
+  if (!relativePath) return true;
+  if (hasIgnoredSegment(relativePath, IGNORED_DISCOVERY_SEGMENTS)) return false;
+  if (relativePath.split("/").includes(".git")) return isRelevantGitPath(relativePath);
+  return eventType === "rename" || relativePath.endsWith(".code-workspace");
+}
+
+function sameResolutionInputs(left: readonly WorkbenchProjectOption[], right: readonly WorkbenchProjectOption[]) {
+  return left.length === right.length && left.every((project, index) => {
+    const other = right[index];
+    return project.id === other.id
+      && project.kind === other.kind
+      && project.relativePath === other.relativePath
+      && project.rootPath === other.rootPath
+      && project.workspacePath === other.workspacePath
+      && project.roots.length === other.roots.length
+      && project.roots.every((root, rootIndex) => {
+        const otherRoot = other.roots[rootIndex];
+        return root.id === otherRoot.id
+          && root.name === otherRoot.name
+          && root.isPrimary === otherRoot.isPrimary
+          && root.relativePath === otherRoot.relativePath
+          && root.rootPath === otherRoot.rootPath;
+      });
+  });
+}
+
+function sendSerializedJson(response: http.ServerResponse, statusCode: number, serialized: string, cacheState?: CatalogCacheState) {
+  response.writeHead(statusCode, {
+    "Cache-Control": "no-store",
+    "Content-Length": Buffer.byteLength(serialized),
+    "Content-Type": "application/json",
+    ...(cacheState ? { "X-Workbench-Snapshot-Cache": cacheState } : {}),
+  });
+  response.end(serialized);
+}
+
+function sendError(response: http.ServerResponse, error: unknown) {
+  sendSerializedJson(response, 400, JSON.stringify({
+    error: error instanceof Error ? error.message : "Unable to discover projects.",
+  }));
+}
+
+function sendIconError(response: http.ServerResponse, statusCode: number, error: string) {
+  sendSerializedJson(response, statusCode, JSON.stringify({ error }));
+}
+
+function projectIconContentType(filePath: string) {
+  return filePath.toLocaleLowerCase().endsWith(".ico") ? "image/x-icon" : "image/png";
+}
+
+class ProjectIconRequestError extends Error {
+  constructor(readonly statusCode: number, message: string) {
+    super(message);
+  }
+}
+
+function isMissingFileError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && (
+    error.code === "ENOENT"
+    || error.code === "ENOTDIR"
+  ));
+}
+
+export default class WorkbenchProjectCatalogController {
+  private readonly cacheTtlMs: number;
+  private catalog: ProjectCatalogSnapshot | null = null;
+  private catalogExpiresAt = 0;
+  private catalogGeneration = 0;
+  private readonly cwdResolutions = new Map<string, Promise<AgentEndpointProjectResolution>>();
+  private readonly createWatcher: NonNullable<WorkbenchProjectCatalogControllerOptions["createWatcher"]>;
+  private readonly discoverProjectOptions: typeof discoverProjects;
+  private disposed = false;
+  private hardStale = false;
+  private readonly logError: NonNullable<WorkbenchProjectCatalogControllerOptions["logError"]>;
+  private readonly now: () => number;
+  private refreshInFlight: Promise<ProjectCatalogSnapshot> | null = null;
+  private readonly projectsRootPath: string;
+  private projectsWatcher: ProjectWatcher | null = null;
+  private readonly resolveProjectByIdFromCatalog: ResolveProjectByIdFromCatalog;
+  private readonly resolveProjectFromCatalog: ResolveProjectFromCatalog;
+
+  constructor({
+    initialSnapshot,
+    cacheTtlMs = DEFAULT_CACHE_TTL_MS,
+    createWatcher = defaultCreateWatcher,
+    discoverProjects: discoverProjectOptions = discoverProjects,
+    logError = (message) => defaultLogError("project-catalog", message),
+    now = Date.now,
+    projectsRootPath = projectsRoot,
+    resolveProjectByIdFromCatalog = resolveProjectRootFromProjects,
+    resolveProjectFromCatalog = resolveAgentEndpointProjectFromProjects,
+  }: WorkbenchProjectCatalogControllerOptions = {}) {
+    this.cacheTtlMs = cacheTtlMs;
+    this.createWatcher = createWatcher;
+    this.discoverProjectOptions = discoverProjectOptions;
+    this.logError = logError;
+    this.now = now;
+    this.projectsRootPath = projectsRootPath;
+    this.resolveProjectByIdFromCatalog = resolveProjectByIdFromCatalog;
+    this.resolveProjectFromCatalog = resolveProjectFromCatalog;
+    if (initialSnapshot) {
+      this.catalog = { data: initialSnapshot.data, payload: initialSnapshot, serialized: JSON.stringify(initialSnapshot) };
+    }
+    this.projectsWatcher = this.watchProjects();
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.cwdResolutions.clear();
+    this.projectsWatcher?.close();
+    this.projectsWatcher = null;
+    this.catalog = null;
+    this.catalogExpiresAt = 0;
+    this.catalogGeneration += 1;
+    this.hardStale = true;
+    this.refreshInFlight = null;
+  }
+
+  async handleHttpRequest(_request: http.IncomingMessage, response: http.ServerResponse) {
+    try {
+      const result = await this.readFreshCatalog();
+      sendSerializedJson(response, 200, result.catalog.serialized, result.cacheState);
+    } catch (error) {
+      sendError(response, error);
+    }
+  }
+
+  async handleIconHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    try {
+      const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+      const match = /^\/daemon\/project-icons\/([^/]+)$/u.exec(requestPath);
+      if (!match) throw new ProjectIconRequestError(400, "Invalid project icon request.");
+      let projectId = "";
+      try {
+        projectId = decodeURIComponent(match[1]);
+      } catch {
+        throw new ProjectIconRequestError(400, "Invalid project icon request.");
+      }
+      const { catalog } = await this.readFreshCatalog();
+      const project = catalog.data.find((candidate) => candidate.id === projectId);
+      const icon = project?.icon;
+      const root = icon ? project.roots.find((candidate) => candidate.id === icon.rootId) : null;
+      if (!project || !icon || !root) throw new ProjectIconRequestError(404, "Project icon not found.");
+
+      const canonicalRoot = await fileSystem.realpath(root.rootPath);
+      const requestedPath = path.resolve(root.rootPath, icon.path);
+      const canonicalIcon = await fileSystem.realpath(requestedPath);
+      if (!isPathWithinRoot(canonicalIcon, canonicalRoot)) {
+        throw new ProjectIconRequestError(404, "Project icon not found.");
+      }
+      const stats = await fileSystem.stat(canonicalIcon);
+      if (!stats.isFile()) throw new ProjectIconRequestError(404, "Project icon not found.");
+      if (stats.size > MAX_PROJECT_ICON_BYTES) {
+        throw new ProjectIconRequestError(413, "Project icon is too large.");
+      }
+      const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304, { ETag: etag });
+        response.end();
+        return;
+      }
+      const bytes = await fileSystem.readFile(canonicalIcon);
+      if (bytes.byteLength > MAX_PROJECT_ICON_BYTES) {
+        throw new ProjectIconRequestError(413, "Project icon is too large.");
+      }
+      response.writeHead(200, {
+        "Cache-Control": "no-cache",
+        "Content-Length": bytes.byteLength,
+        "Content-Type": projectIconContentType(icon.path),
+        ETag: etag,
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(bytes);
+    } catch (error) {
+      if (error instanceof ProjectIconRequestError) {
+        sendIconError(response, error.statusCode, error.message);
+        return;
+      }
+      if (isMissingFileError(error)) {
+        sendIconError(response, 404, "Project icon not found.");
+        return;
+      }
+      this.logError(`project icon request failed: ${sanitizeRefreshError(error)}`);
+      sendIconError(response, 500, "Unable to read the project icon.");
+    }
+  }
+
+  async ensureLoaded() {
+    this.assertActive();
+    if (this.catalog) return;
+    await this.refreshCatalog();
+  }
+
+  async resolveAgentEndpointProjectFromCwd(
+    cwd: string | null | undefined,
+    options: { endpointName?: string } = {},
+  ) {
+    this.assertActive();
+    const generation = this.catalogGeneration;
+    const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
+    this.assertActive();
+    const endpointName = options.endpointName ?? "Agent endpoint";
+    const key = `${endpointName.length}:${endpointName}${cwd ?? ""}`;
+    const cached = generation === this.catalogGeneration ? this.cwdResolutions.get(key) : undefined;
+    if (cached) {
+      const result = await cached;
+      this.assertActive();
+      return result;
+    }
+    const resolution = (async () => {
+      let result: AgentEndpointProjectResolution;
+      try {
+        result = await this.resolveProjectFromCatalog(catalog.data, cwd, options);
+      } catch (firstError) {
+        this.assertActive();
+        if (refreshed) throw firstError;
+        const refreshedCatalog = await (refresh ?? this.refreshCatalog());
+        this.assertActive();
+        result = await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, options);
+      }
+      this.assertActive();
+      return result;
+    })();
+    // Retired callers may finish, but cannot publish into a newer catalog generation.
+    if (generation === this.catalogGeneration) this.cwdResolutions.set(key, resolution);
+    try {
+      return await resolution;
+    } catch (error) {
+      if (this.cwdResolutions.get(key) === resolution) this.cwdResolutions.delete(key);
+      throw error;
+    }
+  }
+
+  async resolveProjectById(projectId?: string | null) {
+    this.assertActive();
+    const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
+    try {
+      return await this.resolveProjectByIdFromCatalog(catalog.data, projectId);
+    } catch (firstError) {
+      if (refreshed) throw firstError;
+      const refreshedCatalog = await (refresh ?? this.refreshCatalog());
+      return await this.resolveProjectByIdFromCatalog(refreshedCatalog.data, projectId);
+    }
+  }
+
+  getCurrentSnapshot() {
+    this.assertActive();
+    if (!this.catalog) throw new Error("The project catalog has not been loaded.");
+    return this.catalog.payload;
+  }
+
+  async readCatalog() {
+    return (await this.readFreshCatalog()).catalog.payload;
+  }
+
+  invalidate = () => {
+    if (this.disposed) return;
+    this.catalogExpiresAt = 0;
+    this.catalogGeneration += 1;
+    this.cwdResolutions.clear();
+    this.hardStale = true;
+  };
+
+  private async readCatalogForResolution() {
+    if (!this.catalog) {
+      return { catalog: await this.refreshCatalog(), refresh: null, refreshed: true };
+    }
+    let refresh: Promise<ProjectCatalogSnapshot> | null = null;
+    if (this.hardStale || this.catalogExpiresAt <= this.now()) {
+      refresh = this.refreshInBackground();
+    }
+    return { catalog: this.catalog, refresh, refreshed: false };
+  }
+
+  private async readFreshCatalog(): Promise<{ cacheState: CatalogCacheState; catalog: ProjectCatalogSnapshot }> {
+    this.assertActive();
+    if (this.catalog) {
+      if (!this.hardStale && this.catalogExpiresAt > this.now()) {
+        return { cacheState: "hit", catalog: this.catalog };
+      }
+      this.refreshInBackground();
+      return { cacheState: "stale", catalog: this.catalog };
+    }
+    const coalesced = this.refreshInFlight;
+    return {
+      cacheState: coalesced ? "coalesced" : "miss",
+      catalog: await this.refreshCatalog(),
+    };
+  }
+
+  private refreshCatalog() {
+    this.assertActive();
+    return this.refreshInFlight ?? this.startRefresh();
+  }
+
+  private refreshInBackground() {
+    const alreadyRefreshing = Boolean(this.refreshInFlight);
+    const refresh = this.refreshCatalog();
+    if (!alreadyRefreshing) {
+      void refresh.catch((error) => {
+        this.logError(`project catalog background refresh failed: ${sanitizeRefreshError(error)}`);
+      });
+    }
+    return refresh;
+  }
+
+  private startRefresh() {
+    const generation = this.catalogGeneration;
+    const refresh = (async () => {
+      const data = await this.discoverProjectOptions();
+      const payload: WorkbenchProjectsPayload = {
+        data,
+        rootPath: normalizeRelativePath(this.projectsRootPath),
+      };
+      const catalog = { data, payload, serialized: JSON.stringify(payload) };
+      if (!this.disposed && this.catalogGeneration === generation) {
+        if (this.catalog && !sameResolutionInputs(this.catalog.data, data)) {
+          this.cwdResolutions.clear();
+          this.catalogGeneration += 1;
+        }
+        this.catalog = catalog;
+        this.catalogExpiresAt = this.now() + this.cacheTtlMs;
+        this.hardStale = false;
+      }
+      return catalog;
+    })();
+    this.refreshInFlight = refresh;
+    void refresh.finally(() => {
+      if (this.refreshInFlight === refresh) this.refreshInFlight = null;
+    }).catch(() => undefined);
+    return refresh;
+  }
+
+  private watchProjects() {
+    try {
+      const watcher = this.createWatcher(this.projectsRootPath, (eventType, filename) => {
+        if (shouldInvalidateProjects(eventType, filename)) this.invalidate();
+      }, false);
+      watcher.on("error", this.invalidate);
+      return watcher;
+    } catch {
+      this.invalidate();
+      return null;
+    }
+  }
+
+  private assertActive() {
+    if (this.disposed) throw new Error("Project catalog controller is disposed.");
+  }
+}

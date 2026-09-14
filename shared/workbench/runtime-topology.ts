@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchRuntimeTopology: shared runner/daemon listener and endpoint configuration. Keywords: process boundary, ports, URLs.
- * - parseWorkbenchEnvironmentText: parse the bounded .env.local value shape used by Workbench. Keywords: dotenv, configuration.
- * - deriveWorkbenchRuntimeTopology/loadWorkbenchRuntimeTopology: validate and own every configured Workbench listener. Keywords: ports, URLs, IPv4, IPv6.
- * - formatWorkbenchRuntimeTopology/workbenchRuntimeForbiddenPorts: derive user-facing display and isolated-probe exclusion. Keywords: display, forbidden ports.
+ * - WorkbenchRuntimeTopology: shared daemon server and host listener configuration.
+ * - parseWorkbenchEnvironmentText: parse the bounded .env.local value shape used by Workbench.
+ * - deriveWorkbenchRuntimeTopology/loadWorkbenchRuntimeTopology: validate and own every configured Workbench listener.
+ * - formatWorkbenchRuntimeTopology/workbenchRuntimeForbiddenPorts: derive user-facing display and isolated-probe exclusion.
  */
 import { readFile } from "node:fs/promises";
 

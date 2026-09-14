@@ -14,8 +14,8 @@ import {
   partitionWorkbenchGitTestFiles,
   prepareWorkbenchGitTestFixtures,
   type WorkbenchPreparedTestFixtures,
-} from "../daemon/lib/workbench/git/WorkbenchGitTestFixtures";
-import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/lib/workbench/WorkbenchTemporaryDirectory";
+} from "../daemon/server/lib/workbench/git/WorkbenchGitTestFixtures";
+import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 

@@ -11,9 +11,9 @@ import { appendLifecycleMigration, installLifecycleProbe, seedLifecycleTranscrip
 import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, installThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import {
   WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
-  WORKBENCH_RELOAD_DIRT_UPDATED_METHOD, WorkbenchOrchestratorReloadDirtEnvelopeSchema,
-  type OrchestratorReloadResponse,
-} from "../shared/workbench/orchestrator-reload";
+  WORKBENCH_RELOAD_DIRT_UPDATED_METHOD, WorkbenchDaemonReloadDirtEnvelopeSchema,
+  type DaemonReloadResponse,
+} from "../shared/workbench/daemon-reload";
 import type { WorkbenchReloadDirtSnapshot } from "../shared/reload/workbench-reload";
 import type { WorkbenchProjectsPayload } from "../shared/types";
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
@@ -51,7 +51,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
   };
   const appState = async () => (await http("/api/workbench-client-state")).json() as Promise<{ daemonRegistrationId: string }>;
   const appDirt = async (signal?: AbortSignal) => (await (await http(runtimePath, { signal })).json() as { reloadDirt: WorkbenchReloadDirtSnapshot }).reloadDirt;
-  const serverDirt = async () => WorkbenchOrchestratorReloadDirtEnvelopeSchema.parse(
+  const serverDirt = async () => WorkbenchDaemonReloadDirtEnvelopeSchema.parse(
     await runtime.request(WORKBENCH_RELOAD_DIRT_READ_METHOD)).snapshot;
   const clean = (dirt: Pick<WorkbenchReloadDirtSnapshot, "dirtyScopes" | "pendingScopes"> & { error?: string | null }) => {
     assert.deepEqual(dirt.pendingScopes, [], "Admission is not reload completion");
@@ -73,13 +73,13 @@ test("real application survives reload expiry, migrated candidate failure, retry
     // Reading registers this connection for subsequent dirt notifications.
     await serverDirt();
     const offset = runtime.events.length;
-    const admitted = await runtime.request<OrchestratorReloadResponse>(WORKBENCH_RELOAD_METHOD, { scopes, ...(all ? { all: true } : {}) });
+    const admitted = await runtime.request<DaemonReloadResponse>(WORKBENCH_RELOAD_METHOD, { scopes, ...(all ? { all: true } : {}) });
     assert.equal(admitted.state, "running");
     assert.deepEqual(admitted.appliedScopes, []);
     await runtime.until(() => {
       const snapshots = runtime.events.slice(offset)
         .filter((event) => event.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD)
-        .map((event) => WorkbenchOrchestratorReloadDirtEnvelopeSchema.parse(event.params).snapshot);
+        .map((event) => WorkbenchDaemonReloadDirtEnvelopeSchema.parse(event.params).snapshot);
       const pending = snapshots.findIndex((snapshot) => snapshot.pendingScopes.length > 0);
       return pending >= 0 && snapshots.slice(pending + 1).some((snapshot) => snapshot.pendingScopes.length === 0);
     }, AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]));
@@ -124,7 +124,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       assert.ok(item?.type === "userMessage");
       const image = item.content[0];
       assert.ok(image?.type === "image");
-      const response = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/orchestrator/transcript-assets/"), runtime.origin), { signal: t.signal });
+      const response = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/daemon/transcript-assets/"), runtime.origin), { signal: t.signal });
       assert.equal(response.status, 200);
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), transcript.bytes);
       const updates: TranscriptStreamUpdate[] = [];
@@ -150,7 +150,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await assets();
     await verifyTranscript();
     const ids = runtime.processIds;
-    assert.ok(ids.app && ids.orchestrator);
+    assert.ok(ids.app && ids.daemon);
     const registration = await appState();
     assert.ok(registration.daemonRegistrationId);
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
@@ -164,8 +164,8 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await verifyTranscript();
     console.log("database reload and reload-all passed without process dirt");
 
-    for (const owner of ["orchestrator", "app"] as const) {
-      const server = owner === "orchestrator";
+    for (const owner of ["daemon", "app"] as const) {
+      const server = owner === "daemon";
       const scope = server ? "server:database" : "client:database";
       const fail = server ? "server:core" : "client:http";
       const database = server ? serverDatabase : appDatabase;
@@ -203,7 +203,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       console.log(`${owner}: schema restored after failure; same-process retry migrated successfully`);
       await writeLifecycleFault(runtime.project, {});
     }
-    assert.deepEqual(await runtime.stop(), { app: 0, orchestrator: 0 }, "Owners must complete shutdown successfully before reopen");
+    assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 }, "Owners must complete shutdown successfully before reopen");
     await runtime.start();
     await runtime.startApp();
     await assets();
@@ -220,14 +220,14 @@ test("real application survives reload expiry, migrated candidate failure, retry
       assert.equal(reopened.prepare("SELECT count(*) FROM workbench_subagent_relationships").pluck().get(), capturedCounts.relationships);
       assert.ok(Number(reopened.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= Number(capturedCounts.threads));
     } finally { reopened.close(); }
-    assert.deepEqual(await runtime.stop(), { app: 0, orchestrator: 0 });
+    assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 });
     console.log("cold reopening preserved durable state");
     await writeLifecycleFault(runtime.project, { fail: "client:http", initial: true });
     await assert.rejects(runtime.startApp(), /Lifecycle injected activation failure/u);
     assert.equal(await runtime.waitForAppExit(), 1, "Failed startup must close its owners and exit without external killing");
     console.log("failed startup cleaned up its own resources; lifecycle checks passed");
   } catch (error) {
-    console.error("lifecycle failed", error, "\napp tail\n", runtime.appOutput.slice(-12000), "\norchestrator tail\n", runtime.output.slice(-12000));
+    console.error("lifecycle failed", error, "\napp tail\n", runtime.appOutput.slice(-12000), "\ndaemon tail\n", runtime.output.slice(-12000));
     throw error;
   } finally {
     await runtime.close();

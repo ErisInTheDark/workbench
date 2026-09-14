@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - typecheckProjectConfigs: lists every portable TypeScript project checked by the public command. Keywords: typecheck, app, daemon, shared, test.
- * - summarizeTypecheckDiagnostics: retains bounded unique compiler diagnostics across project runs. Keywords: typecheck, diagnostics, summary.
- * - runProjectTypechecks: runs every local compiler project and preserves failure after the complete sequence. Keywords: typecheck, lifecycle, diagnostics.
+ * - typecheckProjectConfigs: lists every portable TypeScript project checked by the public command.
+ * - summarizeTypecheckDiagnostics: retains bounded unique compiler diagnostics across project runs.
+ * - runProjectTypechecks: runs every local compiler project and preserves failure after the complete sequence.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -14,9 +14,8 @@ const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc
 
 export const typecheckProjectConfigs = [
   "daemon/tsconfig.typecheck.json",
-  "daemon/orchestrator/tsconfig.json",
   "app/tsconfig.json",
-  "runner/tsconfig.json",
+  "daemon/host/tsconfig.json",
   "shared/tsconfig.json",
   "test/tsconfig.typecheck.json",
 ];

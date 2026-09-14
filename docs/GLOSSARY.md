@@ -18,10 +18,10 @@
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
-| logs | The persisted Workbench runtime logs under `.workbench/logs/`. Includes both orchestrator/daemon logs, and app server logs. |
+| logs | Persisted daemon and app server logs under `.workbench/logs/`. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
-| daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |
-| orchestrator runner | The standalone supervisor process under `runner/`. It starts and stops the daemon, owns launcher logs and silence recovery, and may expose runner-only control HTTP. It imports shared contracts but never daemon implementation code. |
+| daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |
+| daemon host | Supervisor under `daemon/host/`. Owns daemon startup/shutdown, launcher logs and silence recovery. Imports shared contracts, never server implementation. |
 | codex app-server | Codex's harness. |
 | provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |
 | app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |

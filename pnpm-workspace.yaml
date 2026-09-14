@@ -2,7 +2,6 @@ packages:
   - app
   - daemon
   - package
-  - runner
   - shared
 
 allowBuilds:

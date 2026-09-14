@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRootPath = path.resolve(path.dirname(scriptPath), "..");
-const trayRootPath = path.join(repositoryRootPath, "tray");
+const trayRootPath = path.join(repositoryRootPath, "app", "tray");
 const manifestPath = path.join(trayRootPath, "Cargo.toml");
 const releaseDirectoryPath = path.join(trayRootPath, "target", "release");
 const builtLauncherPath = path.join(releaseDirectoryPath, "workbench-tray.exe");
@@ -149,7 +149,7 @@ async function runTrayBuild() {
   await validateWindowsX64Executable(builtLauncherPath);
   await removeRetiredLaunchers();
   const artifact = await publishLauncher();
-  console.log(`Updated tray/bin/windows-x64/workbench-tray.exe (${artifact.size} bytes).`);
+  console.log(`Updated app/tray/bin/windows-x64/workbench-tray.exe (${artifact.size} bytes).`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {

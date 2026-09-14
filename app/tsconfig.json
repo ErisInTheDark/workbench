@@ -25,6 +25,6 @@
   ],
   "exclude": [
     "node_modules",
-    "./workbench/thread/thread-command-matchers.test.ts"
+    "./client/workbench/thread/thread-command-matchers.test.ts"
   ]
 }

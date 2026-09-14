@@ -7,7 +7,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc-scope-response";
 import { GitCheckpointRequestSchema } from "../shared/workbench/git/checkpoint-contracts";
-import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/lib/workbench/testing/ClaimedTestSelector";
+import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/server/lib/workbench/testing/ClaimedTestSelector";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
@@ -55,13 +55,13 @@ export default class ClaimedProjectTestCommand {
       action: "arcScope", cwd: root, harness: env.WORKBENCH_HARNESS ?? "codex",
       threadId: env.WORKBENCH_THREAD_ID ?? env.CODEX_THREAD_ID ?? "",
     });
-    const response = await (this.options.fetch ?? globalThis.fetch)(new URL("/orchestrator/git-arc", origin), {
+    const response = await (this.options.fetch ?? globalThis.fetch)(new URL("/daemon/git-arc", origin), {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
       redirect: "error",
     });
     if (!response.ok) throw new Error(`Could not read Git arc claims (HTTP ${response.status}).`);
     const parsed = GitArcScopeClaimsResponseSchema.safeParse(await response.json());
-    if (!parsed.success) throw new Error("Git arc scope response lacks valid repository-relative claims. Installed CLI and orchestrator must support this response.");
+    if (!parsed.success) throw new Error("Git arc scope response lacks valid repository-relative claims. Installed CLI and daemon must support this response.");
     const scopes = parsed.data;
     const claims = [...new Set(scopes.filter(scope => !path.relative(root, path.resolve(scope.repoRoot))).flatMap(scope => scope.claimedPaths))];
     const otherRoots = scopes.filter(scope => path.relative(root, path.resolve(scope.repoRoot)) && scope.claimedPaths.length);

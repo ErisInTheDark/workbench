@@ -11,8 +11,8 @@ import test from "node:test";
 import { claimPreparedGitTestFixture, GIT_TEST_FIXTURE_MANIFEST_ENV, gitTestFixtureKey } from "./git-test-fixture.ts";
 
 const { default: GitTestFixtureCache } = createRequire(import.meta.url)(
-  "../../../daemon/lib/workbench/git/GitTestFixtureCache.ts",
-) as typeof import("../../../daemon/lib/workbench/git/GitTestFixtureCache");
+  "../../../daemon/server/lib/workbench/git/GitTestFixtureCache.ts",
+) as typeof import("../../../daemon/server/lib/workbench/git/GitTestFixtureCache");
 
 test("prepared fixture consumers share single-use allocation and reject invalid admission", async context => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-fixture-manifest-"));

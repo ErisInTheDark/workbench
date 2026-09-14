@@ -1,6 +1,6 @@
 ---
 name: opencode-diagnostics
-description: Diagnose Workbench OpenCode integration under `daemon/orchestrator/` with bounded local `@opencode-ai/sdk` probes that subscribe to events, send a tiny prompt, report event and session behavior, and abort promptly. Use when investigating OpenCode server connectivity, SDK event streams, session creation, prompt delivery, or bridge behavior; do not use for ordinary daemon endpoint testing.
+description: Diagnose Workbench OpenCode integration under `daemon/server/` with bounded local `@opencode-ai/sdk` probes that subscribe to events, send a tiny prompt, report event and session behavior, and abort promptly. Use when investigating OpenCode server connectivity, SDK event streams, session creation, prompt delivery, or bridge behavior; do not use for ordinary daemon endpoint testing.
 ---
 
 ## Safety Boundaries

@@ -5,8 +5,8 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-const ROOTS = ["app", "daemon", "package", "runner", "shared", "test"];
-const EXCLUDED = new Set([".next", "build", "coverage", "dist", "generated", "node_modules", ".git", ".workbench"]);
+const ROOTS = ["app", "daemon", "package", "shared", "test"];
+const EXCLUDED = new Set([".next", "build", "coverage", "dist", "generated", "node_modules", ".git", ".workbench", "target", "gen"]);
 const TEST = /\.test\.tsx?$/u;
 
 export default class ProjectTestCatalog {

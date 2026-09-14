@@ -9,8 +9,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
-import { workbenchDatabaseSchema } from "../daemon/orchestrator/database/workbench-database-schema";
-import WorkbenchThreadStateMigration, { readThreadStateRelationshipSources } from "../daemon/orchestrator/database/thread-state/WorkbenchThreadStateMigration";
+import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
+import WorkbenchThreadStateMigration, { readThreadStateRelationshipSources } from "../daemon/server/database/thread-state/WorkbenchThreadStateMigration";
 
 export async function installThreadStateMigrationSource(
   source: Awaited<ReturnType<typeof captureThreadStateMigrationSource>>,

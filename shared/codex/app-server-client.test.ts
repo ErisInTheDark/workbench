@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover WebSocket send failure cleanup, response settlement, and cumulative event-stream receipts. Keywords: codex, websocket, stream, acknowledgement, request, test.
+ * - No production exports; Node tests cover WebSocket send failure cleanup, response settlement, and cumulative event-stream receipts.
  */
 
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import { CodexAppServerClient } from "./app-server-client.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
-import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload.ts";
+import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD } from "../workbench/websocket-stream.ts";
 
 type Listener = (event: { data?: string }) => void;

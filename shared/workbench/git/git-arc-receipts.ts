@@ -1,13 +1,12 @@
 /*
- * Keywords: git, receipts, text protocol, scope, outcomes, compatibility.
  * Exports:
- * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data. Keywords: git, arc, receipt, thread.
+ * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
  * - parseGitArcReceipt: decode current text or historical JSON receipts.
  * - formatGitArcTextReceipt: emit one labelled plain-text result without duplicated JSON.
  * - escapeGitArcValue/readGitArcValue: preserve literal values without permitting output-section injection.
  */
 import { z } from "zod";
-import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload.ts";
+import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
@@ -31,7 +30,7 @@ const GitArcReceiptSchema = z.object({
   proposalId: z.string().min(1).optional(),
   proposals: z.array(z.object({ proposalId: z.string().min(1), status: z.enum(["proposed", "committed"]) })).optional(),
   rootId: z.string().min(1).optional(),
-  reloadScopes: z.array(z.string().regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN)).optional(),
+  reloadScopes: z.array(z.string().regex(DAEMON_RELOAD_SCOPE_PATTERN)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
   matchedPathCount: z.number().int().nonnegative().optional(),
   mappings: z.array(z.object({ destination: z.string().min(1), source: z.string().min(1) })).optional(),

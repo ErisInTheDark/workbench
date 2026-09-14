@@ -1,5 +1,4 @@
 /*
- * Keywords: isolated runtime, source copy, diagnostics, process lifecycle, RPC, HTTP.
  * Exports:
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
  */
@@ -12,10 +11,10 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
-import { createSpawnOptions } from "../daemon/orchestrator/process-helpers";
+import { createSpawnOptions } from "../daemon/server/process-helpers";
 import { CodexAppServerClient } from "../shared/codex/app-server-client";
 import { isCodexJsonRpcFailure } from "../shared/codex/protocol";
-import WorkbenchTranscriptClient from "../app/workbench/database/transcript/WorkbenchTranscriptClient";
+import WorkbenchTranscriptClient from "../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
 
@@ -32,7 +31,7 @@ export default class IsolatedWorkbench {
   private closed = false;
   private constructor(readonly root: string, readonly project: string, readonly origin: string, private readonly openCodePort: number, readonly signal: AbortSignal, private readonly codexIdentity: boolean) {}
 
-  get processIds() { return { orchestrator: this.child?.pid, app: this.appChild?.pid }; }
+  get processIds() { return { daemon: this.child?.pid, app: this.appChild?.pid }; }
   get output() { return this.log; }
   get appOutput() { return this.appLog; }
   get appOrigin() {
@@ -61,7 +60,7 @@ export default class IsolatedWorkbench {
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
     const ignored = new Set(["node_modules", ".workbench", ".git", ".next", "dist", "target", ".env.local"]);
-    for (const directory of ["app", "daemon", "shared", "instructions", "runner", "package", "static", "tray"]) {
+    for (const directory of ["app", "daemon", "shared", "instructions", "package"]) {
       await fs.cp(path.join(source, directory), path.join(project, directory), {
         recursive: true, filter: (file) => !ignored.has(path.basename(file)),
       });
@@ -138,14 +137,14 @@ export default class IsolatedWorkbench {
       + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
     const env = this.environment();
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
-      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "orchestrator/index.ts"], {
+      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "server/index.ts"], {
       ...createSpawnOptions(path.join(this.project, "daemon"), env, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
     this.child = child;
     const collect = (chunk: Buffer) => {
       this.log += chunk.toString();
-      appendFileSync(path.join(this.root, "orchestrator.log"), chunk);
+      appendFileSync(path.join(this.root, "daemon.log"), chunk);
       for (const observer of this.observers) observer();
     };
     child.stdout!.on("data", collect);
@@ -181,7 +180,7 @@ export default class IsolatedWorkbench {
       ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
-      WORKBENCH_ORCHESTRATOR_LOOP: "1",
+      WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
       TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
       CODEX_APP_SERVER_URL: this.origin.replace("http:", "ws:"),
@@ -199,7 +198,7 @@ export default class IsolatedWorkbench {
     assert.equal(this.appChild, null);
     const offset = this.appLog.length;
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
-      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "app/index.ts"], {
+      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "app/server/index.ts"], {
       ...createSpawnOptions(this.project, { ...this.environment(), TSX_TSCONFIG_PATH: path.join(this.project, "app/tsconfig.json") }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
@@ -262,14 +261,14 @@ export default class IsolatedWorkbench {
     this.transcriptClient = null;
     this.client?.dispose();
     this.client = null;
-    const children = { app: this.appChild, orchestrator: this.child };
+    const children = { app: this.appChild, daemon: this.child };
     const results = await Promise.allSettled([
       this.child ? this.stopChild(this.child).then(() => { this.child = null; }) : Promise.resolve(),
       this.appChild ? this.stopChild(this.appChild).then(() => { this.appChild = null; this.appAddress = null; }) : Promise.resolve(),
     ]);
     const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
     if (errors.length) throw new AggregateError(errors, "Isolated process cleanup failed");
-    return { app: children.app?.exitCode, orchestrator: children.orchestrator?.exitCode };
+    return { app: children.app?.exitCode, daemon: children.daemon?.exitCode };
   }
 
   private async stopChild(child: ChildProcess) {
@@ -303,7 +302,7 @@ export default class IsolatedWorkbench {
     try {
       await this.stop();
     } finally {
-      await fs.writeFile(path.join(this.root, "orchestrator.log"), this.log);
+      await fs.writeFile(path.join(this.root, "daemon.log"), this.log);
       const auth = path.resolve(this.root, "codex", "auth.json");
       assert.ok(auth.startsWith(`${path.resolve(this.root)}${path.sep}`));
       await fs.rm(auth, { force: true });

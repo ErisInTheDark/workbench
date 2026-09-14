@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default databaseReleases: append-only named orchestrator releases and independently sealed fingerprints.
+ * - default databaseReleases: append-only named daemon releases and independently sealed fingerprints.
  */
 function release<const Version extends number>(version: Version, fingerprint: string | null) {
   return Object.freeze({ version, fingerprint });
