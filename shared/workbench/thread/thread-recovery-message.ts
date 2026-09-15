@@ -2,11 +2,12 @@
  * Exports:
  * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: reserved hidden continuation contracts.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
- * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content by text.
+ * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
 import { getCurrentInProgressTurn } from "../../codex/thread-state.ts";
 import type { ThreadPayload, WorkbenchUserInputResponse } from "../../types.ts";
@@ -84,6 +85,10 @@ export function isWorkbenchUnfinishedTurnInput(input: readonly UserInput[]) {
   return input.length === 1
     && input[0]?.type === "text"
     && isWorkbenchResumeWrapper(input[0].text);
+}
+
+export function isWorkbenchUnfinishedContinuationTurn(turn: Pick<Turn, "items">) {
+  return turn.items.some(item => item.type === "userMessage" && isWorkbenchUnfinishedTurnInput(item.content));
 }
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {

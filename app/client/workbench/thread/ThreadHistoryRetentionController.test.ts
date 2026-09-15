@@ -8,6 +8,7 @@ import test from "node:test";
 
 import type { ThreadPayload, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import ThreadHistoryRetentionController, {
   getThreadHistoryRetentionCandidates,
   getThreadTurnLastUpdateMs,
@@ -68,6 +69,22 @@ test("mounted retention is strict after one hour and always protects current plu
   source.turnHistory[0] = { ...source.turnHistory[0]!, completedAt: null, startedAt: null };
   source.turns[0] = { ...source.turns[0]!, completedAt: null, startedAt: null };
   assert.deepEqual(getThreadHistoryRetentionCandidates(source, now).turnIds, []);
+});
+
+test("mounted retention protects every physical turn in the previous logical continuation", () => {
+  const now = 10 * THREAD_HISTORY_RETENTION_AGE_MS;
+  const source = thread([1, 2, 3, 4]);
+  source.turns[2] = {
+    ...source.turns[2]!,
+    items: [{
+      clientId: null,
+      content: createWorkbenchUnfinishedTurnInput(),
+      id: "hidden-continuation",
+      type: "userMessage",
+    }],
+  };
+
+  assert.deepEqual(getThreadHistoryRetentionCandidates(source, now).turnIds, ["turn-0"]);
 });
 
 test("all mounted surfaces must be at latest before one scheduled retention pass can trim", () => {

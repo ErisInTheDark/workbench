@@ -5,7 +5,10 @@
 
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
-import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  isWorkbenchUnfinishedContinuationTurn,
+  isWorkbenchUnfinishedTurnInput,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 
 export interface ThreadRenderProjection {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
@@ -67,7 +70,7 @@ export default function projectThreadRenderTurns(
 ): ThreadRenderProjection {
   const groups: TurnRenderGroup[] = [];
   for (const turn of thread.turns) {
-    const continuesPreviousTurn = turn.items.some(isUnfinishedTurnUserMessage);
+    const continuesPreviousTurn = isWorkbenchUnfinishedContinuationTurn(turn);
     const previous = groups.at(-1);
     if (continuesPreviousTurn && previous) {
       groups[groups.length - 1] = mergeTurnGroup(previous, turn);

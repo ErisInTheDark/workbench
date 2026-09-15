@@ -3,12 +3,13 @@
  * - THREAD_HISTORY_RETENTION_AGE_MS: minimum mounted-view age before a historical turn can unload.
  * - ThreadHistoryRetentionCandidates: eligible turn IDs and the next required age review.
  * - getThreadTurnLastUpdateMs: derive one turn's latest canonical update timestamp.
- * - getThreadHistoryRetentionCandidates: select old loaded turns while protecting current context.
+ * - getThreadHistoryRetentionCandidates: select old loaded turns while protecting complete current logical context.
  * - ThreadHistoryRetentionSurface: report one mounted surface's exact-end state.
  * - default ThreadHistoryRetentionController: own per-thread surface retention and its review schedule.
  */
 
 import type { ThreadPayload, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
+import { isWorkbenchUnfinishedContinuationTurn } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 export const THREAD_HISTORY_RETENTION_AGE_MS = 60 * 60 * 1_000;
 
@@ -54,7 +55,17 @@ export function getThreadHistoryRetentionCandidates(
   }
 
   const historyByTurnId = new Map(thread.turnHistory.map((entry) => [entry.turnId, entry]));
-  const candidates = thread.turns.slice(0, -2);
+  let protectedStartIndex = thread.turns.length;
+  let protectedLogicalTurnCount = 0;
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const turn = thread.turns[index]!;
+    protectedStartIndex = index;
+    if (!isWorkbenchUnfinishedContinuationTurn(turn)) {
+      protectedLogicalTurnCount += 1;
+      if (protectedLogicalTurnCount === 2) break;
+    }
+  }
+  const candidates = thread.turns.slice(0, protectedStartIndex);
   const turnIds: string[] = [];
   let nextReviewAtMs: number | null = null;
   for (const turn of candidates) {
