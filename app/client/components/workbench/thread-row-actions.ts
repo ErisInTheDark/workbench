@@ -30,6 +30,7 @@ export function getThreadRowActions(
     : canComplete ? "snooze" : settlementAvailable ? "settle" : null;
   const shiftAction = entry.entryKind === "subagent" ? null
     : group === "settled" ? "archive"
+    : group === "snoozed" && entry.lifecycle.kind === "completed" && settlementAvailable ? "settle"
     : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "needsAttention" ? canComplete ? "complete" : "snooze"
     : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "completed" ? "snooze"
     : null;

@@ -62,8 +62,16 @@ test("pinned summaries preserve questionnaire completion without enabling shift 
   assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "snooze", shiftAction: "complete" });
 });
 
-test("completed rows keep settlement primary and add snooze as the shift action", () => {
+test("completed rows keep settlement primary while snoozed rows expose settlement through shift", () => {
   assert.deepEqual(getThreadRowActions(completed, "main"), { baseAction: "settle", shiftAction: "snooze" });
+  assert.deepEqual(getThreadRowActions(completed, "snoozed"), { baseAction: "wake", shiftAction: "settle" });
+  assert.deepEqual(getThreadRowActions({
+    ...completed,
+    gitArc: {
+      checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentName: "work",
+      intentDescription: "", phase: "active", proposals: [], updatedAt: "2026-09-08T00:00:00Z",
+    },
+  }, "snoozed"), { baseAction: "wake", shiftAction: null });
 });
 
 test("subagent pending input retains its existing action restrictions", () => {
