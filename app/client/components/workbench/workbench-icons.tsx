@@ -68,19 +68,25 @@ type DashedBookDetail = "bookmark" | "search" | null;
 function DashedBookIcon({ detail, ...props }: IconProps & { detail: DashedBookDetail }) {
   return (
     <OutlinedIcon {...props}>
-      <path d="M12 17h1.5" />
-      <path d="M12 22h1.5" />
+      {detail === "search" ? (
+        <path d="M12 22H6.5a1 1 0 0 1 0-5h4.501" />
+      ) : (
+        <>
+          <path d="M12 17h1.5" />
+          <path d="M12 22h1.5" />
+          <path d="M17.5 22H19a1 1 0 0 0 1-1" />
+          <path d="M20 14v3h-2.5" />
+          <path d="M8 22H6.5a1 1 0 0 1 0-5H8" />
+        </>
+      )}
       <path d="M12 2h1.5" />
-      <path d="M17.5 22H19a1 1 0 0 0 1-1" />
       <path d="M17.5 2H19a1 1 0 0 1 1 1v1.5" />
-      <path d="M20 14v3h-2.5" />
-      <path d="M20 8.5V10" />
+      <path d={detail === "search" ? "M20 8.5V11" : "M20 8.5V10"} />
       <path d="M4 10V8.5" />
       <path d="M4 19.5V14" />
       <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H8" />
-      <path d="M8 22H6.5a1 1 0 0 1 0-5H8" />
       {detail === "bookmark" ? <path d="M10 2v7.751a.25.25 0 0 0 .407.195l2.28-1.834a.5.5 0 0 1 .627 0l2.28 1.834A.25.25 0 0 0 16 9.751V2" /> : null}
-      {detail === "search" ? <><path d="m21 22-1.879-1.878" /><circle cx="17" cy="18" r="3" /></> : null}
+      {detail === "search" ? <><path d="m22 22-1.879-1.878" /><circle cx="18" cy="18" r="3" /></> : null}
     </OutlinedIcon>
   );
 }
@@ -94,7 +100,7 @@ export function BookBookmarkIcon(props: IconProps) {
 }
 
 export function BookSearchIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M11 22H5.5a1 1 0 0 1 0-5h4.501" /><path d="m21 22-1.879-1.878" /><path d="M3 19.5v-15A2.5 2.5 0 0 1 5.5 2H18a1 1 0 0 1 1 1v8" /><circle cx="17" cy="18" r="3" /></OutlinedIcon>;
+  return <OutlinedIcon {...props}><path d="M12 22H6.5a1 1 0 0 1 0-5h4.501" /><path d="m22 22-1.879-1.878" /><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v8" /><circle cx="18" cy="18" r="3" /></OutlinedIcon>;
 }
 
 export function BookDashedIcon(props: IconProps) {
