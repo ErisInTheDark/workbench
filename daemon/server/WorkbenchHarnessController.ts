@@ -6,6 +6,7 @@
  * - WorkbenchHarnessControllerOptions: turn admission and public identity boundary.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadTurnsListResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListResponse";
@@ -27,7 +28,7 @@ import type { WorkbenchTurnIdentityLookup } from "./database/thread-identity/wor
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
   request(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse>;
-  readThread(threadId: NativeThreadId): Promise<ThreadReadResponse>;
+  readThread(threadId: NativeThreadId): Promise<Pick<WorkbenchThreadContextReadResponse, "thread">>;
   steerTurn(threadId: NativeThreadId, expectedTurnId: NativeTurnId, input: UserInput[]): Promise<string | null>;
   recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
   readLoadedThreads?: () => readonly Thread[];

@@ -3,7 +3,7 @@
  * - CompletedThreadWorkPartition: one completed turn split into collapsible work and always-mounted terminal output.
  * - partitionCompletedThreadWork: use the last successful CLI or MCP task-status operation as the terminal boundary, with a legacy final-message fallback.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   getThreadItemTimelineDurationMs,
   type WorkbenchThreadItemTimelineEntry,

@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { truncateThreadText } from "./thread-view-formatters";

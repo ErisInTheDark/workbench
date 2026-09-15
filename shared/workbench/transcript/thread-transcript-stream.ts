@@ -9,7 +9,7 @@
  * - readTranscriptText/writeTranscriptText: access one live presentation field.
  */
 import { areDeeplyEqual } from "../deep-equality.ts";
-import type { FileUpdateChange } from "../../codex/generated/app-server/v2/FileUpdateChange.ts";
+import type { FileUpdateChange } from "../thread/workbench-thread-items.ts";
 import type { WorkbenchTranscriptSnapshot } from "../database/transcript/workbench-transcript-contract.ts";
 import {
   projectWorkbenchTranscript,

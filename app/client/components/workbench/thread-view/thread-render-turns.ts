@@ -3,7 +3,7 @@
  * - ThreadRenderProjection/projectThreadRenderTurns: group hidden unfinished-turn continuations into one render-only logical turn. Keywords: thread, rendering, continuation.
  */
 
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   isWorkbenchUnfinishedContinuationTurn,

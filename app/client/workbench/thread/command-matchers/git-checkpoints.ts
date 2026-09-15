@@ -9,7 +9,7 @@
  * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: proposal-card command intent.
  * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: legacy and inline diff content without trailers.
  */
-import type { FileUpdateChange } from "workbench-shared/codex/generated/app-server/v2/FileUpdateChange";
+import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   parseGitArcReceipt,
   readGitArcValue,

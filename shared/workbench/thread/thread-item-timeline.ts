@@ -8,7 +8,7 @@
  * - projectWorkbenchThreadItemTimelines: add overlay timing to hydrated turn history without replacing existing observations.
  */
 
-import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
+import type { Turn } from "./workbench-thread-turn.ts";
 import type { ThreadPayloadData, WorkbenchThreadTurnHistoryEntry } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 

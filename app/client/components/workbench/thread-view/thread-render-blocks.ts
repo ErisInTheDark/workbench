@@ -7,7 +7,7 @@
  * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
  * - getWorkedBlockRows: split independently rendered work rows and identify protected content.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";

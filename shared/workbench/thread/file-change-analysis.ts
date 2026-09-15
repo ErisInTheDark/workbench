@@ -5,7 +5,7 @@
  * - FileChangeHunkAnalysis/FileChangeAnalysis: requested-change evidence, not writer attribution.
  * - analyseFileChange: compare an attempted change with current file observations.
  */
-import type { FileUpdateChange } from "../../codex/generated/app-server/v2/FileUpdateChange.ts";
+import type { FileUpdateChange } from "./workbench-thread-items.ts";
 import { parseUnifiedDiff, type UnifiedDiffHunk } from "./unified-diff.ts";
 
 export type FileObservation =

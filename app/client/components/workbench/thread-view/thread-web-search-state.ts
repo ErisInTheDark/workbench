@@ -5,7 +5,7 @@
  * - getThreadWebSearchLiveLabel: derive the live activity label for a web-search item. Keywords: workbench, thread, web search, live.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 

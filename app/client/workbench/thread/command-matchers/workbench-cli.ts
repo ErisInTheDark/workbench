@@ -5,7 +5,7 @@
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, task, token, subagent, and reload commands.
  */
-import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
+import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";

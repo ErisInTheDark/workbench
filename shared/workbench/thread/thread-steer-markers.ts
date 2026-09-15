@@ -5,8 +5,7 @@
  * - isAgentScreenshotSteerText/isAgentScreenshotSteerInput/isAgentScreenshotSteerUserMessage: detect screenshot steers in stored thread items. Keywords: steer, screenshot, render.
  * - getAgentScreenshotSteerImages: extract screenshot image inputs from a marked steer user message. Keywords: steer, screenshot, image.
  */
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
 
 export const WORKBENCH_AGENT_SCREENSHOT_STEER_MARKER = "<!-- workbench-agent-screenshot-steer -->";
 const WORKBENCH_AGENT_SCREENSHOT_STEER_PATTERN = /^<!--\s*workbench-agent-screenshot-steer(?:\s+\{[\s\S]*?\})?\s*-->/u;

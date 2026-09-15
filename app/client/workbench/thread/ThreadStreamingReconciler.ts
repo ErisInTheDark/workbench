@@ -4,7 +4,7 @@
  * - default ThreadStreamingReconciler: owns structural matching, duplicate selection, and live item key lifecycle.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getThreadStateChangeTagText } from "../markdown/markdown-parse";
 
 interface StreamingItemDescriptor {

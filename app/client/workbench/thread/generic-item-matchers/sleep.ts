@@ -5,8 +5,8 @@
  * - matchSleepItem: recognise a generic sleep payload without changing its source.
  * - getSleepDisplay: derive countdown and completion from owned timing.
  */
-import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 export interface SleepItemMatch {
   kind: "sleep";

@@ -3,7 +3,7 @@
  * - unwrapWorkbenchSteerDisplayText/unwrapWorkbenchSteerDisplayInput: remove every registered UI-visible Workbench steer wrapper while preserving transport text. Keywords: steer, display, unwrap, registry.
  */
 
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { UserInput } from "./workbench-thread-items.ts";
 import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { WORKBENCH_AGENT_MESSAGE_TAG_WRAPPER } from "./thread-agent-message.ts";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";

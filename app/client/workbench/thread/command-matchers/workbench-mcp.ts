@@ -5,8 +5,7 @@
  * - getWorkbenchMcpCommandDisplay: match a simple recorded wb MCP call to its shared summary presentation. Keywords: workbench, MCP, command, rendering.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive valid wb shell evidence and its matcher shell into the ordinary command presentation shape. Keywords: workbench, MCP, shell, command, presentation.
  */
-import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   getWorkbenchShellAggregatedOutput,
   WorkbenchShellInputSchema,

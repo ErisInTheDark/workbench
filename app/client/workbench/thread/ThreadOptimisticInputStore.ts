@@ -11,9 +11,8 @@
  * - default ThreadOptimisticInputStore: create the optimistic input owner.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
+import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import { createThreadDocumentKeyForThread } from "./thread-document-keys";
 import { isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";

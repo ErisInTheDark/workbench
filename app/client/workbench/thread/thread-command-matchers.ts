@@ -22,8 +22,7 @@
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
 
-import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
-import type { CommandExecutionStatus } from "workbench-shared/codex/generated/app-server/v2/CommandExecutionStatus";
+import type { CommandAction, CommandExecutionStatus } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
     BROWSE_COMMAND_MATCHERS,
     isBrowseCommandMatcherClaim,

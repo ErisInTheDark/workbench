@@ -15,9 +15,10 @@
  * - createCodexModelRerouteObservation: retain explicit mixed-model evidence.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Thread as NativeThread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
 import type { TokenUsageBreakdown } from "workbench-shared/codex/generated/app-server/v2/TokenUsageBreakdown";
 import type {
   NativeTranscriptAtomicObservation,

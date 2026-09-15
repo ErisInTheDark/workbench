@@ -6,15 +6,16 @@
  */
 import { createHash } from "node:crypto";
 
-import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
+import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultSink, WorkbenchBrowseScreenshotDelivery } from "./lib/workbench/browse/browse-result-events";
 import type { WorkbenchToolContextRequest, WorkbenchToolContextResponse } from "workbench-shared/workbench/thread/thread-tool-output";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 const IDLE_TAIL = Promise.resolve();
+type ThreadReadResponse = Pick<WorkbenchThreadContextReadResponse, "thread">;
 
 export interface WorkbenchBrowseActiveThread {
   commandItemId: string | null;

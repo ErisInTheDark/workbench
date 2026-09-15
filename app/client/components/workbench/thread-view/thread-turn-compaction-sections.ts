@@ -4,7 +4,7 @@
  * - createThreadTurnCompactionRenderPlan: split raw turn items into lazy older context and visible current context sections. Keywords: thread, context compaction, performance.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   getThreadItemTimelineDurationMs,
   type WorkbenchThreadItemTimelineEntry,

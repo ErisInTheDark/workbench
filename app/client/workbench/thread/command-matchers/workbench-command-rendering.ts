@@ -9,7 +9,7 @@
  * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: specialised and simple command routes.
  * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve arguments into shared presentation.
  */
-import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
+import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import type { GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { CommandMatcher } from "./core";

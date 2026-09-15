@@ -4,8 +4,7 @@
  * - formatDynamicToolInvocation: format a recorded dynamic-tool call as a qualified TypeScript invocation. Keywords: dynamic tool, TypeScript, arguments.
  * - formatToolCallOutput: prefer captured text while preserving structured tool output as readable JSON. Keywords: tool call, output, text, JSON.
  */
-import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { DynamicToolCallOutputContentItem } from "workbench-shared/codex/generated/app-server/v2/DynamicToolCallOutputContentItem";
+import type { JsonValue, DynamicToolCallOutputContentItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 

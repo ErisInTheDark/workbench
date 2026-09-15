@@ -18,10 +18,11 @@ import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse.ts";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus.ts";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage.ts";
-import type { Turn } from "./generated/app-server/v2/Turn.ts";
+import type { Turn } from "../workbench/thread/workbench-thread-turn.ts";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline.ts";
 import { withCodexItemMetadata } from "./thread-item-source.ts";
 
+type CompatibleThread = Omit<Thread, "turns"> & { turns: Turn[] };
 type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
   & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
 
@@ -151,7 +152,7 @@ export function isProjectCodexThreadAtExpectedCwd(
     && isCodexThreadAtRoot(thread.cwd, expectedCwd);
 }
 
-export function toThreadSummary<Id extends string>(thread: Omit<Thread, "id"> & { id: Id }, harness: WorkbenchHarness = "codex"): ThreadSummary<Id> {
+export function toThreadSummary<Id extends string>(thread: Omit<CompatibleThread, "id"> & { id: Id }, harness: WorkbenchHarness = "codex"): ThreadSummary<Id> {
   return {
     id: thread.id,
     harness,
@@ -168,7 +169,7 @@ export function toThreadSummary<Id extends string>(thread: Omit<Thread, "id"> & 
   };
 }
 
-export function toThreadTurn(turn: Turn, harness: WorkbenchHarness = "codex"): Turn {
+export function toThreadTurn<T extends Turn>(turn: T, harness: WorkbenchHarness = "codex"): T {
   return harness === "codex" ? {
     ...turn,
     items: turn.items.map(withCodexItemMetadata),
@@ -176,7 +177,7 @@ export function toThreadTurn(turn: Turn, harness: WorkbenchHarness = "codex"): T
 }
 
 export function toThreadPayload<Id extends string>(
-  thread: Omit<Thread, "id"> & { id: Id },
+  thread: Omit<CompatibleThread, "id"> & { id: Id },
   harness: WorkbenchHarness = "codex",
   model: string | null = null,
   reasoningEffort: string | null = null,
@@ -213,7 +214,7 @@ export function toThreadResumePayload<Id extends string>(
   return toThreadPayload(thread, harness, model, reasoningEffort, serviceTier, agentPath);
 }
 
-function createTurnHistoryFromTurns(turns: Thread["turns"]): WorkbenchThreadTurnHistoryEntry[] {
+function createTurnHistoryFromTurns(turns: Turn[]): WorkbenchThreadTurnHistoryEntry[] {
   return turns.map((turn) => ({
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
@@ -226,8 +227,8 @@ function createTurnHistoryFromTurns(turns: Thread["turns"]): WorkbenchThreadTurn
   }));
 }
 
-export function readWorkbenchTurnHistory(thread: Thread) {
-  const value = (thread as Thread & { workbenchTurnHistory?: unknown }).workbenchTurnHistory;
+export function readWorkbenchTurnHistory(thread: CompatibleThread) {
+  const value = (thread as CompatibleThread & { workbenchTurnHistory?: unknown }).workbenchTurnHistory;
   return Array.isArray(value)
     ? value
       .map(normalizeWorkbenchThreadTurnHistoryEntry)

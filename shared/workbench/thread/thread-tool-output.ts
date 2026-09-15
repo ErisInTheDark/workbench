@@ -9,9 +9,7 @@
  * - getWorkbenchToolOutputText: read supported text parts without converting media to text.
  */
 import { z } from "zod";
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { TurnToolOutput } from "../../codex/generated/app-server/v2/TurnToolOutput.ts";
-import type { FunctionCallOutputContentItem } from "../../codex/generated/app-server/FunctionCallOutputContentItem.ts";
+import type { ThreadItem, TurnToolOutput, FunctionCallOutputContentItem } from "./workbench-thread-items.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 
 export const WORKBENCH_TOOL_CONTEXT_METHOD = "workbench/thread/inject-tool-context";

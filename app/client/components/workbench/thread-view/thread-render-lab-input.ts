@@ -3,12 +3,11 @@
  * - parseThreadRenderInput: parse canonical thread payloads/items without rewriting them, while adapting shorthand lab fixtures into renderable thread data.
  */
 
-import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
+import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
+import type { ThreadItem, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
 import { z } from "zod";

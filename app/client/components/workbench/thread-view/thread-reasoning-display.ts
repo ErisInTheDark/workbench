@@ -7,8 +7,8 @@
  * - getCurrentThreadReasoningActivity: select the newest live reasoning step after pending steers. Keywords: reasoning, live, status.
  * - omitThreadReasoningStep: remove one exact live step while preserving earlier disclosure content. Keywords: reasoning, disclosure, filter.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;

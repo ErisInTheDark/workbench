@@ -4,8 +4,6 @@
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
  * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
- * - mapProviderLifecycleNotification: translate provider lifecycle notifications.
- * - mapProviderActivityNotification: translate provider activity notifications.
  * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite state, provider titles, thread-owned status commands, and provider notifications.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
@@ -34,6 +32,7 @@ import { admitProviderThreads, admitProviderNotifications, mapProviderThread, ma
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema, type NativeThreadId, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -162,78 +161,10 @@ export function normalizeSubagentProviderLifecycle(lifecycle: WorkbenchThreadLif
     : lifecycle;
 }
 
-export function mapProviderLifecycleNotification(notification: JsonRpcNotification, identities: AdmittedThreadIdentities): { event: WorkbenchObservedLifecycleEvent; threadId: WorkbenchThreadId } | null {
-  const params = asRecord(notification.params);
-  const threadId = typeof params?.threadId === "string" && params.threadId.trim()
-    ? identities.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
-  if (!threadId) return null;
-  if (notification.method === "item/started" || notification.method === "item/completed") {
-    const item = asRecord(params.item);
-    const turnId = typeof params.turnId === "string" ? identities.knownTurn(TurnReferenceSchema.parse(params.turnId)).turnId : null;
-    return item?.type === "userMessage" && turnId
-      ? { event: { kind: "userInputDelivered", turnId }, threadId }
-      : null;
-  }
-  if (notification.method === "turn/started") {
-    const turn = asRecord(params.turn);
-    if (turn?.workbenchAdmission === "connecting" || turn?.workbenchAdmission === "providerPending") return null;
-    const turnId = typeof turn?.id === "string" ? identities.knownTurn(TurnReferenceSchema.parse(turn.id)).turnId : null;
-    const items = Array.isArray(turn?.items) ? turn.items : [];
-    return turnId && items.some((item) => asRecord(item)?.type === "userMessage")
-      ? { event: { kind: "userInputDelivered", turnId }, threadId }
-      : null;
-  }
-  if (notification.method === "turn/completed") {
-    const turn = asRecord(params.turn);
-    const turnId = typeof turn?.id === "string" ? identities.knownTurn(TurnReferenceSchema.parse(turn.id)).turnId : null;
-    const status = turn?.status;
-    return turnId && (status === "completed" || status === "interrupted" || status === "failed")
-      ? { event: { kind: "turnCompleted", status, turnId }, threadId }
-      : null;
-  }
-  if (notification.method === "questionnaire/requested") {
-    const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;
-    const turnId = typeof params.turnId === "string" ? identities.knownTurn(TurnReferenceSchema.parse(params.turnId)).turnId : null;
-    if (!requestKey) return null;
-    const questionnaire = WorkbenchDurableQuestionnaireSchema.safeParse({
-      itemId: typeof params.itemId === "string" ? params.itemId : null,
-      request: params.request,
-      requestKey,
-      turnId,
-    });
-    return {
-      event: { kind: "pendingInput", questionnaire: questionnaire.success ? questionnaire.data : null, requestKey, turnId },
-      threadId,
-    };
-  }
-  if (notification.method === "questionnaire/resolved") {
-    const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;
-    return requestKey ? { event: { kind: "inputResolved", requestKey }, threadId } : null;
-  }
-  if (notification.method === "thread/status/changed" && asRecord(params.status)?.type === "systemError") {
-    return { event: { kind: "providerSystemError" }, threadId };
-  }
-  return null;
-}
-
 export interface WorkbenchProviderLifecycleObservation {
   event: WorkbenchObservedLifecycleEvent;
   lifecycle: WorkbenchThreadLifecycle | null;
   threadId: WorkbenchThreadId;
-}
-
-export function mapProviderActivityNotification(notification: JsonRpcNotification, identities: AdmittedThreadIdentities):
-  | { kind: "activity"; threadId: WorkbenchThreadId }
-  | { kind: "turnStarted"; startedAt: number | null; threadId: WorkbenchThreadId }
-  | null {
-  if (notification.method !== "turn/started" && notification.method !== "item/started" && notification.method !== "item/completed") return null;
-  const params = asRecord(notification.params);
-  const threadId = typeof params?.threadId === "string" && params.threadId.trim()
-    ? identities.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
-  if (!threadId) return null;
-  return notification.method === "turn/started"
-    ? { kind: "turnStarted", startedAt: normalizeOptionalTimestamp(asRecord(params.turn)?.startedAt), threadId }
-    : { kind: "activity", threadId };
 }
 
 export default class WorkbenchThreadStateFeature {
@@ -334,17 +265,8 @@ export default class WorkbenchThreadStateFeature {
     });
   }
 
-  async observeProviderNotification(harness: HarnessKind, notification: JsonRpcNotification) {
-    const owners = this.context.identities;
-    const params = asRecord(notification.params);
-    let projectId: ProjectId | undefined;
-    if (owners && typeof params?.threadId === "string") {
-      const native = owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(params.threadId));
-      projectId = (await owners.threads.resolveNative(native))?.projectId;
-      await admitProviderNotifications(owners, native, [notification as ServerNotification]);
-      notification = mapProviderNotification(owners, native, notification as ServerNotification);
-    }
-    const mapped = mapProviderLifecycleNotification(notification, owners.threads);
+  async observeProviderNotification(harness: HarnessKind, facts: WorkbenchProviderObservation) {
+    const { projectId, lifecycle: mapped, title, activity } = facts;
     let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
       const lifecycle = projectId
@@ -353,18 +275,11 @@ export default class WorkbenchThreadStateFeature {
       observation = { ...mapped, lifecycle };
       if (mapped.event.kind !== "userInputDelivered") return observation;
     }
-    if (notification.method === "thread/name/updated") {
-      const params = asRecord(notification.params);
-      const threadId = typeof params?.threadId === "string" && params.threadId.trim()
-        ? owners.threads.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
-      const title = normalizeThreadTitle(typeof params?.name === "string" ? params.name : null);
-      if (threadId && title) {
-        if (projectId) await this.controller.setTitle(projectId, harness, threadId, title);
-        else await this.controller.observeTitle(harness, threadId, title);
-      }
+    if (title) {
+      if (projectId) await this.controller.setTitle(projectId, harness, title.threadId, title.title);
+      else await this.controller.observeTitle(harness, title.threadId, title.title);
       return observation;
     }
-    const activity = mapProviderActivityNotification(notification, owners.threads);
     if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined, projectId);
     return observation;
   }

@@ -11,6 +11,7 @@ import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityControll
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { createNativeQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
+import { admitNativeTranscriptObservations } from "./thread-identity-transcript-mapping";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -121,6 +122,22 @@ test("observation requests validate canonical ownership and outbound state needs
       native: { harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"] },
       projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "/repo", title: "Child", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
+    const childTurnId = fixtureIdentitySchemas.NativeTurnIdSchema.parse("child-turn");
+    await admitNativeTranscriptObservations(owners, [{
+      kind: "turn", threadId: fixtureIdentityValues.NativeThreadId["native-child"], turnId: childTurnId,
+      harnessId: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"],
+      nativeTurnId: childTurnId, state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
+    }, {
+      kind: "item", threadId: fixtureIdentityValues.NativeThreadId["native-child"], turnId: childTurnId,
+      item: { type: "reasoning", id: "item-123", summary: ["Independent provider"], content: [] },
+      lifecycle: "streaming", observedAt: 2,
+    }], "opencode");
+    const childTurn = threads.workbenchTurnIdForNative({
+      harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"],
+      nativeTurnId: childTurnId,
+    });
+    assert.ok(items.findItemIdForSource(child.threadId, { turnId: childTurn, sourceId: "item-123", kind: "stable" }));
+    assert.equal(items.findItemIdForSource(child.threadId, { turnId: childTurn, sourceId: "item-123", kind: "provisional" }), undefined);
     const childRequest = await mapWorkbenchThreadStateRequest(owners, {
       method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: source.subscriptionId, version: 1,
       target: { kind: "subagent", harness: "opencode", threadId: child.threadId, parentThreadId: thread.threadId },

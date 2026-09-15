@@ -10,7 +10,7 @@
  */
 
 import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { TurnStartParams } from "workbench-shared/codex/generated/app-server/v2/TurnStartParams";
 import type { TurnSteerParams } from "workbench-shared/codex/generated/app-server/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";

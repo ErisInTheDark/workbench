@@ -4,7 +4,7 @@
  * projectWorkbenchTranscript: reconstruct turns, Browse facts, item timing, and display segments from canonical item projection. Keywords: transcript, browser, canonical, parity.
  * Re-exports: shared canonical item projection values from the lower database transcript owner. Keywords: transcript, projection, item, database.
  */
-import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
+import type { Turn } from "../thread/workbench-thread-turn.ts";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchThreadTurnHistoryEntry,

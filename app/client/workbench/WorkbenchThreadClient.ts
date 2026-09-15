@@ -10,7 +10,7 @@ import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
 import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
-import type { CodexAppServerNotification } from "workbench-shared/codex/app-server-notifications";
+import type { WorkbenchClientNotification as CodexAppServerNotification } from "workbench-shared/codex/app-server-client";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
@@ -19,25 +19,25 @@ import type { ModelListResponse } from "workbench-shared/codex/generated/app-ser
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { WorkbenchControls } from "workbench-shared/types";
 import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
-import type { ThreadActiveFlag } from "workbench-shared/codex/generated/app-server/v2/ThreadActiveFlag";
+import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { ThreadTokenUsageSchema } from "workbench-shared/workbench/thread/thread-context-usage";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { ThreadCompactStartResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadCompactStartResponse";
 import type { ThreadGoalClearResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalClearResponse";
 import type { ThreadGoalGetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalGetResponse";
 import type { ThreadGoalSetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalSetResponse";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadReadResponse as ProviderThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { WorkbenchThreadResponse } from "workbench-shared/workbench/thread/workbench-thread-identity";
 import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { TurnStartParams } from "workbench-shared/codex/generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse as ProviderTurnStartResponse } from "workbench-shared/codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
     createQuestionnaireCollaborationMode,
     createTextInput,
@@ -52,15 +52,15 @@ import {
     toThreadResumePayload,
     toThreadSummary,
 } from "workbench-shared/codex/thread-adapter";
-import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "workbench-shared/codex/thread-command-output";
+import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "workbench-shared/workbench/thread/thread-command-output";
 import {
   isSupportedWorkbenchTranscriptItem,
   normalizeThreadItems,
-} from "workbench-shared/codex/thread-item-normalization";
+} from "workbench-shared/workbench/thread/thread-item-normalization";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
-import { getCurrentInProgressTurn, getCurrentTurn } from "workbench-shared/codex/thread-state";
+import { getCurrentInProgressTurn, getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
     ThreadPayload,
     ThreadSummary,

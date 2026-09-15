@@ -539,15 +539,6 @@ export default class WorkbenchWebSocketRequestController {
           const params = await mapNativeThreadStateSnapshot(this.threadStateIdentities!, source);
           signal.throwIfAborted();
           message = { ...envelope, params };
-        } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
-          const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);
-          const params = asRecord(envelope.params);
-          const thread = asRecord(params?.thread);
-          const threadId = typeof params?.threadId === "string" ? params.threadId : thread?.id;
-          if (typeof threadId === "string") {
-            const native = this.identities.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(threadId));
-            message = mapProviderNotification(this.identities, native, message as ServerNotification);
-          }
         }
       }
     }

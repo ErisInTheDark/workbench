@@ -263,7 +263,7 @@ test("bridge admits public identity before structural publication and records th
     bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
     ...{ identities },
     onNotification(notification) {
-      publicEvents.push(mapProviderNotification(identities, native, notification as ServerNotification));
+      publicEvents.push(notification as ServerNotification);
     },
     recordSqliteTranscript: async (batch) => {
       facts.push(...batch);
@@ -388,7 +388,7 @@ test("database replacement preserves ordered live events and usage without repla
     appServer: { send() { throw new Error("Cold identity lookup must not request provider history"); } } as unknown as CodexAppServer,
     initialState, identities,
     bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification(event) { published.push(mapProviderNotification(identities, native, event as ServerNotification)); },
+    onNotification(event) { published.push(event as ServerNotification); },
     recordSqliteTranscript: async (batch) => { transcripts.settle(batch); },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
@@ -2704,7 +2704,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     }]);
     assert.deepEqual(notifications, [{
       method: "browse/result/recorded",
-      params: { threadId: "thread", turnId: "turn" },
+      params: { threadId, turnId },
     }]);
 
     await fs.writeFile(path.join(assetDirectory, `${digest}.png`), "tampered");
@@ -2763,7 +2763,7 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
     });
     assert.deepEqual(notifications, [{
       method: "browse/result/recorded",
-      params: { threadId: "thread", turnId: "turn" },
+      params: { threadId, turnId },
     }]);
   } finally {
     await bridge.disposeImmediately();
@@ -2779,6 +2779,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const sqliteFailures: Error[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
+  const publications: Parameters<ConstructorParameters<typeof CodexStdioBridge>[0]["onNotification"]>[] = [];
   const streamed: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptTextUpdate[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const client: BridgeClient = {
@@ -2797,7 +2798,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
-    onNotification() {},
+    onNotification(...publication) { publications.push(publication); },
     onTranscriptLiveUpdate(update) { if (update.kind === "text") streamed.push(update); },
     readSqliteTranscriptMaterializedTurnIds: async (threadId, turnIds) => (
       repository.readMaterializedTurnIds(threadId, turnIds)
@@ -3054,6 +3055,35 @@ test("live transcript recording and reload use only SQL and preserve image asset
     assert.deepEqual(sqliteFailures, []);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
+    const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
+    const publicThreadId = fixtureIdentities.threads.workbenchIdForNative(native);
+    const publicTurnId = fixtureIdentities.threads.workbenchTurnIdForNative({
+      ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn,
+    });
+    const question = publications.find(([event]) => event.method === "questionnaire/requested");
+    assert.ok(question);
+    const pendingInput = question[1].lifecycle;
+    assert.equal(pendingInput?.event.kind, "pendingInput");
+    if (pendingInput?.event.kind !== "pendingInput") throw new Error("Missing pending questionnaire observation");
+    assert.equal(pendingInput.threadId, publicThreadId);
+    assert.equal(pendingInput.event.turnId, publicTurnId);
+    assert.ok(pendingInput.event.questionnaire);
+    assert.equal(pendingInput.event.questionnaire.turnId, publicTurnId);
+    assert.equal(question[1].projectId, fixtureIdentityValues.ProjectId.project);
+    assert.deepEqual(publications.find(([event]) => event.method === "questionnaire/resolved")?.[1].lifecycle, {
+      threadId: publicThreadId, event: { kind: "inputResolved", requestKey: "questionnaire" },
+    });
+    assert.deepEqual(publications.find(([event]) => event.method === "turn/completed")?.[1].lifecycle, {
+      threadId: publicThreadId, event: { kind: "turnCompleted", turnId: publicTurnId, status: "interrupted" },
+    });
+    for (const [event, , original] of publications.filter(([event]) => (
+      event.method === "questionnaire/requested" || event.method === "questionnaire/resolved"
+      || event.method === "browse/result/recorded" || event.method === "turn/completed"
+    ))) {
+      assert.equal((event.params as { threadId: string }).threadId, publicThreadId);
+      assert.equal((original.params as { threadId: string }).threadId, "thread");
+    }
+    assert.ok(publications.some(([event]) => event.method === "browse/result/recorded"));
     assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "message"));
     assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "dynamic-call"));
     assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "command"));
@@ -3171,6 +3201,12 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
 
     let fileChangeNotifications = notifications.filter((notification) => notification.method === "item/completed" && notification.params?.item?.type === "fileChange");
     assert.equal(fileChangeNotifications.length, 1);
+    const native = sql.ports.identities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
+    const publicThreadId = sql.ports.identities.threads.workbenchIdForNative(native);
+    const publicTurnId = sql.ports.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
+    const publicItemId = sql.ports.identities.items.itemIdForSource(publicThreadId, {
+      turnId: publicTurnId, sourceId: anchorlessItemId, kind: "stable",
+    });
     assert.deepEqual(fileChangeNotifications[0]?.params?.item, {
       changes: [{
         diff: "",
@@ -3179,7 +3215,7 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
         workbenchAdditions: 1,
         workbenchDeletions: 1,
       }],
-      id: anchorlessItemId,
+      id: publicItemId,
       status: "failed",
       type: "fileChange",
       workbenchFailureKind: "unclaimed",

@@ -112,9 +112,9 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
   });
 }
 
-function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
-  featureHost.get("harnesses").observeNotification(harness, message);
-  void featureHost.observeProviderNotification({ harness, notification: message }, `provider notification: ${harness} ${message.method}`).catch((error) => {
+function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification, observation: import("workbench-shared/workbench/provider/provider-observation").WorkbenchProviderObservation, nativeNotification: JsonRpcNotification) {
+  featureHost.get("harnesses").observeNotification(harness, nativeNotification);
+  void featureHost.observeProviderNotification({ harness, notification: nativeNotification, observation }, `provider notification: ${harness} ${message.method}`).catch((error) => {
     logError("thread-state", `failed to observe provider notification: ${error instanceof Error ? error.message : String(error)}`);
   });
   for (const client of bridgeConnections) {
@@ -286,7 +286,7 @@ function createDaemonFeatureContext(): DaemonProcessContext {
       bridgeUrl: CODEX_BRIDGE_URL,
       handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
       initialState,
-      onNotification: (notification) => broadcastToClients("codex", notification),
+      onNotification: (notification, observation, nativeNotification) => broadcastToClients("codex", notification, observation, nativeNotification),
       resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
       sendToClient: (client, message) => sendJsonToClient(client, message),
       storageRoot: PROJECT_ROOT,

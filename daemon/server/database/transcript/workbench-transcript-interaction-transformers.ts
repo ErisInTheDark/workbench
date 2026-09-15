@@ -8,7 +8,7 @@
  * - transformQuestionnaireEntry: convert settled questionnaires and approvals.
  * - transformSteerEntry: convert a settled steer to a typed user-message row.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
 export { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";

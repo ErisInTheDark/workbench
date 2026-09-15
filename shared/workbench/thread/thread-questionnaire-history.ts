@@ -5,7 +5,7 @@
  * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into thread turns.
  */
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
 import type { ThreadPayload, ThreadPayloadData, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import {

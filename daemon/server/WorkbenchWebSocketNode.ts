@@ -63,6 +63,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/WorkbenchWebSocketRequestController.ts",
     "daemon/server/WorkbenchWebSocketEventLog.ts",
     "daemon/server/thread-identity-provider-mapping.ts",
+    "daemon/server/CodexProviderIdentity.ts",
+    "daemon/server/CodexProviderObservations.ts",
     "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/thread-identity-workbench-mapping.ts",
     "daemon/server/WorkbenchWebSocketStreamController.ts",

@@ -7,7 +7,7 @@
  */
 import { z } from "zod";
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
 
 const delivery = z.enum(["pending", "sent", "failed", "interrupted"]);
 

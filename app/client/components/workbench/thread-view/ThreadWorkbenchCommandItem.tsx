@@ -6,7 +6,7 @@
 
 import { useContext, type ReactNode } from "react";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";

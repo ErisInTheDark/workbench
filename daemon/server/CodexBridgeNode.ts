@@ -4,6 +4,7 @@
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
+import CodexProviderObservations from "./CodexProviderObservations";
 import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -196,6 +197,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      providerObservations: new CodexProviderObservations({ threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") }),
       onAcceptedTurnSteer: nativeThreadId => requestRegistry.interruptThreadWaits(
         threadIdentity.workbenchIdForNative(
           threadIdentity.knownNativeBinding("codex", nativeThreadId),
@@ -333,6 +335,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/CodexBridgeNode.ts",
     "daemon/server/codex-sandbox-policy.ts",
     "daemon/server/CodexStdioBridge.ts",
+    "daemon/server/CodexProviderObservations.ts",
+    "daemon/server/CodexProviderIdentity.ts",
     "daemon/server/thread-identity-provider-mapping.ts",
     "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/CodexFileChangeController.ts",

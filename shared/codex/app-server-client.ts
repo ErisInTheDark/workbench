@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - CodexAppServerClient: persistent WebSocket transport for provider and Workbench notifications with fenced reconnects.
+ * - WorkbenchClientNotification: WB transcript messages beside retained native transport events.
  */
 import type { WorkbenchHarness } from "../types.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
@@ -13,7 +14,8 @@ import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
   type WorkbenchEventStreamAck,
 } from "../workbench/websocket-stream.ts";
-import type { CodexAppServerNotification } from "./app-server-notifications.ts";
+import type { CodexAppServerNotification as NativeAppServerNotification } from "./app-server-notifications.ts";
+import type { WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
 import { isCodexAppServerNotification } from "./app-server-notifications.ts";
 import { toThreadTurn } from "./thread-adapter.ts";
 import { getCodexItemIdentityKind } from "./thread-item-source.ts";
@@ -38,6 +40,10 @@ type PendingResponseHandler = {
   resolve: (value: CodexJsonRpcResponse<unknown>) => void;
 };
 
+export type WorkbenchClientNotification =
+  | Exclude<NativeAppServerNotification, { method: WorkbenchTranscriptNotification["method"] }>
+  | WorkbenchTranscriptNotification;
+type CodexAppServerNotification = WorkbenchClientNotification;
 type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexAppServerNotification;
 type WorkbenchNotification = {
   method:
@@ -308,7 +314,7 @@ export class CodexAppServerClient {
         return;
       }
       const harness = provider.data;
-      let notification = parsed;
+      let notification: WorkbenchClientNotification = parsed;
       if (harness === "codex" && (parsed.method === "item/started" || parsed.method === "item/completed")) {
         const item = withWorkbenchThreadItemIdentity(parsed.params.item, getCodexItemIdentityKind(parsed.params.item));
         notification = parsed.method === "item/started"

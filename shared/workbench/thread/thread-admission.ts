@@ -6,7 +6,7 @@
  * - withWorkbenchTurnAdmission: attach the lifecycle owner's admission state.
  * - isPendingWorkbenchTurn: narrow temporary identity from explicit admission metadata.
  */
-import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
+import type { Turn } from "./workbench-thread-turn.ts";
 import type { PendingTurnId } from "../identity.ts";
 
 export type WorkbenchTurnAdmission = "connecting" | "providerPending" | "admitted";

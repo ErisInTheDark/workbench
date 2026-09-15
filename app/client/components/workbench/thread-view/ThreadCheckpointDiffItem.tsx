@@ -6,7 +6,7 @@
 
 import { useContext, useEffect, useMemo, useState } from "react";
 
-import type { FileUpdateChange } from "workbench-shared/codex/generated/app-server/v2/FileUpdateChange";
+import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {

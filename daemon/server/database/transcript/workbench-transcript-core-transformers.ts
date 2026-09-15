@@ -2,7 +2,7 @@
  * Exports:
  * - transformCoreTranscriptItem: convert core transcript items to relational mutations.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { itemTables } from "../workbench-database-schema.ts";
 import {

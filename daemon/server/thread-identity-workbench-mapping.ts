@@ -16,7 +16,8 @@ import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/th
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { mapProviderThread, mapProviderTurn } from "./thread-identity-provider-mapping";
-import { mapNativeTranscriptObservation, type NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+import { mapCodexTranscriptObservation as mapNativeTranscriptObservation } from "./CodexProviderObservations";
 import type {
   WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot, WorkbenchDurableQuestionnaire,
   WorkbenchThreadStateRequest, WorkbenchThreadStateOpenResult, WorkbenchGlobalThreadStateOpenResult,

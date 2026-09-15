@@ -7,7 +7,7 @@
 
 import { useMemo, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,

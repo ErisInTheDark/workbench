@@ -7,7 +7,7 @@
  * - getUserMessageCopyMarkdown: preserve ordered user-authored text inputs as source Markdown while excluding attachments. Keywords: user message, markdown, attachment.
  */
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 
 const BUBBLE_COPY_FEEDBACK_MS = 1_600;

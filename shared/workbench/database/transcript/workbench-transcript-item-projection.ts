@@ -10,9 +10,8 @@
  * - projectWorkbenchToolOutput: reconstruct typed context for persistence and projection.
  * - projectWorkbenchFileChange: reconstruct attempted changes and owned recovery findings.
  */
-import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue.ts";
-import type { ThreadItem } from "../../../codex/generated/app-server/v2/ThreadItem.ts";
-import { getCodexItemIdentityKind } from "../../../codex/thread-item-source.ts";
+import type { JsonValue, ThreadItem } from "../../thread/workbench-thread-items.ts";
+import { readRetainedTranscriptIdentityKind } from "../../thread/retained-transcript-identity.ts";
 import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
@@ -629,7 +628,7 @@ export function projectWorkbenchTranscriptItems(
           fail("invalidReference", "itemIdentities", root.public_id);
         }
         const item = projectItem(root, indexes);
-        const identityKind = root.public_id === null ? getCodexItemIdentityKind(item) : sourceKinds.get(root.public_id) ?? "stable";
+        const identityKind = root.public_id === null ? readRetainedTranscriptIdentityKind(item) : sourceKinds.get(root.public_id) ?? "stable";
         return {
           item: identityKind === "provisional"
             ? { ...item, workbenchIdentityKind: "provisional" as const }

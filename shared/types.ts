@@ -162,12 +162,12 @@
 
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot.ts";
 import type { DraftId, FolderId, ProjectId, WorkbenchThreadId } from "./workbench/identity.ts";
-import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction.ts";
+import type { CommandAction } from "./workbench/thread/workbench-thread-items.ts";
 import type { Thread } from "./codex/generated/app-server/v2/Thread.ts";
 import type { ThreadGoal } from "./codex/generated/app-server/v2/ThreadGoal.ts";
-import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTokenUsage.ts";
-import type { Turn } from "./codex/generated/app-server/v2/Turn.ts";
-import type { UserInput } from "./codex/generated/app-server/v2/UserInput.ts";
+import type { ThreadTokenUsage } from "./workbench/thread/thread-context-usage.ts";
+import type { Turn } from "./workbench/thread/workbench-thread-turn.ts";
+import type { UserInput } from "./workbench/thread/workbench-thread-items.ts";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route.ts";
 import type WorkbenchDaemonClient from "./workbench/daemon/WorkbenchDaemonClient.ts";
 import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon-reload.ts";
@@ -1049,7 +1049,7 @@ export interface WorkbenchThreadContextReadResponse {
   entryScope?: WorkbenchThreadContextEntryScope;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
-  thread: Thread;
+  thread: Omit<Thread, "turns"> & { turns: Turn[] };
 }
 
 export interface WorkbenchThreadContextEntryScope {

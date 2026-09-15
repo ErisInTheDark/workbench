@@ -3,7 +3,7 @@
  * - default getFinishedThreadTailHiddenItemIds: hide every hoisted proposal source and terminal reasoning.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { getThreadCommandDisplay } from "../../../workbench/thread/thread-command-matchers";

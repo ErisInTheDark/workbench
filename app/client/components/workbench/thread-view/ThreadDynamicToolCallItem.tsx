@@ -6,7 +6,7 @@
 
 import { useState, type ReactNode } from "react";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,

@@ -9,9 +9,8 @@
  * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history.
  */
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
-import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
+import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
+import { areUserInputsEquivalentForUserMessageDedupe } from "./thread-item-normalization.ts";
 import type { ThreadPayloadData, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
 import { getWorkbenchInputState, withWorkbenchInputState } from "./thread-input-item.ts";

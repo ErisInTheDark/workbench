@@ -12,11 +12,10 @@
 
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { getCodexTranscriptAssetUrl } from "workbench-shared/codex/config";
-import { getCurrentTurn } from "workbench-shared/codex/thread-state";
+import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   findWorkbenchThreadItemTimelineEntry,

@@ -5,7 +5,7 @@
  * - isWorkbenchActivatedSkillsInput/stripWorkbenchActivatedSkillsInput: recognize and remove only the exact hidden item for display. Keywords: skills, display, strip.
  */
 
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { UserInput } from "./workbench-thread-items.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 
 export const WORKBENCH_ACTIVATED_SKILLS_TAG_WRAPPER = defineTagWrapper("wb:activated-skills", {

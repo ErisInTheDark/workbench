@@ -5,13 +5,14 @@
  * - CodexThreadWindowStore: cursor and ordered recording port.
  * - default CodexThreadWindowLoader: bounded provider paging and recovery.
  */
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Thread as NativeThread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadTurnsListParams } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListParams";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
 import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
 export interface CodexThreadWindowRecord {
   catalog?: {
     boundary?: { cursor: string | null; turnId: string };

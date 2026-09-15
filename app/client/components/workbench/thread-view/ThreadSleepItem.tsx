@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { getSleepDisplay } from "../../../workbench/thread/generic-item-matchers/sleep";
 import { SnoozedThreadIcon } from "../workbench-icons";

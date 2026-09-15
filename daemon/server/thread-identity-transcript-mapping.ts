@@ -5,13 +5,14 @@
  * - NativeTranscriptIdentityOwners: database-owned admission and committed projection ports.
  */
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
+import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { z } from "zod";
 import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
-import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchNativeThreadIdentity } from "./database/thread-identity/workbench-thread-identity-types";
 import type { NativeTranscriptAtomicObservation, NativeTranscriptObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission, WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
-import { mapProviderThreadItem, type WorkbenchProviderIdentityOwners } from "./thread-identity-provider-mapping";
+import type { WorkbenchProviderIdentityOwners, WorkbenchNativeTurnIdentity } from "./thread-identity-provider-mapping";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchItemIdSchema, WorkbenchTurnIdSchema, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -30,11 +31,11 @@ type ObservationMappers = {
     (input: Extract<NativeTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
 };
 
-function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: WorkbenchTurnId): WorkbenchTranscriptItemSource[] {
+function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: WorkbenchTurnId, classify: typeof getWorkbenchThreadItemIdentityKind): WorkbenchTranscriptItemSource[] {
   if (entry.status === "sent") {
     const sources: WorkbenchTranscriptItemSource[] = [];
     if (entry.canonicalItemId) {
-      sources.push({ turnId, sourceId: entry.canonicalItemId, kind: getCodexItemIdentityKind({ id: entry.canonicalItemId }) });
+      sources.push({ turnId, sourceId: entry.canonicalItemId, kind: classify({ id: entry.canonicalItemId }) });
     }
     if (entry.clientUserMessageId) {
       sources.push({ turnId, sourceId: entry.clientUserMessageId, kind: "client" });
@@ -54,6 +55,8 @@ function steerAttemptReference(entry: WorkbenchSteerHistoryEntry, publicItemId?:
 export async function admitNativeTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
   observations: readonly NativeTranscriptObservation[],
+  provider: WorkbenchHarness,
+  classify: typeof getWorkbenchThreadItemIdentityKind = getWorkbenchThreadItemIdentityKind,
 ) {
   const facts = observations.flatMap<NativeTranscriptAtomicObservation | Extract<NativeTranscriptObservation, { kind: "captureGap" }>>((observation) => {
     switch (observation.kind) {
@@ -80,14 +83,14 @@ export async function admitNativeTranscriptObservations(
     if (fact.kind !== "item" && fact.kind !== "questionnaire" && fact.kind !== "steer") continue;
     const nativeThreadId = fact.kind === "item" ? fact.threadId : fact.entry.threadId;
     const nativeTurnId = fact.kind === "item" ? fact.turnId : fact.entry.turnId;
-    const native = owners.threads.knownNativeBinding("codex", nativeThreadId);
+    const native = owners.threads.knownNativeBinding(provider, nativeThreadId);
     const threadId = owners.threads.workbenchIdForNative(native);
     const turnId = owners.threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
     const sourceId = fact.kind === "item" ? fact.item.id
       : fact.kind === "questionnaire" ? resolveQuestionnaireHistoryItemId(fact.entry)
         : resolveSteerTranscriptSourceId(fact.entry);
-    const sources: WorkbenchTranscriptItemSource[] = fact.kind === "steer" ? steerSources(fact.entry, turnId) : [
-      { turnId, sourceId, kind: fact.kind === "item" ? getCodexItemIdentityKind(fact.item) : "stable" },
+    const sources: WorkbenchTranscriptItemSource[] = fact.kind === "steer" ? steerSources(fact.entry, turnId, classify) : [
+      { turnId, sourceId, kind: fact.kind === "item" ? classify(fact.item) : "stable" },
       ...(fact.kind === "item" && fact.item.type === "userMessage" && fact.item.clientId
         ? [{ turnId, kind: "client" as const, sourceId: fact.item.clientId }] : []),
     ];
@@ -112,6 +115,8 @@ export function mapNativeTranscriptObservation(
   owners: IdentityOwners,
   native: WorkbenchNativeThreadIdentity | null,
   observation: NativeTranscriptObservation,
+  classify: typeof getWorkbenchThreadItemIdentityKind = getWorkbenchThreadItemIdentityKind,
+  mapItem?: (native: WorkbenchNativeTurnIdentity, item: ThreadItem) => ThreadItem,
 ): WorkbenchTranscriptObservation {
   if (observation.kind === "nativeEvidence" && observation.threadId === null) {
     if (observation.turnId !== null || observation.itemId !== null) throw new Error("Transcript evidence references require an owning thread.");
@@ -150,12 +155,19 @@ export function mapNativeTranscriptObservation(
       ...input, threadId: threadId(input.threadId), turnId: turnId(input.threadId, input.turnId),
     }),
     item: (input) => {
-      const mapped = mapProviderThreadItem(owners, {
+      const destination = {
         ...native, nativeThreadId: input.threadId, nativeTurnId: input.turnId,
-      }, input.item);
+      };
+      const mapped = mapItem?.(destination, input.item) ?? {
+        ...input.item,
+        id: owners.items.itemIdForSource(threadId(input.threadId), {
+          turnId: turnId(input.threadId, input.turnId), sourceId: input.item.id, kind: classify(input.item),
+        }),
+      };
+      const publicItemId = WorkbenchItemIdSchema.parse(mapped.id);
       return {
         ...input, threadId: threadId(input.threadId), turnId: turnId(input.threadId, input.turnId),
-        publicItemId: mapped.id,
+        publicItemId,
         item: { ...mapped, id: input.item.id },
         ...(input.timeline ? { timeline: { ...input.timeline, itemId: mapped.id } } : {}),
       };
@@ -179,13 +191,13 @@ export function mapNativeTranscriptObservation(
       const reference = steerAttemptReference(entry, input.publicItemId);
       const id = reference
         ? itemId(entry.threadId, entry.turnId, reference)
-        : owners.items.itemIdForSource(ownerThreadId, steerSources(entry, ownerTurnId)[0]!);
+        : owners.items.itemIdForSource(ownerThreadId, steerSources(entry, ownerTurnId, classify)[0]!);
       return {
         ...input, publicItemId: id,
         entry: {
           ...entry, threadId: ownerThreadId, turnId: ownerTurnId, itemId: id,
           canonicalItemId: entry.canonicalItemId === null ? null : owners.items.itemIdForSource(ownerThreadId, {
-            turnId: ownerTurnId, sourceId: entry.canonicalItemId, kind: getCodexItemIdentityKind({ id: entry.canonicalItemId }),
+            turnId: ownerTurnId, sourceId: entry.canonicalItemId, kind: classify({ id: entry.canonicalItemId }),
           }),
         },
       };

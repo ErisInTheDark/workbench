@@ -12,8 +12,8 @@
  * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces from a thread context bundle. Keywords: context, questionnaire, steer, user message.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
 import type {

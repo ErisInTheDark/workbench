@@ -7,7 +7,8 @@
  */
 import { z } from "zod";
 import type { Thread } from "../../codex/generated/app-server/v2/Thread.ts";
-import type { ThreadTokenUsage } from "../../codex/generated/app-server/v2/ThreadTokenUsage";
+import type { Turn } from "./workbench-thread-turn.ts";
+import type { ThreadTokenUsage } from "./thread-context-usage.ts";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,
@@ -37,14 +38,14 @@ export interface WorkbenchThreadPageResponse<Id extends string = string> {
   reasoningEffort?: string | null;
   serviceTier?: string | null;
   steerEntries: WorkbenchSteerHistoryEntry[];
-  thread: Omit<Thread, "id"> & { id: Id };
+  thread: Omit<Thread, "id" | "turns"> & { id: Id; turns: Turn[] };
 }
 
-type ThreadWithHistory = Thread & {
+type ThreadWithHistory = { turns: readonly { id: string }[] } & {
   workbenchTurnHistory?: WorkbenchThreadTurnHistoryEntry[];
 };
 
-export function readWorkbenchThreadPageNextCursor(thread: Thread) {
+export function readWorkbenchThreadPageNextCursor(thread: { turns: readonly { id: string }[] }) {
   const history = (thread as ThreadWithHistory).workbenchTurnHistory;
   if (!history?.length || !thread.turns.length) return null;
   const historyIndexByTurnId = new Map(history.map((entry, index) => [entry.turnId, index]));

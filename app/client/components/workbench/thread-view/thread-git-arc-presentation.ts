@@ -8,7 +8,7 @@
  * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadPayload, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";

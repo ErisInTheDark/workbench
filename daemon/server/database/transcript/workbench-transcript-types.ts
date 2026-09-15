@@ -19,7 +19,7 @@
  * - WorkbenchTranscriptItemIdentity: resolved public identity and private alias evidence.
  * - WorkbenchTranscriptIdentityDatabase: structural identity operations on the existing database worker.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,

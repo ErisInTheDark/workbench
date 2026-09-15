@@ -23,7 +23,7 @@
  * - CommandMatcherDefinition: shell-stage matcher definition for thread command summaries. Keywords: thread, command, matcher, definition.
  */
 
-import type { CommandAction } from "workbench-shared/codex/generated/app-server/v2/CommandAction";
+import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../markdown/markdown-links";
 

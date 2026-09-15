@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { formatThreadDuration } from "./thread-view-formatters";
 import { useThreadLiveDuration } from "./use-thread-live-duration";

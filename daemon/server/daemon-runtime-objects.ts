@@ -84,7 +84,11 @@ export type DaemonReloadableModules = {
   workbenchPromptFiles: Pick<typeof workbenchPromptFiles, "buildWorkbenchPromptInstructions" | "buildWorkbenchThreadUtilityDeveloperInstructions" | "filterWorkbenchInstructionContent" | "listWorkbenchInstructionMechanics" | "ensureWorkbenchPromptFiles">;
 };
 
-export interface DaemonProviderNotification { harness: HarnessKind; notification: JsonRpcNotification }
+export interface DaemonProviderNotification {
+  harness: HarnessKind;
+  notification: JsonRpcNotification;
+  observation: import("workbench-shared/workbench/provider/provider-observation").WorkbenchProviderObservation;
+}
 
 export interface DaemonCodexAppServerRuntime {
   appServer: CodexAppServer;

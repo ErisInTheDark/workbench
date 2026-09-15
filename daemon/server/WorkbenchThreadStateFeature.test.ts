@@ -11,7 +11,8 @@ import test from "node:test";
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import WorkbenchThreadStateFeature, { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNotification as mapLifecycle, normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
+import WorkbenchThreadStateFeature, { normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
+import { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNotification as mapLifecycle } from "./CodexProviderObservations";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -241,7 +242,9 @@ test("manual questionnaire completion preserves its question and survives a late
     assert.deepEqual(response, { result: { accepted: true, revision: (await h.feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).revision } });
     assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
     await h.feature.observeProviderNotification("codex", {
-      method: "turn/completed", params: { threadId: "native:thread", turn: { id: "native:turn", status: "interrupted", items: [] } },
+      lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
+        kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
+      } }, activity: null, title: null,
     });
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
@@ -256,7 +259,9 @@ test("completing an agent-blocked sidebar questionnaire fences late events from 
     await h.feature.controller.observeLifecycle("codex", fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "agentStatus", status: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
     await h.complete();
     await h.feature.observeProviderNotification("codex", {
-      method: "turn/completed", params: { threadId: "native:thread", turn: { id: "native:turn", status: "interrupted", items: [] } },
+      lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
+        kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
+      } }, activity: null, title: null,
     });
     assert.equal((await h.read())?.lifecycle.kind, "completed");
   } finally { await h.feature.dispose(); }
@@ -475,8 +480,9 @@ test("provider notification observation returns the persisted lifecycle result",
   await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
 
   assert.deepEqual(await feature.observeProviderNotification("codex", {
-    method: "turn/completed",
-    params: { threadId: "native:thread", turn: { id: "native:turn", status: "completed", items: [] } },
+    lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
+      kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "completed",
+    } }, activity: null, title: null,
   }), {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },

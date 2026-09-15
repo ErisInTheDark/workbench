@@ -2,7 +2,7 @@
  * WorkbenchTranscriptItemTransformContext/WorkbenchTranscriptItemTransform: stable transform inputs and relational output. Keywords: transcript, transform, registry.
  * transformWorkbenchTranscriptItem: route one current renderer item through focused transform owners. Keywords: transcript, transform, item.
  */
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { ItemSchemaRows } from "workbench-shared/workbench/database/schema/item-schema";
 import type { WorkbenchDatabaseMutation } from "workbench-shared/database/workbench-database-statements";

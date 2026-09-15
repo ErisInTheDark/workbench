@@ -7,9 +7,7 @@
  * - createWorkbenchAgentMessageOutput: encode agent information at tool authority.
  */
 
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { TurnToolOutput } from "../../codex/generated/app-server/v2/TurnToolOutput.ts";
+import type { UserInput, ThreadItem, TurnToolOutput } from "./workbench-thread-items.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 import { getWorkbenchToolOutputText, readWorkbenchToolOutput } from "./thread-tool-output.ts";
 

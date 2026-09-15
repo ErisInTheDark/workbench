@@ -217,5 +217,12 @@ export default new ReloadableNode<
     "daemon/server/WorkbenchCodexSandboxNetworkController.ts",
     "daemon/server/WorkbenchThreadIdentityController.ts",
     "daemon/server/WorkbenchTranscriptIdentityController.ts",
+    "shared/workbench/thread/workbench-thread-items.ts",
+    "shared/workbench/thread/workbench-thread-turn.ts",
+    "shared/workbench/thread/thread-item-normalization.ts",
+    "shared/workbench/thread/thread-runtime-state.ts",
+    "shared/workbench/thread/thread-command-output.ts",
+    "shared/workbench/thread/retained-transcript-identity.ts",
+    "shared/workbench/provider/provider-observation.ts",
   ].join("\n"),
 });

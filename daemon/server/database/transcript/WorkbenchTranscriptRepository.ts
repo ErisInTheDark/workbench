@@ -16,13 +16,13 @@ import { usageTables } from "workbench-shared/workbench/database/schema/usage-sc
 import { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 import { codexTranscriptTables } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readRetainedTranscriptIdentityKind } from "workbench-shared/workbench/thread/retained-transcript-identity";
 import {
   isSupportedWorkbenchTranscriptItem,
   mergeThreadItem,
   reconcileCompleteThreadItems,
-} from "workbench-shared/codex/thread-item-normalization";
+} from "workbench-shared/workbench/thread/thread-item-normalization";
 import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
 import { SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -333,7 +333,7 @@ export default class WorkbenchTranscriptRepository {
         threadId,
         sources: [
           { turnId, sourceId: item.source_id,
-            kind: turn.harness_id === "codex" ? getCodexItemIdentityKind({ id: item.source_id }) : "stable" },
+            kind: readRetainedTranscriptIdentityKind({ id: item.source_id }, turn.harness_id) },
           ...(userMessage?.client_id ? [{ turnId, sourceId: userMessage.client_id, kind: "client" as const }] : []),
         ],
         legacyAliases: [...new Set([

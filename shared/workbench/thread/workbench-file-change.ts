@@ -9,7 +9,7 @@
  * - WorkbenchFileChangeRecovery: passive feedback queue result.
  * - mergeWorkbenchFileChange: retain findings only for matching attempted changes.
  */
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
 import type { FileChangeAnalysis } from "./file-change-analysis.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 

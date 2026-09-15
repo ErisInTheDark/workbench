@@ -372,7 +372,7 @@ function createWorkbenchCoreFeature(
       reportPhase("project catalog disposal");
       await projectCatalog.dispose();
     },
-    observeProviderNotification: async ({ harness, notification }) => {
+    observeProviderNotification: async ({ harness, notification, observation: facts }) => {
       if (!lease.isCurrent()) {
         await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
         return;
@@ -380,7 +380,7 @@ function createWorkbenchCoreFeature(
       stats.observeProviderNotification(harness, notification);
       let observation;
       try {
-        observation = await threadState!.observeProviderNotification(harness, notification);
+        observation = await threadState!.observeProviderNotification(harness, facts);
       } catch (error) {
         await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
         throw error;

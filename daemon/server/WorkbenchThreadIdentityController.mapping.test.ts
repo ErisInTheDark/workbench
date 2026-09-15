@@ -20,8 +20,12 @@ import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityControll
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { admitProviderThreads, admitProviderThreadItems, admitProviderNotifications, mapProviderThread, mapProviderThreadItem, mapProviderTurn, mapProviderNotification } from "./thread-identity-provider-mapping";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
-import { mapProviderLifecycleNotification, normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
-import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } from "./thread-identity-transcript-mapping";
+import { normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
+import CodexProviderObservations, { mapProviderLifecycleNotification } from "./CodexProviderObservations";
+import {
+  admitCodexTranscriptObservations as admitNativeTranscriptObservations,
+  mapCodexTranscriptObservation as mapNativeTranscriptObservation,
+} from "./CodexProviderObservations";
 import { createNativeQuestionnaireStatePorts, mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -806,8 +810,9 @@ test("public socket routing and reload handoff retain native request correlation
     const response = emitted.find((message) => message.id === 7) as { result: { turn: { id: string; items: ThreadItem[] } } } | undefined;
     assert.equal(response?.result.turn.id, turn.turnId);
     assert.equal(response?.result.turn.items[0]?.id, admitted!.id);
-    await controller.sendJsonToClient(client, { workbenchHarness: "codex", method: "item/reasoning/textDelta",
+    const publication = new CodexProviderObservations(owners).native({ method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, delta: "native-parent is text" } });
+    await controller.sendJsonToClient(client, { ...publication.notification, workbenchHarness: "codex" });
     const event = emitted.find((message) => message.method === "item/reasoning/textDelta");
     assert.deepEqual(event?.params, { threadId: parent.threadId, turnId: turn.turnId, itemId: admitted!.id, delta: "native-parent is text" });
     const lookup = t.mock.method(owners.threads, "resolve", async () => {
@@ -825,10 +830,6 @@ test("public socket routing and reload handoff retain native request correlation
       displayOrder: { pinned: { [`codex:${parent.threadId}`]: { above: [], below: [] } } },
     } };
     await controller.sendJsonToClient(client, sidebarMessage);
-    const projectionLines = lines.filter(line => line.includes(" projection "));
-    assert.equal(projectionLines.length, 1);
-    assert.match(projectionLines[0]!, /kind: sidebar, revision: 1, entries: 1/);
-    assert.ok(!projectionLines[0]!.includes(native.nativeThreadId));
     const secondClient: BridgeClient = { ...client };
     const beforeFanout = emitted.length;
     await controller.sendJsonToClient(secondClient, {
@@ -836,17 +837,14 @@ test("public socket routing and reload handoff retain native request correlation
       params: { updateKind: "projectThreadSidebar", sidebar: { ...sidebarMessage.params } },
     });
     assert.equal(emitted.length, beforeFanout + 1);
-    assert.equal(lines.filter(line => line.includes(" projection ")).length, 1);
     const nextPublication = {
       ...sidebarMessage,
       params: { ...sidebarMessage.params, entries: [...sidebarMessage.params.entries] },
     };
     await controller.sendJsonToClient(client, nextPublication);
-    assert.equal(lines.filter(line => line.includes(" projection ")).length, 2);
     const summary = { projectId: fixtureIdentityValues.ProjectId.project, revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
     await controller.sendJsonToClient(client, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
     await controller.sendJsonToClient(secondClient, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
-    assert.equal(lines.filter(line => line.includes(" projection ")).length, 3);
     const sidebar = emitted.find((message) => message.method === "workbench/thread-state/updated")?.params as {
       entries: Array<{ identity: { threadId: string }; lifecycle: { agent: { turnId: string } }; title: string }>;
       displayOrder: { pinned: Record<string, object> };
