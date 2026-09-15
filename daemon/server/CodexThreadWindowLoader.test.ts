@@ -338,6 +338,137 @@ test("inactive provider metadata repairs the same durable turn from one full pro
   });
 });
 
+test("not-loaded provider metadata repairs a newer stored turn when the provider catalog stops at its predecessor", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const predecessor = turn("predecessor");
+  const loader = new CodexThreadWindowLoader(async (request) => {
+    requests.push(request);
+    return response({ data: [predecessor], nextCursor: "before-predecessor" });
+  });
+  const owner = fakeStore();
+  const storedTurn: Turn = {
+    ...turn("latest"),
+    completedAt: null,
+    durationMs: null,
+    items: [
+      {
+        aggregatedOutput: null,
+        command: "wait",
+        commandActions: [],
+        cwd: "C:/repo",
+        durationMs: null,
+        exitCode: null,
+        id: "command",
+        pluginId: null,
+        processId: null,
+        scriptPath: null,
+        source: "agent",
+        status: "inProgress",
+        type: "commandExecution",
+      },
+      {
+        changes: [],
+        id: "file-change",
+        status: "inProgress",
+        type: "fileChange",
+      },
+      {
+        appContext: null,
+        arguments: {},
+        durationMs: null,
+        error: null,
+        id: "mcp",
+        mcpAppResourceUri: undefined,
+        pluginId: null,
+        readOnlyHint: true,
+        result: null,
+        server: "wb",
+        status: "inProgress",
+        tool: "request_user_input",
+        type: "mcpToolCall",
+      },
+      {
+        arguments: {},
+        contentItems: null,
+        durationMs: null,
+        id: "dynamic",
+        namespace: "tools",
+        status: "inProgress",
+        success: null,
+        tool: "wait",
+        type: "dynamicToolCall",
+      },
+      {
+        agentsStates: {},
+        id: "collaboration",
+        model: null,
+        prompt: null,
+        reasoningEffort: null,
+        receiverThreadIds: [],
+        senderThreadId: "thread",
+        status: "inProgress",
+        tool: "wait",
+        type: "collabAgentToolCall",
+      },
+    ],
+    startedAt: 3,
+    status: "inProgress",
+  };
+  const hydrated = withHistory([storedTurn], [
+    history("predecessor", "unloaded"),
+    {
+      ...history("latest", "loaded"),
+      completedAt: null,
+      durationMs: null,
+      itemCount: storedTurn.items.length,
+      startedAt: 3,
+      status: "inProgress",
+    },
+  ]);
+  const metadata = {
+    ...thread(),
+    status: { type: "notLoaded" as const },
+    updatedAt: 2,
+  };
+
+  const loaded = await loader.ensureWindow(
+    owner.store,
+    metadata,
+    hydrated,
+    { mode: "latest" },
+  );
+
+  assert.deepEqual(requests.map(({ params }) => params), [{
+    itemsView: "notLoaded",
+    limit: 1,
+    sortDirection: "desc",
+    threadId: "thread",
+  }]);
+  assert.deepEqual(loaded && {
+    boundary: loaded.recording.catalog?.boundary,
+    completedAt: loaded.thread.turns[0]?.completedAt,
+    command: loaded.thread.turns[0]?.items.find(item => item.type === "commandExecution")?.command,
+    durationMs: loaded.thread.turns[0]?.durationMs,
+    itemIds: loaded.thread.turns[0]?.items.map(({ id }) => id),
+    itemStatuses: loaded.thread.turns[0]?.items.flatMap(item => "status" in item ? [item.status] : []),
+    page: loaded.recording.page,
+    requestTool: loaded.thread.turns[0]?.items.find(item => item.type === "mcpToolCall")?.tool,
+    status: loaded.thread.turns[0]?.status,
+    turnId: loaded.thread.turns[0]?.id,
+  }, {
+    boundary: undefined,
+    command: "wait",
+    completedAt: 3,
+    durationMs: 0,
+    itemIds: ["command", "file-change", "mcp", "dynamic", "collaboration"],
+    itemStatuses: ["completed", "completed", "completed", "completed", "interrupted"],
+    page: undefined,
+    requestTool: "request_user_input",
+    status: "interrupted",
+    turnId: "latest",
+  });
+});
+
 test("inactive recovery fails closed when provider latest identity differs", async () => {
   const loader = new CodexThreadWindowLoader(async () => response({
     data: [turn("other", ["assistant"])],
@@ -356,11 +487,13 @@ test("inactive recovery fails closed when provider latest identity differs", asy
     durationMs: null,
     status: "inProgress",
   }]);
+  const metadata = { ...thread(), status: { type: "notLoaded" as const } };
 
   await assert.rejects(
-    loader.ensureWindow(owner.store, thread(), hydrated, { mode: "latest" }, { recoveryOnly: true }),
+    loader.ensureWindow(owner.store, metadata, hydrated, { mode: "latest" }, { recoveryOnly: true }),
     /did not match stored turn latest/u,
   );
+  assert.deepEqual(owner.recordings, []);
   assert.deepEqual(owner.pages, []);
 });
 

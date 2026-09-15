@@ -1429,6 +1429,115 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
   }
 });
 
+for (const providerStatus of ["completed", "failed"] as const) {
+  test(`provider ${providerStatus} truth replaces a weak synthetic operation settlement`, () => {
+    const { database, repository } = createRepository();
+    const syntheticTurn = {
+      ...turnObservation("turn", 0),
+      durationMs: 3_000,
+      endedAt: 5,
+      startedAt: 2,
+      state: "interrupted" as const,
+    };
+    const item = (
+      status: "completed" | "failed",
+      observedAt: number,
+    ): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
+      kind: "item",
+      threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+      lifecycle: "completed",
+      observedAt,
+      item: {
+        appContext: null,
+        arguments: {},
+        durationMs: status === "completed" && observedAt > 5 ? 9_000 : null,
+        error: status === "failed" ? { message: "provider failure" } : null,
+        id: "operation",
+        pluginId: null,
+        readOnlyHint: true,
+        result: status === "completed" && observedAt > 5
+          ? { _meta: null, content: [{ text: "provider result", type: "text" }], structuredContent: null }
+          : null,
+        server: "wb",
+        status,
+        tool: "request_user_input",
+        type: "mcpToolCall",
+      },
+    });
+    try {
+      repository.settle([
+        threadObservation(),
+        providerTurnScope([syntheticTurn, item("completed", 5)], ["turn"]),
+      ]);
+      const synthetic = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      const stableItemId = synthetic.rows.threadItems[0]?.id;
+      assert.ok(stableItemId);
+
+      const providerTurn = {
+        ...turnObservation("turn", 0),
+        durationMs: 9_000,
+        endedAt: 11,
+        startedAt: 2,
+        state: providerStatus,
+      };
+      repository.settle([
+        providerTurnScope([providerTurn, item(providerStatus, 11)], ["turn"]),
+      ]);
+
+      const repaired = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      assert.deepEqual(repaired.turns.map(({ duration_ms, ended_at, started_at, state }) => ({
+        durationMs: duration_ms,
+        endedAt: ended_at,
+        startedAt: started_at,
+        state,
+      })), [{
+        durationMs: 9_000,
+        endedAt: 11,
+        startedAt: 2,
+        state: providerStatus,
+      }]);
+      assert.deepEqual(repaired.rows.threadItems.map(({ id, item_position, source_id }) => ({
+        id,
+        itemPosition: item_position,
+        sourceId: source_id,
+      })), [{
+        id: stableItemId,
+        itemPosition: 0,
+        sourceId: "operation",
+      }]);
+      assert.deepEqual(repaired.rows.threadOperationToolSources.map(({ source_revision, state }) => ({
+        revision: source_revision,
+        state,
+      })), [{ revision: 1, state: providerStatus }]);
+      assert.deepEqual(
+        repaired.rows.threadOperationCallableToolSources.map(({ error_text, source_revision, state }) => ({
+          error: error_text,
+          revision: source_revision,
+          state,
+        })),
+        [{
+          error: providerStatus === "failed" ? "provider failure" : null,
+          revision: 1,
+          state: providerStatus,
+        }],
+      );
+      const projection = projectWorkbenchTranscript(repaired);
+      assert.ok("data" in projection);
+      const projectedItem = projection.data.turns[0]?.items[0];
+      assert.equal(projectedItem?.type, "mcpToolCall");
+      assert.equal(projectedItem?.type === "mcpToolCall" ? projectedItem.status : null, providerStatus);
+      assert.deepEqual(
+        projectedItem?.type === "mcpToolCall" ? projectedItem.result?.content[0] ?? null : null,
+        providerStatus === "completed" ? { text: "provider result", type: "text" } : null,
+      );
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    } finally {
+      database.close();
+    }
+  });
+}
+
 test("provider settlement converts retained bodies before reconciliation without requiring a browser read", () => {
   const { database, repository } = createRepository();
   try {

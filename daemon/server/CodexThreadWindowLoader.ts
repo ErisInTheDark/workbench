@@ -6,6 +6,7 @@
  * - default CodexThreadWindowLoader: bounded provider paging and recovery.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadTurnsListParams } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListParams";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
@@ -92,7 +93,59 @@ function findTurn(thread: Thread, turnId: string | null) {
 }
 
 function isProviderThreadInactive(thread: Thread) {
-  return record(thread.status)?.type === "idle";
+  const status = record(thread.status)?.type;
+  return status === "idle" || status === "notLoaded";
+}
+
+function settleInterruptedOperation(item: ThreadItem): ThreadItem {
+  switch (item.type) {
+    case "commandExecution":
+    case "dynamicToolCall":
+    case "fileChange":
+    case "mcpToolCall":
+      return item.status === "inProgress" ? { ...item, status: "completed" } : item;
+    case "collabAgentToolCall":
+      return item.status === "inProgress" ? { ...item, status: "interrupted" } : item;
+    default:
+      return item;
+  }
+}
+
+function interruptStoredTurn(turn: Turn, threadUpdatedAt: number): Turn {
+  const completedAt = Math.max(turn.startedAt ?? threadUpdatedAt, threadUpdatedAt);
+  return {
+    ...turn,
+    completedAt,
+    durationMs: turn.startedAt === null ? null : Math.round((completedAt - turn.startedAt) * 1_000),
+    items: turn.items.map(settleInterruptedOperation),
+    status: "interrupted",
+  };
+}
+
+function recoverLaggingLatestWindow(
+  thread: Thread,
+  hydratedThread: Thread,
+  providerLatestTurn: Turn,
+): CodexThreadWindowLoad | null {
+  const history = readHistory(hydratedThread);
+  const storedLatestTurnId = history.at(-1)?.turnId ?? null;
+  const storedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
+  if (
+    !isProviderThreadInactive(thread)
+    || !storedLatestTurn
+    || storedLatestTurn.status !== "inProgress"
+    || providerLatestTurn.id === storedLatestTurnId
+  ) {
+    return null;
+  }
+  const providerLatestIndex = history.findIndex(({ turnId }) => turnId === providerLatestTurn.id);
+  if (providerLatestIndex < 0 || providerLatestIndex >= history.length - 1) {
+    return null;
+  }
+  return createProviderWindowLoad({
+    catalog: { turns: [interruptStoredTurn(storedLatestTurn, thread.updatedAt)] },
+    thread,
+  });
 }
 
 function providerWindowThread(recording: CodexThreadWindowRecord) {
@@ -290,6 +343,8 @@ export default class CodexThreadWindowLoader {
         thread,
       });
     }
+    const laggingRecovery = recoverLaggingLatestWindow(thread, hydratedThread, metadataLatestTurn);
+    if (laggingRecovery) return laggingRecovery;
     if (
       metadataLatestTurn.id === storedLatestTurnId
       && hydratedLatestTurn
@@ -368,7 +423,8 @@ export default class CodexThreadWindowLoader {
     thread: Thread,
     hydratedThread: Thread,
   ) {
-    const storedLatestTurnId = readHistory(hydratedThread).at(-1)?.turnId ?? null;
+    const history = readHistory(hydratedThread);
+    const storedLatestTurnId = history.at(-1)?.turnId ?? null;
     const storedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
     if (
       !isProviderThreadInactive(thread)
@@ -385,7 +441,12 @@ export default class CodexThreadWindowLoader {
       threadId: thread.id,
     });
     const providerLatestTurn = page.data[0] ?? null;
-    if (!providerLatestTurn || providerLatestTurn.id !== storedLatestTurnId) {
+    if (!providerLatestTurn) {
+      throw new Error(`Codex recovery latest turn did not match stored turn ${storedLatestTurnId}.`);
+    }
+    const laggingRecovery = recoverLaggingLatestWindow(thread, hydratedThread, providerLatestTurn);
+    if (laggingRecovery) return laggingRecovery;
+    if (providerLatestTurn.id !== storedLatestTurnId) {
       throw new Error(`Codex recovery latest turn did not match stored turn ${storedLatestTurnId}.`);
     }
     if (providerLatestTurn.status === "inProgress") {

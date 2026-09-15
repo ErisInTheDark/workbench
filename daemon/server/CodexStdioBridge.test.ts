@@ -934,6 +934,129 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
   }
 });
 
+test("foreground thread pages durably repair a newer turn omitted by an inactive provider catalog", async (context) => {
+  const sql = await recordingFixture();
+  context.mock.method(console, "warn", () => undefined);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-foreground-turn-repair-"));
+  const recordingStarted = deferred<void>();
+  const releaseRecording = deferred<void>();
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let holdRecording = false;
+  const predecessor = {
+    ...bridgeThread().turns[0]!,
+    completedAt: 2,
+    durationMs: 1_000,
+    id: "predecessor",
+    items: [],
+    itemsView: "notLoaded" as const,
+    status: "completed" as const,
+  };
+  const latest = {
+    ...bridgeThread().turns[0]!,
+    id: "latest",
+    items: [],
+    startedAt: 3,
+  };
+  const providerThread = {
+    ...bridgeThread(),
+    status: { type: "notLoaded" as const },
+    turns: [],
+    updatedAt: 5,
+  };
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        const params = message.params as { itemsView?: string };
+        const result = message.method === "thread/read"
+          ? { thread: providerThread }
+          : message.method === "thread/turns/list"
+            ? {
+              data: [params.itemsView === "full"
+                ? { ...predecessor, itemsView: "full" as const }
+                : predecessor],
+              nextCursor: "before-predecessor",
+            }
+            : {};
+        void bridge.handleUpstreamMessage({ id: message.id ?? null, result });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      if (holdRecording) {
+        recordingStarted.resolve();
+        await releaseRecording.promise;
+      }
+      await sql.ports.recordSqliteTranscript(observations);
+    },
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      method: "thread/started",
+      params: { thread: { ...bridgeThread(), turns: [] } },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: { ...predecessor, itemsView: "full" },
+      },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/started",
+      params: { threadId: "thread", turn: latest },
+    });
+    await bridge.waitForIdle();
+    upstreamRequests.length = 0;
+    holdRecording = true;
+    let responseResolved = false;
+    const responsePromise = bridge.handleBridgeRequest({
+      id: 1,
+      method: "workbench/thread/page/read",
+      params: { cursor: null, threadId: "thread" },
+    }).then(response => {
+      responseResolved = true;
+      return response;
+    });
+
+    await recordingStarted.promise;
+    assert.equal(responseResolved, false, "foreground page response must await repaired SQLite settlement");
+    releaseRecording.resolve();
+    const response = await responsePromise;
+    const repaired = (response?.result as WorkbenchThreadPageResponse).thread.turns.at(-1);
+    const expectedLatestId = sql.ports.identities.threads.workbenchTurnIdForNative({
+      harness: "codex",
+      nativeLocation: "C:/repo",
+      nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+      nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(latest.id),
+    });
+    assert.equal(repaired?.id, expectedLatestId);
+    assert.equal(repaired?.status, "interrupted");
+    assert.deepEqual(upstreamRequests.map(({ method, params }) => ({
+      itemsView: (params as { itemsView?: string }).itemsView,
+      method,
+    })), [
+      { itemsView: undefined, method: "thread/read" },
+      { itemsView: "notLoaded", method: "thread/turns/list" },
+    ]);
+    assert.equal(sql.project().projection.turns.at(-1)?.status, "interrupted");
+  } finally {
+    releaseRecording.resolve();
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("background thread pages await SQL repair without losing later live facts", async () => {
   const sql = await recordingFixture();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-recovery-"));
