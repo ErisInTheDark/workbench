@@ -2,12 +2,20 @@
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
- * - default CodexStdioBridge: own request translation, creation diagnostics, questionnaires, and passive patch context around a stable app-server.
+ * - default CodexStdioBridge: own request translation, transcript recovery, questionnaires, and reload state around a stable app-server.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
+import {
+  NativeThreadIdSchema,
+  NativeTurnIdSchema,
+  ProjectIdSchema,
+  ThreadReferenceSchema,
+  WorkbenchItemIdSchema,
+  type NativeThreadId,
+  type NativeTurnId,
+} from "workbench-shared/workbench/identity";
 
 import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
@@ -895,6 +903,10 @@ export default class CodexStdioBridge {
     observations: readonly NativeTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
   ) => Promise<void>;
+  private readonly recordWorkbenchTranscript: (
+    observations: readonly WorkbenchTranscriptObservation[],
+    context: WorkbenchTranscriptRecordingContext,
+  ) => Promise<void>;
   private readonly readSqliteTranscriptMaterializedTurnIds: NonNullable<
     CodexStdioBridgeOptions["readSqliteTranscriptMaterializedTurnIds"]
   >;
@@ -956,6 +968,14 @@ export default class CodexStdioBridge {
     }
     this.transcriptSteers = structuredClone(initialState?.transcriptSteers ?? new Map());
     this.unmaterializedThreadIds = new Set(initialState?.unmaterializedThreadIds);
+    this.recordWorkbenchTranscript = async (observations, context) => {
+      if (!observations.length || !recordSqliteTranscript) return;
+      try {
+        await recordSqliteTranscript(observations, context);
+      } catch (cause) {
+        throw new CodexTranscriptSqliteRecordingFailure(cause);
+      }
+    };
     this.recordTranscript = async (observations, context) => {
       if (!observations.length || !recordSqliteTranscript) return;
       try {
@@ -2794,7 +2814,7 @@ export default class CodexStdioBridge {
         { recoveryOnly: background });
       signal.throwIfAborted();
       if (window) {
-        await store.recordProviderWindow(window.recording);
+        await store.recordWindow(window.recording);
         context = await reader.read(canonicalMetadata, hydration);
       }
     } else if (!context) {
@@ -3217,7 +3237,7 @@ export default class CodexStdioBridge {
       readProviderPreviousCursor: (threadId, beforeTurnId) => (
         this.readSqliteProviderCursor?.(threadId, beforeTurnId) ?? Promise.resolve(undefined)
       ),
-      recordProviderWindow: (recording) => {
+      recordWindow: (recording) => {
         let context: CodexTranscriptThreadContext | undefined;
         const labelTurnId = recording.page?.turn.id
           ?? recording.catalog?.turns.at(-1)?.id
@@ -3227,6 +3247,53 @@ export default class CodexStdioBridge {
             ...recording.thread,
             turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
           }, { storageRoot: this.storageRoot, threadId: recording.thread.id })).value;
+          if (recording.source === "workbench") {
+            if (!this.identities || !context) {
+              throw new Error("Workbench transcript recovery requires admitted identities and thread context.");
+            }
+            if (providerThread.turns.length !== 1 || recording.page) {
+              throw new Error("Workbench transcript recovery must settle exactly one stored turn.");
+            }
+            const turn = providerThread.turns[0]!;
+            const native = this.identities.threads.knownNativeBinding(
+              "codex",
+              NativeThreadIdSchema.parse(providerThread.id),
+            );
+            const publicThreadId = this.identities.threads.workbenchIdForNative(native);
+            const publicTurnId = this.identities.threads.workbenchTurnIdForNative({
+              ...native,
+              nativeTurnId: NativeTurnIdSchema.parse(turn.id),
+            });
+            const turnObservation = mapNativeTranscriptObservation(
+              this.identities,
+              native,
+              createCodexTranscriptProviderTurnObservation({
+                context,
+                threadId: providerThread.id,
+                turn,
+              }),
+            );
+            if (turnObservation.kind !== "turn") {
+              throw new Error("Workbench transcript recovery did not produce a turn observation.");
+            }
+            const observedAt = Math.round(
+              (turn.completedAt ?? turn.startedAt ?? context.updatedAt / 1_000) * 1_000,
+            );
+            await this.persistTranscript(() => this.recordWorkbenchTranscript([
+              turnObservation,
+              ...turn.items.map((item, itemPosition): WorkbenchTranscriptObservation => ({
+                item,
+                itemPosition,
+                kind: "item",
+                lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
+                observedAt,
+                publicItemId: WorkbenchItemIdSchema.parse(item.id),
+                threadId: publicThreadId,
+                turnId: publicTurnId,
+              })),
+            ], { source: "workbench" }));
+            return;
+          }
           const observations = this.createSqliteProviderWindowObservations(providerThread, context);
           const boundary = recording.page
             ? { turnId: recording.page.turn.id, cursor: recording.page.previousCursor }

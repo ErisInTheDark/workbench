@@ -98,7 +98,7 @@ test("previous paging discovers an absent cursor using metadata and settles it b
   });
   const result = await loader.ensureWindow({
     readProviderPreviousCursor: async () => undefined,
-    recordProviderWindow: async record => {
+    recordWindow: async record => {
       assert.deepEqual(record.catalog?.boundary, { turnId: "boundary", cursor: "before-old" });
       settled = true;
     },
@@ -172,6 +172,7 @@ function fakeStore(previousCursors: Record<string, string | null | undefined> = 
   const recordings: Array<{
     catalog?: { boundary?: { cursor: string | null; turnId: string }; turns: Turn[] };
     page?: { previousCursor: string | null; turn: Turn };
+    source: "provider" | "workbench";
     thread: Thread;
   }> = [];
   return {
@@ -182,7 +183,7 @@ function fakeStore(previousCursors: Record<string, string | null | undefined> = 
       async readProviderPreviousCursor(_threadId: string, beforeTurnId: string) {
         return previousCursors[beforeTurnId];
       },
-      recordProviderWindow(recording: typeof recordings[number]) {
+      recordWindow(recording: typeof recordings[number]) {
         recordings.push(recording);
         if (recording.catalog) catalogs.push(recording.catalog);
         if (recording.page) {
@@ -265,9 +266,11 @@ test("previous windows use the stored boundary and accept only the exact predece
   });
   assert.deepEqual(loaded && {
     cursor: loaded.recording.page?.previousCursor,
+    source: loaded.recording.source,
     turnId: loaded.recording.page?.turn.id,
   }, {
     cursor: null,
+    source: "provider",
     turnId: "older",
   });
 });
@@ -453,6 +456,7 @@ test("not-loaded provider metadata repairs a newer stored turn when the provider
     itemStatuses: loaded.thread.turns[0]?.items.flatMap(item => "status" in item ? [item.status] : []),
     page: loaded.recording.page,
     requestTool: loaded.thread.turns[0]?.items.find(item => item.type === "mcpToolCall")?.tool,
+    source: loaded.recording.source,
     status: loaded.thread.turns[0]?.status,
     turnId: loaded.thread.turns[0]?.id,
   }, {
@@ -464,6 +468,7 @@ test("not-loaded provider metadata repairs a newer stored turn when the provider
     itemStatuses: ["completed", "completed", "completed", "completed", "interrupted"],
     page: undefined,
     requestTool: "request_user_input",
+    source: "workbench",
     status: "interrupted",
     turnId: "latest",
   });

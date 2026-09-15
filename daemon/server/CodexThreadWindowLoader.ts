@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - CodexThreadWindowLoad: fetched provider projection and recording input.
- * - CodexThreadWindowRecord: fetched catalog and materialised page.
- * - CodexThreadWindowStore: cursor and ordered recording port.
+ * - CodexThreadWindowLoad: hydrated window plus provenance-tagged recording input.
+ * - CodexThreadWindowRecord: provider or Workbench recovery window with explicit source.
+ * - CodexThreadWindowStore: cursor and source-aware ordered recording port.
  * - default CodexThreadWindowLoader: bounded provider paging and recovery.
  */
 import type { Thread as NativeThread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -22,6 +22,7 @@ export interface CodexThreadWindowRecord {
     previousCursor: string | null;
     turn: Turn;
   };
+  source: "provider" | "workbench";
   thread: Thread;
 }
 
@@ -32,7 +33,7 @@ export interface CodexThreadWindowLoad {
 
 export interface CodexThreadWindowStore {
   readProviderPreviousCursor: (threadId: string, beforeTurnId: string) => Promise<string | null | undefined>;
-  recordProviderWindow: (record: CodexThreadWindowRecord) => void | Promise<void>;
+  recordWindow: (record: CodexThreadWindowRecord) => void | Promise<void>;
 }
 
 type ThreadWithHistory = Thread & {
@@ -143,23 +144,24 @@ function recoverLaggingLatestWindow(
   if (providerLatestIndex < 0 || providerLatestIndex >= history.length - 1) {
     return null;
   }
-  return createProviderWindowLoad({
+  return createWindowLoad({
     catalog: { turns: [interruptStoredTurn(storedLatestTurn, thread.updatedAt)] },
+    source: "workbench",
     thread,
   });
 }
 
-function providerWindowThread(recording: CodexThreadWindowRecord) {
+function windowThread(recording: CodexThreadWindowRecord) {
   return {
     ...recording.thread,
     turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
   };
 }
 
-function createProviderWindowLoad(recording: CodexThreadWindowRecord): CodexThreadWindowLoad {
+function createWindowLoad(recording: CodexThreadWindowRecord): CodexThreadWindowLoad {
   return {
     recording,
-    thread: providerWindowThread(recording),
+    thread: windowThread(recording),
   };
 }
 
@@ -261,8 +263,9 @@ export default class CodexThreadWindowLoader {
     if (!turn || turn.id !== expectedId) {
       throw new Error(`Codex previous turn did not match expected turn ${expectedId}.`);
     }
-    return createProviderWindowLoad({
+    return createWindowLoad({
       page: { previousCursor: page.nextCursor, turn },
+      source: "provider",
       thread: metadataThread,
     });
   }
@@ -284,8 +287,10 @@ export default class CodexThreadWindowLoader {
           });
           const turn = single.data[0];
           if (turn?.id === turnId) {
-            await store.recordProviderWindow({
-              thread, catalog: { turns: [turn], boundary: { turnId, cursor: single.nextCursor } },
+            await store.recordWindow({
+              source: "provider",
+              thread,
+              catalog: { turns: [turn], boundary: { turnId, cursor: single.nextCursor } },
             });
             return single.nextCursor;
           }
@@ -322,8 +327,9 @@ export default class CodexThreadWindowLoader {
       });
     } catch (error) {
       if (!history.length && error instanceof Error && error.message.includes("unavailable before first user message")) {
-        return createProviderWindowLoad({
+        return createWindowLoad({
           catalog: { turns: [] },
+          source: "provider",
           thread,
         });
       }
@@ -339,8 +345,9 @@ export default class CodexThreadWindowLoader {
       if (storedLatestTurnId !== null) {
         throw new Error(`Codex returned no latest turn for stored turn ${storedLatestTurnId}.`);
       }
-      return createProviderWindowLoad({
+      return createWindowLoad({
         catalog: { turns: [] },
+        source: "provider",
         thread,
       });
     }
@@ -372,8 +379,9 @@ export default class CodexThreadWindowLoader {
       if (latestTurn.id !== storedLatestTurnId) {
         console.warn("[workbench-transcript] Codex latest page overlaps earlier stored history; retaining omitted turns.");
       }
-      return createProviderWindowLoad({
+      return createWindowLoad({
         page: { previousCursor: firstPage.nextCursor, turn: latestTurn },
+        source: "provider",
         thread,
       });
     }
@@ -409,12 +417,13 @@ export default class CodexThreadWindowLoader {
     }
 
     const turns = descendingTurns.slice().reverse();
-    return createProviderWindowLoad({
+    return createWindowLoad({
       catalog: {
         boundary: { cursor: firstPage.nextCursor, turnId: latestTurn.id },
         turns,
       },
       page: { previousCursor: firstPage.nextCursor, turn: latestTurn },
+      source: "provider",
       thread,
     });
   }
@@ -454,8 +463,9 @@ export default class CodexThreadWindowLoader {
       throw new Error(`Codex thread ${thread.id} is inactive but latest turn ${providerLatestTurn.id} is still in progress.`);
     }
 
-    return createProviderWindowLoad({
+    return createWindowLoad({
       page: { previousCursor: page.nextCursor, turn: providerLatestTurn },
+      source: "provider",
       thread,
     });
   }

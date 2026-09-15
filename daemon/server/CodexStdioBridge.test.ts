@@ -951,10 +951,29 @@ test("foreground thread pages durably repair a newer turn omitted by an inactive
     itemsView: "notLoaded" as const,
     status: "completed" as const,
   };
+  const reasoningItem: ThreadItem = {
+    content: ["private trace"],
+    id: "rs-native",
+    summary: ["reasoning summary"],
+    type: "reasoning",
+  };
+  const mcpItem: ThreadItem = {
+    appContext: null,
+    arguments: { path: "docs/invariants/ownership.md" },
+    durationMs: null,
+    error: null,
+    id: "exec-native",
+    pluginId: null,
+    readOnlyHint: true,
+    result: null,
+    server: "wb",
+    status: "inProgress",
+    tool: "shell",
+    type: "mcpToolCall",
+  };
   const latest = {
-    ...bridgeThread().turns[0]!,
+    ...bridgeThread([reasoningItem, mcpItem]).turns[0]!,
     id: "latest",
-    items: [],
     startedAt: 3,
   };
   const providerThread = {
@@ -1016,6 +1035,10 @@ test("foreground thread pages durably repair a newer turn omitted by an inactive
       params: { threadId: "thread", turn: latest },
     });
     await bridge.waitForIdle();
+    const beforeRecovery = sql.project().projection.turns.at(-1);
+    assert.ok(beforeRecovery);
+    const originalItemIds = beforeRecovery.items.map(({ id }) => id);
+    assert.equal(originalItemIds.length, 2);
     upstreamRequests.length = 0;
     holdRecording = true;
     let responseResolved = false;
@@ -1039,6 +1062,11 @@ test("foreground thread pages durably repair a newer turn omitted by an inactive
       nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
       nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(latest.id),
     });
+    const expectedThreadId = sql.ports.identities.threads.workbenchIdForNative({
+      harness: "codex",
+      nativeLocation: "C:/repo",
+      nativeThreadId: fixtureIdentityValues.NativeThreadId.thread,
+    });
     assert.equal(repaired?.id, expectedLatestId);
     assert.equal(repaired?.status, "interrupted");
     assert.deepEqual(upstreamRequests.map(({ method, params }) => ({
@@ -1048,7 +1076,22 @@ test("foreground thread pages durably repair a newer turn omitted by an inactive
       { itemsView: undefined, method: "thread/read" },
       { itemsView: "notLoaded", method: "thread/turns/list" },
     ]);
-    assert.equal(sql.project().projection.turns.at(-1)?.status, "interrupted");
+    const stored = sql.project().projection;
+    const storedLatest = stored.turns.at(-1);
+    assert.equal(storedLatest?.status, "interrupted");
+    assert.deepEqual(storedLatest?.items.map(({ id }) => id), originalItemIds);
+    for (const [itemId, nativeSourceId] of originalItemIds.map((itemId, index) => (
+      [itemId, [reasoningItem.id, mcpItem.id][index]!] as const
+    ))) {
+      const identity = await sql.ports.identities.items.resolve({
+        itemId: fixtureIdentitySchemas.WorkbenchItemIdSchema.parse(itemId),
+        threadId: expectedThreadId,
+        turnId: expectedLatestId,
+      });
+      assert.ok(identity);
+      assert.equal(identity.sources.some(({ sourceId }) => sourceId === nativeSourceId), true);
+      assert.equal(identity.sources.some(({ sourceId }) => sourceId === itemId), false);
+    }
   } finally {
     releaseRecording.resolve();
     await bridge.waitForIdle();
@@ -1246,23 +1289,25 @@ test("provider catalog identities and the materialized page record as one SQL fa
   });
   const owner = bridge as unknown as {
     createThreadWindowStore(): {
-      recordProviderWindow(recording: {
+      recordWindow(recording: {
         catalog: {
           boundary: { cursor: string | null; turnId: string };
           turns: Thread["turns"];
         };
         page: { previousCursor: string | null; turn: Thread["turns"][number] };
+        source: "provider";
         thread: Thread;
       }): void;
     };
   };
   try {
-    await owner.createThreadWindowStore().recordProviderWindow({
+    await owner.createThreadWindowStore().recordWindow({
       catalog: {
         boundary: { cursor: "before-latest", turnId: latest.id },
         turns: [older, latest],
       },
       page: { previousCursor: "before-latest", turn: latest },
+      source: "provider",
       thread: metadata,
     });
     await bridge.waitForIdle();
@@ -2191,8 +2236,9 @@ test("SQL context pages settle provider bodies and then read without legacy stor
     const windows = (bridge as unknown as {
       createThreadWindowStore(): CodexThreadWindowStore;
     }).createThreadWindowStore();
-    await windows.recordProviderWindow({
+    await windows.recordWindow({
       thread: { ...bridgeThread(), turns: [] },
+      source: "provider",
       catalog: { turns: providerTurns
         .map(turn => ({ ...turn, items: [], itemsView: "notLoaded" })) },
     });
