@@ -9,6 +9,7 @@
  */
 
 import type { ThreadPayload, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
+import { isPendingWorkbenchTurn } from "workbench-shared/workbench/thread/thread-admission";
 import { isWorkbenchUnfinishedContinuationTurn } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 export const THREAD_HISTORY_RETENTION_AGE_MS = 60 * 60 * 1_000;
@@ -51,6 +52,9 @@ export function getThreadHistoryRetentionCandidates(
   nowMs: number,
 ): ThreadHistoryRetentionCandidates {
   if (thread.harness !== "codex" || thread.isDraft || thread.turns.length <= 2) {
+    return { nextReviewAtMs: null, turnIds: [] };
+  }
+  if (thread.turns.some(isPendingWorkbenchTurn)) {
     return { nextReviewAtMs: null, turnIds: [] };
   }
 
