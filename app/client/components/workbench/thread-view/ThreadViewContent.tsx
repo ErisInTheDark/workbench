@@ -789,10 +789,7 @@ export default memo(function ThreadViewContent ({
 
     const reconcile = () => historyPagingRef.current?.reconcile();
     const interrupt = (historyIntent = false) => historyPagingRef.current?.interrupt({ historyIntent });
-    const handleScroll = () => {
-      if (scrollTarget.dataset.threadScrollDirection === "up") interrupt(true);
-      else reconcile();
-    };
+    const handleScroll = () => historyPagingRef.current?.viewportScrolled();
     const handleWheel = (event: WheelEvent) => interrupt(event.deltaY < 0);
     const handleTouchMove = () => interrupt();
     const handleKeyDown = (event: KeyboardEvent) => {

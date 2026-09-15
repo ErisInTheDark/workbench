@@ -71,10 +71,19 @@ function fixture() {
       renderedTurnIds = ["turn-1", "turn-2"];
       controller.reconcile();
     },
+    shiftLayout(shift: number) {
+      contentTop += shift;
+      scrollHeight += shift;
+      controller.reconcile();
+    },
     setNearTop(value: boolean) { nearTop = value; controller.reconcile(); },
     setSourceReady(value: boolean) { sourceReady = value; controller.reconcile(); },
     setScrollTop(value: number) { scrollTop = value; },
     move(value: number, historyIntent = false) { controller.interrupt({ historyIntent }); scrollTop = value; },
+    scroll(value: number) {
+      scrollTop = value;
+      controller.viewportScrolled();
+    },
     replace() { identity = {}; controller.reconcile(); },
     fail() {
       assert.notEqual(transaction, null);
@@ -147,19 +156,22 @@ test("normal layout preserves a nonzero reader offset across prepended history",
   assert.equal(f.scrollTop, 700);
 });
 
-test("user scrolling relinquishes the anchor without releasing the render fence", () => {
+test("continuous autoscroll rebases the anchor across multi-phase prepends", () => {
   const f = fixture();
+  f.setScrollTop(300);
   f.start();
+  f.shiftLayout(100);
+  assert.equal(f.scrollTop, 400);
+  f.controller.viewportScrolled();
+  f.scroll(250);
   f.receive();
-  f.move(90);
-  f.setNearTop(false);
-  f.advance(2_000);
+  f.render(400);
+  assert.equal(f.scrollTop, 650);
+  assert.deepEqual(f.writes, [400, 650]);
+  f.advance(499);
   assert.equal(f.loads, 1);
-  f.render();
-  assert.equal(f.scrollTop, 90);
-  assert.deepEqual(f.writes, []);
-  f.advance(500);
-  assert.equal(f.loads, 1);
+  f.advance(1);
+  assert.equal(f.loads, 2);
 });
 
 test("failures stay manual and explicit retry does not wait for an automatic dwell", () => {

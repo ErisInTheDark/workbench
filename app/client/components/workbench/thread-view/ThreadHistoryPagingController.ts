@@ -75,9 +75,20 @@ export default class ThreadHistoryPagingController {
   }
 
   interrupt({ historyIntent = false }: { historyIntent?: boolean } = {}) {
-    if (this.#pending) this.#pending.anchor = null;
     if (historyIntent) this.#historyIntentRequired = false;
     this.#cancelScheduled();
+    this.reconcile();
+  }
+
+  viewportScrolled() {
+    const view = this.#read();
+    const anchor = this.#pending?.anchor;
+    if (view && anchor) {
+      const top = view.anchorTop(anchor.turnId);
+      if (top !== null && this.#pending) {
+        this.#pending.anchor = { turnId: anchor.turnId, top };
+      }
+    }
     this.reconcile();
   }
 
