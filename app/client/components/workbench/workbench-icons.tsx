@@ -1,6 +1,9 @@
 /*
  * Exports:
  * - IconProps: shared icon size and SVG attributes.
+ * - ShellProcessingIcon: shell text with a processing cog.
+ * - ShellIcon: shell text within a solid window border.
+ * - TerminalIcon: terminal prompt and cursor.
  * - ZapIcon: fast mode outlined lightning glyph.
  * - StarIcon/StarOffIcon: emphasise and de-emphasise model choices.
  * - BotIcon: composer profile glyph.
@@ -57,6 +60,31 @@ export type IconProps = Omit<ComponentPropsWithoutRef<"svg">, "height" | "stroke
 
 function OutlinedIcon({ size = 16, ...props }: IconProps) {
   return <svg {...props} aria-hidden="true" fill="none" height={size} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={32 / size} viewBox="0 0 24 24" width={size} xmlns="http://www.w3.org/2000/svg" />;
+}
+
+export function ShellProcessingIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4" />
+    <path d="M6 8h8" /><path d="M6 12h4" />
+    <g transform="translate(0 11)">
+      <path d="m14.305 7.53.923-.382" /><path d="m15.228 4.852-.923-.383" />
+      <path d="m16.852 3.228-.383-.924" /><path d="m16.852 8.772-.383.923" />
+      <path d="m19.148 3.228.383-.924" /><path d="m19.53 9.696-.382-.924" />
+      <path d="m20.772 4.852.924-.383" /><path d="m20.772 7.148.924.383" />
+      <circle cx="18" cy="6" r="3" />
+    </g>
+  </OutlinedIcon>;
+}
+
+export function ShellIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <rect width="20" height="16" x="2" y="4" rx="2" />
+    <path d="M6 8h8" /><path d="M6 12h4" />
+  </OutlinedIcon>;
+}
+
+export function TerminalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M12 19h8" /><path d="m4 17 6-6-6-6" /></OutlinedIcon>;
 }
 
 function BrandIcon({ size = 16, ...props }: IconProps) {
