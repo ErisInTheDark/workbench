@@ -22,7 +22,9 @@ export default function LoaderIcon(props: IconProps) {
       controller = null;
       if (reducedMotion.matches) return;
       controller = new LoaderAnimationController((target, frames, options) => {
-        const node = target === "spin" ? element : paths[target === "traveller" ? 8 : target]!;
+        const node = target === "spin" ? element
+          : typeof target === "object" ? element.children[target.rotation]!
+          : paths[target === "traveller" ? 8 : target]!;
         return node.animate(frames, options);
       });
       controller.start();
@@ -36,9 +38,16 @@ export default function LoaderIcon(props: IconProps) {
   }, []);
 
   return <OutlinedIcon {...props} viewportPadding={2}>
-    <g ref={group} style={{ transformBox: "view-box", transformOrigin: "50% 50%" }}>
-      {spokes.map(path => <path key={path} d={path} />)}
-      <path d={spokes[0]} style={{ opacity: 0, transformBox: "view-box", transformOrigin: "50% 50%" }} />
-    </g>
+    {/* Keep rotation coordinates independent of the outer bounce clearance. */}
+    <svg x={0} y={0} width={24} height={24} viewBox="0 0 24 24" overflow="visible">
+      <g ref={group} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
+        {spokes.map(path => (
+          <g key={path} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
+            <path d={path} />
+          </g>
+        ))}
+        <path d={spokes[0]} style={{ opacity: 0, transformBox: "view-box", transformOrigin: "12px 12px" }} />
+      </g>
+    </svg>
   </OutlinedIcon>;
 }

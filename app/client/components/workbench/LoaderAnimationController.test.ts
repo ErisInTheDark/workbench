@@ -31,7 +31,7 @@ async function flush() {
 test("weights choices and renormalises after excluding the previous motion", async () => {
   for (const excludeFirst of [false, true]) {
     const counts = new Map<number, number>();
-    const total = excludeFirst ? 60 : 70;
+    const total = excludeFirst ? 120 : 130;
     for (let sample = 0; sample < total; sample++) {
       let random = excludeFirst ? 0 : (sample + .5) / total;
       const h = harness(() => random);
@@ -52,6 +52,7 @@ test("weights choices and renormalises after excluding the previous motion", asy
     assert.deepEqual(counts, new Map([
       ...(!excludeFirst ? [[2160, 10] as const] : []),
       [2100, 20], [4800, 10], [4020, 30],
+      [2800, 20], [2400, 20], [2000, 20],
     ]));
   }
 });

@@ -3,9 +3,9 @@
  * - LoaderAnimator: browser animation boundary for loader targets.
  * - default LoaderAnimationController: owns loader motion sequencing and disposal.
  */
-export type LoaderAnimator = (target: "spin" | "traveller" | number, frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "finished" | "cancel">;
+export type LoaderAnimator = (target: "spin" | "traveller" | number | { rotation: number }, frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "finished" | "cancel">;
 
-type Track = { target: "traveller" | number; frames: Keyframe[]; easing?: string };
+type Track = { target: Exclude<Parameters<LoaderAnimator>[0], "spin">; frames: Keyframe[]; easing?: string };
 const ease = "cubic-bezier(.4,0,.2,1)";
 const directions = [[0, 1], [-.7075, .7075], [-1, 0], [-.7075, -.7075], [0, -1], [.7075, -.7075], [1, 0], [.7075, .7075]];
 const foldStarts = [0, 43.2, 88.3, 137.2, 193.7, 264.3, 362.6, 526.7];
@@ -80,6 +80,56 @@ const motions = [
       const start = Math.floor(i / 2) * 140 + (i % 2 ? 1440 : 0);
       return [start, start + 720, start + 1440, start + 2160];
     }),
+  },
+  {
+    weight: 20,
+    duration: 2800,
+    tracks: (): Track[] => directions.flatMap(([x, y], index): Track[] => [
+      { target: { rotation: index }, frames: [
+        { transform: "rotate(0deg)", offset: 0, easing: "cubic-bezier(.4,0,.6,1)" },
+        { transform: "rotate(-30deg)", offset: .25, easing: "cubic-bezier(.15,.65,.25,1)" },
+        { transform: "rotate(360deg)", offset: 1 },
+      ] },
+      { target: index, frames: [
+        { transform: "translate(0px,0px)", offset: 0, easing: "cubic-bezier(.4,0,.6,1)" },
+        { transform: `translate(${x}px,${y}px)`, offset: .25, easing: "cubic-bezier(.2,.8,.3,1)" },
+        { transform: `translate(${x! * -1.8}px,${y! * -1.8}px)`, offset: .36, easing: "cubic-bezier(.4,0,.6,1)" },
+        { transform: "translate(0px,0px)", offset: 1 },
+      ] },
+    ]),
+  },
+  {
+    weight: 20,
+    duration: 2400,
+    tracks: (): Track[] => directions.flatMap(([x, y], index): Track[] => [
+      { target: { rotation: index }, easing: "cubic-bezier(.42,0,.58,1)", frames: [
+        { transform: "rotate(0deg)" },
+        { transform: `rotate(${index % 2 ? 360 : -360}deg)` },
+      ] },
+      { target: index, frames: [
+        { transform: "translate(0px,0px)", offset: 0, easing: "cubic-bezier(.7,0,.3,1)" },
+        { transform: `translate(${x! * -1.8}px,${y! * -1.8}px)`, offset: .5, easing: "cubic-bezier(.7,0,.3,1)" },
+        { transform: "translate(0px,0px)", offset: 1 },
+      ] },
+    ]),
+  },
+  {
+    weight: 20,
+    duration: 2000,
+    tracks: (): Track[] => directions.map((_, index): Track => ({
+      target: { rotation: index },
+      frames: index % 2 ? [
+        { transform: "rotate(0deg)", offset: 0, easing: ease },
+        { transform: "rotate(45deg)", offset: .4, easing: ease },
+        { transform: "rotate(135deg)", offset: .8 },
+        { transform: "rotate(135deg)", offset: 1 },
+      ] : [
+        { transform: "rotate(0deg)", offset: 0 },
+        { transform: "rotate(0deg)", offset: .2, easing: ease },
+        { transform: "rotate(90deg)", offset: .6, easing: ease },
+        { transform: "rotate(135deg)", offset: 1 },
+      ],
+    })),
   },
 ];
 
