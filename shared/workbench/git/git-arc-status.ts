@@ -106,8 +106,10 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
       lines.push(`Intersecting commits: ${lost.commits.map(c => `${c.commit} ${quote(c.subject)}`).join(", ")}`);
     }
     if (lost.omittedCommits) lines.push(`More intersecting commits: ${lost.omittedCommits}`);
-    lines.push(lost.comparison.length ? "Changes since claim loss:" : "Changes since claim loss: none");
-    if (lost.comparison.length) lines.push(...formatGitArcDriftComparison(lost.comparison));
+    if (lost.comparison.length) {
+      lines.push("Changes since claim loss:");
+      lines.push(...formatGitArcDriftComparison(lost.comparison));
+    }
   }
   if (status.unavailableRecovery.length) lines.push(`Claim-loss baseline unavailable: ${status.unavailableRecovery.map(quote).join(", ")}`);
   return lines.join("\n");
@@ -126,6 +128,10 @@ export function parseGitArcStatus(output: string) {
       const separator = line.indexOf(":");
       const label = separator < 0 ? line : line.slice(0, separator);
       const value = separator < 0 ? "" : line.slice(separator + 1).trimStart();
+      if (lost && !["HEAD since claim loss", "Intersecting commits", "More intersecting commits", "Changes since claim loss"].includes(label)) {
+        result.recovery.push(lost);
+        lost = undefined;
+      }
       if (["Proposals pending", "Proposals accepted", "Dirty claims", "Clean claims", "Unclaimed dirt", "Claim-loss baseline unavailable"].includes(label)) {
         if (seen.has(label)) throw new Error("Duplicate status group.");
         seen.add(label);
@@ -189,7 +195,7 @@ export function parseGitArcStatus(output: string) {
         default: throw new Error("Unrecognised status line.");
       }
     }
-    if (lost) throw new Error("Incomplete recovery group.");
+    if (lost) result.recovery.push(lost);
     return presentationSchema.safeParse(result);
   } catch {
     return presentationSchema.safeParse(null);

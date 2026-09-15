@@ -7,6 +7,7 @@
  */
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { GitArcClaimLossSchema } from "workbench-shared/workbench/git/git-arc-status";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import {
   CHECKPOINT_METADATA_MARKER,
@@ -67,7 +68,7 @@ export default class GitArcHistoryRewriter {
     const refs = (await this.repository.listRefsWithValues("refs/worktree/agents"))
       .filter(({ ref }) => !excludedRefs.has(ref));
     const missingRefs = refs.filter(({ objectType, ref }) => (
-      objectType === "missing" && /\/(?:arc-outcomes|checkpoint-proposals|checkpoints)\//u.test(ref)
+      objectType === "missing" && /\/(?:(?:arc-outcomes|checkpoint-proposals|checkpoints)\/|claim-loss$)/u.test(ref)
     ));
     for (const entry of missingRefs.slice(0, 20)) {
       warnings.push(`Skipped unreadable Workbench ref ${entry.ref}: missing object ${entry.value}`);
@@ -79,9 +80,13 @@ export default class GitArcHistoryRewriter {
     const checkpointRefs = refs
       .filter(({ objectType, ref }) => objectType === "commit" && /\/checkpoints\//u.test(ref))
       .sort((left, right) => left.ref.localeCompare(right.ref));
+    const claimLossRefs = refs
+      .filter(({ objectType, ref }) => objectType === "commit" && /\/claim-loss$/u.test(ref))
+      .sort((left, right) => left.ref.localeCompare(right.ref));
     const proposalRefs = refs.filter(({ objectType, ref }) => objectType === "commit" && /\/checkpoint-proposals\//u.test(ref));
     const commitBatch = await this.repository.readCommits([
       ...checkpointRefs.map(({ value }) => value),
+      ...claimLossRefs.map(({ value }) => value),
       ...proposalRefs.map(({ value }) => value),
       ...branchCommits.keys(),
       ...branchCommits.values(),
@@ -157,6 +162,43 @@ export default class GitArcHistoryRewriter {
     }
     if (pendingCheckpoints.length) {
       throw new Error(`Checkpoint metadata contains a dependency cycle: ${pendingCheckpoints.map(({ entry }) => entry.ref).join(", ")}`);
+    }
+
+    const invalidClaimLossRefs: string[] = [];
+    for (const entry of claimLossRefs) {
+      const oldCommit = commitBatch.commits.get(entry.value);
+      if (!oldCommit) {
+        invalidClaimLossRefs.push(entry.ref);
+        continue;
+      }
+      let stored: ReturnType<typeof GitArcClaimLossSchema.safeParse>;
+      try {
+        stored = GitArcClaimLossSchema.safeParse(JSON.parse(oldCommit.message));
+      } catch {
+        invalidClaimLossRefs.push(entry.ref);
+        continue;
+      }
+      if (!stored.success || oldCommit.parents.length > 1 || (oldCommit.parents[0] ?? null) !== stored.data.head) {
+        invalidClaimLossRefs.push(entry.ref);
+        continue;
+      }
+      const head = stored.data.head === null ? null : commits.get(stored.data.head) ?? stored.data.head;
+      if (head === stored.data.head) continue;
+      const next = await this.repository.createCommitFromTree(
+        oldCommit.tree,
+        head,
+        JSON.stringify({ ...stored.data, head }),
+        oldCommit,
+      );
+      commits.set(entry.value, next);
+      preparedTrees.set(next, oldCommit.tree);
+      updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });
+    }
+    for (const ref of invalidClaimLossRefs.slice(0, 20)) {
+      warnings.push(`Skipped invalid claim-loss ref ${ref}.`);
+    }
+    if (invalidClaimLossRefs.length > 20) {
+      warnings.push(`Skipped ${invalidClaimLossRefs.length - 20} additional invalid claim-loss refs.`);
     }
 
     for (const entry of proposalRefs) {

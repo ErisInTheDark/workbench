@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitCheckpointStore from "./GitCheckpointStore";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
@@ -142,6 +143,10 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   const amendmentPreview = (await store.readProposal("codex", "amend-thread", amendment.proposalId)).metadata;
   assert.equal(amendmentPreview.title, "Original title");
   assert.equal(amendmentPreview.description, "Original description");
+  const lossStore = new GitArcClaimLossStore(repository);
+  const lossBefore = await lossStore.read({ harness: "codex", threadId: "amend-thread" });
+  assert.ok(lossBefore);
+  assert.equal(lossBefore.head, oldHead);
   const second = { proposalId: state.secondProposalId };
   const secondBefore = await controller.getProposal({
     cwd: root,
@@ -165,6 +170,14 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   });
   assert.notEqual(amended.committedSha, oldHead);
   assert.equal(await repository.resolveParent(amended.committedSha!), originalParent);
+  const lossAfter = await lossStore.read({ harness: "codex", threadId: "amend-thread" });
+  assert.ok(lossAfter);
+  assert.equal(lossAfter.head, amended.committedSha);
+  assert.equal(lossAfter.tree, lossBefore.tree);
+  assert.equal(
+    (await repository.classifyHeadMovement(lossAfter.head, lossAfter.paths, lossAfter.commit)).kind,
+    "fast-forward",
+  );
   assert.equal(
     await fs.readFile(path.join(root, "selected.txt"), "utf8"),
     "first proposal\nfirst amendment\nsecond amendment\n",

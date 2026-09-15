@@ -44,6 +44,20 @@ test("status round-trips proposal identities and recovery counts without section
   assert.equal(parseGitArcStatus('Dirty claims: "unterminated').success, false);
 });
 
-test("incomplete recovery never reports an unchanged boundary", () => {
-  assert.equal(parseGitArcStatus("Lost claims: one").success, false);
+test("clean claim loss omits empty comparison noise", () => {
+  const input: GitArcStatus = {
+    ...empty,
+    recovery: [{
+      paths: ["one.ts"], headMovement: "same", commits: [], comparison: [], omittedCommits: 0,
+    }],
+  };
+  const output = formatGitArcStatus(input);
+  assert.equal(output, "Lost claims: one.ts");
+  assert.doesNotMatch(output, /Changes since claim loss/u);
+  assert.deepEqual(parseGitArcStatus(output).data, input);
+  assert.deepEqual(parseGitArcStatus(`${output}\nChanges since claim loss: none`).data, input);
+});
+
+test("invalid recovery evidence is rejected", () => {
+  assert.equal(parseGitArcStatus("Lost claims: one\nHEAD since claim loss: unexpected").success, false);
 });

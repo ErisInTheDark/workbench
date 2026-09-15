@@ -5,3 +5,4 @@
 - Thread settlement checks only live claimed paths under the worktree Git transition. It does not hydrate proposal details.
 - Git arc storage writes canonical Workbench thread IDs. Reads resolve legacy provider IDs through admitted identity; unresolved owners are orphaned, inactive, and omitted from normal projections.
 - Proposal summaries do not require diff hydration. Full proposal diffs hydrate on demand through bounded Git work; completed immutable projections may be reused only by exact tree-and-path identity.
+- Every new Workbench Git ref must be handled explicitly by the history rewriter and covered across replacement history.

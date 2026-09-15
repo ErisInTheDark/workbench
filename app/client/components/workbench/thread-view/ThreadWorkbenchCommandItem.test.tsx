@@ -34,6 +34,12 @@ test("empty status remains a successful status card", () => {
   assert.doesNotMatch(html, /Status output could not be read/u);
 });
 
+test("clean claim loss keeps paths without empty comparison noise", () => {
+  const html = renderSpecialized(makeItem("git_arc_status", {}, "Lost claims: clean-evidence.ts"));
+  assert.match(html, /clean-evidence\.ts/u);
+  assert.doesNotMatch(html, /No changes since claim loss|Status output could not be read/u);
+});
+
 test("compact claim updates show actual changes rather than attempted or unchanged paths", () => {
   for (const tool of ["git_arc_claims", "git_plan_claims", "git_plan_start"]) {
     const action = tool === "git_arc_claims" ? "claims" : tool === "git_plan_claims" ? "plan" : "start";

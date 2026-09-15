@@ -61,7 +61,7 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
           {lost.omittedCommits ? <p className="text-fg/muted">{lost.omittedCommits} more intersecting commits</p> : null}
           {lost.comparison.length ? <ThreadCheckpointCompareItem changes={lost.comparison.map(change => ({
             ...change, status: change.kind === "add" ? "A" : change.kind === "delete" ? "D" : "U",
-          }))} {...context} /> : <p className="m-0 text-fg/muted">No changes since claim loss.</p>}
+          }))} {...context} /> : null}
         </section>
       ))}
       {status.unavailableRecovery.length ? <p className="text-fg/muted">Claim-loss baseline unavailable for {status.unavailableRecovery.join(", ")}.</p> : null}

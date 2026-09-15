@@ -1186,7 +1186,10 @@ export default class GitArcProposalController {
             store,
             threadId,
           });
-          updates.push(...transition.updates);
+          for (const update of transition.updates) {
+            updates.push(update);
+            if (update.ref.endsWith("/claim-loss")) replaceRefs.push(update.ref);
+          }
           const oldOutcome = await repository.readRef(oldOutcomeRef);
           const nextOutcomeRef = outcomeRef(harness, threadId, transition.sourceCheckpoint);
           const acceptedProposals = previousAcceptedProposals.map((receipt) => ({
