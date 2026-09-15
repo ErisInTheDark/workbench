@@ -159,5 +159,5 @@ export default async function migrateWorkbenchDatabase(
     await options.beforeMigration?.(backupPath);
   }
   applyWorkbenchDatabaseSchema(database, schema, options);
-  if (directory) await pruneBackups(directory, (options.now ?? Date.now)());
+  if (directory && installedVersion < targetVersion) await pruneBackups(directory, (options.now ?? Date.now)());
 }

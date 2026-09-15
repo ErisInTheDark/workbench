@@ -156,12 +156,20 @@ test("real application survives reload expiry, migrated candidate failure, retry
       } finally { await runtime.transcripts.unsubscribe({ subscriptionId }); }
     };
     await installLifecycleProbe(runtime.project);
+    const daemonStart = performance.now();
     await runtime.start();
+    const daemonStartupMs = Math.round(performance.now() - daemonStart);
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const fixtureProject = catalog.data.find(project => path.resolve(project.rootPath) === runtime.project);
     assert.ok(fixtureProject);
     const transcript = await seedLifecycleTranscript(runtime.project, fixtureProject.id);
+    const appStart = performance.now();
     await runtime.startApp();
+    const appStartupMs = Math.round(performance.now() - appStart);
+    console.log(`cold startup to diagnostic readiness: daemon ${daemonStartupMs}ms, app ${appStartupMs}ms`);
+    for (const output of [runtime.output, runtime.appOutput]) {
+      console.log(output.split(/\r?\n/u).filter(line => line.startsWith("[startup] ")).join("\n"));
+    }
     await assets();
     await verifyTranscript();
     const ids = runtime.processIds;

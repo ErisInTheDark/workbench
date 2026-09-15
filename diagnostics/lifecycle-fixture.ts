@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - installLifecycleProbe: instrument only a private copy's node lifecycle callbacks.
+ * - installLifecycleProbe: time startup and instrument only a private copy's node lifecycle callbacks.
  * - writeLifecycleFault: select held drain or failed activation for the next transition.
  * - appendLifecycleMigration: append a synthetic release without changing sealed production history.
  * - seedLifecycleTranscript: admit an isolated durable transcript and image without JSON recording.
@@ -88,6 +88,26 @@ exports.instrument = (instance, scope, mode) => {
   const identity = randomUUID();
   const read = () => JSON.parse(fs.readFileSync(control, "utf8"));
   const mark = (phase) => console.log("[lifecycle] " + phase + " " + scope + " " + identity);
+  if (instance.start && mode === "initial") {
+    const start = instance.start.bind(instance);
+    instance.start = async (report = () => {}, signal) => {
+      const began = performance.now();
+      let phaseBegan = began;
+      let phase = "start";
+      const timing = (label, since) => console.log("[startup] " + scope + " " + label + " " + Math.round(performance.now() - since) + "ms");
+      try {
+        return await start((next) => {
+          timing(phase, phaseBegan);
+          phase = next;
+          phaseBegan = performance.now();
+          report(next);
+        }, signal);
+      } finally {
+        timing(phase, phaseBegan);
+        timing("total", began);
+      }
+    };
+  }
   const dispose = instance.dispose.bind(instance);
   instance.dispose = async (report = () => {}) => {
     mark("disposing");

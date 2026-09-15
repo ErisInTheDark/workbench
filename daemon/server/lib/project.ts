@@ -679,7 +679,9 @@ export async function discoverProjectIdentities(signal?: AbortSignal): Promise<W
   for (const locations of origins.values()) {
     if (locations.length < 2) continue;
     for (const key of locations) classifications.get(key)!.excluded = true;
-    console.warn(`[projects] skipped ${locations.length} distinct checkouts sharing one origin`);
+    const paths = locations.map(key => normalizeRelativePath(path.relative(projectsRoot, roots.get(key)!))
+      .replace(/[\r\n\t]/gu, " ").slice(0, 300) || ".").sort();
+    console.warn(`[projects] skipped checkouts sharing one origin: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` (+${paths.length - 10} more)` : ""}`);
   }
   const data: WorkbenchProjectOption[] = [];
   const aliases: WorkbenchProjectDiscovery["aliases"] = [];
