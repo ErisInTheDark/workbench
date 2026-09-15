@@ -8,7 +8,7 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { CheckIcon, EllipsisIcon } from "../workbench-icons";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
-import ThreadClaimedFileList from "./ThreadClaimedFileList";
+import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 
 export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, projectId, projectRootPath, workspaceRoots }: {
@@ -25,9 +25,14 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
   if (!parsed.success) return <p className="text-danger">Status output could not be read.</p>;
   const status = parsed.data;
   const context = { projectFilePaths, projectId, projectRootPath, workspaceRoots };
-  const group = (label: string, paths: number | string[]) => typeof paths === "number"
-    ? <p className="m-0 py-1 text-fg/muted" key={label}>{label}: {paths}</p>
-    : paths.length ? <ThreadClaimedFileList key={label} label={label} paths={paths} {...context} /> : null;
+  const group = (label: string, paths: number | string[], marker: ThreadClaimMarker) => typeof paths === "number"
+    ? (
+      <p className="m-0 flex items-center gap-1 py-1 text-fg/muted" key={label}>
+        <span className="inline-flex shrink-0" aria-hidden="true"><ThreadClaimMarkerIcon marker={marker} /></span>
+        <span>{label}: {paths}</span>
+      </p>
+    )
+    : paths.length ? <ThreadClaimedFileList inset={false} key={label} label={label} marker={marker} paths={paths} {...context} /> : null;
   return (
     <div className="min-w-0 py-1">
       {status.pending.map(proposal => (
@@ -45,12 +50,12 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
           <span className="min-w-0 break-words">{proposal.title}</span>
         </div>
       ))}
-      {group("Dirty claims", status.dirtyClaims)}
-      {group("Clean claims", status.cleanClaims)}
-      {group("Unclaimed dirt", status.unclaimedDirt)}
+      {group("Dirty claims", status.dirtyClaims, "dirty")}
+      {group("Clean claims", status.cleanClaims, "clean")}
+      {group("Unclaimed dirt", status.unclaimedDirt, "unclaimed")}
       {status.recovery.map((lost, index) => (
         <section key={index}>
-          {group("Lost claims", lost.paths)}
+          {group("Lost claims", lost.paths, "unclaimed")}
           {lost.headMovement === "incompatible" ? <p className="text-danger">HEAD moved incompatibly since claim loss.</p> : null}
           {lost.commits.length ? <ThreadGitArcCommitList commits={lost.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} {...context} /> : null}
           {lost.omittedCommits ? <p className="text-fg/muted">{lost.omittedCommits} more intersecting commits</p> : null}

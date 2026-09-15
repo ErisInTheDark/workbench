@@ -28,6 +28,12 @@ test("status uses the dedicated card without inventing paths for count-only grou
   assert.match(html, /8/u);
 });
 
+test("empty status remains a successful status card", () => {
+  const html = renderSpecialized(makeItem("git_arc_status", {}, ""));
+  assert.match(html, /data-thread-git-arc-card="status"/u);
+  assert.doesNotMatch(html, /Status output could not be read/u);
+});
+
 test("compact claim updates show actual changes rather than attempted or unchanged paths", () => {
   for (const tool of ["git_arc_claims", "git_plan_claims", "git_plan_start"]) {
     const action = tool === "git_arc_claims" ? "claims" : tool === "git_plan_claims" ? "plan" : "start";

@@ -1,14 +1,32 @@
 /*
  * Exports:
  * - default ThreadClaimedFileList: render static planned, claimed, or attempted Git arc path rows with optional failure tone.
+ * - ThreadClaimMarker/ThreadClaimMarkerIcon: select the semantic glyph for a claim-state row.
  */
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { isProjectDirectoryPath } from "../../../workbench/project/project-file-path";
 import ProjectFilePath from "../ProjectFilePath";
-import { GitArcClaimIcon, GitArcPlannedClaimIcon } from "./GitArcIcon";
+import {
+  GitArcClaimIcon,
+  GitArcCleanClaimIcon,
+  GitArcDirtyClaimIcon,
+  GitArcPlannedClaimIcon,
+  GitArcUnclaimedIcon,
+} from "./GitArcIcon";
 import ThreadSummaryText from "./ThreadSummaryText";
 
+export type ThreadClaimMarker = "claimed" | "clean" | "dirty" | "planned" | "unclaimed";
+
+export function ThreadClaimMarkerIcon({ marker }: { marker: ThreadClaimMarker }) {
+  if (marker === "clean") return <GitArcCleanClaimIcon size={20} />;
+  if (marker === "dirty") return <GitArcDirtyClaimIcon size={20} />;
+  if (marker === "planned") return <GitArcPlannedClaimIcon size={20} />;
+  if (marker === "unclaimed") return <GitArcUnclaimedIcon size={20} />;
+  return <GitArcClaimIcon size={20} />;
+}
+
 export default function ThreadClaimedFileList({
+  inset = true,
   label = "Claimed",
   marker = "claimed",
   paths,
@@ -18,8 +36,9 @@ export default function ThreadClaimedFileList({
   tone = "default",
   workspaceRoots,
 }: {
+  inset?: boolean;
   label?: string;
-  marker?: "claimed" | "planned";
+  marker?: ThreadClaimMarker;
   paths: readonly string[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -35,12 +54,12 @@ export default function ThreadClaimedFileList({
         const targetType = isProjectDirectoryPath(displayPath, projectFilePaths ?? []) ? "directory" : "file";
         return (
           <div
-            className={`flex min-w-0 items-baseline gap-1 py-0.5 pl-6 text-[0.86em] leading-[1.5] ${tone === "danger" ? "text-danger" : "text-fg/muted"}`}
+            className={`flex min-w-0 items-baseline gap-1 py-0.5 text-[0.86em] leading-[1.5] ${inset ? "pl-6" : ""} ${tone === "danger" ? "text-danger" : "text-fg/muted"}`}
             data-thread-git-arc-path-tone={tone}
             key={filePath}
           >
             <span className="-mt-0.5 inline-flex shrink-0 self-center" aria-hidden="true">
-              {marker === "planned" ? <GitArcPlannedClaimIcon size={20} /> : <GitArcClaimIcon size={20} />}
+              <ThreadClaimMarkerIcon marker={marker} />
             </span>
             <ThreadSummaryText text={label} />
             <ProjectFilePath className="min-w-0 max-w-full shrink align-baseline text-[0.9em]" disambiguationPaths={projectFilePaths} path={displayPath} projectId={projectId} targetType={targetType} />

@@ -43,7 +43,7 @@
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
  * - CompactIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
- * - GitArcIcon and Git arc action glyphs: Git arc status and action glyphs.
+ * - GitArcIcon and Git arc action/claim-state glyphs: Git arc status and action glyphs.
  */
 import type { ComponentPropsWithoutRef } from "react";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -640,9 +640,30 @@ export function GitArcClaimIcon(props: IconProps) {
   return <FlagIcon {...props} />;
 }
 
+export function GitArcCleanClaimIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11 2v2" /><path d="M12 3h-2" /><path d="M13.5 10.5 22 2" /><path d="M14.734 13.841a2 2 0 0 0-.314-2.42L12.58 9.58a2 2 0 0 0-2.421-.314l-7.657 4.461A1 1 0 0 0 2.3 15.3l6.403 6.403a1 1 0 0 0 1.571-.204z" /><path d="M20 15v4" /><path d="M22 17h-4" /><path d="M4 4v4" /><path d="m5 18 2-2" /><path d="M6 6H2" /><path d="m7.699 10.7 5.602 5.601" />
+  </OutlinedIcon>;
+}
+
+export function GitArcDirtyClaimIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M13.5 10.5 22 2" /><path d="M14.734 13.841a2 2 0 0 0-.314-2.42L12.58 9.58a2 2 0 0 0-2.421-.314l-7.657 4.461A1 1 0 0 0 2.3 15.3l6.403 6.403a1 1 0 0 0 1.571-.204z" /><path d="m5 18 2-2" /><path d="m7.699 10.7 5.602 5.601" />
+  </OutlinedIcon>;
+}
+
 export function GitArcPlannedClaimIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M6 6V3l2.7 1.3" /><path d="m11.15 5.48 2.7 1.3" /><path d="m16.3 7.95 2.7 1.3-2.7 1.3" /><path d="m13.85 11.73-2.7 1.3" /><path d="m8.7 14.2-2.7 1.3v-3" /><path d="M6 9.78V8.72" /><path d="M6 22v-3.75" />
+  </OutlinedIcon>;
+}
+
+export function GitArcUnclaimedIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M7.5 22V7.5" />
+    <path d="m12.83 12.83-5.33 2.67" />
+    <path d="m2 2 20 20" />
+    <path d="M7.5 2 20.05 7.78a.8.8 0 0 1 0 1.44l-3.75 1.88" />
   </OutlinedIcon>;
 }
 
