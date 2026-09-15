@@ -2,7 +2,9 @@
  * Exports:
  * - default ThreadGitArcItem: render shared Git arc lifecycle, status and recovery cards.
  */
-import type { ReactNode } from "react";
+"use client";
+
+import { useContext, type ReactNode } from "react";
 
 import {
   createGitArcOperationRejected,
@@ -13,11 +15,12 @@ import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-recei
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
-import ThreadClaimedFileList from "./ThreadClaimedFileList";
+import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
+import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
 
 const ACTION_LABELS = {
@@ -114,23 +117,24 @@ export default function ThreadGitArcItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const state = actionState(outcome);
+  const presentationContext = useContext(ThreadGitArcPresentationContext);
   const adoptPaths = commandIntent.adoptPaths ?? [];
   const adoptPathSet = new Set(adoptPaths);
   const movePreview = commandIntent.action === "mv" && (
     receipt?.mode === "preview"
     || (!receipt && commandIntent.move?.kind === "regex" && !commandIntent.move.confirm)
   );
-  const planName = receipt?.intentName ?? commandIntent.intentName ?? "git arc";
   const ref = receipt?.ref ?? commandIntent.ref;
   const memberRefs = receipt?.memberRefs ?? [];
   const claimedPaths = receipt?.claimedPaths ?? [];
   const scopeUpdate = commandIntent.action === "plan" || commandIntent.action === "planStart" || commandIntent.action === "claims" || commandIntent.action === "start";
+  const flushClaimLists = scopeUpdate;
   const fullInventory = Boolean(receipt && (receipt.fullScope === true || (receipt.fullScope === undefined && scopeUpdate)));
   const showUpdateChanges = state === "completed" && scopeUpdate && receipt !== null;
   const inventory = fullInventory && receipt ? [
     { label: "Planned", marker: "planned" as const, paths: receipt.plannedPaths ?? [] },
     { label: "Claimed", marker: "claimed" as const, paths: claimedPaths },
-    { label: "Adopted", marker: "claimed" as const, paths: receipt.adoptedPaths ?? [] },
+    { label: "Adopted", marker: commandIntent.action === "plan" ? "planned" as const : "claimed" as const, paths: receipt.adoptedPaths ?? [] },
   ] : [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
@@ -152,7 +156,20 @@ export default function ThreadGitArcItem ({
   const failure = receiptFailure ?? (state === "failed"
     ? createGitArcOperationRejected(failureAction(commandIntent.action), failureReason?.trim() || "This Git arc action did not complete.")
     : null);
+  const currentPlan = presentationContext?.gitArcPlan ?? null;
+  const requestedPlanRef = failure?.code === "planDrift" ? failure.planRef : commandIntent.ref;
+  const currentPlanMatchesCommand = Boolean(currentPlan && requestedPlanRef && (
+    currentPlan.checkpointCommit.startsWith(requestedPlanRef)
+  ));
+  const planName = receipt?.intentName
+    ?? commandIntent.intentName
+    ?? (commandIntent.action === "start" && currentPlanMatchesCommand ? currentPlan?.intentName : null)
+    ?? "git arc";
   const ignoredFailure = failure?.code === "ignoredPaths" ? failure : null;
+  const failedStartDrift = commandIntent.action === "start" && failure?.code === "planDrift" ? failure : null;
+  const failedStartDriftTotals = new Map(
+    failedStartDrift?.comparison?.map(({ additions, deletions, path }) => [path, { additions, deletions }]) ?? [],
+  );
   const primaryPaths = ignoredFailure
     ? ignoredFailure.paths
     : commandIntent.action === "plan" || commandIntent.action === "planStart"
@@ -185,10 +202,21 @@ export default function ThreadGitArcItem ({
         : commandIntent.action === "release"
           ? commandIntent.disown ? "Disowned" : "Released"
           : commandIntent.action === "restore" ? "Restored" : "Claimed";
-  const primaryPathMarker = commandIntent.action === "plan" ? "planned" : "claimed";
+  const failedPlanOrClaim = state === "failed" && (
+    commandIntent.action === "plan"
+    || commandIntent.action === "planStart"
+    || commandIntent.action === "start"
+    || commandIntent.action === "continue"
+    || commandIntent.action === "claims"
+  );
+  const primaryPathMarker: ThreadClaimMarker = failedPlanOrClaim || (state === "completed" && commandIntent.action === "release")
+    ? "unclaimed"
+    : commandIntent.action === "plan" ? "planned" : "claimed";
+  const adoptedPathMarker: ThreadClaimMarker = commandIntent.action === "plan" ? "planned" : "claimed";
   const showNestedClaims = receipt?.fullScope === undefined && commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
   const inventoryLists = inventory.filter((entry) => entry.paths.length).map((entry) => (
     <ThreadClaimedFileList
+      inset={!flushClaimLists}
       key={entry.label}
       label={entry.label}
       marker={entry.marker}
@@ -244,7 +272,7 @@ export default function ThreadGitArcItem ({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {operationDetails && !ignoredFailure ? <div>{operationDetails}</div> : null}
+        {operationDetails && !ignoredFailure && !failedStartDrift ? <div>{operationDetails}</div> : null}
         {commandIntent.action === "status" && state === "completed" && statusOutput !== undefined ? (
           <ThreadGitArcStatusDetails output={statusOutput} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
         ) : null}
@@ -260,9 +288,10 @@ export default function ThreadGitArcItem ({
         ) : null}
         {showUpdateChanges ? ([
           { label: commandIntent.action === "plan" ? "Added to plan" : "Claimed", marker: primaryPathMarker, paths: receipt.additionalClaims ?? [] },
-          { label: commandIntent.action === "plan" ? "Removed from plan" : "Released", marker: undefined, paths: receipt.removedClaims ?? [] },
+          { label: commandIntent.action === "plan" ? "Removed from plan" : "Released", marker: "unclaimed" as const, paths: receipt.removedClaims ?? [] },
         ] as const).filter((entry) => entry.paths.length).map((entry) => (
           <ThreadClaimedFileList
+            inset={!flushClaimLists}
             key={entry.label}
             label={entry.label}
             marker={entry.marker}
@@ -285,7 +314,9 @@ export default function ThreadGitArcItem ({
         {receipt?.planningDrift?.map((drift) => (
           <div key={drift.previousRef}>
             <ThreadClaimedFileList
+              inset={!flushClaimLists}
               label="Changed since planning"
+              marker="dirty"
               paths={drift.paths}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
@@ -296,8 +327,10 @@ export default function ThreadGitArcItem ({
         ))}
         {!fullInventory && !showUpdateChanges && primaryPaths.length ? (
           <ThreadClaimedFileList
+            inset={!flushClaimLists}
             label={primaryPathLabel}
             marker={primaryPathMarker}
+            pathTotals={failedStartDriftTotals}
             paths={primaryPaths}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -308,8 +341,9 @@ export default function ThreadGitArcItem ({
         ) : null}
         {!fullInventory && !showUpdateChanges && adoptPaths.length && !ignoredFailure ? (
           <ThreadClaimedFileList
+            inset={!flushClaimLists}
             label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
-            marker={commandIntent.action === "plan" ? "planned" : "claimed"}
+            marker={state === "failed" ? "unclaimed" : adoptedPathMarker}
             paths={adoptPaths}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -321,11 +355,12 @@ export default function ThreadGitArcItem ({
         {!fullInventory && showNestedClaims ? (
           <ThreadDisclosure
             className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-1.5"
-            contentClassName="pl-1"
+            contentClassName={flushClaimLists ? undefined : "pl-1"}
             summary={`${claimedPaths.length} claimed ${claimedPaths.length === 1 ? "file" : "files"}`}
             summaryClassName="text-[0.78em] leading-[1.45] text-fg/muted"
           >
             <ThreadClaimedFileList
+              inset={!flushClaimLists}
               paths={claimedPaths}
               projectFilePaths={projectFilePaths}
               projectId={projectId}

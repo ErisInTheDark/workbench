@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadClaimedFileList: render static planned, claimed, or attempted Git arc path rows with optional failure tone.
+ * - default ThreadClaimedFileList: render static Git arc path rows with optional failure tone and change totals.
  * - ThreadClaimMarker/ThreadClaimMarkerIcon: select the semantic glyph for a claim-state row.
  */
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -13,6 +13,7 @@ import {
   GitArcPlannedClaimIcon,
   GitArcUnclaimedIcon,
 } from "./GitArcIcon";
+import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export type ThreadClaimMarker = "claimed" | "clean" | "dirty" | "planned" | "unclaimed";
@@ -29,6 +30,7 @@ export default function ThreadClaimedFileList({
   inset = true,
   label = "Claimed",
   marker = "claimed",
+  pathTotals,
   paths,
   projectFilePaths,
   projectId,
@@ -39,6 +41,7 @@ export default function ThreadClaimedFileList({
   inset?: boolean;
   label?: string;
   marker?: ThreadClaimMarker;
+  pathTotals?: ReadonlyMap<string, { additions: number; deletions: number }>;
   paths: readonly string[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -52,6 +55,7 @@ export default function ThreadClaimedFileList({
       {paths.map((filePath) => {
         const displayPath = toWorkspaceDisplayPath(filePath, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? filePath;
         const targetType = isProjectDirectoryPath(displayPath, projectFilePaths ?? []) ? "directory" : "file";
+        const totals = pathTotals?.get(filePath);
         return (
           <div
             className={`flex min-w-0 items-baseline gap-1 py-0.5 text-[0.86em] leading-[1.5] ${inset ? "pl-6" : ""} ${tone === "danger" ? "text-danger" : "text-fg/muted"}`}
@@ -63,6 +67,7 @@ export default function ThreadClaimedFileList({
             </span>
             <ThreadSummaryText text={label} />
             <ProjectFilePath className="min-w-0 max-w-full shrink align-baseline text-[0.9em]" disambiguationPaths={projectFilePaths} path={displayPath} projectId={projectId} targetType={targetType} />
+            {totals ? <ThreadFileChangeTotals additions={totals.additions} deletions={totals.deletions} /> : null}
           </div>
         );
       })}

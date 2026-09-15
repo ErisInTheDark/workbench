@@ -54,11 +54,13 @@ export default function ThreadGitArcFailure({
     : rejection && "path" in rejection ? [rejection.path] : [];
   const rejectedProjects = rejection && "rootIds" in rejection ? rejection.rootIds
     : rejection && "rootId" in rejection ? [rejection.rootId] : [];
-  const hasStructuredFacts = Boolean(
+  const hasIntersectionFacts = Boolean(
     (failure.code === "planDrift" && failure.commits.length)
-    || failure.code === "acceptedProposals"
     || canRenderLiveThreads
-    || missingOwners.length
+    || missingOwners.length,
+  );
+  const hasOutsideFacts = Boolean(
+    failure.code === "acceptedProposals"
     || rejectedPaths.length
     || rejectedProjects.length
     || failure.workspace
@@ -87,8 +89,36 @@ export default function ThreadGitArcFailure({
             {presentation.userHint}
           </p>
         ) : null}
+        {hasIntersectionFacts ? (
+          <div
+            className="col-start-2 min-w-0 text-text"
+            data-thread-git-arc-failure-intersections="inside-panel"
+          >
+            {failure.code === "planDrift" && failure.commits.length ? (
+              <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+            ) : null}
+            {canRenderLiveThreads ? (
+              <ThreadGitArcConflictList
+                entries={liveEntries.map((entry) => ({ entry, paths: [] }))}
+                onOpenThread={presentationContext!.onOpenThread!}
+                projectId={resolvedProjectId!}
+              />
+            ) : null}
+            {missingOwners.length ? (
+              <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]">
+                {missingOwners.map((owner) => (
+                  <li className="min-w-0" key={identityKey(owner.harness, owner.threadId)}>
+                    <span className="font-medium text-text">{owner.title || owner.intentName}</span>
+                    <span className="ml-2 text-fg/muted">{owner.lifecycle}</span>
+                    <span className="ml-2 font-mono text-fg/muted">{owner.checkpointCommit.slice(0, 8)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      {hasStructuredFacts ? (
+      {hasOutsideFacts ? (
         <div className="mt-1 text-text" data-thread-git-arc-failure-facts="true">
           {rejectedPaths.length ? (
             <ProjectFileLinkList paths={rejectedPaths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
@@ -106,33 +136,12 @@ export default function ThreadGitArcFailure({
                   : null}
             </div>
           ) : null}
-          {failure.code === "planDrift" && failure.commits.length ? (
-            <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
-          ) : null}
           {failure.code === "acceptedProposals" ? (
             <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]" data-thread-git-arc-accepted-proposals="true">
               {failure.proposals.map(({ commitSha, proposalId, title }) => (
                 <li className="flex min-w-0 flex-wrap items-baseline gap-x-2" key={proposalId}>
                   <span className="font-medium text-text">{title || "Accepted commit"}</span>
                   <ThreadInlineCode>{commitSha.slice(0, 8)}</ThreadInlineCode>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {canRenderLiveThreads ? (
-            <ThreadGitArcConflictList
-              entries={liveEntries.map((entry) => ({ entry, paths: [] }))}
-              onOpenThread={presentationContext!.onOpenThread!}
-              projectId={resolvedProjectId!}
-            />
-          ) : null}
-          {missingOwners.length ? (
-            <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]">
-              {missingOwners.map((owner) => (
-                <li className="min-w-0" key={identityKey(owner.harness, owner.threadId)}>
-                  <span className="font-medium text-text">{owner.title || owner.intentName}</span>
-                  <span className="ml-2 text-fg/muted">{owner.lifecycle}</span>
-                  <span className="ml-2 font-mono text-fg/muted">{owner.checkpointCommit.slice(0, 8)}</span>
                 </li>
               ))}
             </ul>

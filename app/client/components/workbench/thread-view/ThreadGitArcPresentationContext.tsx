@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcPresentationContext: provide active harness and thread Git arc presentation actions.
+ * - default ThreadGitArcPresentationContext: provide active harness, plan and thread Git arc presentation actions.
  * - ThreadGitArcPresentation: describe live Git arc facts used by nested thread presentation.
  * - getGitArcClaimReleaseAction: choose clean unclaim or dirty restore from the active comparison.
  */
@@ -10,9 +10,10 @@ import { createContext } from "react";
 
 import type { GitCheckpointCommitCommandIntent } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcPlanState, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 
 export interface ThreadGitArcPresentation {
+  gitArcPlan?: WorkbenchGitArcPlanState | null;
   harness: WorkbenchHarness;
   hasActiveGitArc?: boolean;
   onOpenThread?: (target: WorkbenchThreadTarget) => void;

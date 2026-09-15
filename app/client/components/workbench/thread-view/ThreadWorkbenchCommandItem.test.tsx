@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
-import { createGitArcFailureFromError, createGitArcOperationRejected, describeGitArcFailure, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { createGitArcFailureFromError, createGitArcOperationRejected, describeGitArcFailure, formatGitArcFailureReceipt, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
@@ -298,6 +298,91 @@ test("Git arc waits use live intersections while running and the start card afte
 
   assert.match(completedHtml, /data-thread-git-arc-card="start"/u);
   assert.match(completedHtml, /data-thread-git-arc-duration="waited"/u);
+});
+
+test("failed Git arc starts compose drift evidence into one named failure card", () => {
+  const planRef = "a".repeat(40);
+  const blockerRef = "b".repeat(40);
+  const affectingCommit = "c".repeat(40);
+  const driftedPath = "src/drifted.ts";
+  const owner = threadEntry("thread-one", null, {
+    checkpointCommit: planRef,
+    intentDescription: "",
+    intentName: "improve arc start card UX",
+    scopePaths: [driftedPath],
+    updatedAt: "2026-09-15T00:00:00.000Z",
+  });
+  const blocker = threadEntry("blocking-thread", {
+    checkpointCommit: blockerRef,
+    claimedPaths: [driftedPath],
+    intentDescription: "",
+    intentName: "blocking work",
+    phase: "active",
+    proposals: [],
+    updatedAt: "2026-09-15T00:00:00.000Z",
+  });
+  const snapshot = {
+    entries: [owner, blocker],
+    error: null,
+    freshness: "fresh" as const,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    revision: 1,
+  };
+  const store = {
+    getProjectSnapshot: (projectId: string) => projectId === "project" ? snapshot : null,
+    getSnapshot: () => null,
+    subscribe: () => () => undefined,
+  } satisfies WorkbenchThreadSidebarStore;
+  const presentation = {
+    gitArcPlan: owner.gitArcPlan,
+    harness: "codex" as const,
+    onOpenThread: () => undefined,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  };
+  const failure: GitArcFailure = {
+    action: "arcStart",
+    code: "planDrift",
+    commits: [{ commit: affectingCommit, paths: [driftedPath], subject: "affect the plan" }],
+    comparison: [{ additions: 15, binary: false, deletions: 1, kind: "update", path: driftedPath }],
+    conflicts: [{
+      overlaps: [{ claimedPath: driftedPath, requestedPath: driftedPath }],
+      owner: {
+        checkpointCommit: blockerRef,
+        harness: "codex",
+        intentName: "blocking work",
+        lifecycle: "active",
+        threadId: "blocking-thread",
+        title: "blocking-thread",
+      },
+    }],
+    dirtyPaths: [],
+    headMovement: "fastForward",
+    planRef,
+    snapshotPaths: [driftedPath],
+    version: 1,
+  };
+  const html = renderSpecialized(
+    makeItem("git_arc_start", {}, formatGitArcFailureReceipt(failure), "failed"),
+    presentation,
+    store,
+  );
+
+  assert.match(html, /Failed to start.*improve arc start card UX/u);
+  assert.match(html, /Failed to claim drifted file.*drifted\.ts.*\+15.*-1/u);
+  assert.doesNotMatch(html, />Edited</u);
+  assert.match(html, /data-thread-git-arc-failure-intersections="inside-panel"/u);
+  assert.match(html, /blocking-thread/u);
+  assert.match(html, /affect the plan/u);
+
+  const historicalHtml = renderSpecialized(
+    makeItem("git_arc_start", {}, formatGitArcFailureReceipt(failure), "failed"),
+    {
+      ...presentation,
+      gitArcPlan: { ...owner.gitArcPlan!, checkpointCommit: "d".repeat(40), intentName: "newer unrelated plan" },
+    },
+    store,
+  );
+  assert.doesNotMatch(historicalHtml, /newer unrelated plan/u);
 });
 
 test("title and subagent MCP operations use their dedicated renderers", () => {

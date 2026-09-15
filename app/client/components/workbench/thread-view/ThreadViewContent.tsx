@@ -1129,6 +1129,7 @@ export default memo(function ThreadViewContent ({
         proposals={activeThreadController.state.gitArcProposals}
       >
       <ThreadGitArcPresentationContext.Provider value={{
+        gitArcPlan: activeGitArcSelection?.gitArcPlan ?? null,
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
         onOpenThread,
