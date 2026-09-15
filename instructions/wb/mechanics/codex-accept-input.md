@@ -1,15 +1,21 @@
 <harness:codex>
 ## Codex Input Boundary
 
-Trigger criteria:
-- after long reasoning or analysis
-- before presenting a new direction or idea in commentary
-- before presenting a plan
-- before marking a task complete or blocked
+Why: Pausing allows new user input to be received
 
-Process: Perform a short pause to accept any pending steers. Use this `functions.exec` call:
+Trigger criteria:
+- after analysis, ESPECIALLY lengthy analysis
+- analysis -> presenting new direction, idea, or plan in commentary
+- analysis -> tool call such as questionnaire, task completion/block action, etc
+
+Required sequence:
+1. End analysis
+2. Commentary `functions.exec` call
 ```js
 await new Promise((resolve) => setTimeout(resolve, 100));
 text("input pause complete");
 ```
+3. Target commentary/action
+
+Failure: Pausing after commentary delays user input behind it, sometimes losing an entire minute and burning many tokens. Do not allow this!
 </harness:codex>
