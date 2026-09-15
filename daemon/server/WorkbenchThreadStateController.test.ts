@@ -87,8 +87,8 @@ const fixtureThreadIds = {
   "working": WorkbenchThreadIdSchema.parse("working"),
 };
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
   & {
     storageRoot: string;
   };
@@ -165,7 +165,11 @@ test("retained project requests share one observation and move drafts between ca
   const stopped: string[] = [];
   const controller = new WorkbenchThreadStateController({
     storageRoot: "canonical-project-requests", threadStateStore: persistence,
-    resolveProjectId: id => id === fixtureProjectIds.alpha ? source : id === fixtureProjectIds.beta ? destination : id,
+    resolveProjectId: id => {
+      if (id === fixtureProjectIds.alpha || id === source) return source;
+      if (id === fixtureProjectIds.beta || id === destination) return destination;
+      throw new Error("Project ownership has not been admitted.");
+    },
     getProjectCatalog: () => ({ data: [projectOption(source, "C:/source"), projectOption(destination, "C:/destination")], rootPath: "C:/" }),
     projectState: { ...projectState(), observe: id => { observations.push(id); return () => { stopped.push(id); }; } },
     publish: () => undefined, reconcileProject: async () => [],
@@ -179,6 +183,15 @@ test("retained project requests share one observation and move drafts between ca
   try {
     const opened = await controller.open("connection", fixtureProjectIds.alpha, 1);
     assert.equal(opened.projectId, source);
+    const before = structuredClone({ projects: persistence.projects, globals: persistence.globals });
+    for (const id of ["remote:/example.test/source", "remote://example.test/unknown"]) {
+      await assert.rejects(controller.open("connection", ProjectIdSchema.parse(id)), /project/i);
+      await assert.rejects(controller.handleRequest("connection", {
+        method: "workbench/thread-state/open", projectId: id, version: 2,
+      }), /project/i);
+    }
+    assert.deepEqual(stopped, []);
+    assert.deepEqual({ projects: persistence.projects, globals: persistence.globals }, before);
     await controller.handleRequest("connection", { method: "workbench/thread-state/draft/upsert", projectId: fixtureProjectIds.alpha, draft });
     assert.equal((await controller.getSnapshot(source)).entries.length, 1);
     assert.ok(!persistence.projects.has(fixtureProjectIds.alpha));
@@ -583,6 +596,7 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
       ...controllerOptions
     } = options;
     super({
+      resolveProjectId: id => id,
       hasLiveGitArcClaims: async () => false,
       resolveGitArc: async () => null,
       resolveGitArcPlan: async () => null,

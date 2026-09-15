@@ -23,6 +23,10 @@ function record(value: object) {
 
 function controller(database: ReturnType<typeof createThreadStateTestDatabase>) {
   return new WorkbenchThreadStateController({
+    resolveProjectId: id => {
+      if (id !== fixtureIdentityValues.ProjectId.project) throw new Error("Unknown fixture project.");
+      return id;
+    },
     getProjectCatalog: () => ({
       data: [{ id: fixtureIdentityValues.ProjectId.project, kind: "git", name: "Project", relativePath: "repo", rootPath: "/repo",
         roots: [{ id: "repo", name: "Repo", relativePath: ".", rootPath: "/repo", isPrimary: true }],

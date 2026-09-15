@@ -22,6 +22,21 @@ function setup() {
   return { database, repository: new WorkbenchProjectRepository(database) };
 }
 
+test("serving reference resolution cannot admit unknown project ownership", () => {
+  const { database, repository } = setup();
+  try {
+    for (const id of ["remote:/example.test/owner/repo", "remote://example.test/owner/missing"]) {
+      assert.throws(() => repository.requireStoredReference(id), /project/i);
+    }
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 0);
+    repository.reconcile([project()]);
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run("old/repo", project().id);
+    assert.equal(repository.requireStoredReference("old/repo"), project().id);
+    repository.reconcile([]);
+    assert.equal(repository.requireStoredReference(project().id), project().id);
+  } finally { database.close(); }
+});
+
 test("positive and negative icon results survive repeated catalogue reads and repository replacement", () => {
   const { database, repository } = setup();
   try {

@@ -563,6 +563,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
     const states: WorkbenchThreadStateController[] = [];
     const createState = () => {
       const state = new WorkbenchThreadStateController({
+        resolveProjectId: id => id,
         threadStateStore: persistence,
         getProjectCatalog: () => ({ data: [], rootPath: "C:/" }),
         readComposerProfiles: async () => ({ profiles: [{

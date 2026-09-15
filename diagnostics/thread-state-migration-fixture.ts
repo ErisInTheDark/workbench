@@ -169,10 +169,53 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
       .filter(table => !["workbench_project_roots", "workbench_project_aliases"].includes(table.name))
       .filter(table => database.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table.name))
       .map(table => [table.name, database.prepare(`SELECT * FROM "${table.name}"`).all() as Record<string, string | number | null>[]]));
+    const beforeSidebar = new Map(workbenchDatabaseSchema.currentTables
+      .filter(table => table.name.startsWith("workbench_sidebar_") && !beforeProjects.has(table.name))
+      .map(table => [table.name, database.prepare(`SELECT * FROM "${table.name}"`).all() as Record<string, string | number | null>[]]));
     const converted = new WorkbenchProjectMigration(database).run(workbenchDatabaseSchema, source.discovery, source.relocations);
     const aliases = new Map(converted.aliases.map(alias => [alias.alias, alias.projectId]));
-    for (const [table, rows] of beforeProjects) {
-      const retainedRows = table === "workbench_search_documents" ? rows.filter(row => row.project_id !== null) : rows;
+    const canonical = (id: string | number | null) => aliases.get(String(id)) ?? id;
+    const repairedAddresses = new Set([...aliases].filter(([address, id]) => {
+      if (!/^(?:remote|local|workspace):\/(?!\/)/u.test(address)) return false;
+      const candidates = new Set(source.discovery.data
+        .filter(project => project.id.split("/").filter(Boolean).join("/") === address).map(project => project.id));
+      return candidates.size === 1 && candidates.has(id);
+    }).map(([address]) => address));
+    const removedLayouts = new Set<string | number | null>();
+    const removedReceipts = new Set<string | number | null>();
+    for (const [table, removed] of [
+      ["workbench_sidebar_project_layouts", removedLayouts],
+      ["workbench_sidebar_pinned_imports", removedReceipts],
+    ] as const) {
+      const rows = beforeProjects.get(table) ?? [];
+      for (const row of rows) {
+        if (!repairedAddresses.has(String(row.project_id))) continue;
+        const peers = rows.filter(peer => peer.project_id !== row.project_id && canonical(peer.project_id) === canonical(row.project_id));
+        if (!peers.length) continue;
+        assert.equal(peers.length, 1, "Repair must leave one unambiguous existing owner");
+        assert.ok(!repairedAddresses.has(String(peers[0]!.project_id)), "Repair must preserve an independently retained owner");
+        if (table === "workbench_sidebar_project_layouts") {
+          const layout = beforeSidebar.get("workbench_sidebar_layouts")?.find(layout => layout.id === row.layout_id);
+          assert.equal(layout?.revision, 0, "Only untouched layout shells may be removed");
+          for (const contents of ["workbench_sidebar_layout_items", "workbench_sidebar_folders"]) {
+            assert.ok(!beforeSidebar.get(contents)?.some(item => item.layout_id === row.layout_id), "Removed layout shells must be empty");
+          }
+          removed.add(row.layout_id);
+        } else {
+          assert.equal(row.layout_id, peers[0]!.layout_id, "Duplicate receipts must identify the same global layout");
+          assert.equal(row.owner_kind, peers[0]!.owner_kind);
+          removed.add(row.project_id);
+        }
+      }
+    }
+    for (const [table, rows] of new Map([...beforeProjects, ...beforeSidebar])) {
+      const retainedRows = rows.filter(row => {
+        if (table === "workbench_search_documents") return row.project_id !== null;
+        if (table === "workbench_sidebar_project_layouts") return !removedLayouts.has(row.layout_id);
+        if (table === "workbench_sidebar_layouts") return !removedLayouts.has(row.id);
+        if (table === "workbench_sidebar_pinned_imports") return !removedReceipts.has(row.project_id);
+        return true;
+      });
       const expected = retainedRows.map<Record<string, string | number | null>>(row => ({
         ...row,
         ...("project_id" in row && row.project_id !== null ? { project_id: aliases.get(String(row.project_id)) ?? row.project_id } : {}),

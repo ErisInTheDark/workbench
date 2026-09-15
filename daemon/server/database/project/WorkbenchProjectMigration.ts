@@ -22,7 +22,8 @@ export default class WorkbenchProjectMigration {
     const foreignKeys = this.database.pragma("foreign_keys", { simple: true }) === 1;
     this.database.pragma("foreign_keys = OFF");
     try {
-      return this.database.transaction(() => {
+      let repairCounts = { aliases: 0, layouts: 0, receipts: 0 };
+      const result = this.database.transaction(() => {
         const installed = this.database.pragma("user_version", { simple: true }) as number;
         if (installed < databaseReleases.projectIdentity.version) {
           applyWorkbenchDatabaseSchema(this.database, schema, { targetVersion: databaseReleases.projectIdentity.version });
@@ -54,12 +55,26 @@ export default class WorkbenchProjectMigration {
           remember(alias, [...identities][0]!);
         }
         const parents = this.database.prepare("SELECT id FROM workbench_projects").all() as { id: string }[];
+        const malformed = new Set<string>();
+        for (const parent of parents) {
+          if (aliases.has(parent.id) || !/^(?:remote|local|workspace):\/(?!\/)/u.test(parent.id)) continue;
+          // Reproduce the broken URL encoder from discovered identities. Never
+          // guess how many slashes to insert into an untrusted retained address.
+          const matches = new Set(discovery.data.filter(project =>
+            project.id.split("/").filter(Boolean).join("/") === parent.id).map(project => project.id));
+          if (matches.size > 1) throw new Error("Malformed project address has ambiguous identity evidence.");
+          if (matches.size === 1) {
+            remember(parent.id, [...matches][0]!);
+            malformed.add(parent.id);
+          }
+        }
         for (const parent of parents) {
           if (!aliases.has(parent.id)) {
             try { repository.resolve(parent.id); }
             catch { throw new Error(`Missing project identity evidence for retained address ${parent.id}.`); }
           }
         }
+        repairCounts = this.reconcileMalformedLayouts(malformed, aliases);
         const before = this.database.prepare("SELECT * FROM workbench_threads ORDER BY id").all() as Record<string, string | number | null>[];
         for (const id of aliases.values()) repository.admit(id);
         const search = new WorkbenchSearchRepository(this.database);
@@ -88,8 +103,48 @@ export default class WorkbenchProjectMigration {
         if (violations.length) throw new Error("Project conversion left invalid foreign keys.");
         return { catalog, aliases: repository.readAliases() };
       })();
+      if (repairCounts.aliases) {
+        console.warn(`[database] repaired malformed project references: ${repairCounts.aliases} aliases, ${repairCounts.layouts} empty layouts, ${repairCounts.receipts} duplicate import receipts`);
+      }
+      return result;
     } finally {
       this.database.pragma(`foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
     }
+  }
+
+  private reconcileMalformedLayouts(malformed: ReadonlySet<string>, aliases: ReadonlyMap<string, ProjectId>) {
+    const counts = { aliases: malformed.size, layouts: 0, receipts: 0 };
+    const canonical = (id: string) => aliases.get(id) ?? id;
+    for (const address of malformed) {
+      const layouts = this.database.prepare(`
+        SELECT owner.project_id, owner.layout_id, layout.revision
+        FROM workbench_sidebar_project_layouts owner
+        JOIN workbench_sidebar_layouts layout ON layout.id = owner.layout_id
+      `).all() as { project_id: string; layout_id: string; revision: number }[];
+      const source = layouts.find(layout => layout.project_id === address);
+      if (source && layouts.some(layout => layout.project_id !== address && canonical(layout.project_id) === canonical(address))) {
+        const items = this.database.prepare("SELECT 1 FROM workbench_sidebar_layout_items WHERE layout_id = ? LIMIT 1").get(source.layout_id);
+        const folders = this.database.prepare("SELECT 1 FROM workbench_sidebar_folders WHERE layout_id = ? LIMIT 1").get(source.layout_id);
+        if (source.revision !== 0 || items || folders) throw new Error("Malformed project address owns a conflicting populated layout.");
+        // Foreign keys are suspended for conversion, so delete the exact empty
+        // owner and shell explicitly. Remaining dependencies fail the final FK check.
+        this.database.prepare("DELETE FROM workbench_sidebar_project_layouts WHERE layout_id = ?").run(source.layout_id);
+        this.database.prepare("DELETE FROM workbench_sidebar_layouts WHERE id = ?").run(source.layout_id);
+        counts.layouts++;
+      }
+      const receipts = this.database.prepare("SELECT project_id, layout_id, owner_kind FROM workbench_sidebar_pinned_imports").all() as {
+        project_id: string; layout_id: string; owner_kind: string;
+      }[];
+      const receipt = receipts.find(row => row.project_id === address);
+      const others = receipts.filter(row => row.project_id !== address && canonical(row.project_id) === canonical(address));
+      if (receipt && others.length) {
+        if (others.some(row => row.layout_id !== receipt.layout_id || row.owner_kind !== receipt.owner_kind)) {
+          throw new Error("Malformed project address has conflicting pinned import receipts.");
+        }
+        this.database.prepare("DELETE FROM workbench_sidebar_pinned_imports WHERE project_id = ?").run(address);
+        counts.receipts++;
+      }
+    }
+    return counts;
   }
 }

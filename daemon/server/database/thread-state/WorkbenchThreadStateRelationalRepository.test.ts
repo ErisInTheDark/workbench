@@ -38,7 +38,7 @@ function seedIdentities(database: Database.Database, projectId: keyof typeof fix
   }).threadId);
 }
 
-test("draft-only project writes admit parents and retained addresses share profiles and layouts", () => {
+test("draft-only writes require admitted parents and retained addresses share profiles and layouts", () => {
   const database = openDatabase();
   const repository = new WorkbenchThreadStateRelationalRepository(database);
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/draft-only");
@@ -50,6 +50,13 @@ test("draft-only project writes admit parents and retained addresses share profi
     clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
   };
   try {
+    assert.throws(() => repository.readProject(projectId), /project/i);
+    assert.throws(() => repository.readDrafts(projectId), /project/i);
+    assert.throws(() => repository.readProjectProfile(projectId), /project/i);
+    assert.throws(() => repository.readLayout({ kind: "project", projectId }), /project/i);
+    assert.throws(() => repository.writeDrafts([{ draft, pinned: false, snoozed: false }]), /project/i);
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 0);
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
     repository.writeDrafts([{ draft, pinned: false, snoozed: false }]);
     assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(projectId));
     database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(legacy, projectId);
@@ -64,6 +71,11 @@ test("draft-only project writes admit parents and retained addresses share profi
     assert.equal(repository.readDrafts(projectId)[0]?.draft.projectId, projectId);
     assert.deepEqual(repository.readProjectProfile(legacy), { kind: "custom", settings: draft.composerSettings });
     assert.deepEqual(repository.readLayout({ kind: "project", projectId }), { revision: 1, displayOrder: {} });
+    assert.throws(() => repository.commit({
+      drafts: [{ draft: { ...draft, prompt: "must roll back" }, pinned: false, snoozed: false }],
+      layouts: [{ owner: { kind: "project", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("remote://unregistered/project") }, revision: 0, displayOrder: {} }],
+    }), /project/i);
+    assert.equal(repository.readDrafts(projectId)[0]?.draft.prompt, "edited");
     const draftKey = fixtureIdentitySchemas.ThreadDisplayKeySchema.parse(`draft:${draft.draftId}`);
     const position = { above: [], below: [] };
     repository.commit({ layouts: [{
@@ -242,6 +254,7 @@ test("unsupported draft attachments fail source admission rather than disappeari
 test("live reads retain parent-status inputs without decoding settled history", () => {
   const database = openDatabase();
   try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(fixtureIdentityValues.ProjectId.other);
     const [live, settled, archived, pinned, child] = seedIdentities(database, "project", "live", "settled", "archived", "pinned", "child");
     for (const [index, threadId] of [live!, settled!, archived!, pinned!, child!].entries()) {
       const isSettled = threadId !== live && threadId !== child;

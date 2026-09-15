@@ -39,6 +39,16 @@ export default class WorkbenchProjectRepository {
     return ProjectIdSchema.parse(alias?.project_id ?? id);
   }
 
+  requireStoredReference(id: string): ProjectId {
+    const projectId = this.resolveStoredReference(id);
+    // Schema-31 conversion predates project storage. Serving starts only after
+    // the project ownership release, where every reference must have a parent.
+    if (this.hasProjectStorage() && !this.database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(projectId)) {
+      throw new Error("Project ownership has not been admitted.");
+    }
+    return projectId;
+  }
+
   admitStoredReference(id: string): ProjectId {
     const projectId = this.resolveStoredReference(id);
     // The schema-31 importer must finish before project storage is installed.

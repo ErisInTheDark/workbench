@@ -138,7 +138,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
       return repository.readRecords(query);
     },
     async seedProject(projectId: string, source: object) {
-      const ownerProjectId = ProjectIdSchema.parse(projectId);
+      const ownerProjectId = projects.admit(projectId);
       const project = parseProjectDocument(JSON.stringify(source), ownerProjectId);
       for (const record of project.records) {
         admitThread(ownerProjectId, record.identity.threadId, record.identity.harness);

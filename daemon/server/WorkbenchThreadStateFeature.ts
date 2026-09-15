@@ -574,7 +574,12 @@ export default class WorkbenchThreadStateFeature {
   }
 
   private canonicalProjectId(projectId: ProjectId) {
-    return this.context.getProjectCatalog().aliases?.find(alias => alias.alias === projectId)?.projectId ?? projectId;
+    const catalog = this.context.getProjectCatalog();
+    const id = catalog.aliases?.find(alias => alias.alias === projectId)?.projectId ?? projectId;
+    if (!catalog.data.some(project => project.id === id) && !catalog.aliases?.some(alias => alias.projectId === id)) {
+      throw new Error("Project ownership has not been admitted.");
+    }
+    return id;
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"], selection: WorkbenchComposerProfileTargetSelection) {

@@ -73,6 +73,7 @@ function createHarnesses(
 
 function createThreadStateDatabase(cwd?: string, threads: readonly [string, WorkbenchHarness][] = []) {
   const database = createThreadStateTestDatabase();
+  database.sqlite.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(fixtureIdentityValues.ProjectId.project);
   for (const [threadId, harness] of threads) {
     database.admitThread(fixtureIdentityValues.ProjectId.project, threadId, harness, `native:${threadId}`, cwd);
   }
@@ -93,8 +94,51 @@ function providerThread(cwd: string, threadId: string, fields: Partial<ThreadRea
 function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThreadStateFeature>[0], "identities" | "database"> & {
   database: ReturnType<typeof createThreadStateDatabase>;
 }) {
-  return new WorkbenchThreadStateFeature({ ...options, identities: options.database.identities });
+  return new WorkbenchThreadStateFeature({
+    ...options, identities: options.database.identities,
+    getProjectCatalog: () => {
+      const catalog = options.getProjectCatalog();
+      const admitted = options.database.sqlite.prepare("SELECT id FROM workbench_projects ORDER BY id").all() as { id: string }[];
+      return { ...catalog, aliases: [...catalog.aliases ?? [], ...admitted.map(({ id }) => ({
+        alias: `fixture/${encodeURIComponent(id)}`, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
+      }))] };
+    },
+  });
 }
+
+test("browser project admission rejects unknown owners before loading or replacing observations", async () => {
+  const database = createThreadStateDatabase("C:/project", [["thread", "codex"]]);
+  const projectId = fixtureIdentityValues.ProjectId.project;
+  const stopped: string[] = [];
+  const feature = createFeature({
+    database,
+    getProjectCatalog: () => ({ data: [], aliases: [{ alias: "old/project", projectId }], rootPath: "C:/" }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: id => () => { stopped.push(id); } },
+    publish: () => {},
+    harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
+    resolveProjectById: async id => {
+      assert.equal(id, projectId);
+      return { id: projectId, rootPath: "C:/project" };
+    },
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: projectId, rootPath: "C:/project" } }),
+    transitions: { run: async (_key, operation) => operation() },
+  });
+  try {
+    await feature.controller.open("client", fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"), 1);
+    const before = database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all();
+    database.operations.length = 0;
+    for (const id of ["remote:/example.test/project", "remote://example.test/unregistered"]) {
+      await assert.rejects(feature.controller.handleRequest("client", {
+        method: "workbench/thread-state/open", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(id), version: 2,
+      }), /project/i);
+    }
+    assert.deepEqual(stopped, []);
+    assert.deepEqual(database.operations, []);
+    assert.deepEqual(database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all(), before);
+  } finally { await feature.dispose(); }
+});
 
 async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   const requests: JsonRpcRequest[] = [];
@@ -465,8 +509,10 @@ test("creation installs captured settings before first admission and refreshes o
     const settings = { harness, model: "captured-model", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null };
     let model = "later-definition";
     let catalogueReads = 0;
+    const database = createThreadStateDatabase();
+    await database.seedProject(fixtureIdentityValues.ProjectId["project-b"], { version: 4 });
     const feature = createFeature({
-      database: createThreadStateDatabase(),
+      database,
       getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
       gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
       harnesses: createHarnesses(async () => ({ id: 0, result: { data: [], nextCursor: null } })),
@@ -637,6 +683,8 @@ for (const foreignPage of ["first", "last"] as const) {
     const projectId = fixtureIdentityValues.ProjectId["project-a"];
     const otherProjectId = fixtureIdentityValues.ProjectId["project-b"];
     const database = createThreadStateDatabase();
+    await database.seedProject(projectId, { version: 4 });
+    await database.seedProject(otherProjectId, { version: 4 });
     const local = providerThread("C:/project-a", "local");
     const neighbour = providerThread("C:/project-a", "copilot-neighbour");
     const foreign = providerThread("C:/project-b", "foreign");
@@ -966,8 +1014,10 @@ test("deep provider pages serialize across projects while both newest pages star
   const deepPages: string[] = [];
   let activeDeepPages = 0;
   let maximumActiveDeepPages = 0;
+  const database = createThreadStateDatabase();
+  for (const id of projectRoots.keys()) await database.seedProject(fixtureIdentitySchemas.ProjectIdSchema.parse(id), { version: 4 });
   const feature = createFeature({
-    database: createThreadStateDatabase(),
+    database,
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),

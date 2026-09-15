@@ -180,7 +180,7 @@ function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: Workb
 }
 
 export interface WorkbenchThreadStateControllerOptions {
-  resolveProjectId?: (projectId: ProjectId) => ProjectId;
+  resolveProjectId: (projectId: ProjectId) => ProjectId;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
@@ -684,7 +684,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private canonicalProjectId(projectId: ProjectId) {
-    return this.options.resolveProjectId?.(projectId) ?? projectId;
+    return this.options.resolveProjectId(projectId);
   }
 
   private canonicalRequest(request: WorkbenchThreadStateRequest): WorkbenchThreadStateRequest {
