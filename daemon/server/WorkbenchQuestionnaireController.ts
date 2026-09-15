@@ -3,7 +3,7 @@
  * - WorkbenchQuestionnaireControllerOptions: caller resolution, durable projection, and dismissal ports.
  * - WorkbenchNativeQuestionnaire: thread questionnaire with optional transcript placement.
  * - WorkbenchAnsweredQuestionnaire: consumed native questionnaire and response.
- * - default WorkbenchQuestionnaireController: own pending native questionnaire waits, viability, delivery, and correlation.
+ * - default WorkbenchQuestionnaireController: own pending native questionnaire waits, viability, delivery, correlation, and restart-preserving disposal.
  */
 import { randomUUID } from "node:crypto";
 
@@ -82,12 +82,10 @@ export default class WorkbenchQuestionnaireController {
     if (this.disposed) return;
     this.disposed = true;
     this.stopPendingSubscription();
+    const reason = new Error("The questionnaire controller was disposed.");
     await Promise.all([...this.pendingByThreadId.values()].map(async (pending) => {
-      if (pending.releaseReason !== null && pending.status === "responding") {
-        await pending.completion;
-        return;
-      }
-      await this.cancelPending(pending, new Error("The questionnaire controller was disposed."));
+      this.releasePending(pending, reason);
+      await pending.completion;
     }));
   }
 

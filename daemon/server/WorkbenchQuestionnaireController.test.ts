@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect Workbench questionnaire publication, answer correlation, cancellation, dismissal, and disposal.
+ * No production exports. Tests protect Workbench questionnaire publication, answer correlation, cancellation, dismissal, restart, and disposal.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -329,13 +329,15 @@ test("failed answer settlement after reload releases the original wait for re-en
   await assert.rejects(waiting, /generation was replaced/u);
 });
 
-test("controller disposal rejects every pending wait and removes its projection", async () => {
+test("controller disposal ends every pending wait without removing its durable projection", async () => {
   const harness = createHarness();
   const waiting = harness.controller.request(freeformInput, new AbortController().signal);
-  await harness.published;
+  const questionnaire = await harness.published;
   await harness.controller.dispose();
   await assert.rejects(waiting, /disposed/u);
   assert.deepEqual(harness.controller.list().data, []);
+  assert.deepEqual(harness.readPending(), questionnaire);
+  assert.equal(harness.clearCount(), 0);
 });
 
 test("an unrelated thread-state update during publication is not mistaken for dismissal", async () => {
@@ -379,7 +381,7 @@ test("an unpublished request cannot be listed or answered", async () => {
   assert.deepEqual(await waiting, response);
 });
 
-test("disposal during answer settlement rejects the wait before releasing the owner", async () => {
+test("answer settlement already in progress wins controller disposal", async () => {
   const clearStarted = deferred<void>();
   const releaseClear = deferred<void>();
   const harness = createHarness({
@@ -390,16 +392,17 @@ test("disposal during answer settlement rejects the wait before releasing the ow
   });
   const waiting = harness.controller.request(freeformInput, new AbortController().signal);
   const questionnaire = await harness.published;
+  const response = { answers: { details: { answers: ["answer"] } } };
   const responding = harness.controller.respond({
     requestKey: questionnaire.requestKey,
-    response: { answers: { details: { answers: ["answer"] } } },
+    response,
     threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
   });
   await clearStarted.promise;
   const disposing = harness.controller.dispose();
   releaseClear.resolve();
-  await assert.rejects(responding, /disposed/u);
-  await assert.rejects(waiting, /disposed/u);
+  assert.deepEqual(await responding, { ...questionnaire, response, threadId: "thread-one" });
+  assert.deepEqual(await waiting, response);
   await disposing;
 });
 
@@ -427,4 +430,5 @@ test("clear failure during disposal still settles the wait and releases the owne
   assert.deepEqual(harness.controller.list().data, []);
   await assert.rejects(waiting, /disposed/u);
   await disposing;
+  assert.deepEqual(harness.readPending(), questionnaire);
 });
