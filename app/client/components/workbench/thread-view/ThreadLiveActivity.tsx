@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - LiveThreadActivity: current reasoning or web-search presentation input. Keywords: thread, live, reasoning, web search.
- * - default ThreadLiveActivity: render live activity and subscribe only to its exact reasoning field. Keywords: thread, live, presentation, leaf.
+ * - LiveThreadActivity: current reasoning or web-search presentation input.
+ * - default ThreadLiveActivity: render live activity with a loader and exact reasoning-field subscription.
  */
 "use client";
 
@@ -10,6 +10,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import ThreadDisclosure from "./ThreadDisclosure";
+import { LoaderIcon } from "../workbench-icons";
 import ThreadMarkdown from "./ThreadMarkdown";
 import {
   projectThreadReasoningMarkdown,
@@ -76,6 +77,13 @@ export default function ThreadLiveActivity({
       ? { body: activity.body, title: activity.title }
       : null;
 
+  const title = (
+    <span className="inline-flex items-center gap-2">
+      <LoaderIcon className="shrink-0" />
+      <span className="thread-thinking-text -mt-0.5">{reasoningDisplay?.title ?? activity.title}</span>
+    </span>
+  );
+
   return (
     <div className="py-4" aria-live="polite">
       {activity.kind === "webSearch" ? (
@@ -84,7 +92,7 @@ export default function ThreadLiveActivity({
             contentClassName="mt-2 space-y-1 pl-6"
             open={isOpen}
             onToggle={(event) => onOpenChange(event.currentTarget.open)}
-            summary={<span className="thread-thinking-text">{activity.title}</span>}
+            summary={title}
             summaryClassName="text-[0.92em] font-medium leading-[1.6]"
           >
             {activity.contextItems.map((item) => (
@@ -94,8 +102,8 @@ export default function ThreadLiveActivity({
             ))}
           </ThreadDisclosure>
         ) : (
-          <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-            {activity.title}
+          <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
+            {title}
           </p>
         )
       ) : reasoningDisplay?.body ? (
@@ -104,7 +112,7 @@ export default function ThreadLiveActivity({
           open={isOpen}
           onToggle={(event) => onOpenChange(event.currentTarget.open)}
           summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-          summary={<span className="thread-thinking-text">{reasoningDisplay.title}</span>}
+          summary={title}
         >
           <ThreadMarkdown
             className="text-[0.8em] text-fg/muted"
@@ -119,8 +127,8 @@ export default function ThreadLiveActivity({
           />
         </ThreadDisclosure>
       ) : (
-        <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-          {reasoningDisplay?.title ?? activity.title}
+        <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
+          {title}
         </p>
       )}
     </div>

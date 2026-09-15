@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - IconProps: shared icon size and SVG attributes.
+ * - LoaderIcon: continuously spinning loader with varied processing motions.
  * - ShellProcessingIcon: shell text with a processing cog.
  * - ShellIcon: shell text within a solid window border.
  * - TerminalIcon: terminal prompt and cursor.
@@ -48,19 +49,12 @@
  * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
  * - GitArcIcon and Git arc action/claim-state glyphs: Git arc status and action glyphs.
  */
-import type { ComponentPropsWithoutRef } from "react";
+import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcCommandAction } from "../../workbench/thread/command-matchers/git-checkpoints";
 
-type IconSize = 12 | 14 | 16 | 18 | 20 | 22 | 32;
-
-export type IconProps = Omit<ComponentPropsWithoutRef<"svg">, "height" | "strokeWidth" | "width"> & {
-  size?: IconSize;
-};
-
-function OutlinedIcon({ size = 16, ...props }: IconProps) {
-  return <svg {...props} aria-hidden="true" fill="none" height={size} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={32 / size} viewBox="0 0 24 24" width={size} xmlns="http://www.w3.org/2000/svg" />;
-}
+export type { IconProps } from "./OutlinedIcon";
+export { default as LoaderIcon } from "./LoaderIcon";
 
 export function ShellProcessingIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
