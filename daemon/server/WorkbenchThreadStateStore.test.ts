@@ -18,8 +18,8 @@ const fixtureIdentityValues = {
     "00000000-0000-4000-8000-000000000001": fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
   },
   ProjectId: {
-    "first": fixtureIdentitySchemas.ProjectIdSchema.parse("first"),
-    "second": fixtureIdentitySchemas.ProjectIdSchema.parse("second"),
+    "first": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///first"),
+    "second": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///second"),
   },
 };
 
@@ -31,7 +31,7 @@ test("consumer objects retain thread facts, title replacement and project isolat
   try {
     const identities = await database.observeThreadIdentities(["first", "second"].map(projectId => ({
       native: { harness: "codex" as const, nativeLocation: join(directory, projectId), nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(projectId) },
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(`local:///${projectId}`), projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
     })));
     const store = new WorkbenchThreadStateStore(database);
     const records = identities.map((identity): WorkbenchThreadStateRecord => ({
@@ -91,7 +91,7 @@ test("project-qualified draft replacement preserves a moved draft and removes de
     assert.equal((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts[0]?.prompt, "kept");
     const key = getProjectQualifiedThreadDisplayKey(fixtureIdentityValues.ProjectId["second"], getThreadDisplayDraftKey(draft.draftId));
     await store.writeGlobal("pinnedLayout", {
-      version: 1, revision: 2, importedProjectIds: ["second"],
+      version: 1, revision: 2, importedProjectIds: [fixtureIdentityValues.ProjectId.second],
       displayOrder: { pinned: { [key]: { above: [], below: [] } } },
     });
     await store.writeChanges(fixtureIdentityValues.ProjectId["second"], { deletedDraftIds: [draft.draftId] });

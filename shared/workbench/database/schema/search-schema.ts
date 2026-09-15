@@ -5,6 +5,7 @@
  * - searchTables/SearchSchemaRows/searchSchemaHistory: current search table registry, row types, and migration history. Keywords: database, schema, search.
  */
 import databaseReleases from "./releases.ts";
+import { ownProjectReferences } from "./project-schema.ts";
 import {
   check,
   defineTable,
@@ -57,4 +58,4 @@ export const searchTables = Object.freeze({ workbenchSearchDocuments });
 export type SearchSchemaRows = {
   [Name in keyof typeof searchTables]: SelectRow<(typeof searchTables)[Name]>;
 };
-export const searchSchemaHistory = defineSubsystemHistory([workbenchSearchDocumentsHistory]);
+export const searchSchemaHistory = defineSubsystemHistory([ownProjectReferences(workbenchSearchDocumentsHistory)]);

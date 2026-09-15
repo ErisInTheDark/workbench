@@ -12,6 +12,7 @@
  * - defineThreadDomainCoreSchema: indexed project identity and versioned thread-owned lifecycle constraints.
  */
 import databaseReleases from "./releases.ts";
+import { ownProjectReferences } from "./project-schema.ts";
 import {
   booleanInteger,
   check,
@@ -354,7 +355,7 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
   return {
     tables: { ...legacyCoreTables, workbenchThreads: indexedThreadHistory.current, workbenchThreadLifecycle: lifecycleHistory.current },
     history: defineSubsystemHistory([
-      workbenchHarnessesHistory, indexedThreadHistory, workbenchPendingImportThreadsHistory,
+      workbenchHarnessesHistory, ownProjectReferences(indexedThreadHistory), workbenchPendingImportThreadsHistory,
       threadTurnsHistory, threadTurnMaterializationsHistory, lifecycleHistory,
     ]),
   };

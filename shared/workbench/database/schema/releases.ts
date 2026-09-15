@@ -39,6 +39,8 @@ const databaseReleases = Object.freeze({
   nativePlanRemoval: release(29, "3512b3f17168a87e195bcbb5abe0dae212fc16d5b0ba82f369a0a5fff106362c"),
   instructionTombstones: release(30, "5fda5dca74274fde0d216a45a4dec4613f2907d89572bb91ff335a837cb7c3c7"),
   providerReferences: release(31, "81716764a09af1f52c187c7b4f29c82293e4f26be482b7f61a2216956afebda0"),
+  projectIdentity: release(32, "8f5890cc7e61b832e43c7f6fd3db940397eb8c704ca8f5e3b4548cc3b02b3f42"),
+  projectOwnership: release(33, "0071d9975b51bb48603819f151baa51f582eac113dac7ef9d476ef7fc0785ce5"),
 });
 
 export default databaseReleases;

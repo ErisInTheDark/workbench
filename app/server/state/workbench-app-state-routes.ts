@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchAppStateRoutes: own the app-state HTTP namespace and bounded JSON admission. Keywords: app, state, HTTP, routes.
+ * - default WorkbenchAppStateRoutes: own app-state HTTP routes and bounded mutation/remap admission.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
+  WorkbenchProjectRemapSchema,
   workbenchClientStateMutationKinds,
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateRecord,
@@ -48,8 +49,9 @@ export default class WorkbenchAppStateRoutes {
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     const isReadRoute = url.pathname === "/api/workbench-client-state";
+    const isRemapRoute = url.pathname === "/api/workbench-client-state/project-remap";
     const mutationKinds = workbenchClientStateMutationKinds(url.pathname);
-    if (!isReadRoute && !mutationKinds) {
+    if (!isReadRoute && !isRemapRoute && !mutationKinds) {
       if (!url.pathname.startsWith("/api/workbench-client-state/")) return false;
       sendJson(response, 404, { error: "Unknown Workbench app-state route." });
       return true;
@@ -58,6 +60,15 @@ export default class WorkbenchAppStateRoutes {
       const rawBrowserStateId = request.headers[WORKBENCH_BROWSER_STATE_HEADER];
       if (Array.isArray(rawBrowserStateId)) throw new Error("Workbench browser state ID is invalid.");
       const browserStateId = rawBrowserStateId || undefined;
+      if (isRemapRoute && request.method === "POST") {
+        const input = WorkbenchProjectRemapSchema.safeParse(await readJson(request));
+        if (!input.success) {
+          sendJson(response, 400, { error: "Workbench project remap is invalid." });
+          return true;
+        }
+        sendJson(response, 200, await this.#registry.remapBrowserProjects(browserStateId, input.data));
+        return true;
+      }
       if (isReadRoute && request.method === "GET") {
         const rawRevision = url.searchParams.get("sinceRevision");
         const sinceRevision = rawRevision === null ? undefined : Number(rawRevision);
@@ -80,7 +91,7 @@ export default class WorkbenchAppStateRoutes {
         sendJson(response, 200, await this.#registry.mutateBrowser(browserStateId, mutation));
         return true;
       }
-      response.writeHead(405, { Allow: isReadRoute ? "GET" : "DELETE, PUT" });
+      response.writeHead(405, { Allow: isReadRoute ? "GET" : isRemapRoute ? "POST" : "DELETE, PUT" });
       response.end();
       return true;
     } catch (error) {

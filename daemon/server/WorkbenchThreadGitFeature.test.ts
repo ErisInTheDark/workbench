@@ -9,7 +9,7 @@ import { createThreadStateTestDatabase } from "./workbench-thread-state-test-dat
 function threadGitIdentities() {
   const database = createThreadStateTestDatabase();
   for (const nativeId of ["thread-one", "thread-two", "thread-three"]) {
-    database.admitThread("project", `wb:${nativeId}`, "codex", nativeId);
+    database.admitThread("local:///project", `wb:${nativeId}`, "codex", nativeId);
   }
   return database.identities.threads;
 }

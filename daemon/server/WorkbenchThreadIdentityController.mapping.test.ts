@@ -49,7 +49,7 @@ const fixtureIdentityValues = {
     "unobserved-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("unobserved-turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -77,12 +77,12 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   });
   const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("native-parent"), nativeTurnId: NativeTurnIdSchema.parse("native-turn") };
   const parent = await threads.observe({
-    native, projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/repo", title: "Parent",
+    native, projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo", title: "Parent",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const child = await threads.observe({
     native: { ...native, nativeThreadId: NativeThreadIdSchema.parse("native-child") },
-    projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/repo", title: "Child",
+    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo", title: "Child",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const turn = await threads.observeTurn({
@@ -360,7 +360,7 @@ test("thread Git resolves public and native callers to the same existing selecti
   const selected: string[] = [];
   const feature = new WorkbenchThreadGitFeature({
     identities: owners.threads,
-    resolveProjectFromCwd: async () => ({ cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
+    resolveProjectFromCwd: async () => ({ cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project } }),
     transitions: { run: async (_root, operation) => operation() },
     createThreadGit: async ({ threadId }) => {
       selected.push(threadId);
@@ -398,7 +398,7 @@ test("cold native thread lookup admits exact metadata before public request rout
     browse: { readThread: async () => { throw new Error("Lookup must not materialise history"); }, steerTurn: async () => null },
   }], {
     identities: owners.threads, itemIdentities: owners.items,
-    resolveProject: async () => ({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/repo" }),
+    resolveProject: async () => ({ projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo" }),
   });
   try {
     const request = { method: "thread/read", params: { threadId: "unobserved", includeTurns: false } };
@@ -814,7 +814,7 @@ test("public socket routing and reload handoff retain native request correlation
       throw new Error("Canonical thread-state delivery must not resolve provider identities");
     });
     const sidebarMessage = { method: "workbench/thread-state/updated", params: {
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, error: null, freshness: "fresh",
+      projectId: fixtureIdentityValues.ProjectId.project, revision: 1, error: null, freshness: "fresh",
       entries: [{
         entryKind: "thread", activityAt: 1, title: native.nativeThreadId,
         identity: { harness: "codex", threadId: parent.threadId },
@@ -843,7 +843,7 @@ test("public socket routing and reload handoff retain native request correlation
     };
     await controller.sendJsonToClient(client, nextPublication);
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 2);
-    const summary = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
+    const summary = { projectId: fixtureIdentityValues.ProjectId.project, revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
     await controller.sendJsonToClient(client, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
     await controller.sendJsonToClient(secondClient, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 3);

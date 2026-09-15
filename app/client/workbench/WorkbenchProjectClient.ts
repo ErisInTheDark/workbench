@@ -75,7 +75,7 @@ interface WorkbenchProjectClient {
   enterNoProject: () => void;
   expandPath: (filePath: string) => boolean;
   getSnapshot: () => WorkbenchProjectSnapshot;
-  installCatalog: (payload: WorkbenchProjectsPayload) => boolean;
+  installCatalog: (payload: WorkbenchProjectsPayload) => Promise<boolean>;
   selectInitialProject: () => Promise<void>;
   selectProjectStrict: (projectId: string) => Promise<boolean>;
   refreshProject: () => Promise<void>;
@@ -279,7 +279,7 @@ function WorkbenchProjectClient({
   }
 
   function beginProjectSelection(projectId: string) {
-    const nextProjectId = projectId.trim();
+    const nextProjectId = clientStateController?.resolveProjectId(projectId.trim()) ?? projectId.trim();
     if (!nextProjectId || state.currentProjectId === nextProjectId) return null;
     const previousState = captureProjectState();
     const previousProjectRevision = projectRevision;
@@ -349,8 +349,21 @@ function WorkbenchProjectClient({
     return didProjectsChange || didMetadataChange;
   }
 
-  function installCatalog(payload: WorkbenchProjectsPayload) {
-    const didChange = applyCatalog(payload);
+  async function installCatalog(payload: WorkbenchProjectsPayload) {
+    const parsed = WorkbenchProjectsPayloadSchema.safeParse(payload);
+    if (!parsed.success) reportClientSchemaError("Repaired Workbench project catalog response", parsed.error);
+    const catalog = conformToZodSchema(WorkbenchProjectsPayloadSchema, payload, { data: [], rootPath: "" }).data;
+    if (catalog.aliases?.length) {
+      if (!clientStateController) throw new Error("Project identity adoption requires the app-state owner.");
+      await clientStateController.adoptProjectAliases(catalog.aliases);
+    }
+    const previousId = state.currentProjectId;
+    const canonicalId = clientStateController?.resolveProjectId(previousId) ?? previousId;
+    if (canonicalId !== previousId) {
+      state.currentProjectId = ProjectIdSchema.parse(canonicalId);
+      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, canonicalId));
+    }
+    const didChange = applyCatalog(catalog) || canonicalId !== previousId;
     if (didChange) emit();
     return didChange;
   }
@@ -367,15 +380,7 @@ function WorkbenchProjectClient({
 
   async function refreshProjects() {
     const payload = await transport.readCatalog();
-    const parsed = WorkbenchProjectsPayloadSchema.safeParse(payload);
-    if (!parsed.success) {
-      reportClientSchemaError("Repaired Workbench project catalog response", parsed.error);
-    }
-    return applyCatalog(conformToZodSchema(
-      WorkbenchProjectsPayloadSchema,
-      payload,
-      { data: [], rootPath: "" },
-    ).data);
+    return await installCatalog(payload);
   }
 
   async function refreshProject() {
@@ -441,6 +446,7 @@ function WorkbenchProjectClient({
     const rollbackSelection = beginProjectSelection(projectId);
 
     const didRefreshProjectsChange = await refreshProjects();
+    projectId = clientStateController?.resolveProjectId(projectId) ?? projectId;
     const project = state.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
       rollbackSelection?.();

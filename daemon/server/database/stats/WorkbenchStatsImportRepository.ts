@@ -8,6 +8,7 @@
  * - default WorkbenchStatsImportRepository: own versioned SQLite usage/claim queues, settlements, facts, and progress.
  */
 import type Database from "better-sqlite3";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { WORKBENCH_STATS_USAGE_DATA_VERSION, WORKBENCH_STATS_USAGE_IMPORT_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
@@ -133,7 +134,7 @@ export default class WorkbenchStatsImportRepository {
       for (const discovery of discoveries) {
         this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(discovery.harness);
         insert.run(
-          discovery.projectId,
+          new WorkbenchProjectRepository(this.database).admitStoredReference(discovery.projectId),
           discovery.rootId,
           discovery.repositoryRoot,
           discovery.workspaceRoot,
@@ -208,6 +209,7 @@ export default class WorkbenchStatsImportRepository {
   }
 
   settleUsage(runId: string, candidate: WorkbenchStatsUsageImportCandidate, settlement: WorkbenchStatsUsageImportSettlement, now: number) {
+    candidate = { ...candidate, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(candidate.projectId) };
     this.database.prepare(`
       UPDATE thread_usage_imports SET state = ?, run_id = NULL, settled_at = ?,
         updated_at = ?, error_text = ?,
@@ -223,6 +225,7 @@ export default class WorkbenchStatsImportRepository {
 
   settleClaims(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number) {
     this.database.transaction(() => {
+      candidate = { ...candidate, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(candidate.projectId) };
       if (settlement.state === "completed") {
         const insert = this.database.prepare(`
           INSERT OR IGNORE INTO git_claim_thread_file_days (

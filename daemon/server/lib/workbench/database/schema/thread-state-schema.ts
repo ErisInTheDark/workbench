@@ -1,6 +1,5 @@
 /*
  * Exports:
- * - workbenchThreadStateProjects: authoritative project documents.
  * - workbenchThreadStateGlobals: authoritative global documents.
  * - workbenchThreadStateProjectionStatus: shadow health and source coverage.
  * - workbenchThreadStateThreads: projected canonical thread roots.
@@ -38,6 +37,7 @@
  * - threadStateSchemaHistory: private table histories.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { admitProjectReferences, ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import {
   booleanInteger,
@@ -63,6 +63,7 @@ import {
   defineSubsystemHistory,
   defineTableHistory,
   rebuildTable,
+  retireTableHistory,
   tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 
@@ -83,7 +84,6 @@ const workbenchThreadStateProjectsV1 = defineTable("workbench_thread_state_proje
   updated_at: integer().notNull().nonNegative(),
 });
 const workbenchThreadStateProjectsHistory = initialHistory(workbenchThreadStateProjectsV1, databaseReleases.threadStateGlobals.version);
-export const workbenchThreadStateProjects = workbenchThreadStateProjectsHistory.current;
 
 const workbenchThreadStateGlobalsV1 = defineTable("workbench_thread_state_globals", {
   id: enumText("homeDisplayOrder", "pinnedLayout").primaryKey(),
@@ -1007,7 +1007,6 @@ export const threadStateRelationalTables = Object.freeze({
 
 export const threadStateTables = Object.freeze({
   workbenchThreadStateGlobals,
-  workbenchThreadStateProjects,
   ...threadStateRelationalTables,
 });
 
@@ -1016,25 +1015,25 @@ export type ThreadStateSchemaRows = {
 };
 
 export const threadStateSchemaHistory = defineSubsystemHistory([
-  workbenchThreadStateProjectsHistory,
+  retireTableHistory(admitProjectReferences(workbenchThreadStateProjectsHistory), databaseReleases.projectOwnership.version),
   workbenchThreadStateGlobalsHistory,
   workbenchThreadStateProjectionStatusHistory,
-  workbenchThreadStateThreadsHistory,
-  workbenchThreadStateProviderIdentitiesHistory,
+  ownProjectReferences(workbenchThreadStateThreadsHistory),
+  ownProjectReferences(workbenchThreadStateProviderIdentitiesHistory),
   workbenchThreadStateLifecyclesHistory,
   workbenchThreadStateSubagentsHistory,
-  workbenchThreadStateSubagentParentsHistory,
+  ownProjectReferences(workbenchThreadStateSubagentParentsHistory),
   workbenchThreadStateSubagentRelationshipsHistory,
   workbenchThreadStatePendingSubagentRelationshipsHistory,
   workbenchThreadStateActiveSubagentRelationshipsHistory,
   workbenchThreadStateRetentionHistory,
   workbenchThreadStateProfilesHistory,
-  workbenchThreadStateProjectProfilesHistory,
+  ownProjectReferences(workbenchThreadStateProjectProfilesHistory),
   workbenchThreadStateSnoozeDependenciesHistory,
-  workbenchThreadStateDraftsHistory,
+  ownProjectReferences(workbenchThreadStateDraftsHistory),
   workbenchThreadStateDraftAttachmentsHistory,
   workbenchThreadStateLayoutsHistory,
-  workbenchThreadStateProjectLayoutsHistory,
+  ownProjectReferences(workbenchThreadStateProjectLayoutsHistory),
   workbenchThreadStateGlobalLayoutsHistory,
   workbenchThreadStateLayoutFoldersHistory,
   workbenchThreadStateLayoutItemsHistory,
@@ -1043,7 +1042,7 @@ export const threadStateSchemaHistory = defineSubsystemHistory([
   workbenchThreadStateLayoutFolderItemsHistory,
   workbenchThreadStateLayoutRelationsHistory,
   workbenchThreadStateFolderMembersHistory,
-  workbenchThreadStatePinnedImportsHistory,
+  ownProjectReferences(workbenchThreadStatePinnedImportsHistory),
   workbenchThreadStateQuestionnairesHistory,
   workbenchThreadStateQuestionnaireQuestionsHistory,
   workbenchThreadStateQuestionnaireOptionsHistory,

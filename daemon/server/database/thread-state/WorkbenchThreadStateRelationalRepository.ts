@@ -16,6 +16,7 @@ import {
   type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import WorkbenchThreadStateGitRepository from "./WorkbenchThreadStateGitRepository.ts";
 import WorkbenchThreadStateQuestionnaireRepository from "./WorkbenchThreadStateQuestionnaireRepository.ts";
 import type {
@@ -117,12 +118,14 @@ export default class WorkbenchThreadStateRelationalRepository {
   private readonly git: WorkbenchThreadStateGitRepository;
   private readonly questionnaires: WorkbenchThreadStateQuestionnaireRepository;
   private readonly layouts: WorkbenchThreadStateLayoutRepository;
+  private readonly projects: WorkbenchProjectRepository;
 
   constructor(
     database: Database.Database,
     private readonly threadIdentity = new WorkbenchThreadIdentityRepository(database),
   ) {
     this.database = database;
+    this.projects = new WorkbenchProjectRepository(database);
     this.git = new WorkbenchThreadStateGitRepository(database);
     this.questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);
     this.layouts = new WorkbenchThreadStateLayoutRepository(database, {
@@ -145,10 +148,12 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readLayout(owner: WorkbenchThreadLayoutOwner) {
+    if (owner.kind === "project") owner = { ...owner, projectId: this.projects.resolveStoredReference(owner.projectId) };
     return this.layouts.read(owner);
   }
 
   readProject(projectId: ProjectId): WorkbenchThreadStateProjectDocument {
+    projectId = this.projects.resolveStoredReference(projectId);
     return this.database.transaction(() => ({
       version: 4 as const,
       records: this.readRecords({ selection: "project", projectId }),
@@ -159,6 +164,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readTitleHistories(projectId: ProjectId): WorkbenchStoredThreadTitleHistory[] {
+    projectId = this.projects.resolveStoredReference(projectId);
     const rows = this.database.prepare(`
       SELECT title.thread_id, title.title, title.used_at, state.harness_id
       FROM workbench_thread_title_history title
@@ -182,11 +188,12 @@ export default class WorkbenchThreadStateRelationalRepository {
 
   writeProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
     this.database.transaction(() => {
+      projectId = this.projects.admitStoredReference(projectId);
       for (const record of document.records) {
         const identity = this.threadIdentity.resolve({ projectId, threadId: record.identity.threadId });
         if (!identity || identity.threadId !== record.identity.threadId) throw new Error("Project state requires a canonical thread in its project.");
       }
-      if (document.drafts.some(draft => draft.projectId !== projectId)) throw new Error("Draft belongs to another project.");
+      if (document.drafts.some(draft => this.projects.resolveStoredReference(draft.projectId) !== projectId)) throw new Error("Draft belongs to another project.");
       const retainedThreads = new Set(document.records.map(record => record.identity.threadId));
       const removedThreads = (this.database.prepare(`
         SELECT state.thread_id FROM workbench_thread_states state
@@ -254,6 +261,21 @@ export default class WorkbenchThreadStateRelationalRepository {
 
   commit(changes: WorkbenchThreadStateCommit) {
     this.database.transaction(() => {
+      changes = {
+        ...changes,
+        ...(changes.projectId === undefined ? {} : { projectId: this.projects.resolveStoredReference(changes.projectId) }),
+        ...(changes.drafts ? { drafts: changes.drafts.map(stored => ({
+          ...stored, draft: { ...stored.draft, projectId: this.projects.resolveStoredReference(stored.draft.projectId) },
+        })) } : {}),
+        ...(changes.projectProfiles ? { projectProfiles: changes.projectProfiles.map(profile => ({
+          ...profile, projectId: this.projects.resolveStoredReference(profile.projectId),
+        })) } : {}),
+        ...(changes.layouts ? { layouts: changes.layouts.map(layout => ({
+          ...layout, owner: layout.owner.kind === "project"
+            ? { ...layout.owner, projectId: this.projects.resolveStoredReference(layout.owner.projectId) } : layout.owner,
+        })) } : {}),
+        ...(changes.pinnedImports ? { pinnedImports: [...new Set(changes.pinnedImports.map(id => this.projects.resolveStoredReference(id)))] } : {}),
+      };
       if (changes.projectId !== undefined) {
         const projectId = changes.projectId;
         for (const threadId of [
@@ -272,6 +294,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       this.writeRecords(changes.records ?? []);
       for (const { projectId, profile } of changes.projectProfiles ?? []) {
         if (profile) {
+          this.projects.admitStoredReference(projectId);
           this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(profile.settings.harness);
           this.writeDomainFact("workbench_project_thread_profiles", ["project_id"], {
             project_id: projectId, ...profileRow(WorkbenchComposerProfileSelectionSchema.parse(profile)),
@@ -280,7 +303,10 @@ export default class WorkbenchThreadStateRelationalRepository {
           this.database.prepare("DELETE FROM workbench_project_thread_profiles WHERE project_id = ?").run(projectId);
         }
       }
-      for (const layout of changes.layouts ?? []) this.layouts.replace(layout.owner, layout.revision, layout.displayOrder);
+      for (const layout of changes.layouts ?? []) {
+        if (layout.owner.kind === "project") this.projects.admitStoredReference(layout.owner.projectId);
+        this.layouts.replace(layout.owner, layout.revision, layout.displayOrder);
+      }
       for (const draftId of changes.deletedDraftIds ?? []) {
         const draft = this.database.prepare("SELECT project_id FROM workbench_thread_drafts WHERE draft_id = ?")
           .get(draftId) as { project_id: ProjectId } | undefined;
@@ -301,7 +327,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           const insert = this.database.prepare(`
             INSERT INTO workbench_sidebar_pinned_imports(project_id, layout_id, owner_kind) VALUES (?, ?, 'pinned')
           `);
-          for (const projectId of changes.pinnedImports) insert.run(projectId, pinned.layout_id);
+          for (const projectId of changes.pinnedImports) insert.run(this.projects.admitStoredReference(projectId), pinned.layout_id);
         }
       }
     })();
@@ -313,6 +339,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readProjectProfile(projectId: ProjectId): WorkbenchComposerProfileSelectionState | null {
+    projectId = this.projects.resolveStoredReference(projectId);
     const profile = this.database.prepare("SELECT * FROM workbench_project_thread_profiles WHERE project_id = ?")
       .get(projectId) as Record<string, SqlValue> | undefined;
     return profile ? WorkbenchComposerProfileSelectionSchema.parse({
@@ -326,6 +353,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readDrafts(projectId: ProjectId): WorkbenchStoredThreadDraft[] {
+    projectId = this.projects.resolveStoredReference(projectId);
     const rows = this.database.prepare(`
       SELECT * FROM workbench_thread_drafts WHERE project_id = ? ORDER BY updated_at DESC, draft_id
     `).all(projectId) as Array<Record<string, SqlValue>>;
@@ -358,6 +386,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     this.database.transaction(() => {
       for (const stored of drafts) {
         const draft = WorkbenchThreadDraftSchema.parse(stored.draft);
+        draft.projectId = this.projects.admitStoredReference(draft.projectId);
         this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(draft.composerSettings.harness);
         const previous = this.database.prepare("SELECT id FROM workbench_thread_drafts WHERE draft_id = ?")
           .get(draft.draftId) as { id: string } | undefined;
@@ -387,6 +416,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readRecords(query: WorkbenchThreadRecordQuery): WorkbenchThreadStateRecord[] {
+    if ("projectId" in query && query.projectId !== undefined) query = { ...query, projectId: this.projects.resolveStoredReference(query.projectId) };
     const parameters: Array<string | number> = [];
     let where: string;
     switch (query.selection) {
@@ -444,6 +474,7 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   readProjectActivity(projectId: ProjectId): number | null {
+    projectId = this.projects.resolveStoredReference(projectId);
     return (this.database.prepare(`
       SELECT MAX(state.activity_at) AS activity_at FROM workbench_thread_states state
       JOIN workbench_threads thread ON thread.id = state.thread_id WHERE thread.project_id = ?
@@ -511,7 +542,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     } else {
       const owner = this.database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?")
         .get(threadId) as { project_id: string };
-      if (owner.project_id !== record.projectId) throw new Error("Subagent state belongs to another project.");
+      if (owner.project_id !== this.projects.resolveStoredReference(record.projectId)) throw new Error("Subagent state belongs to another project.");
       this.writeDomainFact("workbench_subagent_thread_states", ["thread_id"], {
         thread_id: threadId, thread_kind: threadKind, parent_thread_id: record.parentThreadId,
         cwd: record.cwd, name: record.name, profile_id: record.profileId, profile_name: record.profileName,
@@ -554,7 +585,7 @@ export default class WorkbenchThreadStateRelationalRepository {
         SELECT thread.project_id, state.harness_id FROM workbench_threads thread
         JOIN workbench_thread_states state ON state.thread_id = thread.id WHERE thread.id = ?
       `).get(record.snoozedUntil.identity.threadId) as { project_id: string; harness_id: string } | undefined;
-      if (!target || target.project_id !== record.snoozedUntil.projectId || target.harness_id !== record.snoozedUntil.identity.harness) {
+      if (!target || target.project_id !== this.projects.resolveStoredReference(record.snoozedUntil.projectId) || target.harness_id !== record.snoozedUntil.identity.harness) {
         throw new Error("Snooze dependency does not match its canonical thread.");
       }
       this.writeDomainFact("workbench_thread_snooze_dependencies", ["source_thread_id"], {

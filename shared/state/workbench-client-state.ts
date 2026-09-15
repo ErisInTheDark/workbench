@@ -7,9 +7,18 @@
  * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows, schema capability, and revision responses.
  * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary.
  * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry.
+ * - WorkbenchProjectRemapSchema/WorkbenchProjectRemap: bounded daemon-scoped project-address adoption.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
+import { z } from "zod";
+import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
+
+export const WorkbenchProjectRemapSchema = z.object({
+  daemonRegistrationId: z.string().min(1).max(256),
+  aliases: z.array(WorkbenchProjectAliasSchema).max(10_000),
+}).strict();
+export type WorkbenchProjectRemap = z.infer<typeof WorkbenchProjectRemapSchema>;
 
 export type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider/provider-key.ts";
 import type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider/provider-key.ts";

@@ -28,6 +28,9 @@ import {
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import resolveWorkbenchRuntimeRoot from "../workbench-runtime-root.ts";
+import { WorkbenchProjectRemapSchema, type WorkbenchProjectRemap } from "workbench-shared/state/workbench-client-state";
+import type { WorkbenchProjectAlias } from "workbench-shared/types";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 export interface WorkbenchAppStateRepositoryOptions {
   databasePath?: string;
@@ -136,6 +139,65 @@ export default class WorkbenchAppStateRepository {
       oldestAvailableRevision: row.oldest_available_revision,
       revision: row.revision,
     };
+  }
+
+  readProjectAliases(): WorkbenchProjectAlias[] {
+    return this.query(selectRows(appStateTables.projectAliases, {
+      where: { daemon_registration_id: this.daemonRegistrationId },
+    })).map(row => ({ alias: row.alias, projectId: ProjectIdSchema.parse(row.project_id) }));
+  }
+
+  resolveProjectId(daemonRegistrationId: string, projectId: string) {
+    return this.query(selectRows(appStateTables.projectAliases, {
+      where: { daemon_registration_id: daemonRegistrationId, alias: projectId },
+    }))[0]?.project_id ?? projectId;
+  }
+
+  remapProjects(
+    input: WorkbenchProjectRemap,
+    build: (aliases: readonly WorkbenchProjectAlias[], revision: number) => readonly WorkbenchDatabaseMutation[],
+  ) {
+    const request = WorkbenchProjectRemapSchema.parse(input);
+    if (request.daemonRegistrationId !== this.daemonRegistrationId) throw new Error("Project remap belongs to another daemon registration.");
+    const existing = new Map(this.readProjectAliases().map(alias => [alias.alias, alias.projectId]));
+    const additions = new Map<string, WorkbenchProjectAlias>();
+    for (const alias of request.aliases) {
+      if (alias.alias === alias.projectId) continue;
+      if (alias.projectId !== "workbench-library" && !/^(?:remote|local|workspace):\/\/.+$/u.test(alias.projectId)) {
+        throw new Error("Project remap destination must be canonical.");
+      }
+      const prior = existing.get(alias.alias) ?? additions.get(alias.alias)?.projectId;
+      if (prior && prior !== alias.projectId) throw new Error("Project alias conflicts with retained ownership.");
+      if (!prior) additions.set(alias.alias, alias);
+    }
+    for (const alias of [...this.readProjectAliases(), ...additions.values()]) {
+      if (existing.has(alias.projectId) || additions.has(alias.projectId)) throw new Error("Project aliases cannot form chains.");
+    }
+    if (!additions.size) return this.currentVersion().revision;
+    const aliases = [...additions.values()];
+    return this.commit(revision => {
+      const mutations = build(aliases, revision);
+      // Deleted parents have no children. Preserve their canonical tombstones too,
+      // without passing empty deleted payloads through live-record constructors.
+      for (const table of appStateSchema.currentTables) {
+        if (!("project_id" in table.columns) || !("deleted" in table.columns) || table.name === "last_launch_target") continue;
+        const names = Object.keys(table.columns);
+        const columns = names.map(name => `"${name}"`).join(", ");
+        const values = names.map(name => name === "project_id" || name === "revision" ? "?" : `"${name}"`).join(", ");
+        for (const alias of aliases) {
+          const parameters = names.flatMap<string | number>(name => name === "project_id" ? [alias.projectId] : name === "revision" ? [revision] : []);
+          this.#requireDatabase().prepare(`INSERT INTO "${table.name}" (${columns})
+            SELECT ${values} FROM "${table.name}" WHERE daemon_registration_id = ? AND project_id = ? AND deleted = 1`)
+            .run(...parameters, request.daemonRegistrationId, alias.alias);
+        }
+      }
+      return [
+        ...aliases.map(alias => insertRow(appStateTables.projectAliases, {
+          daemon_registration_id: request.daemonRegistrationId, alias: alias.alias, project_id: alias.projectId,
+        })),
+        ...mutations,
+      ];
+    });
   }
 
   commit(build: (revision: number) => readonly WorkbenchDatabaseMutation[]) {

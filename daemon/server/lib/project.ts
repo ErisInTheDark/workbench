@@ -7,6 +7,7 @@
  * - safeResolve/safeResolveProjectPath: validate project-relative paths.
  * - isPathWithinRoot: check absolute path containment.
  * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: discover and resolve selectable projects.
+ * - discoverProjectIdentities: prepare structural projects and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
  * - buildTree/buildProjectTree: build visible explorer trees.
@@ -19,10 +20,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
-import { getGitChanges } from "./git";
+import { getGitChanges, readGitProjectMetadata, resolveGitDirectory } from "./git";
+import { localProjectId, remoteProjectId, workspaceProjectId } from "./workbench/project/project-identity";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
-import { discoverWorkbenchProjectIcon } from "./workbench/project/project-icon-discovery";
 import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
 import {
   ensureWorkbenchLibrary,
@@ -263,31 +265,6 @@ async function readTextFile(filePath: string) {
   }
 }
 
-async function resolveGitDirectory(rootDir: string) {
-  const gitMarkerPath = path.join(rootDir, ".git");
-
-  try {
-    const stats = await fs.lstat(gitMarkerPath);
-    if (stats.isDirectory()) {
-      return gitMarkerPath;
-    }
-    if (!stats.isFile()) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-
-  const marker = await readTextFile(gitMarkerPath);
-  const gitDirMatch = /^gitdir:\s*(.+)\s*$/im.exec(marker ?? "");
-  if (!gitDirMatch) {
-    return null;
-  }
-
-  const gitDirPath = gitDirMatch[1].trim();
-  return path.resolve(rootDir, gitDirPath);
-}
-
 function parseHeadRef(headContent: string | null) {
   const match = /^ref:\s*(.+)\s*$/m.exec(headContent ?? "");
   return match?.[1]?.trim() || null;
@@ -361,10 +338,8 @@ async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOpt
   const id = (normalizeProjectId(relativePath) || ".") as ProjectId;
   const canonicalRootDir = await resolveCanonicalPath(rootDir);
   const root = createSingleProjectRoot(rootDir, canonicalRootDir);
-  const icon = await discoverWorkbenchProjectIcon([root]);
   return {
     id,
-    ...(icon ? { icon } : {}),
     kind: "git",
     lastCommitTimeMs: await getGitHeadActivityTimeMs(canonicalRootDir),
     name: path.basename(rootDir) || id,
@@ -496,6 +471,10 @@ function getWorkspaceFolderName(folder: Record<string, unknown>, resolvedRoot: s
 }
 
 async function createWorkspaceProjectOption(workspacePath: string): Promise<WorkbenchProjectOption | null> {
+  const incomplete = () => {
+    console.warn("[projects] workspace identity unavailable because a declared member is invalid or missing");
+    return null;
+  };
   const content = await readTextFile(workspacePath);
   if (!content) {
     return null;
@@ -519,17 +498,17 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
 
   for (const rawFolder of (parsed as { folders: unknown[] }).folders) {
     if (!rawFolder || typeof rawFolder !== "object") {
-      continue;
+      return incomplete();
     }
 
     const folder = rawFolder as Record<string, unknown>;
     if (typeof folder.path !== "string" || !folder.path.trim()) {
-      continue;
+      return incomplete();
     }
 
     const discoveryRoot = path.resolve(workspaceDirectory, folder.path);
     if (!await isDirectory(discoveryRoot)) {
-      continue;
+      return incomplete();
     }
 
     const canonicalRoot = await resolveCanonicalPath(discoveryRoot);
@@ -558,11 +537,9 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, workspacePath)) || path.basename(workspacePath);
   const id = normalizeProjectId(relativePath) as ProjectId;
   const name = path.basename(workspacePath, WORKSPACE_FILE_EXTENSION);
-  const icon = await discoverWorkbenchProjectIcon(roots);
 
   return {
     id,
-    ...(icon ? { icon } : {}),
     kind: "workspace",
     lastCommitTimeMs: latestCommitTimeMs,
     name,
@@ -573,7 +550,8 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
   };
 }
 
-async function walkProjects(currentDir: string, projects: WorkbenchProjectOption[]) {
+async function walkProjects(currentDir: string, projects: WorkbenchProjectOption[], signal?: AbortSignal) {
+  signal?.throwIfAborted();
   let entries;
   try {
     entries = await fs.readdir(currentDir, { withFileTypes: true });
@@ -612,7 +590,7 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   directories.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
 
   for (const entry of directories) {
-    await walkProjects(path.join(currentDir, entry.name), projects);
+    await walkProjects(path.join(currentDir, entry.name), projects, signal);
   }
 }
 
@@ -645,10 +623,10 @@ function filterIndirectGitProjectDuplicates(
   });
 }
 
-export async function discoverProjects() {
+async function discoverProjectOptions(signal?: AbortSignal) {
   const projects: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
-  await walkProjects(projectsRoot, projects);
+  await walkProjects(projectsRoot, projects, signal);
   const canonicalProjectsRoot = await resolveCanonicalPath(projectsRoot);
   const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
   const discoveredProjects = filterIndirectGitProjectDuplicates(projects, canonicalProjectsRoot)
@@ -662,7 +640,82 @@ export async function discoverProjects() {
 
       return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
     });
-  return [libraryProject, ...discoveredProjects];
+  return {
+    data: [libraryProject, ...discoveredProjects],
+    addresses: [libraryProject, ...projects],
+  };
+}
+
+export async function discoverProjects() {
+  return (await discoverProjectIdentities()).data;
+}
+
+export async function discoverProjectIdentities(signal?: AbortSignal): Promise<WorkbenchProjectDiscovery> {
+  const { data: candidates, addresses } = await discoverProjectOptions(signal);
+  const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
+    .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
+  const classifications = new Map<string, { projectId: ProjectId; excluded: boolean }>();
+  const origins = new Map<ProjectId, string[]>();
+  const remaining = roots.entries();
+  await Promise.all(Array.from({ length: Math.min(8, roots.size) }, async () => {
+    for (const [key, rootPath] of remaining) {
+      signal?.throwIfAborted();
+      try {
+        const metadata = await readGitProjectMetadata(rootPath, signal);
+        const projectId = metadata?.origin ? remoteProjectId(metadata.origin) : localProjectId(rootPath);
+        classifications.set(key, { projectId, excluded: metadata?.linkedWorktree ?? false });
+        if (metadata?.origin && !metadata.linkedWorktree) {
+          const locations = origins.get(projectId) ?? [];
+          locations.push(key);
+          origins.set(projectId, locations);
+        }
+      } catch (error) {
+        signal?.throwIfAborted();
+        const code = error && typeof error === "object" && "code" in error ? String(error.code).slice(0, 40) : "invalid metadata";
+        console.warn(`[projects] identity unavailable for ${rootPath} (${code})`);
+      }
+    }
+  }));
+  for (const locations of origins.values()) {
+    if (locations.length < 2) continue;
+    for (const key of locations) classifications.get(key)!.excluded = true;
+    console.warn(`[projects] skipped ${locations.length} distinct checkouts sharing one origin`);
+  }
+  const data: WorkbenchProjectOption[] = [];
+  const aliases: WorkbenchProjectDiscovery["aliases"] = [];
+  const candidateIdentities = new Map<WorkbenchProjectOption, ProjectId>();
+  for (const candidate of candidates) {
+    if (candidate.kind === "workbench-library") {
+      data.push(candidate);
+      continue;
+    }
+    const members = candidate.roots.map(root => classifications.get(normalizePathForComparison(root.rootPath)));
+    if (members.some(member => !member)) continue;
+    const excluded = members.some(member => member!.excluded);
+    const id = excluded
+      ? localProjectId(candidate.workspacePath ?? candidate.rootPath)
+      : candidate.kind === "workspace"
+        ? workspaceProjectId(members.map(member => member!.projectId))
+        : members[0]!.projectId;
+    if (candidate.id !== id) aliases.push({ alias: candidate.id, projectId: id });
+    candidateIdentities.set(candidate, id);
+    if (!excluded) data.push({ ...candidate, id });
+  }
+  for (const address of addresses) {
+    if (address.kind !== "git" || candidates.includes(address)) continue;
+    const retained = candidates.find(candidate => candidate.kind !== "workspace"
+      && normalizePathForComparison(candidate.rootPath) === normalizePathForComparison(address.rootPath));
+    if (!retained) continue;
+    const id = retained.kind === "workbench-library" ? retained.id : candidateIdentities.get(retained);
+    if (id && address.id !== id) aliases.push({ alias: address.id, projectId: id });
+  }
+  return {
+    data,
+    aliases,
+    excludedRootPaths: [...roots].filter(([key]) => !classifications.has(key) || classifications.get(key)!.excluded)
+      .map(([, rootPath]) => rootPath),
+    rootPath: projectsRoot,
+  };
 }
 
 function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOption[]) {

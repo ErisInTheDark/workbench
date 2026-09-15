@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - WorkbenchProjectsPayloadSchema: project catalog wire contract with optional icons.
+ * - WorkbenchProjectOptionSchema/WorkbenchProjectIconSchema: shared catalogue and icon boundary validation.
+ * - WorkbenchProjectAliasSchema: retained project-address mapping.
  * - WorkbenchProjectSnapshotSchema: project tree and change-summary wire contract.
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: pushed project snapshot update.
  * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create and delete requests.
@@ -19,12 +21,12 @@ const WorkbenchProjectRootSchema = z.object({
   rootPath: z.string(),
 }).strict();
 
-const WorkbenchProjectIconSchema = z.object({
+export const WorkbenchProjectIconSchema = z.object({
   path: z.string().min(1),
   rootId: z.string().min(1),
 }).strict();
 
-const WorkbenchProjectOptionSchema = z.object({
+export const WorkbenchProjectOptionSchema = z.object({
   id: z.string().min(1).brand<"ProjectId">(),
   icon: WorkbenchProjectIconSchema.optional(),
   kind: z.enum(["git", "workspace", "workbench-library"]),
@@ -39,8 +41,14 @@ const WorkbenchProjectOptionSchema = z.object({
   lastCommitTimeMs: project.lastCommitTimeMs ?? null,
 }));
 
+export const WorkbenchProjectAliasSchema = z.object({
+  alias: z.string().min(1).max(4096),
+  projectId: z.string().min(1).max(4096).brand<"ProjectId">(),
+}).strict();
+
 export const WorkbenchProjectsPayloadSchema = z.object({
   data: z.array(WorkbenchProjectOptionSchema),
+  aliases: z.array(WorkbenchProjectAliasSchema).default([]),
   rootPath: z.string(),
 }).strict().transform((payload): WorkbenchProjectsPayload => payload);
 

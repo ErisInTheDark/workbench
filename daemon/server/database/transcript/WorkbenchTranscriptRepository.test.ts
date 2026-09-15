@@ -40,7 +40,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchThreadId: {
     "other": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other"),
@@ -174,6 +174,20 @@ function providerTurnScope(
     threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
   };
 }
+
+test("transcript settlement resolves retained project aliases and admits independent parents", () => {
+  const { database, repository } = createRepository();
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/transcript");
+  try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run("project", projectId);
+    repository.settle([{ ...threadObservation(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }]);
+    assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = 'thread'").pluck().get(), projectId);
+    const independent = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/transcript");
+    repository.settle([{ ...threadObservation("independent"), projectId: independent }]);
+    assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(independent));
+  } finally { database.close(); }
+});
 
 test("provider cursors distinguish an unknown boundary from exhausted history and roll back with the turn", () => {
   const { database, repository } = createRepository();

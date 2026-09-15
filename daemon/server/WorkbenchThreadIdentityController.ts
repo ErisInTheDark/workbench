@@ -56,10 +56,9 @@ export default class WorkbenchThreadIdentityController {
   async resolve(input: WorkbenchThreadIdentityLookup) {
     this.assertActive();
     const known = this.records.get(input.threadId);
-    if (known) {
-      if (input.projectId && input.projectId !== known.projectId) throw new Error("Workbench thread does not belong to the requested project.");
-      return known;
-    }
+    if (known && (!input.projectId || input.projectId === known.projectId)) return known;
+    // A different address may be a retained project alias. The database owns
+    // that resolution and still rejects genuinely foreign project scopes.
     const record = await this.database.resolveThreadIdentity(input);
     this.assertActive();
     return record ? this.remember(record) : null;

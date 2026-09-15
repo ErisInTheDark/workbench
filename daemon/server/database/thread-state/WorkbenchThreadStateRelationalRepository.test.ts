@@ -18,8 +18,8 @@ const fixtureIdentityValues = {
     "f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f": fixtureIdentitySchemas.DraftIdSchema.parse("f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"),
   },
   ProjectId: {
-    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -30,13 +30,53 @@ function openDatabase() {
   return database;
 }
 
-function seedIdentities(database: Database.Database, projectId: string, ...nativeIds: string[]) {
+function seedIdentities(database: Database.Database, projectId: keyof typeof fixtureIdentityValues.ProjectId, ...nativeIds: string[]) {
   const owner = new WorkbenchThreadIdentityRepository(database);
   return nativeIds.map((nativeThreadId) => owner.observe({
     native: { harness: "codex", nativeLocation: `C:/${projectId}`, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
+    projectId: fixtureIdentityValues.ProjectId[projectId], projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
   }).threadId);
 }
+
+test("draft-only project writes admit parents and retained addresses share profiles and layouts", () => {
+  const database = openDatabase();
+  const repository = new WorkbenchThreadStateRelationalRepository(database);
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/draft-only");
+  const legacy = fixtureIdentitySchemas.ProjectIdSchema.parse("old-drafts");
+  const draft: WorkbenchThreadDraft = {
+    draftId: fixtureIdentityValues.DraftId["f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"], projectId,
+    prompt: "retained", profileId: null, attachments: [{ id: "image", url: "image:retained" }],
+    composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
+    clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
+  };
+  try {
+    repository.writeDrafts([{ draft, pinned: false, snoozed: false }]);
+    assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(projectId));
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(legacy, projectId);
+    repository.commit({
+      projectId: legacy,
+      drafts: [{ draft: { ...draft, projectId: legacy, prompt: "edited" }, pinned: true, snoozed: false }],
+      projectProfiles: [{ projectId: legacy, profile: { kind: "custom", settings: draft.composerSettings } }],
+      layouts: [{ owner: { kind: "project", projectId: legacy }, revision: 1, displayOrder: {} }],
+    });
+    assert.deepEqual(repository.readDrafts(legacy), repository.readDrafts(projectId));
+    assert.equal(repository.readDrafts(projectId)[0]?.draft.prompt, "edited");
+    assert.equal(repository.readDrafts(projectId)[0]?.draft.projectId, projectId);
+    assert.deepEqual(repository.readProjectProfile(legacy), { kind: "custom", settings: draft.composerSettings });
+    assert.deepEqual(repository.readLayout({ kind: "project", projectId }), { revision: 1, displayOrder: {} });
+    const draftKey = fixtureIdentitySchemas.ThreadDisplayKeySchema.parse(`draft:${draft.draftId}`);
+    const position = { above: [], below: [] };
+    repository.commit({ layouts: [{
+      owner: { kind: "pinned" }, revision: 2,
+      displayOrder: { pinned: { [getProjectQualifiedThreadDisplayKey(legacy, draftKey)]: position } },
+    }] });
+    assert.deepEqual(repository.readLayout({ kind: "pinned" }), {
+      revision: 2, displayOrder: { pinned: { [getProjectQualifiedThreadDisplayKey(projectId, draftKey)]: position } },
+    });
+    repository.commit({ projectId, deletedDraftIds: [draft.draftId] });
+    assert.deepEqual(repository.readDrafts(legacy), []);
+  } finally { database.close(); }
+});
 
 test("lifecycle upgrade preserves existing facts and permits thread-owned turnless states", () => {
   const database = new Database(":memory:");
@@ -82,7 +122,7 @@ test("relational batches roll back invalid references and preserve valid draft p
       clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
       attachments: [{ id: "second", url: "image:second" }, { id: "first", url: "image:first" }],
     };
-    const projectOwner = { kind: "project" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
+    const projectOwner = { kind: "project" as const, projectId: fixtureIdentityValues.ProjectId.project };
     const pinnedOwner = { kind: "pinned" as const };
     const draftKey = `draft:${draft.draftId}`;
     const threadKey = `codex:${threadId}`;
@@ -133,7 +173,7 @@ test("relational batches roll back invalid references and preserve valid draft p
     assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.profile, record.profile);
     repository.commit({ projectProfiles: [{ projectId: draft.projectId, profile: record.profile }] });
     assert.deepEqual(repository.readProjectProfile(draft.projectId), record.profile);
-    assert.deepEqual(repository.readPinnedImports(), ["project"]);
+    assert.deepEqual(repository.readPinnedImports(), [fixtureIdentityValues.ProjectId.project]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
 });
@@ -155,7 +195,9 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     });
     const first = record(firstId!, "first");
     const second = record(secondId!, "second");
-    first.snoozedUntil = { projectId: fixtureIdentityValues.ProjectId["project"], identity: second.identity };
+    const retainedAddress = fixtureIdentitySchemas.ProjectIdSchema.parse("old-project");
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(retainedAddress, fixtureIdentityValues.ProjectId.project);
+    first.snoozedUntil = { projectId: retainedAddress, identity: second.identity };
     const repository = new WorkbenchThreadStateRelationalRepository(database);
     repository.writeRecords([first, second]);
     database.exec(`
@@ -170,7 +212,7 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     const loaded = repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]!;
     assert.equal(loaded.title, "updated");
     assert.deepEqual(loaded.gitArcPlan, first.gitArcPlan);
-    assert.deepEqual(loaded.snoozedUntil, first.snoozedUntil);
+    assert.deepEqual(loaded.snoozedUntil, { identity: second.identity, projectId: fixtureIdentityValues.ProjectId.project });
     assert.deepEqual(loaded.titleHistory, first.titleHistory);
     assert.throws(() => repository.writeRecords([
       { ...first, title: "rolled back" }, { ...second, title: "reject" },

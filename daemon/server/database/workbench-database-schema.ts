@@ -21,6 +21,7 @@
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
  * gitArcProposalDiffTables: immutable Git arc proposal diff cache table map.
  * instructionTombstoneTables: durable retired instruction file receipt table map.
+ * projectTables/ProjectSchemaRows: canonical project storage, roots, and aliases.
  * workbenchDatabaseTables: every current table keyed by its SQLite name.
  * workbenchDatabaseSchema: assembled history used by protected production migration.
  * validateWorkbenchDatabaseReleases: reject rewritten or unsealed releases before opening SQLite.
@@ -51,6 +52,10 @@ import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "wor
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { codexTranscriptSchemaHistory } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
+import { projectSchemaHistory } from "workbench-shared/workbench/database/schema/project-schema";
+
+export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
+export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
 
 export { codexSandboxNetworkTables } from "../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
 export type { CodexSandboxNetworkSchemaRows } from "../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -80,6 +85,7 @@ export const workbenchDatabaseSchema = defineRelationalThreadStateSchema(databas
 export function defineRelationalThreadStateSchema(schemaVersion: number) {
   return defineWorkbenchDatabaseSchema({
     subsystems: [
+      projectSchemaHistory,
       composerProfileSchemaHistory,
       codexSandboxNetworkSchemaHistory,
       codexTranscriptSchemaHistory,

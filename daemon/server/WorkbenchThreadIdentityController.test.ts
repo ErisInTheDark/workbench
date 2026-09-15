@@ -49,6 +49,24 @@ function database(overrides: Partial<WorkbenchThreadIdentityDatabase> = {}): Wor
   };
 }
 
+test("cached thread ownership delegates retained project aliases to the database owner", async () => {
+  const canonical = { ...record, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/repo") };
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [canonical],
+    resolveThreadIdentity: async input => {
+      if (input.projectId !== record.projectId) throw new Error("Workbench thread does not belong to the requested project.");
+      return canonical;
+    },
+  }));
+  try {
+    await controller.start();
+    assert.equal((await controller.resolve({ threadId: canonical.threadId, projectId: record.projectId }))?.projectId, canonical.projectId);
+    await assert.rejects(controller.resolve({
+      threadId: canonical.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("foreign"),
+    }), /requested project/);
+  } finally { controller.dispose(); }
+});
+
 test("live identity projection uses committed bindings after admission and database reload", async () => {
   const initial = new WorkbenchThreadIdentityController(database({ listThreadIdentities: async () => [] }));
   const native = record.bindings[0]!;

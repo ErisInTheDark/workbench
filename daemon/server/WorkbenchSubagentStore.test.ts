@@ -14,8 +14,8 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "another": fixtureIdentitySchemas.ProjectIdSchema.parse("another"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "another": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///another"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -38,7 +38,7 @@ function fixture() {
     removeSubagent: async (parent, identifier) => { repository.remove(parent, identifier); },
   };
   const metadata = (parentThreadId: fixtureIdentitySchemas.WorkbenchThreadId, name: string, createdAt = 1) => ({
-    parentThreadId, reservationId: randomUUID(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" as const,
+    parentThreadId, reservationId: randomUUID(), projectId: fixtureIdentityValues.ProjectId.project, harness: "codex" as const,
     cwd: "C:/project", name, title: `Task ${name}`, profileId: "profile", profileName: "reviewer",
     createdAt, updatedAt: createdAt,
   });

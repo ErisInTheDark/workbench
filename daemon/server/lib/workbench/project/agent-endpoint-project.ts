@@ -1,19 +1,20 @@
 /*
  * Exports:
- * - AgentEndpointProjectResolution: resolved cwd, Workbench project, and owning root for a project-scoped agent endpoint. Keywords: agent endpoint, cwd, project.
- * - resolveAgentEndpointProjectFromProjects: resolve a project-scoped agent endpoint from an existing discovered project catalog. Keywords: agent endpoint, cwd, catalog.
- * - resolveAgentEndpointProjectFromCwd: resolve a project-scoped agent endpoint request from cwd without relying on route process memory. Keywords: agent endpoint, cwd, serverless.
+ * - AgentEndpointProjectResolution: validated cwd, project, and owning root.
+ * - resolveAgentEndpointProjectFromProjects: resolve cwd against a supplied catalogue without admitting excluded checkouts.
+ * - resolveAgentEndpointProjectFromCwd: resolve cwd through project discovery.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  discoverProjects,
+  discoverProjectIdentities,
   normalizeRelativePath,
   resolveDiscoveredProject,
   type ResolvedProject,
 } from "../../project";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import { isLinkedGitWorktree, resolveGitDirectory } from "../../git";
 
 export interface AgentEndpointProjectResolution {
   cwd: string;
@@ -32,7 +33,8 @@ async function readComparablePathVariants(filePath: string) {
   const variants = new Set<string>([normalizeComparablePath(filePath)]);
   try {
     variants.add(normalizeComparablePath(await fs.realpath(filePath)));
-  } catch {
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
     // Missing paths can still produce a useful resolved-path comparison; callers own existence checks.
   }
   return variants;
@@ -85,13 +87,14 @@ export async function resolveAgentEndpointProjectFromCwd(
   cwd: string | null | undefined,
   { endpointName = "Agent endpoint" }: { endpointName?: string } = {},
 ): Promise<AgentEndpointProjectResolution> {
-  return await resolveAgentEndpointProjectFromProjects(await discoverProjects(), cwd, { endpointName });
+  const catalog = await discoverProjectIdentities();
+  return await resolveAgentEndpointProjectFromProjects(catalog.data, cwd, { endpointName, excludedRootPaths: catalog.excludedRootPaths });
 }
 
 export async function resolveAgentEndpointProjectFromProjects(
   projects: readonly WorkbenchProjectOption[],
   cwd: string | null | undefined,
-  { endpointName = "Agent endpoint" }: { endpointName?: string } = {},
+  { endpointName = "Agent endpoint", excludedRootPaths = [] }: { endpointName?: string; excludedRootPaths?: readonly string[] } = {},
 ): Promise<AgentEndpointProjectResolution> {
   const requestedCwd = typeof cwd === "string" ? cwd.trim() : "";
   if (!requestedCwd) {
@@ -99,6 +102,20 @@ export async function resolveAgentEndpointProjectFromProjects(
   }
 
   const resolvedCwd = path.resolve(requestedCwd);
+  if (!(await fs.stat(resolvedCwd)).isDirectory()) throw new Error(`${endpointName} cwd must be a directory.`);
+  for (const excludedRoot of excludedRootPaths) {
+    if (await isCwdWithinRoot(resolvedCwd, excludedRoot)) throw new Error(`${endpointName} cwd belongs to an excluded checkout.`);
+  }
+  let ancestor = await fs.realpath(resolvedCwd);
+  while (true) {
+    if (await resolveGitDirectory(ancestor)) {
+      if (await isLinkedGitWorktree(ancestor)) throw new Error(`${endpointName} cwd belongs to an excluded linked worktree.`);
+      break;
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
   const projectMatch = await findProjectMatchForCwd(projects, resolvedCwd);
   if (!projectMatch) {
     throw new Error(`${endpointName} cwd must be inside a discovered Workbench project.`);

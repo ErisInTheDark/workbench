@@ -157,6 +157,46 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
 
+test("retained project requests share one observation and move drafts between canonical owners", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const source = ProjectIdSchema.parse("remote://example.test/source");
+  const destination = ProjectIdSchema.parse("remote://example.test/destination");
+  const observations: string[] = [];
+  const stopped: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "canonical-project-requests", threadStateStore: persistence,
+    resolveProjectId: id => id === fixtureProjectIds.alpha ? source : id === fixtureProjectIds.beta ? destination : id,
+    getProjectCatalog: () => ({ data: [projectOption(source, "C:/source"), projectOption(destination, "C:/destination")], rootPath: "C:/" }),
+    projectState: { ...projectState(), observe: id => { observations.push(id); return () => { stopped.push(id); }; } },
+    publish: () => undefined, reconcileProject: async () => [],
+  });
+  const draft = {
+    draftId: "eb83014c-5b6c-4bd0-963b-27c5641a0f93", projectId: fixtureProjectIds.alpha, prompt: "retain me",
+    profileId: null, attachments: [],
+    composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
+    clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
+  };
+  try {
+    const opened = await controller.open("connection", fixtureProjectIds.alpha, 1);
+    assert.equal(opened.projectId, source);
+    await controller.handleRequest("connection", { method: "workbench/thread-state/draft/upsert", projectId: fixtureProjectIds.alpha, draft });
+    assert.equal((await controller.getSnapshot(source)).entries.length, 1);
+    assert.ok(!persistence.projects.has(fixtureProjectIds.alpha));
+    await controller.handleRequest("connection", {
+      method: "workbench/thread-state/draft/move", sourceProjectId: fixtureProjectIds.alpha,
+      destinationProjectId: fixtureProjectIds.beta, draftId: draft.draftId,
+    });
+    assert.equal((await controller.getSnapshot(source)).entries.length, 0);
+    const moved = (await controller.getSnapshot(destination)).entries[0];
+    assert.ok(moved?.entryKind === "draft");
+    assert.equal(moved.draft.projectId, destination);
+    assert.equal(moved.draft.prompt, draft.prompt);
+    await controller.close("connection", fixtureProjectIds.alpha);
+    assert.deepEqual(observations, [source]);
+    assert.deepEqual(stopped, [source]);
+  } finally { await controller.dispose(); }
+});
+
 test("thread mutations do not replace their project document", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const controller = new WorkbenchThreadStateController({
@@ -1234,20 +1274,21 @@ test("a failed cross-priority pinned move restores the loaded project state", as
 });
 
 test("project, pinned, and home thread state persist authoritatively in SQLite across controller restart", async () => {
+  const projectId = ProjectIdSchema.parse("local:///project");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-authority-"));
   await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, ".workbench", "workbench.sqlite3") });
   const store = new WorkbenchThreadStateStore(database);
   const [alpha, beta] = await database.observeThreadIdentities(["alpha", "beta"].map(nativeThreadId => ({
     native: { harness: "codex" as const, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId), nativeLocation: root },
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: root, title: nativeThreadId, createdAt: 1, updatedAt: 1, activityAt: 1,
+    projectId, projectRoot: root, title: nativeThreadId, createdAt: 1, updatedAt: 1, activityAt: 1,
   })));
   const providerEntries: WorkbenchThreadSidebarEntry[] = [
     pinnedRecord(alpha!.threadId, "Private alpha title"),
     pinnedRecord(beta!.threadId, "Private beta title"),
   ];
   const createController = () => new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
+    getProjectCatalog: () => ({ data: [{ ...projectOption("project", root), id: projectId }], rootPath: root }),
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
@@ -1260,9 +1301,9 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
   let controller = createController();
   try {
     await controller.openGlobal("global", 6);
-    await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.length === 2, "Provider entries did not reconcile.");
-    const alphaKey = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project"], getThreadDisplayThreadKey("codex", alpha!.threadId));
-    const betaKey = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project"], getThreadDisplayThreadKey("codex", beta!.threadId));
+    await waitFor(async () => (await controller.getSnapshot(projectId)).entries.length === 2, "Provider entries did not reconcile.");
+    const alphaKey = getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayThreadKey("codex", alpha!.threadId));
+    const betaKey = getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayThreadKey("codex", beta!.threadId));
     const pinnedFolderId = "00000000-0000-4000-8000-000000000301";
     const pinnedResult = await controller.handleRequest("global", {
       folderId: pinnedFolderId,
@@ -1280,7 +1321,7 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
     });
     assert.equal("result" in homeResult && (homeResult.result as { accepted?: boolean }).accepted, true);
 
-    const projectDocument = await store.readProject(fixtureProjectIds["project"]) as { records?: unknown[] } | null;
+    const projectDocument = await store.readProject(projectId) as { records?: unknown[] } | null;
     const pinnedDocument = await store.readGlobal("pinnedLayout") as { revision?: number } | null;
     const homeDocument = await store.readGlobal("homeDisplayOrder") as { revision?: number } | null;
     assert.equal(projectDocument?.records?.length, 2);

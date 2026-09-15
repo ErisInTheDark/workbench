@@ -81,6 +81,7 @@
  * - WorkbenchProjectOption: selectable project option.
  * - WorkbenchProjectRoot: project-root contract.
  * - WorkbenchProjectsPayload: project-list payload.
+ * - WorkbenchProjectAlias: retained address for a canonical project.
  * - WorkbenchModelOption: selectable model option.
  * - WorkbenchModelContextCapability: supported model context bounds.
  * - WorkbenchComposerSettings: composer settings contract.
@@ -735,8 +736,14 @@ export interface WorkbenchProjectRoot {
   rootPath: string;
 }
 
+export interface WorkbenchProjectAlias {
+  alias: string;
+  projectId: ProjectId;
+}
+
 export interface WorkbenchProjectsPayload {
   data: WorkbenchProjectOption[];
+  aliases?: WorkbenchProjectAlias[];
   rootPath: string;
 }
 

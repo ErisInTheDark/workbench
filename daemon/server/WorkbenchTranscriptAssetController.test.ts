@@ -25,7 +25,7 @@ const fixtureIdentityValues = {
     "later": fixtureIdentitySchemas.NativeTurnIdSchema.parse("later"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 

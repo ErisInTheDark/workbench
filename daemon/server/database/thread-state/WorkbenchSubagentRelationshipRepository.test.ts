@@ -12,8 +12,8 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("other-project"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other-project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -34,7 +34,7 @@ function fixture() {
     database, parentThreadId, childThreadId, otherParentThreadId,
     repository: new WorkbenchSubagentRelationshipRepository(database),
     reservation: {
-      reservationId: randomUUID(), parentThreadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "opencode" as const,
+      reservationId: randomUUID(), parentThreadId, projectId: fixtureIdentityValues.ProjectId.project, harness: "opencode" as const,
       cwd: "C:/project", name: "lena", title: "check things", profileId: "review", profileName: "reviewer",
       createdAt: 1, updatedAt: 1,
     },

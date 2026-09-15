@@ -50,7 +50,7 @@ const fixtureIdentityValues = {
     "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchThreadId: {
     "thread-sqlite": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-sqlite"),

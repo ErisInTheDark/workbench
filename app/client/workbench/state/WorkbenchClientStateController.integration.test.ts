@@ -3,6 +3,14 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createServer } from "node:http";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchAppStateRepository from "../../../server/state/WorkbenchAppStateRepository";
+import WorkbenchBrowserStateRegistry from "../../../server/state/WorkbenchBrowserStateRegistry";
+import WorkbenchAppStateRoutes from "../../../server/state/workbench-app-state-routes";
 
 import type {
   WorkbenchClientStateResponse,
@@ -12,6 +20,76 @@ import { WORKBENCH_BROWSER_STATE_HEADER } from "workbench-shared/state/workbench
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+
+test("real app-state remapping orders pending and later saves without losing edits across a failed retry", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-remap-"));
+  const repository = new WorkbenchAppStateRepository({ databasePath: path.join(directory, "state.sqlite3") });
+  await repository.start();
+  const registry = new WorkbenchBrowserStateRegistry(repository);
+  registry.start();
+  const routes = new WorkbenchAppStateRoutes(registry);
+  const server = createServer((request, response) => {
+    void routes.handle(request, response, new URL(request.url!, "http://localhost"));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const started = deferred<void>();
+  const release = deferred<void>();
+  let firstWrite = true;
+  let rejectRemap = true;
+  const controller = new WorkbenchClientStateController({
+    mode: "http", schedule: () => 1, cancelSchedule: () => {},
+    fetcher: async (input, init) => {
+      if (init?.method === "PUT" && firstWrite) {
+        firstWrite = false;
+        started.resolve();
+        await release.promise;
+      }
+      if (init?.method === "POST" && rejectRemap) {
+        rejectRemap = false;
+        return new Response("injected remap failure", { status: 500 });
+      }
+      return fetch(new URL(String(input), `http://127.0.0.1:${address.port}`), init);
+    },
+  });
+  try {
+    await controller.bootstrap();
+    const identity = { kind: "composerDraft" as const, daemonRegistrationId: controller.daemonRegistrationId, projectId: "old", threadId: "thread" };
+    const value = { text: "first", attachments: [{ id: "a", url: "attachment" }], updatedAt: 1 };
+    const first = controller.put({ ...identity, value });
+    await started.promise;
+    const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
+    const aliases = [{ alias: "old", projectId }];
+    const failed = assert.rejects(controller.adoptProjectAliases(aliases), /injected remap failure/);
+    const later = controller.put({ ...identity, value: { ...value, text: "later", updatedAt: 2 } });
+    release.resolve();
+    await Promise.all([first, failed, later]);
+    assert.equal(controller.records("composerDraft")[0]!.value.text, "later");
+    assert.equal(controller.resolveProjectId("old"), "old");
+    controller.rememberThreadIdentityAlias("old", "thread", "canonical-thread");
+    const observedDrafts: Array<{ projectId: string; threadId: string }> = [];
+    const unsubscribe = controller.subscribe(() => {
+      observedDrafts.push(...controller.records("composerDraft").map(({ projectId, threadId }) => ({ projectId, threadId })));
+    });
+    const adopted = controller.adoptProjectAliases(aliases);
+    const latest = controller.put({ ...identity, value: { ...value, text: "latest", updatedAt: 3 } });
+    await Promise.all([adopted, latest]);
+    unsubscribe();
+    assert.ok(observedDrafts.every(draft => draft.threadId === "canonical-thread"));
+    assert.deepEqual(controller.records("composerDraft"), [{ ...identity, projectId, threadId: "canonical-thread", value: { ...value, text: "latest", updatedAt: 3 } }]);
+    await controller.bootstrap();
+    assert.equal(controller.records("composerDraft").length, 1);
+    assert.equal(controller.records("composerDraft")[0]!.value.text, "latest");
+  } finally {
+    release.resolve();
+    controller.dispose();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await registry.close();
+    await repository.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("font size survives a later state snapshot and retains legacy whole-rem values", async () => {
   for (const [stored, expected] of [[116, 1.16], [1, 1]]) {

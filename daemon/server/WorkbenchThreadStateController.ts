@@ -15,7 +15,7 @@ import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { DraftIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
@@ -180,6 +180,7 @@ function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: Workb
 }
 
 export interface WorkbenchThreadStateControllerOptions {
+  resolveProjectId?: (projectId: ProjectId) => ProjectId;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
@@ -424,6 +425,7 @@ export default class WorkbenchThreadStateController {
   private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {
     const projectRequest = WorkbenchProjectStateRequestSchema.safeParse(input);
     if (projectRequest.success) {
+      projectRequest.data.projectId = this.canonicalProjectId(ProjectIdSchema.parse(projectRequest.data.projectId));
       const observation = this.connectionProjects.get(connectionId);
       const observedProjectId = observation?.scope === "project" ? observation.projectId : "";
       if (!observedProjectId || observedProjectId !== projectRequest.data.projectId) {
@@ -441,7 +443,7 @@ export default class WorkbenchThreadStateController {
       if (issue) this.options.log?.(`request invalid method=${sanitizeLogValue((input as { method?: unknown }).method)} ${describeInvalidRequest(input, issue)}`);
       return { error: { code: "invalidThreadStateMutation", message: issue?.message ?? "Invalid thread-state request." } };
     }
-    const request = parsed.data;
+    const request = this.canonicalRequest(parsed.data);
     switch (request.method) {
       case "workbench/thread-state/observe": {
         const observationRequest: ThreadObservationRequest = { projectId: request.projectId, subscriptionId: request.subscriptionId, target: request.target };
@@ -526,6 +528,7 @@ export default class WorkbenchThreadStateController {
   async open(connectionId: string, projectId: ProjectId, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
   async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
+    projectId = this.canonicalProjectId(projectId);
     const priorObservation = this.connectionProjects.get(connectionId);
     if (priorObservation?.scope === "global") await this.closeGlobal(connectionId);
     const priorProjectId = priorObservation?.scope === "project" ? priorObservation.projectId : "";
@@ -588,6 +591,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async close(connectionId: string, expectedProjectId?: ProjectId) {
+    if (expectedProjectId) expectedProjectId = this.canonicalProjectId(expectedProjectId);
     const observation = this.connectionProjects.get(connectionId);
     const projectId = observation?.scope === "project" ? observation.projectId : "";
     if (!projectId || (expectedProjectId && projectId !== expectedProjectId)) return;
@@ -643,6 +647,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async acceptIntent(connectionId: string, input: { draftId?: DraftId; harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId; title?: string; turnId: WorkbenchTurnId }) {
+    input = { ...input, projectId: this.canonicalProjectId(input.projectId) };
     const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
     if (
       !this.isObservedProjectAuthorized(connectionId, input.projectId)
@@ -678,6 +683,42 @@ export default class WorkbenchThreadStateController {
     return { accepted: true, revision: (await this.getSnapshot(input.projectId)).revision };
   }
 
+  private canonicalProjectId(projectId: ProjectId) {
+    return this.options.resolveProjectId?.(projectId) ?? projectId;
+  }
+
+  private canonicalRequest(request: WorkbenchThreadStateRequest): WorkbenchThreadStateRequest {
+    if ("projectId" in request) request = { ...request, projectId: this.canonicalProjectId(request.projectId) };
+    if (request.method === "workbench/thread-state/draft/upsert") {
+      return { ...request, draft: { ...request.draft, projectId: this.canonicalProjectId(request.draft.projectId) } };
+    }
+    if (request.method === "workbench/thread-state/draft/move") {
+      return {
+        ...request, sourceProjectId: this.canonicalProjectId(request.sourceProjectId),
+        destinationProjectId: this.canonicalProjectId(request.destinationProjectId),
+      };
+    }
+    if (request.method === "workbench/thread-state/snooze/until") {
+      return { ...request, target: { ...request.target, projectId: this.canonicalProjectId(ProjectIdSchema.parse(request.target.projectId)) } };
+    }
+    const key = (value: string | null) => {
+      if (!value) return value;
+      const parsed = parseProjectQualifiedThreadDisplayKey(value);
+      return parsed ? getProjectQualifiedThreadDisplayKey(this.canonicalProjectId(parsed.projectId), parsed.threadKey) : value;
+    };
+    switch (request.method) {
+      case "workbench/thread-state/home-display-order/move":
+        return { ...request, sourceKey: key(request.sourceKey)!, beforeKey: key(request.beforeKey), destinationFolderKey: key(request.destinationFolderKey) };
+      case "workbench/thread-state/pinned-display-order/move":
+        return { ...request, sourceKey: key(request.sourceKey)!, beforeKey: key(request.beforeKey) };
+      case "workbench/thread-state/pinned-display-order/folder/create":
+        return { ...request, sourceKey: key(request.sourceKey)! };
+      case "workbench/thread-state/pinned-display-order/folder/drop":
+        return { ...request, sourceKey: key(request.sourceKey)!, targetKey: key(request.targetKey) };
+      default: return request;
+    }
+  }
+
   async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId) {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId });
   }
@@ -687,12 +728,14 @@ export default class WorkbenchThreadStateController {
   }
 
   async refresh(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     void this.reconcile(projectId, state);
     return this.snapshot(projectId, state);
   }
 
   async ensureProviderEntry(projectId: ProjectId, providerEntry: Exclude<WorkbenchObservedThreadEntry, { entryKind: "draft" }>) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = entryKey(providerEntry);
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -708,12 +751,14 @@ export default class WorkbenchThreadStateController {
   }
 
   async getMcpGeneration(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const entry = state.entries.get(`${harness}:${threadId}`);
     return entry?.entryKind === "draft" ? null : entry?.mcpGeneration ?? null;
   }
 
   async setMcpGeneration(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, generation: string) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -737,6 +782,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private readComposerProfile(slot: WorkbenchComposerProfileSlot, refresh: boolean) {
+    slot = { ...slot, projectId: this.canonicalProjectId(slot.projectId) };
     const key = `${slot.projectId}:profiles`;
     const pending = this.operationQueues.get(key);
     return this.enqueue(key, async () => {
@@ -746,6 +792,7 @@ export default class WorkbenchThreadStateController {
   }
 
   setComposerProfileTarget(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
+    slot = { ...slot, projectId: this.canonicalProjectId(slot.projectId) };
     const parsed = WorkbenchComposerProfileSelectionSchema.parse(selection);
     return this.enqueue(`${slot.projectId}:profiles`, async () => {
       return await this.persistComposerProfileTarget(await this.getProject(slot.projectId), slot, parsed);
@@ -753,6 +800,7 @@ export default class WorkbenchThreadStateController {
   }
 
   prepareComposerProfileTarget(slot: WorkbenchComposerProfileSlot) {
+    slot = { ...slot, projectId: this.canonicalProjectId(slot.projectId) };
     const key = `${slot.projectId}:profiles`;
     const pending = this.operationQueues.get(key);
     return this.enqueue(key, async () => {
@@ -885,6 +933,7 @@ export default class WorkbenchThreadStateController {
     profile?: WorkbenchComposerProfileSelectionState | null,
     promotedDraftId?: DraftId,
   ) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -992,17 +1041,20 @@ export default class WorkbenchThreadStateController {
   }
 
   async getThreadEntry(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     return this.naturallyOrderedEntries(state).find(entry => entry.entryKind !== "draft"
       && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
   }
 
   async getCanonicalThreadEntry(projectId: ProjectId, threadId: WorkbenchThreadId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     return [...state.entries.values()].find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId) ?? null;
   }
 
   async setAgentStatus(projectId: ProjectId, threadId: WorkbenchThreadId, status: "completed" | "blocked") {
+    projectId = this.canonicalProjectId(projectId);
     const entry = await this.getCanonicalThreadEntry(projectId, threadId);
     if (!entry || entry.entryKind === "draft") throw new Error("The managed thread has no stored thread state.");
     const next = await this.applyLifecycle(projectId, entry.identity.harness, threadId, { kind: "agentStatus", status });
@@ -1013,6 +1065,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async setPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) {
+    projectId = this.canonicalProjectId(projectId);
     const entry = await this.getCanonicalThreadEntry(projectId, threadId);
     if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
     const next = await this.applyLifecycle(projectId, entry.identity.harness, threadId,
@@ -1022,6 +1075,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async clearPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, requestKey: string) {
+    projectId = this.canonicalProjectId(projectId);
     const entry = await this.getCanonicalThreadEntry(projectId, threadId);
     if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
     return this.applyLifecycle(projectId, entry.identity.harness, threadId,
@@ -1047,6 +1101,7 @@ export default class WorkbenchThreadStateController {
       turnId: WorkbenchTurnId;
     }>,
   ) {
+    input = { ...input, projectId: this.canonicalProjectId(input.projectId) };
     const state = await this.getProject(input.projectId);
     const key = `${input.harness}:${input.threadId}`;
     const candidate = state.entries.get(key);
@@ -1105,15 +1160,18 @@ export default class WorkbenchThreadStateController {
   }
 
   async getRevision(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
     return (await this.getProject(projectId)).revision;
   }
 
   async observeLifecycleInProject(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, event: WorkbenchObservedLifecycleEvent) {
+    projectId = this.canonicalProjectId(projectId);
     await this.getProject(projectId);
     return this.observeLifecycle(harness, threadId, event, projectId);
   }
 
   async observeLifecycle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, event: WorkbenchObservedLifecycleEvent, selectedProjectId?: ProjectId) {
+    if (selectedProjectId) selectedProjectId = this.canonicalProjectId(selectedProjectId);
     const key = `${harness}:${threadId}`;
     const projectIds = [...this.projects.entries()].filter(([id, state]) => (!selectedProjectId || id === selectedProjectId) && state.entries.has(key)).map(([projectId]) => projectId);
     let lifecycle: WorkbenchThreadLifecycle | null = null;
@@ -1170,6 +1228,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async observeActivity(harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnStartedAt?: number | null, selectedProjectId?: ProjectId) {
+    if (selectedProjectId) selectedProjectId = this.canonicalProjectId(selectedProjectId);
     if (selectedProjectId) await this.getProject(selectedProjectId);
     const key = `${harness}:${threadId}`;
     for (const [projectId, state] of this.projects) {
@@ -1213,6 +1272,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async setTitle(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, title: string) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => await this.setTitleOwned(projectId, state, key, title));
@@ -1266,11 +1326,13 @@ export default class WorkbenchThreadStateController {
   }
 
   async getSnapshot(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     return this.snapshot(projectId, state);
   }
 
   async getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null> {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     const entry = state.entries.get(key);
@@ -1285,6 +1347,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async refreshGitArcState(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -1342,6 +1405,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private async getProject(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
     this.assertActive();
     const current = this.projects.get(projectId);
     if (current) return current;

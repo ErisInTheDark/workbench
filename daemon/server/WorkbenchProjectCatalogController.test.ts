@@ -14,6 +14,214 @@ import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence } from "./database/project/workbench-project-persistence";
+
+test("prepared startup waits for parent readiness and warm replacement retains icon freshness without discovery", async () => {
+  const project = createProject("local://C:/projects/ready", "C:/projects/ready");
+  const initial = { catalog: [{ project, sourceKey: "ready", checkedAt: 100 }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" };
+  let ready = false;
+  let scans = 0;
+  const options = {
+    now: () => 101,
+    persistence: {
+      reconcileProjectCatalog: async () => { throw new Error("Startup must use prepared discovery."); },
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => { throw new Error("Startup must not repeat discovery."); },
+    discoverIcon: async () => { scans += 1; return null; },
+    createWatcher: (root: string, listener: (event: string, filename: string | Buffer | null) => void, recursive: boolean) => new FakeWatcher(root, listener, recursive),
+  };
+  const controller = new WorkbenchProjectCatalogController({
+    ...options,
+    initialProjects: () => {
+      assert.equal(ready, true, "constructor must not read a parent that has not started");
+      return initial;
+    },
+  });
+  let replacement: WorkbenchProjectCatalogController | undefined;
+  try {
+    ready = true;
+    await controller.ensureLoaded();
+    assert.deepEqual(controller.getCurrentSnapshot().data, [project]);
+    replacement = new WorkbenchProjectCatalogController({ ...options, initialProjects: controller.captureReloadState() });
+    await replacement.ensureLoaded();
+    await replacement.observeProjectIcon(project.id);
+    assert.equal(scans, 0);
+  } finally {
+    await controller.dispose();
+    await replacement?.dispose();
+  }
+});
+
+test("icon observations keep stale data, coalesce work, and retain successful absence without eviction", async () => {
+  let now = 600_000;
+  const project = createProject("local://C:/projects/icon", "C:/projects/icon");
+  project.icon = { rootId: project.roots[0].id, path: "old.png" };
+  let record: WorkbenchProjectCacheRecord = { project, checkedAt: 0, sourceKey: "first" };
+  const scan = deferred<null>();
+  let scans = 0;
+  const persistence: WorkbenchProjectPersistence = {
+    reconcileProjectCatalog: async () => [record],
+    readProjectAliases: async () => [],
+    resolveProjectIdentity: async () => project.id,
+    settleProjectIcon: async settlement => {
+      const { icon: _old, ...metadata } = record.project;
+      record = { project: { ...metadata, ...(settlement.icon ? { icon: settlement.icon } : {}) }, checkedAt: settlement.checkedAt, sourceKey: record.sourceKey };
+      return true;
+    },
+  };
+  const controller = new WorkbenchProjectCatalogController({
+    persistence,
+    initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
+    now: () => now,
+    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" }),
+    discoverIcon: () => { scans += 1; return scan.promise; },
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  try {
+    await controller.ensureLoaded();
+    assert.equal(scans, 0);
+    const first = controller.observeProjectIcon(project.id);
+    assert.equal(controller.observeProjectIcon(project.id), first);
+    assert.deepEqual((await controller.readCatalog()).data[0].icon, project.icon);
+    scan.resolve(null);
+    await first;
+    assert.equal(controller.getCurrentSnapshot().data[0].icon, undefined);
+    await controller.observeProjectIcon(project.id);
+    assert.equal(scans, 1);
+    now += 30 * 60_000;
+    assert.equal(controller.getCurrentSnapshot().data[0].icon, undefined);
+    assert.equal(scans, 1);
+  } finally {
+    scan.resolve(null);
+    await controller.dispose();
+  }
+});
+
+test("every disposal caller waits for icon settlement and unexpected settlement failure stays visible", async () => {
+  const project = createProject("local://C:/projects/icon", "C:/projects/icon");
+  const settlement = deferred<boolean>();
+  const entered = deferred<void>();
+  const errors: string[] = [];
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: { catalog: [{ project, sourceKey: "first", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
+    persistence: {
+      reconcileProjectCatalog: async () => [],
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: () => { entered.resolve(); return settlement.promise; },
+    },
+    discoverIcon: async () => null,
+    logError: message => errors.push(message),
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  const work = controller.observeProjectIcon(project.id);
+  await entered.promise;
+  const first = controller.dispose();
+  let secondFinished = false;
+  const second = controller.dispose().then(() => { secondFinished = true; });
+  await Promise.resolve();
+  assert.equal(secondFinished, false);
+  settlement.reject(new Error("database settlement failed"));
+  await Promise.all([first, second, work]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /database settlement failed/u);
+});
+
+test("structural refresh cannot replace a newer settled icon with its earlier database snapshot", async () => {
+  const project = createProject("local://C:/projects/icon", "C:/projects/icon");
+  const record: WorkbenchProjectCacheRecord = { project, sourceKey: "same-roots", checkedAt: null };
+  const aliases = deferred<[]>();
+  const reconciled = deferred<void>();
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
+    persistence: {
+      reconcileProjectCatalog: async () => { reconciled.resolve(); return [record]; },
+      readProjectAliases: () => aliases.promise,
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" }),
+    discoverIcon: async () => ({ rootId: project.roots[0].id, path: "fresh.png" }),
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  try {
+    controller.invalidate();
+    await controller.readCatalog();
+    await reconciled.promise;
+    await controller.observeProjectIcon(project.id);
+    aliases.resolve([]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(controller.getCurrentSnapshot().data[0].icon?.path, "fresh.png");
+  } finally {
+    aliases.resolve([]);
+    await controller.dispose();
+  }
+});
+
+test("invalidated structural discovery cannot reconcile stale roots into durable storage", async () => {
+  const project = createProject("local://C:/projects/icon", "C:/projects/icon");
+  const discovery = deferred<{ data: WorkbenchProjectOption[]; aliases: []; excludedRootPaths: string[]; rootPath: string }>();
+  let reconciliations = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: { catalog: [{ project, sourceKey: "current", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
+    persistence: {
+      reconcileProjectCatalog: async () => { reconciliations += 1; return []; },
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: () => discovery.promise,
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  try {
+    controller.invalidate();
+    await controller.readCatalog();
+    controller.invalidate();
+    discovery.resolve({ data: [], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(reconciliations, 0);
+    assert.equal(controller.getCurrentSnapshot().data[0].id, project.id);
+  } finally {
+    discovery.resolve({ data: [], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" });
+    await controller.dispose();
+  }
+});
+
+test("changed exclusion evidence retires cached CWD authority even when selectable projects stay the same", async () => {
+  const project = createProject("local://C:/projects/parent", "C:/projects/parent");
+  const record = { project, sourceKey: "roots", checkedAt: null };
+  const excluded = "C:/projects/parent/nested";
+  let now = 0;
+  let resolverCalls = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
+    now: () => now,
+    persistence: {
+      reconcileProjectCatalog: async () => [record],
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [excluded], rootPath: "C:/projects" }),
+    resolveProjectFromCatalog: async (projects, cwd, options) => {
+      resolverCalls += 1;
+      if (options?.excludedRootPaths?.includes(excluded)) throw new Error("Excluded checkout.");
+      return resolveFromCatalog(projects, cwd, options);
+    },
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  try {
+    await controller.resolveAgentEndpointProjectFromCwd(excluded);
+    now = 20_000;
+    await controller.readCatalog();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await assert.rejects(controller.resolveAgentEndpointProjectFromCwd(excluded), /Excluded checkout/u);
+    assert.ok(resolverCalls > 1);
+  } finally { await controller.dispose(); }
+});
 
 class FakeWatcher {
   closed = false;
@@ -56,13 +264,28 @@ function createProject(id: string, rootPath = `C:/projects/${id}`): WorkbenchPro
   };
 }
 
+function catalogFixture(read: () => Promise<WorkbenchProjectOption[]>) {
+  return {
+    discoverProjectIdentities: async () => ({
+      data: await read(), aliases: [], excludedRootPaths: [], rootPath: "C:/projects",
+    }),
+    persistence: {
+      reconcileProjectCatalog: async projects => projects.map(project => ({ project, sourceKey: project.rootPath, checkedAt: null })),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async projectId => fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
+      settleProjectIcon: async () => true,
+    } satisfies WorkbenchProjectPersistence,
+  };
+}
+
 test("replacement catalog serves its retained snapshot while discovery is pending", async () => {
   const discovery = deferred<WorkbenchProjectOption[]>();
-  const initialSnapshot = { data: [createProject("retained")], rootPath: "C:/projects" };
+  const project = createProject("retained");
+  const initialSnapshot = { data: [project], aliases: [], rootPath: "C:/projects" };
   const options = {
-    initialSnapshot,
+    initialProjects: { catalog: [{ project, sourceKey: "retained", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     now: () => 1,
-    discoverProjects: () => discovery.promise,
+    ...catalogFixture(() => discovery.promise),
     createWatcher: (root: string, listener: (event: string, filename: string | Buffer | null) => void, recursive: boolean) => (
       new FakeWatcher(root, listener, recursive)
     ),
@@ -71,10 +294,11 @@ test("replacement catalog serves its retained snapshot while discovery is pendin
   try {
     assert.deepEqual(controller.getCurrentSnapshot(), initialSnapshot);
     await controller.ensureLoaded();
+    controller.invalidate();
     assert.deepEqual(await controller.readCatalog(), initialSnapshot);
   } finally {
-    controller.dispose();
     discovery.resolve([createProject("fresh")]);
+    await controller.dispose();
   }
 });
 
@@ -167,10 +391,10 @@ function createHarness() {
       watchers.push(watcher);
       return watcher;
     },
-    discoverProjects: async () => {
+    ...catalogFixture(async () => {
       discoveryReads += 1;
       return await readProjects();
-    },
+    }),
     logError: (message) => { loggedErrors.push(message); },
     now: () => now,
     projectsRootPath: "C:/projects",
@@ -348,7 +572,7 @@ test("serves catalog-selected PNG and ICO assets with bounded content types", as
   };
   const controller = new WorkbenchProjectCatalogController({
     createWatcher: () => new FakeWatcher(root, () => undefined, false),
-    discoverProjects: async () => [pngProject, icoProject],
+    ...catalogFixture(async () => [pngProject, icoProject]),
     projectsRootPath: root,
   });
   context.after(async () => {
@@ -381,7 +605,7 @@ test("rejects catalog icon descriptors that escape their project root", async (c
   };
   const controller = new WorkbenchProjectCatalogController({
     createWatcher: () => new FakeWatcher(temporaryRoot, () => undefined, false),
-    discoverProjects: async () => [project],
+    ...catalogFixture(async () => [project]),
     projectsRootPath: temporaryRoot,
   });
   context.after(async () => {
@@ -398,7 +622,7 @@ test("rejects catalog icon descriptors that escape their project root", async (c
 test("reuses one structured catalog for repeated CWD resolution", async () => {
   const harness = createHarness();
   assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src")).project.id, "alpha");
-  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], rootPath: "C:/projects" });
+  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], aliases: [], rootPath: "C:/projects" });
   assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/test")).project.id, "alpha");
   assert.equal(harness.discoveryReads, 1);
   assert.equal(harness.watchers[0]?.recursive, false);
@@ -428,7 +652,7 @@ test("ensureLoaded coalesces with initial resolution and makes the snapshot sync
   assert.equal((await resolution).id, "alpha");
   await loading;
   await harness.controller.ensureLoaded();
-  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], rootPath: "C:/projects" });
+  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], aliases: [], rootPath: "C:/projects" });
   assert.equal(harness.discoveryReads, 1);
 });
 
@@ -563,10 +787,12 @@ test("disposal fences publication from an in-flight generation", async () => {
   harness.setReader(async () => await gate.promise);
   const pending = harness.controller.resolveProjectById("alpha");
   await Promise.resolve();
-  harness.controller.dispose();
+  const disposed = harness.controller.dispose();
   gate.resolve([createProject("alpha")]);
 
-  assert.equal((await pending).id, "alpha");
+  await assert.rejects(pending, { name: "AbortError" });
+  await disposed;
+  assert.throws(() => harness.controller.getCurrentSnapshot(), /disposed/u);
   await assert.rejects(harness.controller.resolveProjectById("alpha"), /disposed/u);
 });
 

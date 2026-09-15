@@ -18,6 +18,7 @@ import type { WorkbenchReloadDirtSnapshot } from "../shared/reload/workbench-rel
 import type { WorkbenchProjectsPayload } from "../shared/types";
 import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
 import type { TranscriptStreamUpdate } from "../shared/workbench/transcript/thread-transcript-stream";
+import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -140,12 +141,26 @@ test("real application survives reload expiry, migrated candidate failure, retry
         const database = new Database(serverDatabase, { readonly: true });
         try {
           assert.equal(database.prepare("SELECT previous_cursor FROM codex_transcript_turn_cursors WHERE turn_id = ?").pluck().get(transcript.turnId), null);
+          assert.deepEqual(database.pragma("foreign_key_check"), [], "Reload must retain project ownership");
+          assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").pluck().get(transcript.threadId), fixtureProject.id);
+          assert.equal(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'workbench_thread_state_projects'").get(), undefined);
+          for (const table of workbenchDatabaseSchema.currentTables) {
+            for (const column of ["project_id", "scope_project_id"]) {
+              if (!(column in table.columns)) continue;
+              const foreignKeys = database.pragma(`foreign_key_list("${table.name}")`) as Array<{ table: string; from: string; to: string }>;
+              assert.ok(foreignKeys.some(key => key.table === "workbench_projects" && key.from === column && key.to === "id"),
+                `${table.name}.${column} must retain its project parent constraint`);
+            }
+          }
         } finally { database.close(); }
       } finally { await runtime.transcripts.unsubscribe({ subscriptionId }); }
     };
     await installLifecycleProbe(runtime.project);
     await runtime.start();
-    const transcript = await seedLifecycleTranscript(runtime.project);
+    const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
+    const fixtureProject = catalog.data.find(project => path.resolve(project.rootPath) === runtime.project);
+    assert.ok(fixtureProject);
+    const transcript = await seedLifecycleTranscript(runtime.project, fixtureProject.id);
     await runtime.startApp();
     await assets();
     await verifyTranscript();
@@ -153,8 +168,6 @@ test("real application survives reload expiry, migrated candidate failure, retry
     assert.ok(ids.app && ids.daemon);
     const registration = await appState();
     assert.ok(registration.daemonRegistrationId);
-    const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
-    assert.ok(catalog.data.some((project) => path.resolve(project.rootPath) === runtime.project));
     console.log("cold entrypoints, SQLite, compiled assets and ingress passed");
 
     await reloadServer(["server:database"]);

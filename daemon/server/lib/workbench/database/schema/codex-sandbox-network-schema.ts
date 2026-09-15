@@ -6,6 +6,7 @@
  * codexSandboxNetworkSchemaHistory: private Codex sandbox network table histories. Keywords: Codex, sandbox, network, history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import {
   booleanInteger,
   defineTable,
@@ -59,5 +60,5 @@ export type CodexSandboxNetworkSchemaRows = {
 
 export const codexSandboxNetworkSchemaHistory = defineSubsystemHistory([
   codexSandboxNetworkGlobalSettingsHistory,
-  codexSandboxNetworkProjectOverridesHistory,
+  ownProjectReferences(codexSandboxNetworkProjectOverridesHistory),
 ]);

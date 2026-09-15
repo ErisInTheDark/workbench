@@ -52,7 +52,7 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
-import { DraftIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchDaemonRuntimeClient from "./workbench/WorkbenchDaemonRuntimeClient";
@@ -205,17 +205,17 @@ export async function openWorkbenchThreadStateObservation({
   request,
 }: {
   acceptProject: (update: WorkbenchProjectStateUpdate) => void;
-  installCatalog: (catalog: WorkbenchProjectsPayload) => void;
+  installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
   projectId: string;
   request: (params: { projectId: string; version?: 2 | 3 | 4 | 5 }) => Promise<unknown>;
 }) {
-  const acceptComposite = (response: unknown) => {
+  const acceptComposite = async (response: unknown) => {
     const parsed = WorkbenchThreadStateOpenResultSchema.safeParse(response);
     if (!parsed.success) {
       reportClientSchemaError("Repaired Workbench thread-state open response", parsed.error);
     }
     const conformed = conformWorkbenchThreadStateOpenResult(response, projectId);
-    installCatalog(conformed.data.catalog);
+    await installCatalog(conformed.data.catalog);
     if (conformed.data.project) acceptProject(conformed.data.project);
     return conformed;
   };
@@ -237,7 +237,7 @@ export async function openWorkbenchThreadStateObservation({
     return { pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const }, projectThreads: { projects: [] }, sidebar: legacy.data };
   }
 
-  const composite = acceptComposite(response).data;
+  const composite = (await acceptComposite(response)).data;
   return { pinnedThreadLayout: composite.pinnedThreadLayout, projectThreads: composite.projectThreads, sidebar: composite.sidebar };
 }
 
@@ -245,7 +245,7 @@ export async function openWorkbenchGlobalThreadStateObservation({
   installCatalog,
   request,
 }: {
-  installCatalog: (catalog: WorkbenchProjectsPayload) => void;
+  installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
   request: (version: 4 | 5 | 6 | 7) => Promise<unknown>;
 }) {
   let response: unknown;
@@ -263,7 +263,7 @@ export async function openWorkbenchGlobalThreadStateObservation({
     reportClientSchemaError("Repaired Workbench global thread-state open response", parsed.error);
   }
   const conformed = conformWorkbenchGlobalThreadStateOpenResult(response).data;
-  installCatalog(conformed.catalog);
+  await installCatalog(conformed.catalog);
   return {
     homeThreadDisplayOrder: "homeThreadDisplayOrder" in conformed ? conformed.homeThreadDisplayOrder : null,
     pinnedThreadLayout: conformed.pinnedThreadLayout,
@@ -1011,8 +1011,16 @@ export async function WorkbenchClient(
       return { ok: false };
     }
     try {
-      const canonicalRoute = await threadIdentity.resolveRoute(route);
+      const clientState = workbenchBindings.clientStateController;
+      const projectRoute = clientState ? {
+        ...route,
+        projectId: route.projectId ? ProjectIdSchema.parse(clientState.resolveProjectId(route.projectId)) : route.projectId,
+        threadOwnerProjectId: route.threadOwnerProjectId
+          ? ProjectIdSchema.parse(clientState.resolveProjectId(route.threadOwnerProjectId)) : route.threadOwnerProjectId,
+      } : route;
+      const canonicalRoute = await threadIdentity.resolveRoute(projectRoute);
       if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
+      if (!isSameWorkbenchRoute(route, projectRoute)) return { ok: true, canonicalRoute };
       if (route.view === "thread") {
         const projectId = route.threadOwnerProjectId || route.projectId;
         const references = new Set(workbenchBindings.clientStateController?.getSnapshot().records.flatMap((record) => (

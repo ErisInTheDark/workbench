@@ -13,6 +13,7 @@ import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/s
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
@@ -21,6 +22,33 @@ const BROWSER_A = "10000000-0000-4000-8000-000000000001";
 const BROWSER_B = "20000000-0000-4000-8000-000000000002";
 const BROWSER_C = "30000000-0000-4000-8000-000000000003";
 const BROWSER_D = "40000000-0000-4000-8000-000000000004";
+
+test("project aliases reach open stores and dormant stores before their next read", async context => {
+  const { directory, registry, shared } = await fixture(context);
+  const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  for (const browser of [BROWSER_A, BROWSER_B]) {
+    const owner = await registry.readBrowser(browser);
+    await registry.mutateBrowser(browser, { action: "put", record: {
+      kind: "composerDraft", daemonRegistrationId: owner.daemonRegistrationId, projectId: "old", threadId: browser,
+      value: { text: browser, updatedAt: 1, attachments: [] },
+    } });
+  }
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
+  reopened.start();
+  try {
+    const owner = await reopened.readBrowser(BROWSER_A);
+    await reopened.remapBrowserProjects(BROWSER_A, {
+      daemonRegistrationId: owner.daemonRegistrationId, aliases: [{ alias: "old", projectId }],
+    });
+    for (const browser of [BROWSER_A, BROWSER_B]) {
+      const drafts = records(await reopened.readBrowser(browser)).filter(record => record.kind === "composerDraft");
+      assert.equal(drafts.length, 1);
+      assert.equal(drafts[0]!.projectId, projectId);
+      assert.equal(drafts[0]!.value.text, browser);
+    }
+  } finally { await reopened.close(); }
+});
 
 test("model favourites remain browser-local, provider-specific and durable", async (context) => {
   const { directory, registry, shared } = await fixture(context);

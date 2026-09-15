@@ -103,7 +103,7 @@ class FakeHarnessClient {
 
 test("multiplexed wait immediately prefers questionnaires, then inactive turns", async (context) => {
   const cwd = process.cwd();
-  const projectId = "subagent-wait-project";
+  const projectId = "local:///subagent-wait-project";
   const inactive = summary({ cwd, name: "Yuzu", projectId, threadId: inactiveThreadId });
   const waiting = summary({ cwd, name: "Momo", projectId, threadId: questionnaireThreadId });
   const database = createThreadStateTestDatabase();

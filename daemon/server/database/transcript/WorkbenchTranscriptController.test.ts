@@ -26,7 +26,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchThreadId: {
     "provider-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider-thread"),

@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchDatabaseNode: own SQLite readiness, identity, transcript and sandbox network registrations, replacement and closure.
  */
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 
@@ -27,7 +27,7 @@ import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
 
 type DatabaseControllerConstructor = new (
-  options: { databasePath: string; beforeMigration?(backupPath: string): void },
+  options: import("./database/WorkbenchDatabaseController").WorkbenchDatabaseControllerOptions,
 ) => DaemonDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & Pick<
   import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission"
 >;
@@ -97,6 +97,9 @@ export default new ReloadableNode<
     "shared/workbench/settings/**",
     "daemon/server/database/**",
     "shared/database/**",
+    "daemon/server/lib/project.ts",
+    "daemon/server/lib/git.ts",
+    "daemon/server/lib/workbench/project/project-identity.ts",
   ].join("\n"),
   children: [WorkbenchInstructionsNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
@@ -115,8 +118,22 @@ export default new ReloadableNode<
       "workbench-transcript-capture-gap.json",
     );
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
+    const { discoverProjectIdentities } = require("./lib/project") as typeof import("./lib/project");
+    const { WorkbenchProjectRelocationsSchema } = require("./database/project/workbench-project-persistence") as typeof import("./database/project/workbench-project-persistence");
     const database = new DatabaseController({
       databasePath,
+      prepareProjects: async signal => {
+        const discovery = await discoverProjectIdentities(signal);
+        signal.throwIfAborted();
+        let source: string;
+        try {
+          source = await readFile(join(context.legacyMigrationProjectRoot, ".workbench", "project-identity-relocations.json"), { encoding: "utf8", signal });
+        } catch (error) {
+          if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return { discovery, relocations: {} };
+          throw error;
+        }
+        return { discovery, relocations: WorkbenchProjectRelocationsSchema.parse(JSON.parse(source)) };
+      },
       beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
     });
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();

@@ -55,7 +55,7 @@ const childThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("chil
 function subagentFixture() {
   const database = createThreadStateTestDatabase();
   for (const id of [callerThreadId, childThreadId, "different-parent", "unrelated-thread"]) {
-    database.admitThread("web/workbench", id);
+    database.admitThread("local:///web/workbench", id);
   }
   return {
     database,
@@ -188,7 +188,7 @@ function createProjectResolver(expectedCwd: string) {
     rootPath: cwd,
   };
   const project = {
-    id: fixtureIdentitySchemas.ProjectIdSchema.parse("web/workbench"),
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///web/workbench"),
     kind: "git" as const,
     root: cwd,
     rootPath: cwd,

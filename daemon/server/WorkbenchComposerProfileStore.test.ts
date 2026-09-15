@@ -11,6 +11,31 @@ import { test, type TestContext } from "node:test";
 import type { WorkbenchComposerProfile } from "workbench-shared/types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import { projectTables } from "./database/workbench-database-schema";
+import { insertRow, selectRows } from "workbench-shared/database/workbench-database-statements";
+
+test("project profile import and mutation preserve canonical scope through retained aliases", async context => {
+  const { create, database, root } = await fixture(context);
+  const projectId = "remote://example.test/profiles";
+  await database.executeTransaction([
+    insertRow(projectTables.projects, { id: projectId }),
+    insertRow(projectTables.aliases, { alias: "old-profiles", project_id: projectId }),
+  ]);
+  const imported = { ...profile("imported", 1), scope: { kind: "project" as const, projectId: "old-profiles" } };
+  await mkdir(path.join(root, ".workbench", "runtime"), { recursive: true });
+  await writeFile(path.join(root, ".workbench", "runtime", "composer-profiles.json"), JSON.stringify({
+    version: 1, profiles: { imported },
+  }));
+  const store = create();
+  assert.deepEqual((await store.read()).profiles[0]?.scope, { kind: "project", projectId });
+  await store.mutate({ kind: "upsert", profile: { ...imported, name: "edited" } }, async value => {
+    assert.deepEqual(value.scope, { kind: "project", projectId });
+  });
+  const independent = "local://C:/profile-only";
+  await store.mutate({ kind: "upsert", profile: { ...profile("independent", 1), scope: { kind: "project", projectId: independent } } });
+  assert.equal((await database.query(selectRows(projectTables.projects, { where: { id: independent } }))).length, 1);
+  assert.deepEqual((await create().read()).profiles.find(value => value.id === "imported")?.scope, { kind: "project", projectId });
+});
 
 async function fixture(context: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-store-"));

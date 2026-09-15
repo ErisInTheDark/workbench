@@ -28,10 +28,15 @@ import WorkbenchClaimStatsRepository from "./stats/WorkbenchClaimStatsRepository
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
+import WorkbenchProjectRepository from "./project/WorkbenchProjectRepository.ts";
+import WorkbenchProjectMigration from "./project/WorkbenchProjectMigration.ts";
+import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
 let database: Database.Database | null = null;
+let projectRepository: WorkbenchProjectRepository | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 let threadIdentityRepository: WorkbenchThreadIdentityRepository | null = null;
 let transcriptIdentityRepository: WorkbenchTranscriptIdentityRepository | null = null;
@@ -47,6 +52,7 @@ let suspendedDatabase: { path: string; version: number } | null = null;
 function initializeRepositories() {
   if (!database) throw new Error("Workbench database is not initialized");
   proveReadWrite();
+  projectRepository = new WorkbenchProjectRepository(database);
   threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
   transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
   transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
@@ -90,6 +96,7 @@ function post(response: WorkbenchDatabaseResponse) {
 }
 
 function closeDatabase() {
+  projectRepository = null;
   threadIdentityRepository = null;
   transcriptIdentityRepository = null;
   transcriptRepository = null;
@@ -146,6 +153,23 @@ function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "
 }
 
 function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" | "acknowledgeMigration" | "suspend" | "resume" }>) {
+  switch (request.type) {
+    case "reconcileProjectCatalog":
+    case "readProjectAliases":
+    case "resolveProjectIdentity":
+    case "settleProjectIcon":
+      if (!projectRepository) throw new Error("Workbench project repository is not initialized");
+      if (request.type === "reconcileProjectCatalog") {
+        post({ id: request.id, type: "projectCatalog", records: projectRepository.reconcile(request.projects) });
+      } else if (request.type === "readProjectAliases") {
+        post({ id: request.id, type: "projectAliases", aliases: projectRepository.readAliases() });
+      } else if (request.type === "resolveProjectIdentity") {
+        post({ id: request.id, type: "projectIdentity", projectId: projectRepository.resolve(request.projectId) });
+      } else {
+        post({ id: request.id, type: "projectIconSettlement", accepted: projectRepository.settleIcon(request.settlement) });
+      }
+      return;
+  }
   if (request.type === "observeTurnIdentities") {
     if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
     post({ id: request.id, type: "turnIdentities", identities: threadIdentityRepository.observeTurns(request.inputs) });
@@ -497,6 +521,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       const threadStateMigration = workbenchDatabaseSchema.currentTables.some(table => table.name === "workbench_thread_state_import")
         ? new WorkbenchThreadStateMigration(connection) : null;
       let threadStateChecked = false;
+      let projects: WorkbenchProjectStartup | undefined;
       const convertThreadState = async () => {
         if (!threadStateMigration) return;
         const relationships = threadStateMigration.requiresImport()
@@ -505,22 +530,33 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
         threadStateMigration.run(workbenchDatabaseSchema, relationships, Date.now());
         threadStateChecked = true;
       };
+      const convertDomains = async () => {
+        await convertThreadState();
+        if (request.projects) {
+          const { discovery, relocations } = request.projects;
+          const result = new WorkbenchProjectMigration(connection).run(workbenchDatabaseSchema, discovery, relocations);
+          projects = { ...result, rootPath: discovery.rootPath, excludedRootPaths: discovery.excludedRootPaths };
+        } else {
+          applyWorkbenchDatabaseSchema(connection, workbenchDatabaseSchema);
+        }
+      };
       // A fresh database has no rollback source. Establish the whole domain in
       // its first schema transaction, rather than installing empty serving tables.
       if (threadStateMigration && !connection.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
-        await convertThreadState();
+        await convertDomains();
       }
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
         beforeMigration: async (backupPath) => {
           await acknowledgeCheckpoint(backupPath);
           // The existing owner has verified and acknowledged its backup before
           // this source conversion is allowed to retire any legacy facts.
-          await convertThreadState();
+          await convertDomains();
         },
       });
       if (!threadStateChecked) await convertThreadState();
+      if (request.projects && !projects) await convertDomains();
       initializeRepositories();
-      post({ id: request.id, type: "ready", inventory: inventory() });
+      post({ id: request.id, type: "ready", inventory: inventory(), projects });
     } catch (error) {
       postFatalFailure(request, error, "Workbench database initialization failed.");
     }

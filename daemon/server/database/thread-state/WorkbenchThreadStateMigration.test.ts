@@ -32,6 +32,18 @@ const fixtureIdentityValues = {
 
 const schema = defineRelationalThreadStateSchema(23);
 
+test("thread conversion stops before project conversion and verifies after its consumed source is retired", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    const migration = new WorkbenchThreadStateMigration(database);
+    migration.run(schema, [], 1);
+    assert.equal(database.pragma("user_version", { simple: true }), 31);
+    database.exec("DROP TABLE workbench_thread_state_projects");
+    assert.deepEqual(migration.run(schema, [], 2), { imported: false });
+  } finally { database.close(); }
+});
+
 test("missing parent metadata preserves relationship ownership without inventing a harness", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");

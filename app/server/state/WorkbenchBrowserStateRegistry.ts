@@ -1,8 +1,7 @@
 /*
- * Keywords: browser state, SQLite, isolation, cloning, migration backup, disposal.
  * Exports:
- * - WorkbenchBrowserStateRegistryOptions: browser-state storage and diagnostic seams. Keywords: browser, state, SQLite, seed.
- * - default WorkbenchBrowserStateRegistry: own shared and UUID-selected app-state controllers, cloning, seed refresh, and disposal. Keywords: browser, state, registry, lifecycle.
+ * - WorkbenchBrowserStateRegistryOptions: browser-state storage and diagnostic seams.
+ * - default WorkbenchBrowserStateRegistry: own browser stores, cloning, project adoption, seed refresh, and disposal.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   isWorkbenchBrowserStateId,
+  type WorkbenchProjectRemap,
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateMutation,
   type WorkbenchClientStateRecord,
@@ -128,6 +128,22 @@ export default class WorkbenchBrowserStateRegistry {
     return response;
   }
 
+  async remapBrowserProjects(browserStateId: string | undefined, request: WorkbenchProjectRemap) {
+    const selected = await this.#controllerFor(browserStateId);
+    if (request.daemonRegistrationId !== selected.daemonRegistrationId) throw new Error("Project remap belongs to another daemon registration.");
+    const operation = this.#seedQueue.then(async () => {
+      if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+      await this.#sharedController.remapProjects({ ...request, daemonRegistrationId: this.daemonRegistrationId });
+      const results = await Promise.allSettled([...this.#controllers.values()].map(controller =>
+        controller.remapProjects({ ...request, daemonRegistrationId: controller.daemonRegistrationId })));
+      const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (failures.length) throw new AggregateError(failures, "Project adoption failed in a browser state store.");
+      return selected.read();
+    });
+    this.#seedQueue = operation.then(() => undefined, () => undefined);
+    return await operation;
+  }
+
   async close() {
     this.#disposed = true;
     const failures = (await Promise.allSettled(this.#openingControllers.values()))
@@ -145,6 +161,8 @@ export default class WorkbenchBrowserStateRegistry {
   }
 
   async #controllerFor(browserStateId: string | undefined) {
+    if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+    await this.#seedQueue;
     if (!browserStateId) return this.#sharedController;
     if (!isWorkbenchBrowserStateId(browserStateId)) throw new Error("Workbench browser state ID is invalid.");
     if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
@@ -198,11 +216,29 @@ export default class WorkbenchBrowserStateRegistry {
     const repository = new WorkbenchAppStateRepository({ databasePath });
     const controller = new WorkbenchAppStateController(repository);
     await controller.start();
-    if (this.#disposed) {
+    try {
+      await this.#adoptProjectAliases(controller);
+    } catch (error) {
       await controller.close();
-      throw new Error("Workbench browser state registry is closed.");
+      throw error;
     }
     this.#controllers.set(browserStateId, controller);
+    return controller;
+  }
+
+  async #adoptProjectAliases(controller: WorkbenchAppStateController) {
+    // An opening store can overlap a remap. Join the current seed boundary before
+    // exposing it, then repeat only if that boundary changed while adopting.
+    let boundary: Promise<void>;
+    do {
+      boundary = this.#seedQueue;
+      await boundary;
+      if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+      await controller.remapProjects({
+        daemonRegistrationId: controller.daemonRegistrationId,
+        aliases: this.#sharedController.readProjectAliases(),
+      });
+    } while (boundary !== this.#seedQueue);
     return controller;
   }
 

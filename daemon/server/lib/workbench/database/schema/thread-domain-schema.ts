@@ -10,6 +10,7 @@ import {
   addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 
 export function defineThreadDomainSchema(schemaVersion: number) {
   function install<Table extends TableDefinition>(table: Table) {
@@ -228,6 +229,8 @@ export function defineThreadDomainSchema(schemaVersion: number) {
       relationships: relationships.current, relationshipMetadata: relationshipMetadata.current,
       activeRelationships: activeRelationships.current, importReceipt: importReceipt.current,
     },
-    history: defineSubsystemHistory(Object.values(histories)),
+    history: defineSubsystemHistory(Object.values(histories).map(history => (
+      "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history
+    ))),
   };
 }

@@ -25,7 +25,7 @@ const fixtureIdentityValues = {
     "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchThreadId: {
     "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),

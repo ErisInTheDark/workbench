@@ -11,6 +11,9 @@ import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
 import WorkbenchThreadStateMigration, { readThreadStateRelationshipSources } from "../daemon/server/database/thread-state/WorkbenchThreadStateMigration";
+import WorkbenchProjectMigration from "../daemon/server/database/project/WorkbenchProjectMigration";
+import { WorkbenchProjectRelocationsSchema } from "../daemon/server/database/project/workbench-project-persistence";
+import { discoverProjectIdentities } from "../daemon/server/lib/project";
 
 export async function installThreadStateMigrationSource(
   source: Awaited<ReturnType<typeof captureThreadStateMigrationSource>>,
@@ -27,7 +30,7 @@ export async function installThreadStateMigrationSource(
     database.transaction(() => {
       for (const table of workbenchDatabaseSchema.currentTables) {
         for (const column of Object.keys(table.columns)) {
-          if (!["cwd", "project_root", "native_location"].includes(column)) continue;
+          if (!["cwd", "project_root", "native_location", "root_path", "workspace_path", "repository_root", "workspace_root"].includes(column)) continue;
           const values = database.prepare(`SELECT DISTINCT "${column}" AS value FROM "${table.name}"`).all() as Array<{ value: string | null }>;
           for (const { value } of values) {
             if (!value) continue;
@@ -79,6 +82,15 @@ async function readRelationshipFiles(runtimeDirectory: string) {
 }
 
 export async function captureThreadStateMigrationSource(sourceRoot: string, privateRoot: string) {
+  const discovery = await discoverProjectIdentities();
+  let relocations = WorkbenchProjectRelocationsSchema.parse({});
+  try {
+    relocations = WorkbenchProjectRelocationsSchema.parse(JSON.parse(
+      await fs.readFile(path.join(sourceRoot, ".workbench", "project-identity-relocations.json"), "utf8"),
+    ));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const directory = await fs.mkdtemp(path.join(privateRoot, "thread-state-source-"));
   const databasePath = path.join(directory, "workbench.sqlite3");
   const runtimeDirectory = path.join(directory, "runtime");
@@ -106,7 +118,7 @@ export async function captureThreadStateMigrationSource(sourceRoot: string, priv
     assert.equal(captured.pragma("integrity_check", { simple: true }), "ok");
     const receiptTable = captured.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'workbench_thread_state_import'").get();
     const alreadyImported = Boolean(receiptTable && captured.prepare("SELECT 1 FROM workbench_thread_state_import WHERE id = 1").get());
-    return { databasePath, runtimeDirectory, alreadyImported };
+    return { databasePath, runtimeDirectory, alreadyImported, discovery, relocations };
   } finally {
     captured.close();
   }
@@ -152,6 +164,51 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
     assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
     assert.deepEqual(database.pragma("foreign_key_check"), []);
     assert.deepEqual(await readRelationshipFiles(source.runtimeDirectory), relationshipFiles, "Conversion must leave relationship recovery files untouched");
+    const beforeProjects = new Map(workbenchDatabaseSchema.currentTables
+      .filter(table => ["project_id", "scope_project_id"].some(column => column in table.columns))
+      .filter(table => !["workbench_project_roots", "workbench_project_aliases"].includes(table.name))
+      .filter(table => database.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table.name))
+      .map(table => [table.name, database.prepare(`SELECT * FROM "${table.name}"`).all() as Record<string, string | number | null>[]]));
+    const converted = new WorkbenchProjectMigration(database).run(workbenchDatabaseSchema, source.discovery, source.relocations);
+    const aliases = new Map(converted.aliases.map(alias => [alias.alias, alias.projectId]));
+    for (const [table, rows] of beforeProjects) {
+      const retainedRows = table === "workbench_search_documents" ? rows.filter(row => row.project_id !== null) : rows;
+      const expected = retainedRows.map<Record<string, string | number | null>>(row => ({
+        ...row,
+        ...("project_id" in row && row.project_id !== null ? { project_id: aliases.get(String(row.project_id)) ?? row.project_id } : {}),
+        ...("scope_project_id" in row && row.scope_project_id !== null ? { scope_project_id: aliases.get(String(row.scope_project_id)) ?? row.scope_project_id } : {}),
+      })).map(row => {
+        if (table !== "workbench_search_documents" || row.project_id === null) return row;
+        if (row.kind === "project") return {
+          ...row, document_key: `project:${row.project_id}`, target: row.project_id,
+          search_text: `${row.title} ${row.project_id} ${row.detail}`,
+        };
+        if (row.kind === "file") return { ...row, document_key: `file:${row.project_id}:${row.target}`, detail: row.project_id };
+        return row;
+      });
+      const actual = (database.prepare(`SELECT * FROM "${table}"`).all() as typeof rows)
+        .filter(row => table !== "workbench_search_documents" || row.project_id !== null);
+      // Rekeying may reorder PK-backed scans. Compare complete facts as a multiset.
+      const columns = Object.keys(workbenchDatabaseSchema.currentTables.find(candidate => candidate.name === table)!.columns);
+      const sorted = (values: typeof rows) => [...values].sort((left, right) => {
+        for (const column of columns) {
+          const a = left[column];
+          const b = right[column];
+          if (a === b) continue;
+          if (a === null) return -1;
+          if (b === null) return 1;
+          return a < b ? -1 : 1;
+        }
+        return 0;
+      });
+      assert.deepEqual(sorted(actual), sorted(expected), `${table} must preserve every non-project fact`);
+    }
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
+    assert.doesNotThrow(() => new WorkbenchProjectMigration(database).run(workbenchDatabaseSchema, source.discovery));
+    assert.deepEqual(migration.run(workbenchDatabaseSchema, [], 4), { imported: false });
+    assert.deepEqual(database.prepare("SELECT completed_at FROM workbench_thread_state_import WHERE id = 1").get(), receipt);
+    console.log(`real project source converted: ${beforeProjects.size} project-bearing tables, ${aliases.size} retained addresses`);
   } finally {
     database.close();
   }

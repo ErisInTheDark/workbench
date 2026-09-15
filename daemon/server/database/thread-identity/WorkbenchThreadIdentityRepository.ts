@@ -12,6 +12,7 @@ import {
 } from "workbench-shared/workbench/identity";
 
 import { nativeLocationKey } from "./native-location-key.ts";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import { compileWorkbenchDatabaseStatement, updateRows } from "workbench-shared/database/workbench-database-statements";
 import {
   coreTables,
@@ -56,6 +57,7 @@ export default class WorkbenchThreadIdentityRepository {
 
   observe(input: WorkbenchThreadIdentityMetadata): WorkbenchThreadIdentityRecord {
     return this.database.transaction(() => {
+      input = { ...input, projectId: new WorkbenchProjectRepository(this.database).admitStoredReference(input.projectId) };
       let existing = this.resolveNative(input.native);
       if (!existing) {
         const retainedId = this.threadRow(input.native.nativeThreadId)?.id
@@ -102,6 +104,7 @@ export default class WorkbenchThreadIdentityRepository {
   }
 
   private resolveInTransaction(input: WorkbenchThreadIdentityLookup): WorkbenchThreadIdentityRecord | null {
+    if (input.projectId) input = { ...input, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(input.projectId) };
     const direct = this.threadRow(input.threadId);
     if (direct?.identity_origin === "workbench") {
       if (input.projectId && direct.project_id !== input.projectId) {
@@ -497,6 +500,7 @@ export default class WorkbenchThreadIdentityRepository {
 
   admitRetainedReference(input: { reference: ThreadReference; projectId: ProjectId; projectRoot: string }): WorkbenchThreadIdentityRecord {
     return this.database.transaction(() => {
+      input = { ...input, projectId: new WorkbenchProjectRepository(this.database).admitStoredReference(input.projectId) };
       const existing = this.resolve({ threadId: input.reference, projectId: input.projectId });
       if (existing) return existing;
       const threadId = randomUUID();

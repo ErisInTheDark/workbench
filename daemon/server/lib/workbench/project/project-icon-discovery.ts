@@ -86,13 +86,16 @@ export function selectWorkbenchProjectIcon(
 
 export async function discoverWorkbenchProjectIcon(
   roots: readonly Pick<WorkbenchProjectRoot, "id" | "rootPath">[],
+  signal?: AbortSignal,
 ) {
   const pathsByRoot = await Promise.all(
     roots.map(async ({ rootPath }) => {
+      signal?.throwIfAborted();
       if (!await hasGitMarker(rootPath)) return [];
-      const candidates = await listGitVisibleFiles(rootPath, PROJECT_ICON_PATHSPECS);
+      const candidates = await listGitVisibleFiles(rootPath, PROJECT_ICON_PATHSPECS, signal);
       const existing = [];
       for (const candidate of candidates) {
+        signal?.throwIfAborted();
         try {
           if ((await fs.stat(path.join(rootPath, candidate))).isFile()) existing.push(candidate);
         } catch (error) {

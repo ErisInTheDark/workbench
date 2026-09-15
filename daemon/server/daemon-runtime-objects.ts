@@ -26,6 +26,7 @@ import type {
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
+import type { WorkbenchProjectPersistence, WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
 import type { WorkbenchThreadIdentityDatabase } from "./database/thread-identity/workbench-thread-identity-types";
 import type { WorkbenchSearchRequest, WorkbenchSearchResponse } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -107,7 +108,9 @@ export interface DaemonBrowseExecution {
 export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase,
   Pick<import("./database/thread-state/workbench-thread-state-persistence").WorkbenchSubagentPersistence,
     "readSubagents" | "readOwnedSubagents" | "reserveSubagent" | "activateSubagent" | "removeSubagent">,
-  WorkbenchThreadStateStoreDatabase {
+  WorkbenchThreadStateStoreDatabase,
+  WorkbenchProjectPersistence {
+  readInitialProjectCatalog(): WorkbenchProjectStartup;
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;

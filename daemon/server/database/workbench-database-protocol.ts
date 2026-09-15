@@ -9,7 +9,8 @@
 import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsDetailedReadRequest, WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
-import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchProjectOption, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchProjectAlias, WorkbenchProjectCacheRecord, WorkbenchProjectIconSettlement, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record.ts";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type {
@@ -80,7 +81,11 @@ export interface WorkbenchDatabaseMutationResult {
 }
 
 export type WorkbenchDatabaseRequestPayload =
-  | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean }
+  | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean; projects?: WorkbenchProjectPreparation }
+  | { type: "reconcileProjectCatalog"; projects: readonly WorkbenchProjectOption[] }
+  | { type: "readProjectAliases" }
+  | { type: "resolveProjectIdentity"; projectId: string }
+  | { type: "settleProjectIcon"; settlement: WorkbenchProjectIconSettlement }
   | { type: "acknowledgeMigration" }
   | { type: "suspend" }
   | { type: "resume"; restoreBackupPath?: string }
@@ -145,7 +150,11 @@ export type WorkbenchDatabaseRequestPayload =
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
 
 export type WorkbenchDatabaseResponse =
-  | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory }
+  | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory; projects?: WorkbenchProjectStartup }
+  | { id: number; type: "projectCatalog"; records: WorkbenchProjectCacheRecord[] }
+  | { id: number; type: "projectAliases"; aliases: WorkbenchProjectAlias[] }
+  | { id: number; type: "projectIdentity"; projectId: ProjectId }
+  | { id: number; type: "projectIconSettlement"; accepted: boolean }
   | { id: number; type: "migrationCheckpoint"; backupPath: string }
   | { id: number; type: "suspended" }
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }

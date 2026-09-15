@@ -18,6 +18,7 @@ import { API_PRICING_CATALOG_DATE } from "../../stats/api-pricing.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
 import WorkbenchUsageStatsRepository from "./WorkbenchUsageStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./WorkbenchClaimStatsRepository.ts";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 
 interface RateWindowObservation {
   durationMinutes: number | null;
@@ -62,6 +63,7 @@ export default class WorkbenchStatsRepository {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `);
     this.database.transaction(() => {
+      snapshot = { ...snapshot, projectId: new WorkbenchProjectRepository(this.database).admitStoredReference(snapshot.projectId) };
       this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(snapshot.harness);
       for (const root of snapshot.roots) {
         for (const path of root.paths) {
@@ -116,6 +118,7 @@ export default class WorkbenchStatsRepository {
   }
 
   readDetailed(request: WorkbenchStatsDetailedReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsDetailedResponse {
+    if (request.projectId !== null) request = { ...request, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(request.projectId) };
     const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
     const claimHotspots = new WorkbenchClaimStatsRepository(this.database).hotspots(request.projectId, usage.startedAt, now, renames);
 

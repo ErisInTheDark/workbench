@@ -1,4 +1,4 @@
-/* No production exports. Tests protect provider references and lossless profile upgrades. */
+/* No production exports. Tests protect project/provider ownership and lossless upgrades. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -11,6 +11,24 @@ function insertProfile(database: Database.Database, id: string, harness: string)
     VALUES (?, 'retained profile', ?, 'retained-model', 'global', 1, 2)
   `).run(id, harness);
 }
+
+test("project overrides require a retained project owner", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    const admit = database.prepare("INSERT INTO workbench_projects(id) VALUES (?)");
+    for (const invalid of ["old-relative-path", "legacy://old-path", "local://", "remote://", "workspace://"]) {
+      assert.throws(() => admit.run(invalid), /CHECK/);
+    }
+    const insert = database.prepare("INSERT INTO codex_sandbox_network_project_overrides(project_id, enabled) VALUES (?, 1)");
+    assert.throws(() => insert.run("local:///missing"), /FOREIGN KEY/);
+    admit.run("local:///retained");
+    insert.run("local:///retained");
+    assert.throws(() => database.prepare("DELETE FROM workbench_projects WHERE id = ?").run("local:///retained"), /FOREIGN KEY/);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
 
 test("profile providers are durable references rather than a fixed product enum", () => {
   const database = new Database(":memory:");
@@ -83,8 +101,8 @@ test("provider upgrade preserves every legacy reference owner and its dependent 
       "git_claim_imports", "thread_usage_imports",
     ];
     const before = tables.map(table => database.prepare(`SELECT * FROM ${table}`).all());
-    installWorkbenchDatabaseSchema(database);
-    installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database, { targetVersion: 31 });
+    installWorkbenchDatabaseSchema(database, { targetVersion: 31 });
     for (const [index, table] of tables.entries()) {
       assert.deepEqual(database.prepare(`SELECT * FROM ${table}`).all(), before[index], table);
     }

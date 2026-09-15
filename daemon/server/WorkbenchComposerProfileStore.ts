@@ -11,6 +11,7 @@ import type { SelectRow } from "workbench-shared/database/schema/schema-definiti
 import { applyComposerProfileMutation, normalizeComposerProfile, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
 import { composerProfileImports, composerProfiles } from "./lib/workbench/database/schema/composer-profile-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
+import { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 
 export interface WorkbenchComposerProfileDatabase {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<{ changes: number }>;
@@ -73,14 +74,15 @@ export default class WorkbenchComposerProfileStore {
       const mutation = normalizeComposerProfileMutation(value);
       if (!mutation) throw new Error("A valid composer profile mutation is required.");
       const previous = await this.readProfiles();
-      const profiles = applyComposerProfileMutation(previous, mutation).map((profile) => {
+      const profiles = await this.canonicalProfiles(applyComposerProfileMutation(previous, mutation).map((profile) => {
         const stored = previous.find((entry) => entry.id === profile.id);
         // The upsert deliberately preserves the original creation time.
         return stored ? { ...profile, createdAt: stored.createdAt, ...(stored.lastUsedAt != null ? { lastUsedAt: stored.lastUsedAt } : {}) } : profile;
-      }).sort((left, right) => left.createdAt - right.createdAt || Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
+      }).sort((left, right) => left.createdAt - right.createdAt || Buffer.compare(Buffer.from(left.id), Buffer.from(right.id))));
       const profile = mutation.kind === "upsert" ? profiles.find((entry) => entry.id === mutation.profile.id) : null;
       if (profile && validate) await validate(profile, previous.find((entry) => entry.id === profile.id) ?? null);
       await this.write([
+        ...this.projectAdmissions(profile ? [profile] : []),
         ...(profile ? [upsertRow(workbenchHarnesses, { id: profile.harness }, { conflictColumns: ["id"], updateColumns: ["id"] })] : []),
         mutation.kind === "delete"
           ? deleteRows(composerProfiles, { id: mutation.profileId })
@@ -121,6 +123,21 @@ export default class WorkbenchComposerProfileStore {
     return profiles.map(fromRow);
   }
 
+  private async canonicalProfiles(profiles: WorkbenchComposerProfile[]) {
+    if (!profiles.some(profile => profile.scope.kind === "project")) return profiles;
+    const aliases = await this.database.query(selectRows(projectTables.aliases));
+    this.assertOpen();
+    const mapping = new Map(aliases.map(alias => [alias.alias, alias.project_id]));
+    return profiles.map(profile => profile.scope.kind === "project" ? {
+      ...profile, scope: { ...profile.scope, projectId: mapping.get(profile.scope.projectId) ?? profile.scope.projectId },
+    } : profile);
+  }
+
+  private projectAdmissions(profiles: readonly WorkbenchComposerProfile[]) {
+    const ids = new Set(profiles.flatMap(profile => profile.scope.kind === "project" ? [profile.scope.projectId] : []));
+    return [...ids].map(id => upsertRow(projectTables.projects, { id }, { conflictColumns: ["id"], updateColumns: ["id"] }));
+  }
+
   private async importLegacy() {
     const imported = await this.database.query(selectRows(composerProfileImports, { where: { id: "legacy-json" } }));
     this.assertOpen();
@@ -137,14 +154,15 @@ export default class WorkbenchComposerProfileStore {
     if (!raw || typeof raw !== "object" || !("profiles" in raw) || !raw.profiles || typeof raw.profiles !== "object" || Array.isArray(raw.profiles)) {
       throw new Error("Legacy composer profile catalogue is invalid.");
     }
-    const profiles = Object.entries(raw.profiles).map(([id, value]) => {
+    const profiles = await this.canonicalProfiles(Object.entries(raw.profiles).map(([id, value]) => {
       const profile = normalizeComposerProfile(value);
       if (!profile || profile.id !== id || (profile.scope.kind === "global" && profile.agentSource === "project")) {
         throw new Error("Legacy composer profile entry is invalid.");
       }
       return profile;
-    });
+    }));
     await this.write([
+      ...this.projectAdmissions(profiles),
       ...[...new Set(profiles.map(profile => profile.harness))].map(id =>
         upsertRow(workbenchHarnesses, { id }, { conflictColumns: ["id"], updateColumns: ["id"] })),
       ...profiles.map((profile) => insertRow(composerProfiles, row(profile))),

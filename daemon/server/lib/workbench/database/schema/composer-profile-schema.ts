@@ -5,6 +5,7 @@
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import { check, defineTable, enumText, evolveTable, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
 import { addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "workbench-shared/database/schema/schema-history";
@@ -68,4 +69,4 @@ const importHistory = defineTableHistory({
 export const composerProfiles = profileHistory.current;
 export const composerProfileImports = importHistory.current;
 export const composerProfileTables = Object.freeze({ composerProfiles, composerProfileImports });
-export const composerProfileSchemaHistory = defineSubsystemHistory([profileHistory, importHistory]);
+export const composerProfileSchemaHistory = defineSubsystemHistory([ownProjectReferences(profileHistory, "scope_project_id"), importHistory]);

@@ -9,6 +9,7 @@ import WorkbenchThreadStateRelationalRepository from "./database/thread-state/Wo
 import WorkbenchSubagentRelationshipRepository from "./database/thread-state/WorkbenchSubagentRelationshipRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchProjectRepository from "./database/project/WorkbenchProjectRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
@@ -31,6 +32,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
   const relationships = new WorkbenchSubagentRelationshipRepository(sqlite);
   const items = new WorkbenchTranscriptIdentityRepository(sqlite);
   const threadRepository = new WorkbenchThreadIdentityRepository(sqlite);
+  const projects = new WorkbenchProjectRepository(sqlite);
   const identities = {
     threads: new WorkbenchThreadIdentityController({
       listThreadIdentities: async () => threadRepository.list(),
@@ -53,6 +55,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
 
   const admitThread = (projectId: string, threadId: string, harness: WorkbenchHarnessId = "codex", nativeThreadId = `native:${threadId}`, nativeLocation = `C:/${projectId}`) => {
     if (threadId === nativeThreadId) throw new Error("Fixture native and canonical thread IDs must differ.");
+    projectId = projects.admit(projectId);
     sqlite.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(harness);
     sqlite.prepare(`
       INSERT OR IGNORE INTO workbench_threads(

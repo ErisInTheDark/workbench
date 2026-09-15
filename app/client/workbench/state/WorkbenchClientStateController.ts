@@ -9,9 +9,11 @@ import type {
   WorkbenchClientStateMutation,
   WorkbenchClientStateRecord,
   WorkbenchClientStateResponse,
+  WorkbenchProjectRemap,
 } from "workbench-shared/state/workbench-client-state";
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
+  WorkbenchProjectRemapSchema,
   workbenchClientStateMutationPath,
 } from "workbench-shared/state/workbench-client-state";
 import {
@@ -20,6 +22,7 @@ import {
 } from "workbench-shared/state/workbench-client-state-projection";
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
+import type { WorkbenchProjectAlias } from "workbench-shared/types";
 
 export interface WorkbenchClientStateSnapshot {
   daemonRegistrationId: string;
@@ -44,15 +47,15 @@ export interface WorkbenchClientStateControllerOptions {
 
 function identityKey(identity: WorkbenchClientStateIdentity) {
   switch (identity.kind) {
-    case "modelPreference": return `model:${identity.harness}:${identity.modelId}`;
-    case "globalPreference": return `global:${identity.key}`;
-    case "projectPreference": return `project:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
-    case "sidebarPreference": return `sidebar:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
-    case "sidebarFolder": return `folder:${identity.daemonRegistrationId}:${identity.projectId}:${identity.scope}:${identity.folderId}`;
-    case "expandedDirectory": return `directory:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
-    case "fileDraft": return `file:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
-    case "composerDraft": return `composer:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}`;
-    case "questionnaireDraft": return `questionnaire:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}:${identity.requestKey}`;
+    case "modelPreference": return JSON.stringify([identity.kind, identity.harness, identity.modelId]);
+    case "globalPreference": return JSON.stringify([identity.kind, identity.key]);
+    case "projectPreference":
+    case "sidebarPreference": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.key]);
+    case "sidebarFolder": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.scope, identity.folderId]);
+    case "expandedDirectory":
+    case "fileDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.path]);
+    case "composerDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.threadId]);
+    case "questionnaireDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.threadId, identity.requestKey]);
     case "lastLaunchTarget": return "launch";
   }
 }
@@ -78,7 +81,9 @@ export default class WorkbenchClientStateController {
   readonly #optimistic = new Map<string, { generation: number; mutation: WorkbenchClientStateMutation }>();
   readonly #pollDelayMs: number;
   readonly #records = new Map<string, WorkbenchClientStateRecord>();
-  readonly #threadAliases = new Map<string, string>();
+  readonly #threadAliases = new Map<string, Map<string, string>>();
+  readonly #projectAliases = new Map<string, string>();
+  #projectRemap: Promise<void> | null = null;
   readonly #schedule: (callback: () => void, delayMs: number) => number;
   readonly #visibility: NonNullable<WorkbenchClientStateControllerOptions["visibility"]>;
   #daemonRegistrationId = "memory";
@@ -141,28 +146,125 @@ export default class WorkbenchClientStateController {
   }
 
   async put(record: WorkbenchClientStateRecord) {
+    if (this.#projectRemap) await this.#projectRemap;
     return await this.#mutate({ action: "put", record: this.#storageIdentity(record) });
   }
 
   async delete(identity: WorkbenchClientStateIdentity) {
+    if (this.#projectRemap) await this.#projectRemap;
     return await this.#mutate({ action: "delete", identity: this.#storageIdentity(identity) });
   }
 
   rememberThreadIdentityAlias(projectId: string, storedThreadId: string, threadId: string) {
     if (storedThreadId === threadId) return;
-    const key = JSON.stringify([projectId, storedThreadId]);
-    if (this.#threadAliases.get(key) === threadId) return;
-    this.#threadAliases.set(key, threadId);
+    projectId = this.resolveProjectId(projectId);
+    const aliases = this.#threadAliases.get(projectId) ?? new Map<string, string>();
+    if (aliases.get(storedThreadId) === threadId) return;
+    aliases.set(storedThreadId, threadId);
+    this.#threadAliases.set(projectId, aliases);
     this.#publish();
   }
 
+  resolveProjectId(projectId: string) {
+    return this.#projectAliases.get(projectId) ?? projectId;
+  }
+
+  async adoptProjectAliases(aliases: readonly WorkbenchProjectAlias[]) {
+    if (!aliases.length) return;
+    const prior = this.#projectRemap;
+    const writes = [...this.#mutationQueues.values()];
+    const operation = (async () => {
+      await prior;
+      await Promise.all(writes);
+      if (this.#disposed) throw new Error("Workbench app state is disposed.");
+      const request = WorkbenchProjectRemapSchema.parse({ daemonRegistrationId: this.#daemonRegistrationId, aliases });
+      const additions = request.aliases.filter(alias => this.#projectAliases.get(alias.alias) !== alias.projectId);
+      if (!additions.length) return;
+      const mapping = new Map(this.#projectAliases);
+      for (const alias of additions) {
+        const previous = mapping.get(alias.alias);
+        if (previous && previous !== alias.projectId) throw new Error("Project alias changes retained ownership.");
+        if (alias.alias === alias.projectId || (alias.projectId !== "workbench-library" && !/^(?:remote|local|workspace):\/\/.+$/u.test(alias.projectId))) {
+          throw new Error("Project alias has an invalid canonical destination.");
+        }
+        mapping.set(alias.alias, alias.projectId);
+      }
+      if ([...mapping.values()].some(id => mapping.has(id))) throw new Error("Project aliases cannot form chains.");
+      this.#remappedThreadAliases(mapping);
+      if (this.#mode === "memory") {
+        const keys = new Set<string>();
+        for (const record of this.#records.values()) {
+          const next = "projectId" in record && record.daemonRegistrationId === this.#daemonRegistrationId
+            ? { ...record, projectId: mapping.get(record.projectId) ?? record.projectId } : record;
+          const key = identityKey(workbenchClientStateRecordIdentity(next));
+          if (keys.has(key)) throw new Error("Project adoption conflicts with existing saved state.");
+          keys.add(key);
+        }
+      }
+      const response = this.#mode === "http"
+        ? await this.#request("POST", "/api/workbench-client-state/project-remap", request)
+        : null;
+      if (this.#disposed) throw new Error("Workbench app state was disposed during project adoption.");
+      // Thread identities may arrive while the app server is persisting the remap.
+      const threadAliases = this.#remappedThreadAliases(mapping);
+      if (response) {
+        if (response.kind !== "snapshot") throw new Error("Project adoption did not return a complete snapshot.");
+        this.#apply(response, false);
+      }
+      for (const alias of additions) {
+        this.#projectAliases.set(alias.alias, alias.projectId);
+      }
+      this.#threadAliases.clear();
+      for (const [projectId, threads] of threadAliases) this.#threadAliases.set(projectId, threads);
+      const records = [...this.#records.values()].map(record => this.#canonicalProject(record));
+      this.#records.clear();
+      for (const record of records) this.#records.set(identityKey(workbenchClientStateRecordIdentity(record)), record);
+      this.#publish();
+      this.#setError("");
+    })().catch((error: unknown) => {
+      this.#setError(error instanceof Error ? error.message : "Project state adoption failed.");
+      throw error;
+    });
+    // The adoption caller owns failure. Queued edits continue at the retained
+    // identity if adoption fails, rather than disappearing behind a rejected gate.
+    const boundary = operation.then(() => undefined, () => undefined);
+    this.#projectRemap = boundary;
+    void boundary.then(() => {
+      if (this.#projectRemap === boundary) this.#projectRemap = null;
+      this.#schedulePoll();
+    });
+    await operation;
+  }
+
+  #canonicalProject<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
+    return "projectId" in identity && identity.daemonRegistrationId === this.#daemonRegistrationId
+      ? { ...identity, projectId: this.resolveProjectId(identity.projectId) }
+      : identity;
+  }
+
+  #remappedThreadAliases(mapping: ReadonlyMap<string, string>) {
+    const result = new Map<string, Map<string, string>>();
+    for (const [projectId, threads] of this.#threadAliases) {
+      const destination = mapping.get(projectId) ?? projectId;
+      const canonical = result.get(destination) ?? new Map<string, string>();
+      for (const [stored, current] of threads) {
+        if (canonical.has(stored) && canonical.get(stored) !== current) throw new Error("Project adoption conflicts with retained thread identity.");
+        canonical.set(stored, current);
+      }
+      result.set(destination, canonical);
+    }
+    return result;
+  }
+
   #projectIdentity<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
+    identity = this.#canonicalProject(identity);
     if (identity.kind !== "composerDraft" && identity.kind !== "questionnaireDraft") return identity;
-    const threadId = this.#threadAliases.get(JSON.stringify([identity.projectId, identity.threadId]));
+    const threadId = this.#threadAliases.get(identity.projectId)?.get(identity.threadId);
     return threadId ? { ...identity, threadId } : identity;
   }
 
   #storageIdentity<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
+    identity = this.#canonicalProject(identity);
     if (identity.kind !== "composerDraft" && identity.kind !== "questionnaireDraft") return identity;
     const address: Extract<WorkbenchClientStateIdentity, { kind: "composerDraft" | "questionnaireDraft" }> = identity;
     const key = identityKey(this.#projectIdentity(address));
@@ -180,6 +282,7 @@ export default class WorkbenchClientStateController {
     this.#unsubscribeVisibility = null;
     this.#listeners.clear();
     this.#threadAliases.clear();
+    this.#projectAliases.clear();
   }
 
   async #mutate(mutation: WorkbenchClientStateMutation) {
@@ -233,7 +336,7 @@ export default class WorkbenchClientStateController {
   }
 
   async #poll() {
-    if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#polling) return;
+    if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#polling || this.#projectRemap) return;
     this.#cancelPendingPoll();
     this.#polling = true;
     try {
@@ -262,9 +365,9 @@ export default class WorkbenchClientStateController {
     this.#scheduledPoll = null;
   }
 
-  async #request(method: "DELETE" | "GET" | "PUT", url: string, mutation?: WorkbenchClientStateMutation) {
+  async #request(method: "DELETE" | "GET" | "PUT" | "POST", url: string, mutation?: WorkbenchClientStateMutation | WorkbenchProjectRemap) {
     const body = mutation
-      ? mutation.action === "put" ? mutation.record : mutation.identity
+      ? "action" in mutation ? mutation.action === "put" ? mutation.record : mutation.identity : mutation
       : undefined;
     const response = await this.#fetcher(url, {
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -291,7 +394,7 @@ export default class WorkbenchClientStateController {
     return conformed.data;
   }
 
-  #apply(response: WorkbenchClientStateResponse) {
+  #apply(response: WorkbenchClientStateResponse, publish = true) {
     if (response.revision < this.#revision) return;
     if (this.#daemonRegistrationId !== "memory" && response.daemonRegistrationId !== this.#daemonRegistrationId) {
       throw new Error("Workbench app-state daemon registration changed during this browser session.");
@@ -308,7 +411,7 @@ export default class WorkbenchClientStateController {
       }
     }
     this.#revision = response.revision;
-    this.#publish();
+    if (publish) this.#publish();
   }
 
   #setError(error: string) {

@@ -226,7 +226,7 @@ export default class WorkbenchDaemonRequestController {
     if (slot.kind !== "thread") return slot;
     const thread = await this.owners.threadIdentity.resolve({ threadId: slot.threadId, projectId: slot.projectId, harness: slot.harness });
     if (!thread) throw new InvalidParamsError("Composer thread identity is unavailable.");
-    return { ...slot, threadId: thread.threadId };
+    return { ...slot, projectId: thread.projectId, threadId: thread.threadId };
   }
 
   async handle(request: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -255,14 +255,12 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "codex-sandbox-network/read": {
-          const projectId = requiredString(params, "projectId");
-          await this.owners.projects.resolveProjectById(projectId);
+          const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
           result = { codexSandboxNetwork: await this.owners.codexSandboxNetwork.read(projectId) };
           break;
         }
         case "codex-sandbox-network/update": {
-          const projectId = requiredString(params, "projectId");
-          await this.owners.projects.resolveProjectById(projectId);
+          const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
           if (params.scope === "global") {
             if (typeof params.enabled !== "boolean") {
               throw new InvalidParamsError("A global Codex sandbox network update requires a boolean enabled value.");
@@ -305,12 +303,12 @@ export default class WorkbenchDaemonRequestController {
           result = await this.owners.questionnaireResponses.respond(questionnaireRespondRequest(params));
           break;
         case "search/query": {
-          const projectId = params.projectId === null || params.projectId === ""
+          let projectId = params.projectId === null || params.projectId === ""
             ? null
             : requiredString(params, "projectId");
           if (projectId) {
             try {
-              await this.owners.projects.resolveProjectById(projectId);
+              projectId = (await this.owners.projects.resolveProjectById(projectId)).id;
             } catch (error) {
               throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
             }
@@ -329,7 +327,7 @@ export default class WorkbenchDaemonRequestController {
           if (!parsed.success) throw new InvalidParamsError("Invalid stats request.");
           if (parsed.data.projectId) {
             try {
-              await this.owners.projects.resolveProjectById(parsed.data.projectId);
+              parsed.data.projectId = (await this.owners.projects.resolveProjectById(parsed.data.projectId)).id;
             } catch (error) {
               throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
             }

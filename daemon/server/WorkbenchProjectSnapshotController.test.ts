@@ -21,6 +21,22 @@ function deferred<TValue>() {
   return { promise, resolve };
 }
 
+test("only active project observation signals background enrichment", () => {
+  const observed: string[] = [];
+  const { controller } = createHarness({ observeProject: projectId => { observed.push(projectId); } });
+  try {
+    assert.equal(controller.getCurrentUpdate("project"), null);
+    assert.deepEqual(observed, []);
+    const stop = controller.observe("project", () => undefined);
+    assert.deepEqual(observed, ["project"]);
+    stop();
+    controller.getCurrentUpdate("project");
+    assert.deepEqual(observed, ["project"]);
+  } finally {
+    controller.dispose();
+  }
+});
+
 function createSnapshot(projectId: string, fileName = "README.md"): ProjectSnapshot {
   return {
     changes: {},
@@ -75,9 +91,11 @@ async function flushPromises() {
 function createHarness({
   maxProjectSnapshots = 4,
   pollIntervalMs = 60_000,
+  observeProject = (_projectId: string) => undefined,
 }: {
   maxProjectSnapshots?: number;
   pollIntervalMs?: number;
+  observeProject?: (projectId: string) => void;
 } = {}) {
   const deletedPaths: string[] = [];
   const errors: string[] = [];
@@ -87,6 +105,7 @@ function createHarness({
   let snapshotReader = async (projectId: string | null | undefined) => createSnapshot(projectId || "default");
   const resolvedProjectIds: Array<string | null | undefined> = [];
   const controller = new WorkbenchProjectSnapshotController({
+    observeProject,
     cacheTtlMs: 100,
     logError: (message) => { errors.push(message); },
     maxProjectSnapshots,

@@ -14,6 +14,7 @@
  * - usageSchemaHistory: additive and conversion steps.
  */
 import databaseReleases from "./releases.ts";
+import { ownProjectReferences } from "./project-schema.ts";
 import { workbenchHarnesses } from "./core-schema.ts";
 import {
   booleanInteger,
@@ -379,8 +380,8 @@ export const usageSchemaHistory = defineSubsystemHistory([
   threadUsageModelAttributionsHistory,
   accountRateLimitSamplesHistory,
   accountRateLimitWindowsHistory,
-  gitClaimSessionsHistory,
-  gitClaimThreadFileDaysHistory,
-  gitClaimImportsHistory,
-  threadUsageImportsHistory,
+  ownProjectReferences(gitClaimSessionsHistory),
+  ownProjectReferences(gitClaimThreadFileDaysHistory),
+  ownProjectReferences(gitClaimImportsHistory),
+  ownProjectReferences(threadUsageImportsHistory),
 ]);

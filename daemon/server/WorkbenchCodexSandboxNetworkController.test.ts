@@ -2,13 +2,33 @@
  * No production exports. Tests protect persisted default-off global and project Codex sandbox network resolution.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
-import WorkbenchDatabaseNode from "./WorkbenchDatabaseNode";
+let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
+let discoveryRoot: string;
+const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
+const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+
+before(async () => {
+  discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-network-discovery-"));
+  await mkdir(join(discoveryRoot, "project", ".git"), { recursive: true });
+  await mkdir(join(discoveryRoot, "other", ".git"), { recursive: true });
+  process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
+  process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
+  ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
+});
+
+after(async () => {
+  if (previousProjectsRoot === undefined) delete process.env.WORKBENCH_PROJECTS_ROOT;
+  else process.env.WORKBENCH_PROJECTS_ROOT = previousProjectsRoot;
+  if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
+  else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
+  if (discoveryRoot) await rm(discoveryRoot, { recursive: true, force: true });
+});
 
 function createDatabaseNode(directory: string) {
   return WorkbenchDatabaseNode.create(
@@ -32,44 +52,48 @@ test("Codex sandbox network settings persist global and project inheritance", as
   let databaseNode = createDatabaseNode(directory);
   try {
     await databaseNode.start();
+    const projects = databaseNode.registrations.database!.readInitialProjectCatalog().catalog;
+    const projectId = projects.find(record => record.project.name === "project")?.project.id;
+    const otherId = projects.find(record => record.project.name === "other")?.project.id;
+    assert.ok(projectId && otherId);
     let settings = databaseNode.registrations.codexSandboxNetwork!;
-    assert.deepEqual(await settings.read("project"), {
+    assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: false,
       globalEnabled: false,
-      projectId: "project",
+      projectId,
       projectOverride: null,
     });
 
     await settings.setGlobal(true);
-    assert.equal((await settings.read("project")).effectiveEnabled, true);
+    assert.equal((await settings.read(projectId)).effectiveEnabled, true);
 
-    await settings.setProjectOverride("project", false);
-    assert.deepEqual(await settings.read("project"), {
+    await settings.setProjectOverride(projectId, false);
+    assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: false,
       globalEnabled: true,
-      projectId: "project",
+      projectId,
       projectOverride: false,
     });
 
-    await settings.setProjectOverride("other", true);
+    await settings.setProjectOverride(otherId, true);
     await databaseNode.dispose();
     databaseNode = createDatabaseNode(directory);
     await databaseNode.start();
     settings = databaseNode.registrations.codexSandboxNetwork!;
-    assert.equal((await settings.read("project")).projectOverride, false);
-    assert.equal((await settings.read("other")).effectiveEnabled, true);
+    assert.equal((await settings.read(projectId)).projectOverride, false);
+    assert.equal((await settings.read(otherId)).effectiveEnabled, true);
 
-    await settings.setProjectOverride("project", null);
-    assert.deepEqual(await settings.read("project"), {
+    await settings.setProjectOverride(projectId, null);
+    assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: true,
       globalEnabled: true,
-      projectId: "project",
+      projectId,
       projectOverride: null,
     });
 
     await settings.setGlobal(false);
-    assert.equal(await settings.resolve("project"), false);
-    assert.equal(await settings.resolve("other"), true);
+    assert.equal(await settings.resolve(projectId), false);
+    assert.equal(await settings.resolve(otherId), true);
   } finally {
     await databaseNode.dispose();
     await rm(directory, { recursive: true, force: true });

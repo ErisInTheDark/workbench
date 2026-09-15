@@ -26,7 +26,7 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
       const turnId = `search-turn-${index}`;
       const title = `Project maintenance ${index}`;
       const catalog = {
-        kind: "thread" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/project",
+        kind: "thread" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"), projectRoot: "C:/project",
         title, createdAt: 1, updatedAt: index + 1, activityAt: index + 1,
       };
       if (index >= 42) {
@@ -56,14 +56,14 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
     }
     transcript.settle(observations);
     const repository = new WorkbenchSearchRepository(database);
-    repository.replaceProjects(Array.from({ length: 102 }, (_, index) => ({ id: `project-${index}`, name: `Project ${index}`, rootPath: `C:/project-${index}` })));
-    repository.replaceProjectFiles("project", Array.from({ length: 1200 }, (_, index) => `src/components/component-${index}.tsx`));
+    repository.replaceProjects(Array.from({ length: 102 }, (_, index) => ({ id: `local:///project-${index}`, name: `Project ${index}`, rootPath: `C:/project-${index}` })));
+    repository.replaceProjectFiles("local:///project", Array.from({ length: 1200 }, (_, index) => `src/components/component-${index}.tsx`));
     assert.ok(corpusCharacters >= 2_373_411);
 
     const measurements = [];
     for (const query of ["", "a", "quartzzeppeln", "quartzzeppelin state", '"exact phrase"', "maintenance -quartzzeppelin", "asdlfkajsdlfkjasdlfkjasdf"]) {
       const startedAt = performance.now();
-      const response = repository.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query });
+      const response = repository.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"), query });
       const elapsedMs = performance.now() - startedAt;
       measurements.push({ query, elapsedMs });
       if (query === "asdlfkajsdlfkjasdlfkjasdf") assert.deepEqual(response.results, []);

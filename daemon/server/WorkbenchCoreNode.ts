@@ -10,7 +10,7 @@ import { createNativeQuestionnaireStatePorts } from "./thread-identity-workbench
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
-import type { WorkbenchProjectsPayload } from "workbench-shared/types";
+import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
@@ -102,11 +102,15 @@ function createWorkbenchCoreFeature(
   transcript: Pick<DaemonTranscriptRegistration, "read">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
-  initialCatalog?: WorkbenchProjectsPayload,
+  initialCatalog?: WorkbenchProjectStartup,
 ) {
   const modules = createModules();
-  const projectCatalog = new WorkbenchProjectCatalogController({ initialSnapshot: initialCatalog });
+  const projectCatalog = new WorkbenchProjectCatalogController({
+    initialProjects: initialCatalog ?? (() => database.readInitialProjectCatalog()),
+    persistence: database,
+  });
   const projectSnapshot = new WorkbenchProjectSnapshotController({
+    observeProject: (projectId) => { void projectCatalog.observeProjectIcon(ProjectIdSchema.parse(projectId)); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
   });
   const search = new WorkbenchSearchController({
@@ -127,6 +131,7 @@ function createWorkbenchCoreFeature(
     itemIdentities: transcriptIdentity,
     resolveProject: async (cwd) => {
       const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Provider identity" });
+      void projectCatalog.observeProjectIcon(project.id);
       return { projectId: project.id, projectRoot: project.rootPath };
     },
   });
@@ -327,7 +332,7 @@ function createWorkbenchCoreFeature(
     bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
-    captureReloadState: () => projectCatalog.getCurrentSnapshot(),
+    captureReloadState: () => projectCatalog.captureReloadState(),
     afterCommit: () => {
       if (!initialCatalog) return;
       stats.start();
@@ -365,7 +370,7 @@ function createWorkbenchCoreFeature(
       reportPhase("project snapshot disposal");
       projectSnapshot.dispose();
       reportPhase("project catalog disposal");
-      projectCatalog.dispose();
+      await projectCatalog.dispose();
     },
     observeProviderNotification: async ({ harness, notification }) => {
       if (!lease.isCurrent()) {
@@ -406,10 +411,10 @@ function createWorkbenchCoreFeature(
     registrations,
     start: async (reportPhase) => {
       if (initialCatalog) return;
+      reportPhase("prepared project catalog");
+      await projectCatalog.ensureLoaded();
       reportPhase("composer profile startup");
       await profileStore.start();
-      reportPhase("project discovery");
-      await projectCatalog.ensureLoaded();
       reportPhase("loaded harness identity admission");
       await harnesses.restoreLoadedIdentities();
       reportPhase("stats startup");
@@ -424,7 +429,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { get, run, lease, handoffState }) => createWorkbenchCoreFeature(
+  create: (context, { get, run, lease, handoffState, isReplacing }) => createWorkbenchCoreFeature(
     context,
     run,
     lease,
@@ -435,7 +440,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     get("transcript"),
     get("threadIdentity"),
     get("transcriptIdentity"),
-    handoffState as WorkbenchProjectsPayload | undefined,
+    isReplacing("server:database") ? undefined : handoffState as WorkbenchProjectStartup | undefined,
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
@@ -471,7 +476,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     "shared/workbench/thread/thread-stop.ts",
     "daemon/server/BrowseSessionCleanupSupervisor.ts",
     "daemon/server/CodexHealthMonitor.ts",
-    "daemon/server/lib/project.ts",
     "daemon/server/lib/thread-bootstrap.ts",
     "daemon/server/lib/workbench-library.ts",
     "daemon/server/lib/workbench/git/**",

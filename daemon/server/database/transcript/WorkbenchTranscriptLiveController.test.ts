@@ -26,7 +26,7 @@ function fixture() {
   const live = new WorkbenchTranscriptLiveController();
   repository.settle([
     {
-      kind: "thread", threadId: WorkbenchThreadIdSchema.parse("thread"), projectId: ProjectIdSchema.parse("project"),
+      kind: "thread", threadId: WorkbenchThreadIdSchema.parse("thread"), projectId: ProjectIdSchema.parse("local:///project"),
       projectRoot: "/project", title: "", activityAt: 1, createdAt: 1, updatedAt: 1,
     },
     {

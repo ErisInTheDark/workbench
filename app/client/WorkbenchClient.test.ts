@@ -242,7 +242,7 @@ test("global thread-state open installs a catalog and full sidebars without a se
     },
   });
   assert.deepEqual(versions, [7]);
-  assert.deepEqual(catalogs, [{ data: [], rootPath: "C:/projects" }]);
+  assert.deepEqual(catalogs, [{ data: [], aliases: [], rootPath: "C:/projects" }]);
   assert.deepEqual(result.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
   assert.equal(result.homeThreadDisplayOrder?.revision, 2);
   assert.equal("project" in result, false);
@@ -429,7 +429,7 @@ test("thread-state open conforms malformed composite nodes without discarding va
   });
   assert.equal(requests, 1);
   assert.equal(result.sidebar.projectId, "project");
-  assert.deepEqual(catalogs, [{ data: [], rootPath: "C:/projects" }]);
+  assert.deepEqual(catalogs, [{ data: [], aliases: [], rootPath: "C:/projects" }]);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /Repaired Workbench thread-state open response/u);
 });

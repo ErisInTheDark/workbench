@@ -16,6 +16,7 @@ const appStateReleases = Object.freeze({
   globalPreferencesV6: release(6, "5a7252dedfca527c7f5bcbed0e8c972be225e739b8090a9a8ad9c0778cc36629"),
   modelPreferences: release(7, "22420d589726afbd5c121d4d82c7db498a899c93b927fb53c557702c0a2d7610"),
   providerReferences: release(8, "9dffb8602539ca72cd239d5476e9e0f204c09f1e456bdc28719a451eb94156b8"),
+  projectAliases: release(9, "07d88a8a4a529b75a97a80a3474b675ccc380dac13a732778985ec32c3aa666d"),
 });
 
 export default appStateReleases;

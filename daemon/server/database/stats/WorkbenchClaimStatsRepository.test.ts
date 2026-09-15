@@ -16,8 +16,8 @@ const fixtureIdentityValues = {
     "native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native"),
   },
   ProjectId: {
-    "empty": fixtureIdentitySchemas.ProjectIdSchema.parse("empty"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "empty": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///empty"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -37,7 +37,7 @@ test("rename projection merges before counting and pagination without rewriting 
       ["two", ["old"], now, "root", projectId],
       ["expired", ["old"], now - 8 * day, "root", projectId],
       ["other-root", ["old"], now, "other", projectId],
-      ["other-project", ["old"], now, "root", "other"],
+      ["other-project", ["old"], now, "root", "local:///other"],
     ] as const) writer.recordClaimSnapshot({
       projectId: project, threadId, harness: "codex", observedAt, roots: [{ rootId, paths: [...paths] }],
     });
@@ -57,7 +57,7 @@ test("rename projection merges before counting and pagination without rewriting 
     assert.deepEqual(repository.hotspots(projectId, now - 7 * day, now, renames)[0], {
       projectId, rootId: "root", path: "current", threadCount: 2,
     });
-    assert.equal(repository.hotspots("other", now - 7 * day, now, renames)[0]?.path, "old");
+    assert.equal(repository.hotspots("local:///other", now - 7 * day, now, renames)[0]?.path, "old");
     assert.equal(repository.hotspots(null, now - 7 * day, now, renames)[0]?.threadCount, 2);
     assert.equal(repository.read({ ...request, range: "all", file: { rootId: "root", path: "current" } }, now, renames).rows.length, 3);
     assert.equal(repository.read(request, now).pages, 2);
@@ -76,10 +76,10 @@ test("one Workbench claimant counts once across native providers and pending met
     });
     const writer = new WorkbenchStatsRepository(db);
     for (const [harness, threadId] of [["codex", "native"], ["codex", identity.threadId], ["opencode", identity.threadId]] as const) {
-      writer.recordClaimSnapshot({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId, harness, observedAt: now, roots: [{ rootId: "root", paths: ["file"] }] });
+      writer.recordClaimSnapshot({ projectId: fixtureIdentityValues.ProjectId.project, threadId, harness, observedAt: now, roots: [{ rootId: "root", paths: ["file"] }] });
     }
     const repository = new WorkbenchClaimStatsRepository(db);
-    assert.equal(repository.hotspots("project", now - day, now)[0]?.threadCount, 1);
+    assert.equal(repository.hotspots(fixtureIdentityValues.ProjectId.project, now - day, now)[0]?.threadCount, 1);
     const result = repository.read({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", page: 1, file: { rootId: "root", path: "file" } }, now);
     assert.equal(result.rows.length, 1);
     assert.equal(result.kind === "threads" && result.rows[0]?.threadId, identity.threadId);
@@ -100,10 +100,10 @@ test("claim identities coalesce providers and days into managed threads without 
       ["native", "codex", now - day], [managed, "codex", now],
       ["missing", "codex", now],
     ] as const) writer.recordClaimSnapshot({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId, harness, observedAt, roots: [{ rootId: "root", paths: ["src/file.ts"] }],
+      projectId: fixtureIdentityValues.ProjectId.project, threadId, harness, observedAt, roots: [{ rootId: "root", paths: ["src/file.ts"] }],
     });
     const repository = new WorkbenchClaimStatsRepository(db);
-    const request = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d" as const, page: 1 };
+    const request = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const, page: 1 };
     const files = repository.read({ ...request, file: null }, now);
     assert.equal(files.kind, "files");
     assert.deepEqual(files.rows, [{ rootId: "root", path: "src/file.ts", threadCount: 2 }]);
@@ -115,7 +115,7 @@ test("claim identities coalesce providers and days into managed threads without 
       { threadId: managed, title: "Current title", identity: "managed" },
       { threadId: "missing", title: null, identity: "provider" },
     ].sort((a, b) => a.threadId.localeCompare(b.threadId)));
-    assert.equal(repository.hotspots("project", now - 6 * day, now)[0]?.threadCount, 2);
+    assert.equal(repository.hotspots(fixtureIdentityValues.ProjectId.project, now - 6 * day, now)[0]?.threadCount, 2);
   } finally { db.close(); }
 });
 
@@ -125,16 +125,16 @@ test("claim queries isolate roots and projects, preserve historical days, and pa
     installWorkbenchDatabaseSchema(db);
     const writer = new WorkbenchStatsRepository(db);
     for (let index = 0; index < 53; index += 1) writer.recordClaimSnapshot({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId: `thread-${String(index).padStart(2, "0")}`, harness: "codex",
+      projectId: fixtureIdentityValues.ProjectId.project, threadId: `thread-${String(index).padStart(2, "0")}`, harness: "codex",
       observedAt: now, roots: [{ rootId: "root", paths: [`file-${String(index).padStart(2, "0")}`, "shared"] }],
     });
     for (const [projectId, rootId, observedAt] of [
-      ["other", "root", now], ["project", "secondary", now], ["project", "root", now - 8 * day],
+      ["local:///other", "root", now], [fixtureIdentityValues.ProjectId.project, "secondary", now], [fixtureIdentityValues.ProjectId.project, "root", now - 8 * day],
     ] as const) writer.recordClaimSnapshot({
       projectId, threadId: "outside", harness: "codex", observedAt, roots: [{ rootId, paths: ["shared"] }],
     });
     const repository = new WorkbenchClaimStatsRepository(db);
-    const request = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d" as const, page: 1, file: null };
+    const request = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const, page: 1, file: null };
     const first = repository.read(request, now);
     const second = repository.read({ ...request, page: 2 }, now);
     assert.equal(first.pages, 2);
@@ -170,7 +170,7 @@ test("retained transcript identities supply titles only when native identity is 
     }
     const writer = new WorkbenchStatsRepository(db);
     for (const threadId of ["native", "canonical", "ambiguous"]) writer.recordClaimSnapshot({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId, harness: "codex", observedAt: now,
+      projectId: fixtureIdentityValues.ProjectId.project, threadId, harness: "codex", observedAt: now,
       roots: [{ rootId: "root", paths: ["src/file.ts"] }],
     });
     const result = new WorkbenchClaimStatsRepository(db).read({

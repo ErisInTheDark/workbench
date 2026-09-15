@@ -56,6 +56,7 @@ type ProjectOperations = {
 };
 
 export interface WorkbenchProjectSnapshotControllerOptions {
+  observeProject?: (projectId: string) => void;
   cacheTtlMs?: number;
   logError?: (message: string) => void;
   maxProjectSnapshots?: number;
@@ -98,6 +99,7 @@ export default class WorkbenchProjectSnapshotController {
   private readonly pollIntervalMs: number;
   private readonly projects = new Map<string, ProjectSnapshotState>();
   private readonly resolveProjectById: WorkbenchProjectSnapshotControllerOptions["resolveProjectById"];
+  private readonly observeProject: (projectId: string) => void;
 
   constructor({
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
@@ -107,6 +109,7 @@ export default class WorkbenchProjectSnapshotController {
     operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath },
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     resolveProjectById,
+    observeProject = () => undefined,
   }: WorkbenchProjectSnapshotControllerOptions) {
     this.cacheTtlMs = cacheTtlMs;
     this.logError = logError;
@@ -115,6 +118,7 @@ export default class WorkbenchProjectSnapshotController {
     this.operations = operations;
     this.pollIntervalMs = Math.max(1, Math.trunc(pollIntervalMs));
     this.resolveProjectById = resolveProjectById;
+    this.observeProject = observeProject;
   }
 
   dispose() {
@@ -126,6 +130,7 @@ export default class WorkbenchProjectSnapshotController {
 
   observe(projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) {
     this.assertActive();
+    this.observeProject(projectId);
     const key = this.projectKey(projectId);
     const state = this.getState(key);
     const observationToken = Symbol(projectId);

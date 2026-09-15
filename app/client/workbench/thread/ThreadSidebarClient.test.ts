@@ -56,6 +56,25 @@ const projectSummary = (
   unsettledThreads: [],
 });
 
+test("project open adopts the resolved address for subsequent pushes and observation closure", async () => {
+  const canonical = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const closed: string[] = [];
+  const client = new ThreadSidebarClient({
+    onChange() {},
+    transport: {
+      open: async () => ({ ...snapshot(1), projectId: canonical }),
+      close: async id => { closed.push(id); },
+      deleteDraft: async () => {}, upsertDraft: async () => {},
+    },
+  });
+  assert.equal(await client.open(fixtureIdentityValues.ProjectId.project), true);
+  assert.equal(client.getSnapshot()?.projectId, canonical);
+  client.accept({ ...snapshot(2), projectId: canonical });
+  assert.equal(client.getSnapshot()?.revision, 2);
+  await client.close();
+  assert.deepEqual(closed, [canonical]);
+});
+
 for (const mode of ["project", "global"] as const) {
   test(`${mode} reopen keeps pushes that overtake bootstrap and keeps project state isolated`, async () => {
     const makeSidebar = (revision: number, title: string): WorkbenchThreadSidebarSnapshot => ({

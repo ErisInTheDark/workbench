@@ -11,7 +11,7 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -24,7 +24,7 @@ function record(value: object) {
 function controller(database: ReturnType<typeof createThreadStateTestDatabase>) {
   return new WorkbenchThreadStateController({
     getProjectCatalog: () => ({
-      data: [{ id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", name: "Project", relativePath: "repo", rootPath: "/repo",
+      data: [{ id: fixtureIdentityValues.ProjectId.project, kind: "git", name: "Project", relativePath: "repo", rootPath: "/repo",
         roots: [{ id: "repo", name: "Repo", relativePath: ".", rootPath: "/repo", isPrimary: true }],
         lastCommitTimeMs: null }],
       rootPath: "/",
@@ -45,7 +45,7 @@ test("cold relational startup preserves canonical entries and layout across reop
   const database = createThreadStateTestDatabase(sqlite);
   const threadId = "43596355-c379-497b-b1e0-2f2619c977a1";
   const turnId = "8997417f-de30-47a7-b63b-fb41e6e8b4e5";
-  database.admitThread("project", threadId);
+  database.admitThread(fixtureIdentityValues.ProjectId.project, threadId);
   const storedRecord = record({
     entryKind: "thread", identity: { harness: "codex", threadId },
     title: "Saved", activityAt: 2,
@@ -85,7 +85,7 @@ test("complete cold serving isolates projects and retains settled cross-harness 
   const parentId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("7b6a28d5-0aad-4bed-8997-4d3cec747e68");
   const childId = "17cbfbd0-4b9e-41e0-925e-6e5edb833904";
   const foreignId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("f5efad70-c326-4947-b0ce-6b389d04cab3");
-  for (const [projectId, id] of [["project", parentId], ["project", childId], ["other", foreignId]]) {
+  for (const [projectId, id] of [[fixtureIdentityValues.ProjectId.project, parentId], [fixtureIdentityValues.ProjectId.project, childId], ["local:///other", foreignId]]) {
     database.admitThread(projectId!, id!);
   }
   await database.commitThreadState({ records: [
@@ -96,7 +96,7 @@ test("complete cold serving isolates projects and retains settled cross-harness 
     })),
     record({
       entryKind: "subagent", identity: { harness: "opencode", threadId: childId },
-      parentThreadId: parentId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), name: "Child", profileId: "profile", profileName: "Profile",
+      parentThreadId: parentId, projectId: fixtureIdentityValues.ProjectId.project, name: "Child", profileId: "profile", profileName: "Profile",
       cwd: "/repo", title: "Child", activityAt: 2, createdAt: 1, updatedAt: 2,
       directSubagentIndex: 0, pinned: false,
       lifecycle: { kind: "completed", reason: "providerInactive", settled: true },

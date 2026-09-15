@@ -3,6 +3,7 @@
  * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations.
  */
 import {
+  type WorkbenchProjectRemap,
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateMutation,
   type WorkbenchClientStateRecord,
@@ -12,6 +13,7 @@ import {
   type WorkbenchProjectPreference,
   type WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
+import { isDeepStrictEqual } from "node:util";
 import { projectWorkbenchClientStateRows, workbenchClientStateRecordIdentity as recordIdentity } from "workbench-shared/state/workbench-client-state-projection";
 import {
   deleteRows,
@@ -96,11 +98,62 @@ export default class WorkbenchAppStateController {
 
   mutate(mutation: WorkbenchClientStateMutation) {
     const operation = this.#mutationQueue.then(() => {
-      const revision = this.#repository.commit((nextRevision) => this.#buildMutation(mutation, nextRevision));
+      const canonical = mutation.action === "put"
+        ? { ...mutation, record: this.#canonicalProject(mutation.record) }
+        : { ...mutation, identity: this.#canonicalProject(mutation.identity) };
+      const revision = this.#repository.commit((nextRevision) => this.#buildMutation(canonical, nextRevision));
       return this.read(revision - 1);
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;
+  }
+
+  readProjectAliases() {
+    return this.#repository.readProjectAliases();
+  }
+
+  remapProjects(request: WorkbenchProjectRemap) {
+    const operation = this.#mutationQueue.then(() => {
+      const revision = this.#repository.remapProjects(request, (aliases, revision) => {
+        const mapping = new Map(aliases.map(alias => [alias.alias, alias.projectId]));
+        const changes = projectWorkbenchClientStateRows(this.read().rows);
+        const identities = changes.map(change => change.change === "upsert" ? recordIdentity(change.record) : change.identity);
+        const moved: WorkbenchClientStateIdentity[] = [];
+        const mutations: WorkbenchDatabaseMutation[] = [];
+        for (const change of changes) {
+          if (change.change === "upsert" && change.record.kind === "lastLaunchTarget") {
+            const projectId = mapping.get(change.record.projectId);
+            if (projectId && change.record.daemonRegistrationId === request.daemonRegistrationId) {
+              mutations.push(...this.#put({ ...change.record, projectId }, revision));
+            }
+            continue;
+          }
+          const value = change.change === "upsert" ? change.record : change.identity;
+          if (!("projectId" in value) || value.daemonRegistrationId !== request.daemonRegistrationId) continue;
+          const projectId = mapping.get(value.projectId);
+          if (!projectId) continue;
+          const next = { ...value, projectId };
+          const identity = change.change === "upsert" ? recordIdentity(next as WorkbenchClientStateRecord) : next as WorkbenchClientStateIdentity;
+          if (identities.some(existing => isDeepStrictEqual(existing, identity)) || moved.some(existing => isDeepStrictEqual(existing, identity))) {
+            throw new Error("Project remap conflicts with existing saved state.");
+          }
+          moved.push(identity);
+          if (change.change === "upsert") {
+            mutations.push(...this.#put({ ...change.record, projectId } as WorkbenchClientStateRecord, revision));
+            mutations.push(...this.#delete(recordIdentity(change.record), revision));
+          }
+        }
+        return mutations;
+      });
+      return this.read(revision - 1);
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  #canonicalProject<Value extends WorkbenchClientStateRecord | WorkbenchClientStateIdentity>(value: Value): Value {
+    if (!("projectId" in value)) return value;
+    return { ...value, projectId: this.#repository.resolveProjectId(value.daemonRegistrationId, value.projectId) };
   }
 
   #readRows(sinceRevision: number): WorkbenchClientStateRows {

@@ -16,13 +16,15 @@ test("claim discovery admits future providers independently of thread admission 
     const repository = new WorkbenchStatsImportRepository(database);
     const discovery = {
       checkpointCommit: "a".repeat(40), checkpointRef: "refs/worktree/agents/future-provider/thread/checkpoints/one",
-      harness: "future-provider", observedAt: Date.UTC(2026, 8, 4), projectId: "project",
+      harness: "future-provider", observedAt: Date.UTC(2026, 8, 4), projectId: "local:///project",
       repositoryRoot: "C:/project", rootId: "root", threadId: "thread", workspaceRoot: "C:/project",
     };
     repository.addClaimDiscoveries("run", [discovery, discovery], 1);
+    assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(discovery.projectId));
     const claim = repository.claimClaims("run", 2);
     assert.ok(claim);
-    repository.settleClaims("run", claim, { paths: ["src/file.ts"], state: "completed" }, 3);
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('old-claims', ?)").run(discovery.projectId);
+    repository.settleClaims("run", { ...claim, projectId: "old-claims" }, { paths: ["src/file.ts"], state: "completed" }, 3);
     repository.addClaimDiscoveries("run", [discovery], 4);
     assert.equal(repository.claimClaims("run", 5), null);
     assert.deepEqual(database.prepare("SELECT harness_id, thread_id FROM git_claim_thread_file_days").all(), [
@@ -38,11 +40,12 @@ test("usage and claim imports resume safely and isolate failed work", () => {
   installWorkbenchDatabaseSchema(database);
   database.exec(`
     INSERT INTO workbench_harnesses(id) VALUES ('codex');
+    INSERT INTO workbench_projects(id) VALUES ('local:///project');
     INSERT INTO workbench_thread_state_threads
       (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed, created_at, updated_at, activity_at, order_at)
-    VALUES ('thread', 'project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 20, NULL);
+    VALUES ('thread', 'local:///project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 20, NULL);
     INSERT INTO workbench_thread_state_provider_identities (thread_id, project_id, harness_id, provider_thread_id)
-    VALUES ('thread', 'project', 'codex', 'provider-thread');
+    VALUES ('thread', 'local:///project', 'codex', 'provider-thread');
   `);
   try {
     const repository = new WorkbenchStatsImportRepository(database);
@@ -60,7 +63,7 @@ test("usage and claim imports resume safely and isolate failed work", () => {
       checkpointRef: "refs/worktree/agents/codex/thread/checkpoints/one",
       harness: "codex",
       observedAt: Date.UTC(2026, 8, 4),
-      projectId: "project",
+      projectId: "local:///project",
       repositoryRoot: "C:/project",
       rootId: "root",
       threadId: "thread",
@@ -103,7 +106,7 @@ test("usage schema v10 preserves pricing context while discarding v1 token facts
       ('project', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL);
   `);
   try {
-    installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database, { targetVersion: 10 });
     const usageColumns = (database.prepare("PRAGMA table_info(thread_turn_usage)").all() as Array<{ name: string }>)
       .map(({ name }) => name);
     assert.equal(usageColumns.includes("input_tokens"), false);
@@ -132,10 +135,11 @@ test("usage import version changes discard stale token facts and requeue complet
   installWorkbenchDatabaseSchema(database);
   database.exec(`
     INSERT INTO workbench_harnesses (id) VALUES ('codex');
+    INSERT INTO workbench_projects(id) VALUES ('local:///project');
     INSERT INTO workbench_threads
       (id, project_id, project_root, title, transcript_content_version,
        created_at, updated_at, activity_at, next_turn_index)
-    VALUES ('thread', 'project', 'C:/project', 'thread', 1, 1, 1, 1, 1);
+    VALUES ('thread', 'local:///project', 'C:/project', 'thread', 1, 1, 1, 1, 1);
     INSERT INTO thread_turns
       (id, thread_id, turn_index, harness_id, native_location, native_thread_id, native_turn_id,
        state, created_at, started_at, ended_at, duration_ms)
@@ -150,14 +154,14 @@ test("usage import version changes discard stale token facts and requeue complet
     INSERT INTO workbench_thread_state_threads
       (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed,
        created_at, updated_at, activity_at, order_at)
-    VALUES ('thread', 'project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 2, NULL);
+    VALUES ('thread', 'local:///project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 2, NULL);
     INSERT INTO workbench_thread_state_provider_identities
       (thread_id, project_id, harness_id, provider_thread_id)
-    VALUES ('thread', 'project', 'codex', 'provider-thread');
+    VALUES ('thread', 'local:///project', 'codex', 'provider-thread');
     INSERT INTO thread_usage_imports
       (project_id, harness_id, provider_thread_id, state, run_id, attempt_count, discovered_at,
        source_activity_at, started_at, settled_at, updated_at, error_text, completed_data_version)
-    VALUES ('project', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL, 1);
+    VALUES ('local:///project', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL, 1);
   `);
   try {
     const repository = new WorkbenchStatsImportRepository(database);

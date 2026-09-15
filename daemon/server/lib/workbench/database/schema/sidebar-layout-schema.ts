@@ -2,6 +2,7 @@
  * Exports:
  * - defineSidebarLayoutSchema: declare layout ownership and same-section relationships.
  */
+import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import {
   booleanInteger, check, defineTable, enumText, foreignKey, integer, primaryKey,
   sql, text, unique, type TableDefinition,
@@ -170,8 +171,8 @@ export function defineSidebarLayoutSchema(schemaVersion: number) {
       pinnedImports: pinnedImports.current,
     },
     history: defineSubsystemHistory([
-      layouts, projectLayouts, globalLayouts, folders, items, threads, drafts, layoutFolders,
-      relations, members, pinnedImports,
+      layouts, ownProjectReferences(projectLayouts), globalLayouts, folders, items, threads, drafts, layoutFolders,
+      relations, members, ownProjectReferences(pinnedImports),
     ]),
   };
 }

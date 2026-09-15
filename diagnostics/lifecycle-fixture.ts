@@ -9,13 +9,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "../shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, type ProjectId } from "../shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "../daemon/server/database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchTranscriptRepository from "../daemon/server/database/transcript/WorkbenchTranscriptRepository";
 import externalizeCodexTranscriptInlineImages from "../daemon/server/codex-transcript-image-assets";
 
-export async function seedLifecycleTranscript(project: string) {
+export async function seedLifecycleTranscript(project: string, projectId: ProjectId) {
   const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });
   database.pragma("foreign_keys = ON");
   try {
@@ -23,7 +23,7 @@ export async function seedLifecycleTranscript(project: string) {
     const nativeThreadId = NativeThreadIdSchema.parse("lifecycle-transcript");
     const thread = threads.observe({
       native: { harness: "codex", nativeLocation: project, nativeThreadId },
-      projectId: ProjectIdSchema.parse("lifecycle"), projectRoot: project,
+      projectId, projectRoot: project,
       title: "isolated transcript", createdAt: 1, updatedAt: 2, activityAt: 2,
     });
     const turn = threads.observeTurn({

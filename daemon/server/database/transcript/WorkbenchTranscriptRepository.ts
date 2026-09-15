@@ -9,6 +9,7 @@ import {
   type WorkbenchItemId, type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository.ts";
 import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
@@ -1018,7 +1019,7 @@ export default class WorkbenchTranscriptRepository {
     if (observation.kind === "thread") {
       this.#run(upsertRow(coreTables.workbenchThreads, {
         id: observation.threadId,
-        project_id: observation.projectId,
+        project_id: new WorkbenchProjectRepository(this.#database).admitStoredReference(observation.projectId),
         project_root: observation.projectRoot,
         title: observation.title,
         transcript_content_version: 0,

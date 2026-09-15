@@ -19,7 +19,7 @@ test("SQL reads select the exact window and retain answered interactions without
   const older = WorkbenchTurnIdSchema.parse("older");
   const newer = WorkbenchTurnIdSchema.parse("newer");
   const observations: WorkbenchTranscriptAtomicObservation[] = [{
-    kind: "thread", threadId, projectId: ProjectIdSchema.parse("project"), projectRoot: "/repo",
+    kind: "thread", threadId, projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/repo",
     title: "reader", createdAt: 1, updatedAt: 5, activityAt: 5,
   }];
   for (const [index, turnId] of [older, newer].entries()) {

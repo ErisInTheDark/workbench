@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
@@ -40,6 +41,60 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
     change.change === "upsert" ? [change.record] : []
   ));
 }
+
+test("project remapping preserves draft attachments and launch selection across restart and late old-address saves", async context => {
+  const fixture = await controllerFixture(context);
+  const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const request = { daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: "old", projectId }] };
+  const draft = {
+    kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread",
+    value: { text: "keep this draft", updatedAt: 1, attachments: [{ id: "attachment", url: "data:image/png;base64,YQ==" }] },
+  };
+  try {
+    await fixture.controller.mutate({ action: "put", record: draft });
+    await fixture.controller.mutate({ action: "put", record: {
+      kind: "lastLaunchTarget", daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old",
+    } });
+    const delta = await fixture.controller.remapProjects(request);
+    assert.ok(projectWorkbenchClientStateRows(delta.rows).some(change => change.change === "delete"
+      && "projectId" in change.identity && change.identity.projectId === "old"));
+    const records = projectedRecords(fixture.controller.read());
+    assert.deepEqual(records.find(record => record.kind === "composerDraft"), { ...draft, projectId });
+    assert.equal(records.find(record => record.kind === "lastLaunchTarget")?.projectId, projectId);
+    await fixture.controller.remapProjects(request);
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    await restarted.mutate({ action: "put", record: { ...draft, value: { ...draft.value, text: "late edit" } } });
+    assert.deepEqual(projectedRecords(restarted.read()).filter(record => record.kind === "composerDraft"), [
+      { ...draft, projectId, value: { ...draft.value, text: "late edit" } },
+    ]);
+    await restarted.mutate({ action: "delete", identity: {
+      kind: "composerDraft", daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread",
+    } });
+    assert.equal(projectedRecords(restarted.read()).filter(record => record.kind === "composerDraft").length, 0);
+  } finally { await restarted.close(); }
+});
+
+test("project remap conflicts roll back records and aliases without losing either draft", async context => {
+  const fixture = await controllerFixture(context);
+  const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const request = { daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: "old", projectId }] };
+  try {
+    for (const id of ["old", projectId]) await fixture.controller.mutate({ action: "put", record: {
+      kind: "composerDraft", daemonRegistrationId: fixture.daemonRegistrationId, projectId: id, threadId: "thread",
+      value: { text: id, updatedAt: 1, attachments: [] },
+    } });
+    const before = fixture.controller.read();
+    await assert.rejects(fixture.controller.remapProjects(request), /conflict/i);
+    assert.deepEqual(fixture.controller.read(), before);
+    await fixture.controller.mutate({ action: "put", record: {
+      kind: "expandedDirectory", daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", path: "src",
+    } });
+    assert.equal(projectedRecords(fixture.controller.read()).find(record => record.kind === "expandedDirectory")?.projectId, "old");
+  } finally { await fixture.controller.close(); }
+});
 
 test("standalone provider favourites survive repeated saves and controller restart", async context => {
   const fixture = await controllerFixture(context);

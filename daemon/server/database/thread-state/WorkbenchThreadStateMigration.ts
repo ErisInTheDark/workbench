@@ -233,7 +233,7 @@ export default class WorkbenchThreadStateMigration {
         this.database.prepare("DELETE FROM workbench_thread_title_history").run();
         const writeLegacyTitle = this.database.prepare("INSERT INTO workbench_thread_title_history(project_id, harness_id, thread_id, title, used_at) VALUES (?, ?, ?, ?, ?)");
         for (const row of canonicalTitles.values()) writeLegacyTitle.run(row.project_id, row.harness_id, row.thread_id, row.title, row.used_at);
-        applyWorkbenchDatabaseSchema(this.database, schema);
+        applyWorkbenchDatabaseSchema(this.database, schema, { targetVersion: databaseReleases.providerReferences.version });
         const repository = new WorkbenchThreadStateRelationalRepository(this.database, this.identities);
         for (const project of converted) {
           for (const record of project.records) {
@@ -446,11 +446,12 @@ export default class WorkbenchThreadStateMigration {
           throw new Error("Current subagent allocation is behind its stored relationships.");
         }
       }
-      const legacy = this.database.prepare(`
-        SELECT 1 FROM workbench_thread_state_projects
-        UNION ALL SELECT 1 FROM workbench_thread_state_globals LIMIT 1
-      `).get();
-      if (legacy) throw new Error("Retired thread-state documents were written after conversion.");
+      for (const table of ["workbench_thread_state_projects", "workbench_thread_state_globals"]) {
+        if (!this.database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table)) continue;
+        if (this.database.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()) {
+          throw new Error("Retired thread-state documents were written after conversion.");
+        }
+      }
     })();
   }
 }

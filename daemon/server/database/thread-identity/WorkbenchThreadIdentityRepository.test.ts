@@ -26,9 +26,9 @@ const fixtureIdentityValues = {
     "secondary-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("secondary-turn"),
   },
   ProjectId: {
-    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
-    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("other-project"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other"),
+    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other-project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchTurnId: {
     "existing-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("existing-turn"),
@@ -56,6 +56,27 @@ function setup() {
   installWorkbenchDatabaseSchema(database);
   return { database, identity: new WorkbenchThreadIdentityRepository(database) };
 }
+
+test("observed and retained thread admission use canonical project aliases and create project parents", () => {
+  const { database, identity } = setup();
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/project");
+  const legacyId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run("project", projectId);
+    const observed = identity.observe({ ...metadata(), projectId: legacyId });
+    assert.equal(observed.projectId, projectId);
+    assert.equal(identity.resolve({ projectId: legacyId, threadId: observed.threadId })?.threadId, observed.threadId);
+    const retained = identity.admitRetainedReference({
+      reference: fixtureIdentitySchemas.ThreadReferenceSchema.parse("retained"),
+      projectId: legacyId, projectRoot: "C:/project",
+    });
+    assert.equal(retained.projectId, projectId);
+    const independent = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/independent");
+    identity.observe({ ...metadata("independent"), projectId: independent, projectRoot: "C:/independent" });
+    assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(independent));
+  } finally { database.close(); }
+});
 
 test("retained parent references acquire real provider bindings without changing canonical ownership", () => {
   const { database, identity } = setup();
@@ -214,7 +235,7 @@ test("thread catalog admission rolls back earlier metadata and allocations on a 
     const catalog = [
       { ...metadata("existing"), title: "Changed", updatedAt: 30 },
       metadata("new"),
-      { ...metadata("existing"), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") },
+      { ...metadata("existing"), projectId: fixtureIdentityValues.ProjectId.other },
     ];
     assert.throws(() => identity.observeMany(catalog), /project owner/iu);
     assert.equal(identity.resolveNative(metadata("new").native), null);

@@ -32,9 +32,9 @@ const fixtureIdentityValues = {
     "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    "project-a": fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"),
-    "project-b": fixtureIdentitySchemas.ProjectIdSchema.parse("project-b"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project-a": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project-a"),
+    "project-b": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project-b"),
   },
   WorkbenchThreadId: {
     "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),
@@ -74,7 +74,7 @@ function createHarnesses(
 function createThreadStateDatabase(cwd?: string, threads: readonly [string, WorkbenchHarness][] = []) {
   const database = createThreadStateTestDatabase();
   for (const [threadId, harness] of threads) {
-    database.admitThread("project", threadId, harness, `native:${threadId}`, cwd);
+    database.admitThread(fixtureIdentityValues.ProjectId.project, threadId, harness, `native:${threadId}`, cwd);
   }
   return database;
 }
@@ -155,11 +155,11 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: cwd } }),
+    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: cwd } }),
     transitions: { run: async <T>(_: string, operation: () => Promise<T>) => await operation() },
   };
-  options.database.admitThread("project", "thread", harness, "native:thread", "C:/workspace");
-  options.database.admitThread("project", "parent", harness, "native:parent", "C:/workspace");
+  options.database.admitThread(fixtureIdentityValues.ProjectId.project, "thread", harness, "native:thread", "C:/workspace");
+  options.database.admitThread(fixtureIdentityValues.ProjectId.project, "parent", harness, "native:parent", "C:/workspace");
   options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true });
   for (const turnId of ["new-turn", "resumed"]) {
     options.database.admitRecord({ ...storedRecordDefaults, ...provider, providerObserved: true,
@@ -185,7 +185,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     feature, provider, questionnaire, releases, requests, state,
     read: async () => (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind === "thread"),
     complete: () => feature.controller.handleRequest("observer", {
-      identity: provider.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), status: "completed",
+      identity: provider.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentityValues.ProjectId.project, status: "completed",
     }),
   };
 }
@@ -239,7 +239,7 @@ test("composer snooze preserves provider questionnaires and fences failures or r
           await h.feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], { kind: "inputResolved", requestKey: h.questionnaire.requestKey });
         };
         const snooze = h.feature.controller.handleRequest("observer", {
-          method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+          method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
           identity: { harness, threadId: "thread" }, requestKey: h.questionnaire.requestKey,
         });
         if (outcome === "fail") await assert.rejects(snooze, /interrupt failed/u);
@@ -268,7 +268,7 @@ test("a retained questionnaire can be snoozed after its thread was marked comple
   try {
     await h.complete();
     const response = await h.feature.controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentityValues.ProjectId.project,
       identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
     });
     assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
@@ -425,7 +425,7 @@ test("provider notification observation returns the persisted lifecycle result",
     },
     publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
   await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
@@ -590,14 +590,14 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     resolveProjectFromCwd: async (cwd) => {
       resolvedCwds.push(cwd);
       if (cwd !== storageRoot) throw new Error("Unowned cwd");
-      return { cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } };
+      return { cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } };
     },
     transitions: { run: async (_key, operation) => await operation() },
   });
 
   assert.deepEqual(await feature.getCodexMcpState(fixtureIdentityValues.NativeThreadId["thread"]), {
     generation: null,
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    projectId: fixtureIdentityValues.ProjectId.project,
   });
   assert.deepEqual(requests, [{
     id: 0,
@@ -623,7 +623,7 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     sessionId: "thread", source: "cli", threadSource: null,
   };
   assert.deepEqual(await feature.prepareCodexProfile(provider), {
-    cwd: storageRoot, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), selection, subagentName: null,
+    cwd: storageRoot, projectId: fixtureIdentityValues.ProjectId.project, selection, subagentName: null,
   });
   assert.equal(resolvedCwds.at(-1), storageRoot);
   await assert.rejects(feature.prepareCodexProfile({ ...provider, cwd: "/unowned" }), /Unowned cwd/u);
@@ -761,7 +761,7 @@ test("a relationship committed during provider pagination remains a subagent aft
     },
     publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -847,7 +847,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
         parentThreadId: fixtureIdentityValues.WorkbenchThreadId.parent,
         profileId: "default",
         profileName: "Default",
-        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+        projectId: fixtureIdentityValues.ProjectId.project,
         threadId: fixtureIdentityValues.WorkbenchThreadId.child,
         title: "Child",
         updatedAt: 2,
@@ -955,9 +955,9 @@ test("provider reconciliation starts concurrently and publishes each successful 
 
 test("deep provider pages serialize across projects while both newest pages start immediately", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pagination-"));
-  const projectRoots = new Map([
-    ["project-a", path.join(storageRoot, "project-a")],
-    ["project-b", path.join(storageRoot, "project-b")],
+  const projectRoots = new Map<string, string>([
+    [fixtureIdentityValues.ProjectId["project-a"], path.join(storageRoot, "project-a")],
+    [fixtureIdentityValues.ProjectId["project-b"], path.join(storageRoot, "project-b")],
   ]);
   await Promise.all([...projectRoots.values()].map((rootPath) => fs.mkdir(rootPath)));
   const firstDeepGate = deferred<void>();
@@ -1042,7 +1042,7 @@ test("managed title commands use the validated provider title as the mutation pr
       };
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -1168,13 +1168,14 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
     publish: () => undefined,
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
   await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => logs.length === 1, "Git snapshot reconciliation failure was not logged.");
-  assert.match(logs[0] ?? "", /reconciliation failed project=project error=Git snapshot exploded\./u);
+  assert.ok(logs[0]?.includes(fixtureIdentityValues.ProjectId.project));
+  assert.match(logs[0] ?? "", /reconciliation failed .*error=Git snapshot exploded\./u);
   assert.equal((await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).error, "Git snapshot exploded.");
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
@@ -1184,7 +1185,7 @@ test("expired settled threads reach repository retention through the feature bou
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-retention-feature-"));
   const identity = { harness: "codex" as const, threadId: "expired-thread" };
   const database = createThreadStateDatabase();
-  await database.seedProject("project", {
+  await database.seedProject(fixtureIdentityValues.ProjectId.project, {
     drafts: [],
     records: [{
       activityAt: 1,
@@ -1217,7 +1218,7 @@ test("expired settled threads reach repository retention through the feature bou
     },
     publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: "C:/workspace" } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -1391,7 +1392,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }, async (harness, threadId) => { resumes.push({ harness, threadId }); }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -1444,7 +1445,7 @@ test("observed title mutations update the provider and published sidebar togethe
       };
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), rootPath: storageRoot } }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -1458,7 +1459,7 @@ test("observed title mutations update the provider and published sidebar togethe
   const renamed = await feature.controller.handleRequest("observer", {
     identity: { harness: "codex", threadId: "thread-one" },
     method: "workbench/thread-state/title/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    projectId: fixtureIdentityValues.ProjectId.project,
     title: '  "Renamed   thread..."  ',
   });
 
@@ -1482,7 +1483,7 @@ test("observed title mutations update the provider and published sidebar togethe
   const rejected = await feature.controller.handleRequest("observer", {
     identity: { harness: "codex", threadId: "thread-one" },
     method: "workbench/thread-state/title/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    projectId: fixtureIdentityValues.ProjectId.project,
     title: "Rejected title",
   });
   assert.deepEqual(rejected, { error: { code: "threadTitleMutationFailed", message: "Provider rejected title" } });

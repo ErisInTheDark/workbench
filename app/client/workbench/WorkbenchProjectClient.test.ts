@@ -8,6 +8,26 @@ import { test } from "node:test";
 import type { ProjectSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import WorkbenchProjectClient, { type WorkbenchProjectTransport } from "./WorkbenchProjectClient";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
+
+test("catalogue adoption preserves the selected tree and expanded directories under canonical identity", async () => {
+  const clientStateController = new WorkbenchClientStateController({ mode: "memory" });
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const { transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport, clientStateController });
+  try {
+    await clientStateController.put({ kind: "expandedDirectory", daemonRegistrationId: "memory", projectId: "old", path: "src" });
+    client.beginProjectSelection("old");
+    client.accept({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old"), revision: 1, snapshot: createSnapshot("old"), updateKind: "project" });
+    await client.installCatalog({
+      data: [{ ...createProject("old"), id: projectId }], rootPath: "C:/projects", aliases: [{ alias: "old", projectId }],
+    });
+    assert.equal(client.getSnapshot().currentProjectId, projectId);
+    assert.deepEqual(client.getSnapshot().expandedDirectories, ["src"]);
+    assert.equal(client.getSnapshot().tree[0]?.name, "README.md");
+    assert.equal(clientStateController.records("expandedDirectory")[0]!.projectId, projectId);
+  } finally { client.dispose(); clientStateController.dispose(); }
+});
 
 function createProject(projectId: string): WorkbenchProjectOption {
   return {

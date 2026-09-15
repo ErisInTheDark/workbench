@@ -21,8 +21,8 @@ const fixtureIdentityValues = {
     "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
   },
   ProjectId: {
-    "foreign": fixtureIdentitySchemas.ProjectIdSchema.parse("foreign"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "foreign": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///foreign"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 

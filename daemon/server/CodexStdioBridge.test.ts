@@ -50,7 +50,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -273,7 +273,7 @@ test("bridge admits public identity before structural publication and records th
       }
     },
     resolveProjectFromCwd: async () => ({
-      cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {}, storageRoot: root,
@@ -391,7 +391,7 @@ test("database replacement preserves ordered live events and usage without repla
     onNotification(event) { published.push(mapProviderNotification(identities, native, event as ServerNotification)); },
     recordSqliteTranscript: async (batch) => { transcripts.settle(batch); },
     resolveProjectFromCwd: async () => ({
-      cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {}, storageRoot: root,
@@ -488,7 +488,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       onNotification(notification) { notifications.push(notification); },
       resolveProjectFromCwd: async () => ({
         cwd: root,
-        project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+        project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
         root: { id: "root", name: "repo", root, rootPath: root },
       }),
       sendToClient() {}, storageRoot: root,
@@ -592,7 +592,7 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
       onNotification(message) { visible.push(message); },
       recordSqliteTranscript: async (batch) => { facts.push(...batch); await sql.ports.recordSqliteTranscript(batch); },
       resolveProjectFromCwd: async () => ({
-        cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       }),
       sendToClient() {}, storageRoot: root,
@@ -697,7 +697,7 @@ test("ordinary failed patches receive current-file findings without automatic re
     bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {}, sendToClient() {}, storageRoot: root,
     resolveProjectFromCwd: async () => ({
-      cwd: root, project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+      cwd: root, project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
       root: { id: "root", name: "repo", root, rootPath: root },
     }),
   });
@@ -1008,7 +1008,7 @@ test("background thread pages await SQL repair without losing later live facts",
     resolveProjectFromCwd: async () => {
       return {
         cwd: "C:/repo",
-        project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       };
     },
@@ -1115,7 +1115,7 @@ test("provider catalog identities and the materialized page record as one SQL fa
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1193,7 +1193,7 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1268,7 +1268,7 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
     recordSqliteTranscript: async (batch) => { observations.push(...batch); },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
   });
@@ -1358,7 +1358,7 @@ test("live provider observations and active baselines stay ordered across a brid
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1465,7 +1465,7 @@ test("blocked SQLite recording holds bridge detach", async () => {
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1510,7 +1510,7 @@ test("provider-live transcript bursts bypass durable recording until item settle
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1641,7 +1641,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -1887,7 +1887,7 @@ test("paged recovery shares one worker across independent thread histories", asy
         bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
         identities, onNotification() {}, sendToClient() {}, storageRoot: root,
         resolveProjectFromCwd: async () => ({
-          cwd: "C:/repo", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+          cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
           root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
         }),
         recordSqliteTranscript: async (observations, context) => {
@@ -2120,7 +2120,7 @@ test("SQLite recording cannot bypass canonical admission when the identity owner
       recordTranscript(observations: readonly WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>[], context: { source: "workbench" }): Promise<void>;
     };
     await assert.rejects(recording.recordTranscript([{
-        kind: "thread", threadId: NativeThreadIdSchema.parse("native-thread"), projectId: ProjectIdSchema.parse("project"),
+        kind: "thread", threadId: NativeThreadIdSchema.parse("native-thread"), projectId: fixtureIdentityValues.ProjectId.project,
         projectRoot: "C:/repo", title: "Thread", createdAt: 1, updatedAt: 1, activityAt: 1,
       }], { source: "workbench" }), { message: "SQLite transcript recording failed." });
     assert.equal(writes, 0);
@@ -2540,7 +2540,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -2690,7 +2690,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -3592,7 +3592,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       events.push("prepare:profile");
       const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
       const configuration = {
-        cwd: root, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), roots: [], subagentName: null, threadId: thread.id,
+        cwd: root, projectId: fixtureIdentityValues.ProjectId.project, roots: [], subagentName: null, threadId: thread.id,
         settings: {
           harness: "codex" as const, agentPath: "library:agents/lily.md", agentSource: "library" as const,
           model: "saved-model", reasoningEffort: null, serviceTier: null,
@@ -4263,7 +4263,7 @@ test("exact transcript windows await ordered provider recording and Thread Recal
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4426,7 +4426,7 @@ test("durable transcript and recall materialisation propagate SQLite failure and
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4486,7 +4486,7 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
@@ -4576,7 +4576,7 @@ test("turn start responses admit the live turn before materialisation reads SQL"
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
-      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},

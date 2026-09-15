@@ -370,6 +370,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (this.installProjectSidebar(snapshot)) this.publish();
   }
   private installOpenResult(result: ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot) {
+    const sidebar = "sidebar" in result ? result.sidebar : result;
+    if (this.mode === "project") this.projectId = sidebar.projectId;
     let changed = false;
     if ("sidebar" in result) {
       if (result.pinnedThreadLayout.revision > this.pinnedThreadLayout.revision) {
@@ -378,7 +380,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       }
       for (const summary of result.projectThreads.projects) changed = this.setProjectThreadSummary(summary) || changed;
     }
-    changed = this.installProjectSidebar("sidebar" in result ? result.sidebar : result) || changed;
+    changed = this.installProjectSidebar(sidebar) || changed;
     if (changed) this.publish();
   }
   private setProjectThreadSummary(summary: WorkbenchProjectThreadSummary) {

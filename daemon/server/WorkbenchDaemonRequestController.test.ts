@@ -45,6 +45,7 @@ test("context capability bounds reject invalid target mutations without writing"
 function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
+  canonicalProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
   providers?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["providers"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
@@ -129,7 +130,7 @@ function createController(options: {
       readCatalog: async () => ({ data: [], rootPath: "" }),
       resolveProjectById: async (projectId) => {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
-        return { id: projectId == null ? undefined : ProjectIdSchema.parse(projectId), kind: "git", root: "", rootPath: "", roots: [] };
+        return { id: projectId == null ? undefined : ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };
       },
     },
     search: {
@@ -255,6 +256,7 @@ test("questionnaire response dispatch validates and delegates one semantic daemo
 });
 
 test("thread lookup resolves native and WB inputs without publishing native bindings or requiring bodies", async () => {
+  const projectId = ProjectIdSchema.parse("local:///project");
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -262,7 +264,7 @@ test("thread lookup resolves native and WB inputs without publishing native bind
     const identities = new WorkbenchThreadIdentityRepository(database);
     const identity = identities.observe({
       native: { harness: "codex", nativeLocation: "private-home", nativeThreadId: NativeThreadIdSchema.parse("native-thread") },
-      projectId: ProjectIdSchema.parse("project"), projectRoot: "C:/project", title: "Thread",
+      projectId, projectRoot: "C:/project", title: "Thread",
       createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const { controller, targetReads } = createController({
@@ -270,16 +272,16 @@ test("thread lookup resolves native and WB inputs without publishing native bind
     });
     for (const threadId of ["native-thread", identity.threadId]) {
       assert.deepEqual(await controller.handle({
-        id: 1, method: "thread/identity/resolve", params: { threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
+        id: 1, method: "thread/identity/resolve", params: { threadId, projectId },
       }), {
-        id: 1, result: { data: { threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" } },
+        id: 1, result: { data: { threadId: identity.threadId, projectId, harness: "codex" } },
       });
       await controller.handle({ id: 4, method: "profiles/target/read", params: {
-        slot: { kind: "thread", threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" },
+        slot: { kind: "thread", threadId, projectId, harness: "codex" },
       } });
     }
     assert.deepEqual(targetReads, [0, 1].map(() => ({
-      kind: "thread", threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex",
+      kind: "thread", threadId: identity.threadId, projectId, harness: "codex",
     })));
     const wrongProject = await controller.handle({
       id: 2, method: "thread/identity/resolve", params: { threadId: identity.threadId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("elsewhere") },
@@ -514,12 +516,27 @@ test("Codex sandbox network requests validate project ownership and preserve exp
   ]);
 });
 
+test("project-scoped network, search, and stats requests use the resolved owner rather than the supplied alias", async () => {
+  const canonicalProjectId = "remote://example.test/request";
+  const { controller, networkWrites, searchRequests, statsRequests } = createController({ canonicalProjectId });
+  const projectId = "old-request";
+  const network = await controller.handle({
+    id: 1, method: "codex-sandbox-network/update", params: { projectId, enabled: true, scope: "project" },
+  });
+  assert.equal(network.error, undefined);
+  assert.deepEqual(networkWrites, [{ projectId: canonicalProjectId, enabled: true, scope: "project" }]);
+  await controller.handle({ id: 2, method: "search/query", params: { projectId, query: "" } });
+  await controller.handle({ id: 3, method: "stats/read", params: { projectId, range: "7d" } });
+  assert.deepEqual(searchRequests, [{ projectId: canonicalProjectId, query: "" }]);
+  assert.deepEqual(statsRequests, [{ projectId: canonicalProjectId, range: "7d", model: null, provider: null }]);
+});
+
 for (const harness of ["codex", "copilot", "opencode"] as const) {
   test(`${harness} thread profile dispatch persists and reopens the canonical owner`, async () => {
     const sqlite = new Database(":memory:");
     installWorkbenchDatabaseSchema(sqlite);
     const identities = new WorkbenchThreadIdentityRepository(sqlite);
-    const projectId = ProjectIdSchema.parse("profile-project");
+    const projectId = ProjectIdSchema.parse("local:///profile-project");
     const nativeThreadId = NativeThreadIdSchema.parse("a116df94-9125-43c6-ae1f-898fbd140cd0");
     const admitted = identities.observe({
       native: { harness, nativeLocation: "C:/profile-project", nativeThreadId },

@@ -9,6 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import IsolatedWorkbench from "./IsolatedWorkbench";
+import { captureThreadStateMigrationSource, installThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import type { WorkbenchComposerProfile, WorkbenchProjectsPayload } from "../shared/types";
 import type { Thread } from "../shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../shared/codex/generated/app-server/v2/Turn";
@@ -41,6 +42,9 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = `{"retained":"${randomUUID()}"}`;
   try {
+    const captured = await captureThreadStateMigrationSource(source, runtime.root);
+    await verifyThreadStateMigrationSource(captured);
+    await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     const gateProof = `gate-${randomUUID()}`;
@@ -78,6 +82,13 @@ await new Promise((resolve, reject) => {
     assert.equal(path.resolve(started.thread.cwd), runtime.project);
     const database = new Database(path.join(runtime.project, ".workbench/workbench.sqlite3"), { readonly: true });
     try {
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.equal(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'workbench_thread_state_projects'").get(), undefined);
+      const owner = database.prepare(`
+        SELECT thread.project_id, project.kind FROM workbench_threads AS thread
+        JOIN workbench_projects AS project ON project.id = thread.project_id WHERE thread.id = ?
+      `).get(threadId);
+      assert.deepEqual(owner, { project_id: project.id, kind: "git" }, "New provider admission must use the migrated project owner");
       const native = database.prepare("SELECT native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ?").get(threadId) as { native_thread_id: string } | undefined;
       assert.ok(native, "Public thread must own a private provider binding immediately after creation");
       nativeThreadId = native.native_thread_id;

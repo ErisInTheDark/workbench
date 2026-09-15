@@ -276,6 +276,7 @@ export default class WorkbenchThreadStateFeature {
 
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
+      resolveProjectId: projectId => this.canonicalProjectId(projectId),
       readComposerProfiles: context.readComposerProfiles,
       recordComposerProfileUsage: context.recordComposerProfileUsage,
       ...(context.reloadDirt ? {
@@ -562,6 +563,7 @@ export default class WorkbenchThreadStateFeature {
 
   async captureCreationProfile(harness: WorkbenchHarness, cwd: string, source: WorkbenchThreadCreationProfile) {
     const resolved = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Thread profile creation" });
+    if (source.kind === "target") source = { ...source, slot: { ...source.slot, projectId: this.canonicalProjectId(source.slot.projectId) } };
     if (source.kind === "target" && source.slot.projectId !== resolved.project.id) {
       throw new Error("The creation profile target belongs to another project.");
     }
@@ -569,6 +571,10 @@ export default class WorkbenchThreadStateFeature {
       : (await this.controller.prepareComposerProfileTarget(source.slot)).selection;
     if (selection.settings.harness !== harness) throw new Error("The creation profile harness does not match the thread.");
     return { selection, cwd: resolved.cwd, projectId: resolved.project.id };
+  }
+
+  private canonicalProjectId(projectId: ProjectId) {
+    return this.context.getProjectCatalog().aliases?.find(alias => alias.alias === projectId)?.projectId ?? projectId;
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadReadResponse["thread"], selection: WorkbenchComposerProfileTargetSelection) {

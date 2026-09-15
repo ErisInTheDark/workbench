@@ -12,12 +12,15 @@ import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
+import WorkbenchThreadStateMigration from "./thread-state/WorkbenchThreadStateMigration";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import {
   coreTables,
+  projectTables,
   installWorkbenchDatabaseSchema,
   WORKBENCH_DATABASE_SCHEMA_VERSION,
   WORKBENCH_DATABASE_TABLE_NAMES,
+  workbenchDatabaseSchema,
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -33,7 +36,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchThreadId: {
     "active-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("active-thread"),
@@ -48,11 +51,11 @@ const fixtureIdentityValues = {
   },
 };
 
-function seedProviderCursor(databasePath: string) {
+function seedProviderCursor(databasePath: string, projectId = fixtureIdentityValues.ProjectId.project) {
   const database = new Database(databasePath);
   new WorkbenchTranscriptRepository(database).settle([{
     kind: "thread", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
-    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "/repo",
+    projectId, projectRoot: "/repo",
     title: "", createdAt: 1, updatedAt: 1, activityAt: 1,
   }, {
     kind: "turn", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
@@ -77,6 +80,49 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
   assert.equal(page.coverage.threads, 0);
   await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
 }
+
+test("prepared project conversion precedes worker readiness and retains its pre-conversion backup", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-project-startup-"));
+  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const old = new Database(databasePath);
+  new WorkbenchThreadStateMigration(old).run(workbenchDatabaseSchema, [], 1);
+  old.close();
+  seedProviderCursor(databasePath, fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/prepared");
+  const project = {
+    id: projectId, kind: "git" as const, name: "prepared", relativePath: "prepared",
+    rootPath: "C:/prepared", lastCommitTimeMs: null,
+    roots: [{ id: "root", name: "prepared", relativePath: "prepared", rootPath: "C:/prepared", isPrimary: true }],
+  };
+  let preparations = 0;
+  let checkpoint: string | undefined;
+  const controller = new WorkbenchDatabaseController({
+    databasePath,
+    beforeMigration: backupPath => { checkpoint = backupPath; },
+    prepareProjects: async () => {
+      preparations += 1;
+      return { discovery: { data: [project], aliases: [{ alias: "project", projectId }], excludedRootPaths: [], rootPath: "C:/" }, relocations: {} };
+    },
+  });
+  try {
+    await Promise.all([controller.start(), controller.start()]);
+    assert.equal(preparations, 1);
+    assert.equal(controller.readInitialProjectCatalog().catalog[0]?.project.id, projectId);
+    assert.equal(await controller.resolveProjectIdentity("project"), projectId);
+    assert.ok(checkpoint);
+    const backup = new Database(checkpoint, { readonly: true, fileMustExist: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 31);
+      assert.equal(backup.prepare("SELECT project_id FROM workbench_threads").pluck().get(), "project");
+    } finally { backup.close(); }
+    assert.deepEqual((await controller.query(selectRows(coreTables.workbenchThreads))).map(row => row.project_id), [projectId]);
+    await checkProviderCursor(controller);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
@@ -132,6 +178,37 @@ test("worker startup retains its old-schema backup even when closed during openi
     }
   } finally {
     await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("project preparation coalesces with startup and closes through caller-owned cancellation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-project-preparation-"));
+  let calls = 0;
+  const entered = Promise.withResolvers<void>();
+  const controller = new WorkbenchDatabaseController({
+    databasePath: join(directory, "workbench.sqlite3"),
+    prepareProjects: async (signal: AbortSignal) => {
+      calls += 1;
+      entered.resolve();
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      signal.throwIfAborted();
+      throw new Error("Preparation must not complete after cancellation.");
+    },
+  });
+  const first = controller.start();
+  const second = controller.start();
+  const settled = Promise.allSettled([first, second]);
+  try {
+    assert.equal(calls, 1);
+    await entered.promise;
+    await controller.close();
+    assert.ok((await settled).every(result => result.status === "rejected"));
+    assert.equal(controller.state, "closed");
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await controller.close();
+    await settled;
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -198,7 +275,7 @@ test("database lifecycle reuses retained state across cold workers", async (cont
     assert.deepEqual(implicitInventory, inventory);
     const catalog = ["first", "second"].map((nativeThreadId) => ({
       native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), projectRoot: "C:/project", title: nativeThreadId,
+      projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/project", title: nativeThreadId,
       createdAt: 1, updatedAt: 2, activityAt: 2,
     }));
     const identities = await controller.observeThreadIdentities(catalog);
@@ -389,15 +466,15 @@ async function checkClaimStats(controller: WorkbenchDatabaseController) {
     await controller.recordStatsClaimSnapshot({
       harness: "codex",
       observedAt: now - 60_000,
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+      projectId: fixtureIdentityValues.ProjectId.project,
       roots: [{ paths: ["src"], rootId: "root" }],
       threadId: "thread",
     });
-    const result = await controller.readStats({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d" }, now);
+    const result = await controller.readStats({ projectId: fixtureIdentityValues.ProjectId.project, range: "7d" }, now);
     assert.equal(result.claimHotspots[0]?.path, "src");
     assert.equal(result.claimHotspots[0]?.threadCount, 1);
     const detailed = WorkbenchStatsDetailedResponseSchema.parse(await controller.readStatsDetailed({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d", tokenTypes: [],
+      projectId: fixtureIdentityValues.ProjectId.project, range: "7d", tokenTypes: [],
     }, now));
     assert.deepEqual(legacyStatsResponse(detailed), result);
     const claims = await controller.readClaimStats({
@@ -405,7 +482,7 @@ async function checkClaimStats(controller: WorkbenchDatabaseController) {
     }, now);
     assert.equal(claims.kind, "threads");
     if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
-    const renames = [{ projectId: "project", rootId: "root", from: "src", to: "renamed" }];
+    const renames = [{ projectId: fixtureIdentityValues.ProjectId.project, rootId: "root", from: "src", to: "renamed" }];
     assert.equal((await controller.readStats({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
     assert.equal((await controller.readStatsDetailed({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
     const renamed = await controller.readClaimStats({
@@ -420,15 +497,16 @@ test("schema constraints reject invalid thread state and mismatched item augment
     database.pragma("foreign_keys = ON");
     installWorkbenchDatabaseSchema(database);
     database.exec(`
+      INSERT INTO workbench_projects(id) VALUES ('local:///project');
       INSERT INTO workbench_thread_state_threads VALUES
-        ('parent', 'project', 'topLevel', 'visible', 'Parent', 0, 0, 0, 1, 1, 2, 2, NULL),
-        ('historical-child', 'project', 'subagent', 'visible', 'Child', 0, 0, 0, 1, 1, 2, 2, NULL);
+        ('parent', 'local:///project', 'topLevel', 'visible', 'Parent', 0, 0, 0, 1, 1, 2, 2, NULL),
+        ('historical-child', 'local:///project', 'subagent', 'visible', 'Child', 0, 0, 0, 1, 1, 2, 2, NULL);
       INSERT INTO workbench_thread_state_subagents
         VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
     `);
     assert.doesNotThrow(() => database.exec(`
       INSERT INTO workbench_thread_state_threads VALUES
-        ('replacement-child', 'project', 'subagent', 'visible', 'Replacement', 0, 0, 0, 1, 3, 4, 4, NULL);
+        ('replacement-child', 'local:///project', 'subagent', 'visible', 'Replacement', 0, 0, 0, 1, 3, 4, 4, NULL);
       INSERT INTO workbench_thread_state_subagents
         VALUES ('replacement-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
     `));
@@ -436,14 +514,14 @@ test("schema constraints reject invalid thread state and mismatched item augment
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,archived,pinned,snoozed,transcript_content_version,
         next_turn_index,created_at,updated_at,activity_at
-      ) VALUES ('thread','project','C:/project','title',1,1,0,1,0,1,1,1)
+      ) VALUES ('thread','local:///project','C:/project','title',1,1,0,1,0,1,1,1)
     `).run(), /CHECK constraint failed/);
 
     database.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
     database.prepare(`
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,transcript_content_version,created_at,updated_at,activity_at
-      ) VALUES ('thread','project','C:/project','title',1,1,1,1)
+      ) VALUES ('thread','local:///project','C:/project','title',1,1,1,1)
     `).run();
     database.prepare(`
       INSERT INTO thread_turns(
@@ -552,7 +630,7 @@ async function checkTransactions(controller: WorkbenchDatabaseController) {
 
     const thread = {
       id: "thread",
-      project_id: "project",
+      project_id: fixtureIdentityValues.ProjectId.project,
       project_root: "C:/project",
       title: "first",
       transcript_content_version: 1,
@@ -560,7 +638,10 @@ async function checkTransactions(controller: WorkbenchDatabaseController) {
       updated_at: 1,
       activity_at: 1,
     } as const;
-    await controller.executeTransaction([insertRow(coreTables.workbenchThreads, thread)]);
+    await controller.executeTransaction([
+      upsertRow(projectTables.projects, { id: thread.project_id }, { conflictColumns: ["id"], updateColumns: ["id"] }),
+      insertRow(coreTables.workbenchThreads, thread),
+    ]);
     await controller.executeTransaction([
       upsertRow(coreTables.workbenchThreads, {
         ...thread,
@@ -576,7 +657,7 @@ async function checkTransactions(controller: WorkbenchDatabaseController) {
       [{
         id: "thread",
         identity_origin: "legacy",
-        project_id: "project",
+        project_id: fixtureIdentityValues.ProjectId.project,
         project_root: "C:/project",
         title: "renamed",
         archived: 0,
@@ -622,7 +703,7 @@ async function checkWorkspaceSearch(controller: WorkbenchDatabaseController) {
       {
         kind: "thread" as const,
         threadId: fixtureIdentityValues.WorkbenchThreadId["active-thread"],
-        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+        projectId: fixtureIdentityValues.ProjectId.project,
         projectRoot: "C:/project",
         title: "Active search thread",
         createdAt: 1,
@@ -692,7 +773,7 @@ async function checkWorkspaceSearch(controller: WorkbenchDatabaseController) {
       {
         kind: "thread" as const,
         threadId: fixtureIdentityValues.WorkbenchThreadId["settled-thread"],
-        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+        projectId: fixtureIdentityValues.ProjectId.project,
         projectRoot: "C:/project",
         title: "Settled archive",
         createdAt: 1,
@@ -783,20 +864,20 @@ async function checkWorkspaceSearch(controller: WorkbenchDatabaseController) {
       }),
     ]);
     await controller.replaceSearchProjects([
-      { id: "project", name: "Project", rootPath: "C:/project" },
-      { id: "other", name: "Other project", rootPath: "C:/other" },
+      { id: fixtureIdentityValues.ProjectId.project, name: "Project", rootPath: "C:/project" },
+      { id: "local:///other", name: "Other project", rootPath: "C:/other" },
     ]);
-    await controller.replaceSearchProjectFiles("project", ["src/lowestvalue-needle.ts"]);
-    await controller.replaceSearchProjectFiles("other", ["src/other-only.ts"]);
+    await controller.replaceSearchProjectFiles(fixtureIdentityValues.ProjectId.project, ["src/lowestvalue-needle.ts"]);
+    await controller.replaceSearchProjectFiles("local:///other", ["src/other-only.ts"]);
 
-    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "search" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "narwhal" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "comet" })).results[0]?.title, "Active search thread");
-    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "settled archive" })).results[0]?.title, "Settled archive");
-    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "sleepyhidden" })).results, []);
-    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "finalsecret" })).results, []);
-    assert.equal((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "\"lowestvalue\"" })).results[0]?.kind, "file");
-    assert.deepEqual((await controller.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), query: "other-only" })).results, []);
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "search" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "narwhal" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "comet" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "settled archive" })).results[0]?.title, "Settled archive");
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "sleepyhidden" })).results, []);
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "finalsecret" })).results, []);
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "\"lowestvalue\"" })).results[0]?.kind, "file");
+    assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "other-only" })).results, []);
 }
 
 async function checkInvalidThreadState(controller: WorkbenchDatabaseController) {

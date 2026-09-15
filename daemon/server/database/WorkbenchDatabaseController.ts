@@ -45,7 +45,8 @@ import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats
 import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchProjectOption, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
@@ -59,6 +60,7 @@ import type {
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
+  prepareProjects?(signal: AbortSignal): Promise<WorkbenchProjectPreparation>;
   databasePath: string;
   workerUrl?: URL;
 }
@@ -83,8 +85,11 @@ interface DatabaseSuspension {
   retire(): void;
 }
 
-export default class WorkbenchDatabaseController {
+export default class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   readonly #beforeMigration: WorkbenchDatabaseControllerOptions["beforeMigration"];
+  readonly #prepareProjects: WorkbenchDatabaseControllerOptions["prepareProjects"];
+  #preparation: AbortController | null = null;
+  #initialProjects: WorkbenchProjectStartup | null = null;
   readonly #databasePath: string;
   readonly #worker: Worker;
   readonly #pending = new Map<number, PendingRequest>();
@@ -95,8 +100,9 @@ export default class WorkbenchDatabaseController {
   #suspension: DatabaseSuspension | null = null;
   #termination: Promise<number> | null = null;
 
-  constructor({ beforeMigration, databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
+  constructor({ beforeMigration, prepareProjects, databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
     this.#beforeMigration = beforeMigration;
+    this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
     const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
     const transformTypes = "--experimental-transform-types";
@@ -131,14 +137,34 @@ export default class WorkbenchDatabaseController {
     if (this.#failure) return Promise.reject(this.#failure);
     if (this.#state === "closed") return Promise.reject(new WorkbenchDatabaseFailure("Workbench database is closed"));
     if (this.#suspension) return this.#suspension.admission.then(() => this.start());
-    this.#startPromise ??= this.#request({
-      type: "initialize", databasePath: this.#databasePath, acknowledgeMigration: !!this.#beforeMigration,
-    }).then((response) => {
+    this.#startPromise ??= (async () => {
+      let projects: WorkbenchProjectPreparation | undefined;
+      if (this.#prepareProjects) {
+        const preparation = new AbortController();
+        this.#preparation = preparation;
+        try {
+          projects = await this.#prepareProjects(preparation.signal);
+          preparation.signal.throwIfAborted();
+        } finally { this.#preparation = null; }
+      }
+      const response = await this.#request({
+        type: "initialize", databasePath: this.#databasePath, acknowledgeMigration: !!this.#beforeMigration, projects,
+      });
       if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database startup response: ${response.type}`);
+      this.#initialProjects = response.projects ?? null;
       this.#state = "ready";
       return response.inventory;
+    })().catch((error: unknown) => {
+      this.#fail(error);
+      throw this.#failure ?? error;
     });
     return this.#startPromise;
+  }
+
+  readInitialProjectCatalog() {
+    this.assertReady();
+    if (!this.#initialProjects) throw new WorkbenchDatabaseFailure("Database startup has no prepared project catalogue.");
+    return this.#initialProjects;
   }
 
   async suspend() {
@@ -200,11 +226,14 @@ export default class WorkbenchDatabaseController {
     if (this.#state === "closed") { await this.#termination; return; }
     this.#state = "closed";
     const error = new WorkbenchDatabaseFailure("Candidate database preparation was retired.");
+    this.#preparation?.abort(error);
     for (const pending of this.#pending.values()) pending.reject(error);
     this.#pending.clear();
     this.#suspension?.release();
     this.#suspension = null;
     await (this.#termination ??= this.#worker.terminate());
+    try { await this.#startPromise; }
+    catch (failure) { if (failure !== error && failure !== this.#failure) throw failure; }
   }
 
   async getInventory() {
@@ -334,6 +363,34 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected context usage response: ${response.type}`);
     }
     return response.snapshot;
+  }
+
+  async reconcileProjectCatalog(projects: readonly WorkbenchProjectOption[]) {
+    await this.start();
+    const response = await this.#request({ type: "reconcileProjectCatalog", projects });
+    if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected project catalogue response: ${response.type}`);
+    return response.records;
+  }
+
+  async readProjectAliases() {
+    await this.start();
+    const response = await this.#request({ type: "readProjectAliases" });
+    if (response.type !== "projectAliases") throw new WorkbenchDatabaseFailure(`Unexpected project aliases response: ${response.type}`);
+    return response.aliases;
+  }
+
+  async resolveProjectIdentity(projectId: string) {
+    await this.start();
+    const response = await this.#request({ type: "resolveProjectIdentity", projectId });
+    if (response.type !== "projectIdentity") throw new WorkbenchDatabaseFailure(`Unexpected project identity response: ${response.type}`);
+    return response.projectId;
+  }
+
+  async settleProjectIcon(settlement: WorkbenchProjectIconSettlement) {
+    await this.start();
+    const response = await this.#request({ type: "settleProjectIcon", settlement });
+    if (response.type !== "projectIconSettlement") throw new WorkbenchDatabaseFailure(`Unexpected project icon response: ${response.type}`);
+    return response.accepted;
   }
 
   async readGitArcProposalDiff(identity: Extract<WorkbenchDatabaseRequestPayload, { type: "readGitArcProposalDiff" }>["identity"]) {
@@ -651,6 +708,7 @@ export default class WorkbenchDatabaseController {
   }
 
   async close() {
+    this.#preparation?.abort(new WorkbenchDatabaseFailure("Database project preparation was cancelled by closure."));
     if (this.#state === "closed") { await this.#termination; return; }
     if (this.#suspension) {
       try { await this.#suspension.closed; }
@@ -729,6 +787,7 @@ export default class WorkbenchDatabaseController {
     const message = error instanceof Error ? error.message : String(error);
     this.#failure = error instanceof WorkbenchDatabaseFailure ? error : new WorkbenchDatabaseFailure(message.slice(0, 1_000));
     this.#state = "failed";
+    this.#preparation?.abort(this.#failure);
     this.#suspension?.release();
     this.#suspension = null;
     for (const pending of this.#pending.values()) pending.reject(this.#failure);

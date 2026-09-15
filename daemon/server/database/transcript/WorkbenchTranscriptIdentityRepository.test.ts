@@ -22,7 +22,7 @@ const fixtureIdentityValues = {
     "first": fixtureIdentitySchemas.NativeTurnIdSchema.parse("first"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
   WorkbenchTurnId: {
     "first": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("first"),

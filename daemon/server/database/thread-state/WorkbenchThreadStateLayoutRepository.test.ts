@@ -15,7 +15,7 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
   },
 };
 
@@ -47,7 +47,7 @@ function fixture() {
 test("layout reload preserves explicit empty positions, implied references and future move behaviour", () => {
   const { database, repository, keys: [a, b, c, d] } = fixture();
   try {
-    const owner = { kind: "project" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
+    const owner = { kind: "project" as const, projectId: fixtureIdentityValues.ProjectId.project };
     const order: ThreadDisplayLayout = {
       pinned: {
         "codex:a": { above: [], below: [] },
@@ -75,7 +75,7 @@ test("layout reload preserves explicit empty positions, implied references and f
 test("folders retain array and member order while project and global layout owners remain separate", () => {
   const { database, repository, keys: [a, b, c, d] } = fixture();
   try {
-    const owner = { kind: "project" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
+    const owner = { kind: "project" as const, projectId: fixtureIdentityValues.ProjectId.project };
     const first = fixtureIdentitySchemas.FolderIdSchema.parse(randomUUID());
     const second = fixtureIdentitySchemas.FolderIdSchema.parse(randomUUID());
     const order: ThreadDisplayLayout = {
@@ -107,7 +107,7 @@ test("folders retain array and member order while project and global layout owne
 test("invalid layout replacement and outer transaction failure retain the complete previous layout", () => {
   const { database, repository, keys: [a, b] } = fixture();
   try {
-    const owner = { kind: "project" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
+    const owner = { kind: "project" as const, projectId: fixtureIdentityValues.ProjectId.project };
     const original: ThreadDisplayLayout = { pinned: { "codex:a": { above: [], below: ["codex:b"] } } };
     repository.replace(owner, 1, original);
     const expected: ThreadDisplayLayout = { pinned: { [a]: { above: [], below: [b] } } };

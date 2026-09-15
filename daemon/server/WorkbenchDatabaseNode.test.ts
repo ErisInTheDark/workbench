@@ -5,11 +5,30 @@ import assert from "node:assert/strict";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
-import { recoverCodexSqliteTranscripts } from "./CodexBridgeNode";
-import WorkbenchDatabaseNode from "./WorkbenchDatabaseNode";
+let recoverCodexSqliteTranscripts: typeof import("./CodexBridgeNode").recoverCodexSqliteTranscripts;
+let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
+let discoveryRoot: string;
+const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
+const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+
+before(async () => {
+  discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-database-node-discovery-"));
+  process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
+  process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
+  ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
+  ({ recoverCodexSqliteTranscripts } = await import("./CodexBridgeNode"));
+});
+
+after(async () => {
+  if (previousProjectsRoot === undefined) delete process.env.WORKBENCH_PROJECTS_ROOT;
+  else process.env.WORKBENCH_PROJECTS_ROOT = previousProjectsRoot;
+  if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
+  else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
+  if (discoveryRoot) await rm(discoveryRoot, { recursive: true, force: true });
+});
 
 async function exists(filePath: string) {
   try {

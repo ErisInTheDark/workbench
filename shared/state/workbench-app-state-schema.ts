@@ -621,11 +621,29 @@ const modelPreferencesHistory = defineTableHistory({
   })],
 });
 
+const projectAliases = defineTable("project_aliases", {
+  daemon_registration_id: registrationForeignKey(),
+  alias: text().notNull(),
+  project_id: text().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.alias]),
+    check(sql`${table.alias} <> ${table.project_id}`),
+  ],
+}));
+const projectAliasesHistory = defineTableHistory({
+  current: projectAliases,
+  versions: [tableVersion({
+    schemaVersion: appStateReleases.projectAliases.version, table: projectAliases, migration: createTable(projectAliases),
+  })],
+});
+
 const histories = [
   workbenchHarnessesHistory,
   modelPreferencesHistory,
   appStateMetadataHistory,
   daemonRegistrationsHistory,
+  projectAliasesHistory,
   lastLaunchTargetHistory,
   globalPreferencesHistory,
   projectPreferencesHistory,
@@ -659,6 +677,7 @@ export const appStateClientTables = Object.freeze({
 });
 
 export const appStateTables = Object.freeze({
+  projectAliases: projectAliasesHistory.current,
   workbenchHarnesses: workbenchHarnessesHistory.current,
   appStateMetadata: appStateMetadataHistory.current,
   daemonRegistrations: daemonRegistrationsHistory.current,

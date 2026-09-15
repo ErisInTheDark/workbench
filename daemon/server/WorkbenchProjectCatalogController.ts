@@ -8,7 +8,10 @@ import fileSystem from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 
-import { discoverProjects, isPathWithinRoot, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "./lib/project";
+import { discoverProjectIdentities, isPathWithinRoot, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "./lib/project";
+import { discoverWorkbenchProjectIcon } from "./lib/workbench/project/project-icon-discovery";
+import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence, WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench-shared/types";
 import {
   resolveAgentEndpointProjectFromProjects,
@@ -17,6 +20,7 @@ import {
 import { logError as defaultLogError } from "./process-helpers";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
+const ICON_FRESHNESS_MS = 5 * 60_000;
 const MAX_PROJECT_ICON_BYTES = 4 * 1024 * 1024;
 const IGNORED_DISCOVERY_SEGMENTS = new Set([".next", "build", "coverage", "dist", "node_modules"]);
 
@@ -31,21 +35,25 @@ interface ProjectCatalogSnapshot {
   data: WorkbenchProjectOption[];
   payload: WorkbenchProjectsPayload;
   serialized: string;
+  records: WorkbenchProjectCacheRecord[];
+  excludedRootPaths: string[];
 }
 
 type ResolveProjectFromCatalog = (
   projects: readonly WorkbenchProjectOption[],
   cwd: string | null | undefined,
-  options?: { endpointName?: string },
+  options?: { endpointName?: string; excludedRootPaths?: readonly string[] },
 ) => Promise<AgentEndpointProjectResolution>;
 
 type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
 
 export interface WorkbenchProjectCatalogControllerOptions {
-  initialSnapshot?: WorkbenchProjectsPayload;
+  initialProjects?: WorkbenchProjectStartup | (() => WorkbenchProjectStartup);
+  persistence: WorkbenchProjectPersistence;
+  discoverProjectIdentities?: typeof discoverProjectIdentities;
+  discoverIcon?: typeof discoverWorkbenchProjectIcon;
   cacheTtlMs?: number;
   createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
-  discoverProjects?: typeof discoverProjects;
   logError?: (message: string) => void;
   now?: () => number;
   projectsRootPath?: string;
@@ -60,6 +68,10 @@ function sanitizeRefreshError(error: unknown) {
     .replace(/\s+/gu, " ")
     .trim()
     .slice(0, 500) || "unknown error";
+}
+
+function isOwnedCancellation(error: unknown, signal: AbortSignal) {
+  return signal.aborted && (error === signal.reason || (error instanceof Error && error.name === "AbortError"));
 }
 
 function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
@@ -83,6 +95,7 @@ function isRelevantGitPath(relativePath: string) {
   return !gitPath
     || gitPath === "HEAD"
     || gitPath === "index"
+    || gitPath === "config"
     || gitPath === "packed-refs"
     || gitPath.startsWith("refs/");
 }
@@ -153,14 +166,20 @@ function isMissingFileError(error: unknown) {
 }
 
 export default class WorkbenchProjectCatalogController {
+  private readonly cancellation = new AbortController();
+  private readonly iconWork = new Map<ProjectId, Promise<void>>();
+  private readonly persistence: WorkbenchProjectPersistence;
+  private readonly loadInitialProjects?: () => WorkbenchProjectStartup;
+  private readonly discoverIdentities: typeof discoverProjectIdentities;
+  private readonly discoverIcon: typeof discoverWorkbenchProjectIcon;
   private readonly cacheTtlMs: number;
   private catalog: ProjectCatalogSnapshot | null = null;
   private catalogExpiresAt = 0;
   private catalogGeneration = 0;
   private readonly cwdResolutions = new Map<string, Promise<AgentEndpointProjectResolution>>();
   private readonly createWatcher: NonNullable<WorkbenchProjectCatalogControllerOptions["createWatcher"]>;
-  private readonly discoverProjectOptions: typeof discoverProjects;
   private disposed = false;
+  private disposal: Promise<void> | null = null;
   private hardStale = false;
   private readonly logError: NonNullable<WorkbenchProjectCatalogControllerOptions["logError"]>;
   private readonly now: () => number;
@@ -171,33 +190,38 @@ export default class WorkbenchProjectCatalogController {
   private readonly resolveProjectFromCatalog: ResolveProjectFromCatalog;
 
   constructor({
-    initialSnapshot,
+    initialProjects,
+    persistence,
+    discoverProjectIdentities: discoverIdentities = discoverProjectIdentities,
+    discoverIcon = discoverWorkbenchProjectIcon,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     createWatcher = defaultCreateWatcher,
-    discoverProjects: discoverProjectOptions = discoverProjects,
     logError = (message) => defaultLogError("project-catalog", message),
     now = Date.now,
     projectsRootPath = projectsRoot,
     resolveProjectByIdFromCatalog = resolveProjectRootFromProjects,
     resolveProjectFromCatalog = resolveAgentEndpointProjectFromProjects,
-  }: WorkbenchProjectCatalogControllerOptions = {}) {
+  }: WorkbenchProjectCatalogControllerOptions) {
+    this.persistence = persistence;
+    this.discoverIdentities = discoverIdentities;
+    this.discoverIcon = discoverIcon;
     this.cacheTtlMs = cacheTtlMs;
     this.createWatcher = createWatcher;
-    this.discoverProjectOptions = discoverProjectOptions;
     this.logError = logError;
     this.now = now;
     this.projectsRootPath = projectsRootPath;
     this.resolveProjectByIdFromCatalog = resolveProjectByIdFromCatalog;
     this.resolveProjectFromCatalog = resolveProjectFromCatalog;
-    if (initialSnapshot) {
-      this.catalog = { data: initialSnapshot.data, payload: initialSnapshot, serialized: JSON.stringify(initialSnapshot) };
-    }
+    if (typeof initialProjects === "function") this.loadInitialProjects = initialProjects;
+    else if (initialProjects) this.installPreparedProjects(initialProjects);
     this.projectsWatcher = this.watchProjects();
   }
 
-  dispose() {
-    if (this.disposed) return;
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
+    this.cancellation.abort();
+    const work = [...this.iconWork.values(), ...(this.refreshInFlight ? [this.refreshInFlight] : [])];
     this.cwdResolutions.clear();
     this.projectsWatcher?.close();
     this.projectsWatcher = null;
@@ -205,7 +229,40 @@ export default class WorkbenchProjectCatalogController {
     this.catalogExpiresAt = 0;
     this.catalogGeneration += 1;
     this.hardStale = true;
-    this.refreshInFlight = null;
+    this.disposal = Promise.allSettled(work).then(() => undefined);
+    return this.disposal;
+  }
+
+  observeProjectIcon(projectId: ProjectId): Promise<void> {
+    this.assertActive();
+    const pending = this.iconWork.get(projectId);
+    if (pending) return pending;
+    const record = this.catalog?.records?.find(record => record.project.id === projectId);
+    if (!record || record.project.kind === "workbench-library"
+      || (record.checkedAt !== null && this.now() - record.checkedAt < ICON_FRESHNESS_MS)) return Promise.resolve();
+    const persistence = this.persistence;
+    const work = (async () => {
+      try {
+        const icon = await this.discoverIcon(record.project.roots, this.cancellation.signal);
+        if (this.disposed || this.catalog?.records?.find(item => item.project.id === projectId)?.sourceKey !== record.sourceKey) return;
+        const checkedAt = this.now();
+        const accepted = await persistence.settleProjectIcon({ projectId, sourceKey: record.sourceKey, checkedAt, icon });
+        if (!accepted || this.disposed || !this.catalog) return;
+        const current = this.catalog.records?.find(item => item.project.id === projectId);
+        if (!current || current.sourceKey !== record.sourceKey) return;
+        const { icon: _previous, ...metadata } = current.project;
+        const project = { ...metadata, ...(icon ? { icon } : {}) };
+        const records = this.catalog.records!.map(item => item === current ? { project, sourceKey: current.sourceKey, checkedAt } : item);
+        const data = records.map(item => item.project);
+        const payload = { ...this.catalog.payload, data };
+        this.catalog = { ...this.catalog, records, data, payload, serialized: JSON.stringify(payload) };
+      } catch (error) {
+        if (!isOwnedCancellation(error, this.cancellation.signal)) this.logError(`project icon refresh failed: ${sanitizeRefreshError(error)}`);
+      }
+    })();
+    this.iconWork.set(projectId, work);
+    void work.then(() => { if (this.iconWork.get(projectId) === work) this.iconWork.delete(projectId); });
+    return work;
   }
 
   async handleHttpRequest(_request: http.IncomingMessage, response: http.ServerResponse) {
@@ -302,13 +359,13 @@ export default class WorkbenchProjectCatalogController {
     const resolution = (async () => {
       let result: AgentEndpointProjectResolution;
       try {
-        result = await this.resolveProjectFromCatalog(catalog.data, cwd, options);
+        result = await this.resolveProjectFromCatalog(catalog.data, cwd, { ...options, excludedRootPaths: catalog.excludedRootPaths });
       } catch (firstError) {
         this.assertActive();
         if (refreshed) throw firstError;
         const refreshedCatalog = await (refresh ?? this.refreshCatalog());
         this.assertActive();
-        result = await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, options);
+        result = await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, { ...options, excludedRootPaths: refreshedCatalog.excludedRootPaths });
       }
       this.assertActive();
       return result;
@@ -325,6 +382,7 @@ export default class WorkbenchProjectCatalogController {
 
   async resolveProjectById(projectId?: string | null) {
     this.assertActive();
+    if (projectId) projectId = await this.persistence.resolveProjectIdentity(projectId);
     const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
     try {
       return await this.resolveProjectByIdFromCatalog(catalog.data, projectId);
@@ -339,6 +397,17 @@ export default class WorkbenchProjectCatalogController {
     this.assertActive();
     if (!this.catalog) throw new Error("The project catalog has not been loaded.");
     return this.catalog.payload;
+  }
+
+  captureReloadState(): WorkbenchProjectStartup {
+    this.assertActive();
+    if (!this.catalog?.records) throw new Error("The durable project catalog has not been loaded.");
+    return {
+      catalog: this.catalog.records,
+      aliases: this.catalog.payload.aliases ?? [],
+      excludedRootPaths: this.catalog.excludedRootPaths ?? [],
+      rootPath: this.catalog.payload.rootPath,
+    };
   }
 
   async readCatalog() {
@@ -382,7 +451,16 @@ export default class WorkbenchProjectCatalogController {
 
   private refreshCatalog() {
     this.assertActive();
+    if (!this.catalog && this.loadInitialProjects) return Promise.resolve(this.installPreparedProjects(this.loadInitialProjects()));
     return this.refreshInFlight ?? this.startRefresh();
+  }
+
+  private installPreparedProjects(projects: WorkbenchProjectStartup) {
+    const data = projects.catalog.map(record => record.project);
+    const payload = { data, aliases: projects.aliases, rootPath: projects.rootPath };
+    this.catalog = { data, payload, serialized: JSON.stringify(payload), records: projects.catalog, excludedRootPaths: projects.excludedRootPaths };
+    this.catalogExpiresAt = this.now() + this.cacheTtlMs;
+    return this.catalog;
   }
 
   private refreshInBackground() {
@@ -390,6 +468,7 @@ export default class WorkbenchProjectCatalogController {
     const refresh = this.refreshCatalog();
     if (!alreadyRefreshing) {
       void refresh.catch((error) => {
+        if (isOwnedCancellation(error, this.cancellation.signal)) return;
         this.logError(`project catalog background refresh failed: ${sanitizeRefreshError(error)}`);
       });
     }
@@ -399,14 +478,30 @@ export default class WorkbenchProjectCatalogController {
   private startRefresh() {
     const generation = this.catalogGeneration;
     const refresh = (async () => {
-      const data = await this.discoverProjectOptions();
+      const discovery = await this.discoverIdentities(this.cancellation.signal);
+      this.cancellation.signal.throwIfAborted();
+      if (this.catalogGeneration !== generation && this.catalog) return this.catalog;
+      let records = await this.persistence.reconcileProjectCatalog(discovery.data);
+      const aliases = await this.persistence.readProjectAliases();
+      // A database reply can precede an icon settlement but arrive at publication after it.
+      records = records.map(record => {
+        const current = this.catalog?.records?.find(item => item.project.id === record.project.id);
+        if (!current || current.sourceKey !== record.sourceKey || current.checkedAt === null
+          || (record.checkedAt !== null && record.checkedAt >= current.checkedAt)) return record;
+        const { icon: _old, ...metadata } = record.project;
+        return { ...record, checkedAt: current.checkedAt, project: { ...metadata, ...(current.project.icon ? { icon: current.project.icon } : {}) } };
+      });
+      const data = records.map(record => record.project);
       const payload: WorkbenchProjectsPayload = {
         data,
+        aliases,
         rootPath: normalizeRelativePath(this.projectsRootPath),
       };
-      const catalog = { data, payload, serialized: JSON.stringify(payload) };
+      const catalog = { data, payload, serialized: JSON.stringify(payload), records, excludedRootPaths: discovery.excludedRootPaths };
       if (!this.disposed && this.catalogGeneration === generation) {
-        if (this.catalog && !sameResolutionInputs(this.catalog.data, data)) {
+        if (this.catalog && (!sameResolutionInputs(this.catalog.data, data)
+          || (this.catalog.excludedRootPaths?.length ?? 0) !== (catalog.excludedRootPaths?.length ?? 0)
+          || this.catalog.excludedRootPaths?.some(root => !catalog.excludedRootPaths?.includes(root)))) {
           this.cwdResolutions.clear();
           this.catalogGeneration += 1;
         }

@@ -16,6 +16,7 @@ import {
   type ThreadDisplayFolder, type ThreadDisplayLayout, type ThreadDisplayLayoutSection,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import { ThreadReferenceSchema, type DraftId, type FolderId, type ProjectId, type ThreadDisplayKey, type ThreadReference, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 
 export type WorkbenchThreadLayoutOwner = { kind: "project"; projectId: ProjectId } | { kind: "pinned" | "home" };
 export interface WorkbenchThreadLayoutReferences {
@@ -38,10 +39,14 @@ type FolderRow = {
 };
 
 export default class WorkbenchThreadStateLayoutRepository {
+  private readonly projects: WorkbenchProjectRepository;
+
   constructor(
     private readonly database: Database.Database,
     private readonly references: WorkbenchThreadLayoutReferences,
-  ) {}
+  ) {
+    this.projects = new WorkbenchProjectRepository(database);
+  }
 
   read(owner: WorkbenchThreadLayoutOwner): { revision: number; displayOrder: ThreadDisplayLayout } | null {
     const layout = this.find(owner);
@@ -179,7 +184,7 @@ export default class WorkbenchThreadStateLayoutRepository {
           if (kind === "draft") {
             const draft = this.database.prepare(`
               SELECT id FROM workbench_thread_drafts WHERE draft_id = ? AND project_id = ?
-            `).get(local.threadKey.slice("draft:".length), local.projectId) as { id: string } | undefined;
+            `).get(local.threadKey.slice("draft:".length), this.projects.resolveStoredReference(local.projectId)) as { id: string } | undefined;
             if (!draft) throw new Error("Layout references a missing draft.");
             this.database.prepare(`
               INSERT INTO workbench_sidebar_layout_drafts(item_id, item_kind, draft_id) VALUES (?, 'draft', ?)

@@ -1,9 +1,9 @@
 /*
- * Keywords: search, sqlite, projection, query-local scoring.
  * Exports:
- * - default WorkbenchSearchRepository: owns SQLite search projections and relational transcript ranking. Keywords: search, sqlite, projection, fuzzy.
+ * - default WorkbenchSearchRepository: own SQLite search projections, identity rekeying, and relational transcript ranking.
  */
 import type Database from "better-sqlite3";
+import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 
 import {
   WORKBENCH_SEARCH_ACTIONS,
@@ -46,6 +46,18 @@ export default class WorkbenchSearchRepository {
     this.seedStaticDocuments();
   }
 
+  rekeyProject(previousId: string, projectId: string) {
+    this.database.prepare(`
+      UPDATE workbench_search_documents SET
+        document_key = CASE kind WHEN 'project' THEN 'project:' || ? WHEN 'file' THEN 'file:' || ? || ':' || target ELSE document_key END,
+        target = CASE kind WHEN 'project' THEN ? ELSE target END,
+        detail = CASE kind WHEN 'file' THEN ? ELSE detail END,
+        search_text = CASE kind WHEN 'project' THEN title || ' ' || ? || ' ' || detail ELSE search_text END,
+        project_id = ?
+      WHERE project_id = ?
+    `).run(projectId, projectId, projectId, projectId, projectId, projectId, previousId);
+  }
+
   replaceProjects(projects: readonly { id: string; name: string; rootPath: string }[]) {
     const replace = this.database.transaction(() => {
       this.database.prepare("DELETE FROM workbench_search_documents WHERE kind = 'project'").run();
@@ -56,7 +68,8 @@ export default class WorkbenchSearchRepository {
       `);
       const now = Date.now();
       for (const project of projects) {
-        insert.run(`project:${project.id}`, project.id, project.name, project.rootPath, project.id, `${project.name} ${project.id} ${project.rootPath}`, now);
+        const id = new WorkbenchProjectRepository(this.database).admitStoredReference(project.id);
+        insert.run(`project:${id}`, id, project.name, project.rootPath, id, `${project.name} ${id} ${project.rootPath}`, now);
       }
     });
     replace();
@@ -64,6 +77,7 @@ export default class WorkbenchSearchRepository {
 
   replaceProjectFiles(projectId: string, paths: readonly string[]) {
     const replace = this.database.transaction(() => {
+      projectId = new WorkbenchProjectRepository(this.database).admitStoredReference(projectId);
       this.database.prepare("DELETE FROM workbench_search_documents WHERE kind = 'file' AND project_id = ?").run(projectId);
       const insert = this.database.prepare(`
         INSERT INTO workbench_search_documents
@@ -79,6 +93,7 @@ export default class WorkbenchSearchRepository {
   }
 
   search(request: WorkbenchSearchRequest): WorkbenchSearchResponse {
+    if (request.projectId !== null) request = { ...request, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(request.projectId) };
     const clauses = parseWorkbenchSearchQuery(request.query);
     const matchFields = createWorkbenchSearchMatcher(clauses);
     const ranked: RankedResult[] = [];

@@ -24,7 +24,7 @@ import type {
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchHarness } from "workbench-shared/types";
 
-const projectId = ProjectIdSchema.parse("project");
+const projectId = ProjectIdSchema.parse("local:///project");
 const threadId = WorkbenchThreadIdSchema.parse("thread");
 const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
 const turnId = WorkbenchTurnIdSchema.parse("turn");
