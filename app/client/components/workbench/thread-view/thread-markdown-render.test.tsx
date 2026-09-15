@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, list, icon, notice, color.
+ * No production exports. Regression wards protect ordered-list ordinals, SVG preview laziness, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, list, SVG, icon, notice, color.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -7,6 +7,17 @@ import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { renderThreadMarkdown } from "./thread-markdown-render";
+
+test("SVG source mode does not load a hidden preview document", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "```svg",
+    '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" /></svg>',
+    "```",
+  ].join("\n"))));
+
+  assert.match(html, /data-thread-codeblock-svg-preview="true"/u);
+  assert.doesNotMatch(html, /data-thread-codeblock-svg-preview-frame="true"/u);
+});
 
 test("ordered lists render every source ordinal literally", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([

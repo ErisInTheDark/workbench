@@ -3,7 +3,7 @@
  * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers.
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 
 import {
   parseBlockCommentBody,
@@ -545,6 +545,125 @@ function parseThreadCodeBlockHeader(language: string, options: MarkdownParseOpti
   };
 }
 
+function getCompletedSvgPreviewSource(svgSource: string) {
+  const completedMarkupEnd = svgSource.lastIndexOf(">");
+  return completedMarkupEnd >= 0
+    ? svgSource.slice(0, completedMarkupEnd + 1)
+    : "";
+}
+
+function ThreadCodeBlock ({
+  block,
+  keyPrefix,
+  options,
+}: {
+  block: Extract<ParsedBlock, { type: "code" }>;
+  keyPrefix: string;
+  options: MarkdownParseOptions;
+}) {
+  const header = parseThreadCodeBlockHeader(block.language, options);
+  const language = header.language;
+  const isDiffCodeBlock = isDiffCodeBlockLanguage(language);
+  const isSvgCodeBlock = isSvgCodeBlockLanguage(language);
+  const [isSvgPreviewing, setIsSvgPreviewing] = useState(false);
+  const completedSvgSource = isSvgCodeBlock
+    ? getCompletedSvgPreviewSource(block.text)
+    : "";
+  const svgPreviewSrcDoc = isSvgCodeBlock && isSvgPreviewing
+    ? createSvgCodeBlockPreviewSrcDoc(completedSvgSource)
+    : null;
+
+  return (
+    <div
+      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
+      data-thread-codeblock="true"
+      data-thread-codeblock-diff={isDiffCodeBlock ? "true" : undefined}
+      data-thread-codeblock-svg-preview-state={isSvgCodeBlock ? (isSvgPreviewing ? "preview" : "code") : undefined}
+    >
+      <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
+        <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-fg/muted">
+          <span className="min-w-0 truncate">{language || "code"}</span>
+          {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <WorkbenchIconButton
+            type="button"
+            label="Copy code block"
+            display="hover-border"
+            size="compact"
+            className={`${CODE_BLOCK_HEADER_BUTTON_CLASS} group`}
+            data-thread-codeblock-copy="true"
+            data-thread-codeblock-copy-state="idle"
+            title="Copy code block"
+          >
+            <span className="block group-data-[thread-codeblock-copy-state=copied]:hidden" data-thread-codeblock-copy-icon="copy">
+              <CopyIcon size={16} />
+            </span>
+            <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
+              <CheckIcon size={16} />
+            </span>
+          </WorkbenchIconButton>
+          {isSvgCodeBlock ? (
+            <WorkbenchIconButton
+              type="button"
+              label={isSvgPreviewing ? "Show SVG source" : "Preview SVG code block"}
+              display="hover-border"
+              size="compact"
+              aria-pressed={isSvgPreviewing}
+              className={CODE_BLOCK_HEADER_BUTTON_CLASS}
+              data-thread-codeblock-svg-preview="true"
+              data-thread-codeblock-toggle-state={isSvgPreviewing ? "active" : "idle"}
+              onClick={() => setIsSvgPreviewing((current) => !current)}
+              title={isSvgPreviewing ? "Show SVG source" : "Preview SVG code block"}
+            >
+              <PreviewIcon size={16} />
+            </WorkbenchIconButton>
+          ) : null}
+          <WorkbenchIconButton
+            type="button"
+            label="Toggle code block line wrapping"
+            display="hover-border"
+            size="compact"
+            aria-pressed={false}
+            className={CODE_BLOCK_HEADER_BUTTON_CLASS}
+            data-thread-codeblock-toggle-state="idle"
+            data-thread-codeblock-wrap-toggle="true"
+            title="Toggle code block line wrapping"
+          >
+            <WrapTextIcon size={16} />
+          </WorkbenchIconButton>
+        </div>
+      </div>
+      <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
+        <pre
+          className={`max-w-full overflow-x-auto whitespace-pre py-[0.8rem] ${isDiffCodeBlock ? "px-0" : "px-[0.95rem]"}`}
+          data-language={language}
+          data-thread-codeblock-pre="true"
+        >
+          <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">
+            {isDiffCodeBlock ? renderThreadDiffCodeBlock(block.text, keyPrefix) : block.text}
+          </code>
+        </pre>
+        {svgPreviewSrcDoc ? (
+          <div
+            className="absolute inset-0 overflow-auto p-[0.95rem]"
+            data-thread-codeblock-svg-preview-layer="true"
+          >
+            <iframe
+              className="block size-full border-0 bg-transparent"
+              data-thread-codeblock-svg-preview-frame="true"
+              key={svgPreviewSrcDoc}
+              sandbox=""
+              srcDoc={svgPreviewSrcDoc}
+              title="SVG code block preview"
+            />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function renderThreadBlock (
   block: ParsedBlock,
   options: MarkdownParseOptions,
@@ -594,100 +713,8 @@ function renderThreadBlock (
         : renderThreadListBlock(block, options, keyPrefix);
     case "hr":
       return <hr className="[margin-inline:10%] my-8 [border-color:color-mix(var(--text),var(--shell-fade-bg)_70%)]" key={keyPrefix} />;
-    case "code": {
-      const header = parseThreadCodeBlockHeader(block.language, options);
-      const language = header.language;
-      const isDiffCodeBlock = isDiffCodeBlockLanguage(language);
-      const isSvgCodeBlock = isSvgCodeBlockLanguage(language);
-      return (
-        <div
-          className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
-          data-thread-codeblock="true"
-          data-thread-codeblock-diff={isDiffCodeBlock ? "true" : undefined}
-          data-thread-codeblock-svg-preview-state={isSvgCodeBlock ? "code" : undefined}
-          key={keyPrefix}
-        >
-          <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
-            <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-fg/muted">
-              <span className="min-w-0 truncate">{language || "code"}</span>
-              {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
-            </span>
-            <div className="flex shrink-0 items-center gap-1">
-              <WorkbenchIconButton
-                type="button"
-                label="Copy code block"
-                display="hover-border"
-                size="compact"
-                className={`${CODE_BLOCK_HEADER_BUTTON_CLASS} group`}
-                data-thread-codeblock-copy="true"
-                data-thread-codeblock-copy-state="idle"
-                title="Copy code block"
-              >
-                <span className="block group-data-[thread-codeblock-copy-state=copied]:hidden" data-thread-codeblock-copy-icon="copy">
-                  <CopyIcon size={16} />
-                </span>
-                <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
-                  <CheckIcon size={16} />
-                </span>
-              </WorkbenchIconButton>
-              {isSvgCodeBlock ? (
-                <WorkbenchIconButton
-                  type="button"
-                  label="Preview SVG code block"
-                  display="hover-border"
-                  size="compact"
-                  aria-pressed={false}
-                  className={CODE_BLOCK_HEADER_BUTTON_CLASS}
-                  data-thread-codeblock-svg-preview="true"
-                  data-thread-codeblock-toggle-state="idle"
-                  title="Preview SVG code block"
-                >
-                  <PreviewIcon size={16} />
-                </WorkbenchIconButton>
-              ) : null}
-              <WorkbenchIconButton
-                type="button"
-                label="Toggle code block line wrapping"
-                display="hover-border"
-                size="compact"
-                aria-pressed={false}
-                className={CODE_BLOCK_HEADER_BUTTON_CLASS}
-                data-thread-codeblock-toggle-state="idle"
-                data-thread-codeblock-wrap-toggle="true"
-                title="Toggle code block line wrapping"
-              >
-                <WrapTextIcon size={16} />
-              </WorkbenchIconButton>
-            </div>
-          </div>
-          <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
-            <pre
-              className={`max-w-full overflow-x-auto whitespace-pre py-[0.8rem] ${isDiffCodeBlock ? "px-0" : "px-[0.95rem]"}`}
-              data-language={language}
-              data-thread-codeblock-pre="true"
-            >
-              <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">
-                {isDiffCodeBlock ? renderThreadDiffCodeBlock(block.text, keyPrefix) : block.text}
-              </code>
-            </pre>
-            {isSvgCodeBlock ? (
-              <div
-                className="absolute inset-0 overflow-auto p-[0.95rem]"
-                data-thread-codeblock-svg-preview-layer="true"
-              >
-                <iframe
-                  className="block size-full border-0 bg-transparent"
-                  data-thread-codeblock-svg-preview-frame="true"
-                  sandbox=""
-                  srcDoc={createSvgCodeBlockPreviewSrcDoc(block.text)}
-                  title="SVG code block preview"
-                />
-              </div>
-            ) : null}
-          </div>
-        </div>
-      );
-    }
+    case "code":
+      return <ThreadCodeBlock block={block} key={keyPrefix} keyPrefix={keyPrefix} options={options} />;
     case "table":
       return renderThreadTableBlock(block, options, keyPrefix);
     case "paragraph": {

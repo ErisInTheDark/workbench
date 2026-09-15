@@ -134,12 +134,6 @@ function setCodeBlockToggleButtonState (button: HTMLButtonElement, isActive: boo
   button.setAttribute("data-thread-codeblock-toggle-state", isActive ? "active" : "idle");
 }
 
-function setSvgCodeBlockPreviewButtonState (button: HTMLButtonElement, isPreviewing: boolean) {
-  setCodeBlockToggleButtonState(button, isPreviewing);
-  button.setAttribute("aria-label", isPreviewing ? "Show SVG source" : "Preview SVG code block");
-  button.title = isPreviewing ? "Show SVG source" : "Preview SVG code block";
-}
-
 function getLiveThreadActivity ({
   pendingUserInputRequest,
   turn,
@@ -955,30 +949,11 @@ export default memo(function ThreadViewContent ({
     showCodeBlockCopyFeedback(button, didCopy ? "copied" : "failed");
   }, [showCodeBlockCopyFeedback]);
 
-  const handleSvgCodeBlockPreviewToggle = useCallback((button: HTMLButtonElement) => {
-    const root = threadViewRef.current;
-    const codeBlock = button.closest<HTMLElement>("[data-thread-codeblock='true']");
-    if (!root || !root.contains(button) || !codeBlock) {
-      return;
-    }
-
-    const isPreviewing = codeBlock.getAttribute("data-thread-codeblock-svg-preview-state") === "preview";
-    const nextIsPreviewing = !isPreviewing;
-    codeBlock.setAttribute("data-thread-codeblock-svg-preview-state", nextIsPreviewing ? "preview" : "code");
-    setSvgCodeBlockPreviewButtonState(button, nextIsPreviewing);
-  }, []);
-
   const handleThreadViewClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
     const copyButton = target?.closest<HTMLButtonElement>("button[data-thread-codeblock-copy]") ?? null;
     if (copyButton && threadViewRef.current?.contains(copyButton)) {
       void handleCodeBlockCopy(copyButton);
-      return;
-    }
-
-    const svgPreviewButton = target?.closest<HTMLButtonElement>("button[data-thread-codeblock-svg-preview]") ?? null;
-    if (svgPreviewButton && threadViewRef.current?.contains(svgPreviewButton)) {
-      handleSvgCodeBlockPreviewToggle(svgPreviewButton);
       return;
     }
 
@@ -992,7 +967,7 @@ export default memo(function ThreadViewContent ({
     const nextValue = threadViewRef.current.getAttribute("data-thread-codeblock-wrap") !== "true";
     syncCodeBlockWrapDomState(nextValue);
     onThreadCodeBlockWrapChange(nextValue);
-  }, [handleCodeBlockCopy, handleSvgCodeBlockPreviewToggle, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
+  }, [handleCodeBlockCopy, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
 
   const handleComposerHarnessSelect = (nextHarness: WorkbenchHarness) => {
     if (!activeThread?.isDraft || !activeProfileSlot || activeThread.harness === nextHarness) return;
