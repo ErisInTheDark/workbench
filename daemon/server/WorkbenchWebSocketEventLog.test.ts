@@ -1,5 +1,4 @@
 /*
- * Keywords: websocket, event logs, independent windows, traffic, disposal.
  * No production exports. Tests protect aggregation, exclusions and scheduler ownership.
  */
 import assert from "node:assert/strict";
@@ -64,9 +63,9 @@ test("event types aggregate independently without aligning their windows", () =>
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /count: 1, out: 100B/);
   advance(700);
-  logger.record("out", "workbench", "workbench/thread-state/updated", 200);
+  logger.record("out", "workbench", "workbench/reload-dirt/updated", 200);
   logger.record("out", "codex", "item/agentMessage/delta", 300);
-  logger.record("out", "workbench", "workbench/thread-state/updated", 400);
+  logger.record("out", "workbench", "workbench/reload-dirt/updated", 400);
   assert.equal(lines.length, 2);
   assert.equal(timers.size, 1);
   advance(1_300);
@@ -75,11 +74,52 @@ test("event types aggregate independently without aligning their windows", () =>
   assert.match(lines[2]!, /count: 1, out: 300B/);
   advance(700);
   assert.equal(lines.length, 4);
-  assert.match(lines[3]!, /wb:thread-state\/updated/);
+  assert.match(lines[3]!, /wb:reload-dirt\/updated/);
   assert.match(lines[3]!, /count: 1, out: 400B/);
   advance(10_000);
   assert.equal(lines.length, 4);
   assert.equal(timers.size, 0);
+  logger.dispose();
+});
+
+test("frequent outbound events aggregate for ten seconds while other traffic keeps two-second windows", () => {
+  const { logger, lines, advance } = fixture();
+  const frequentEvents = [
+    ["codex", "item/started"],
+    ["codex", "item/completed"],
+    ["codex", "item/fileChange/patchUpdated"],
+    ["codex", "hook/started"],
+    ["codex", "hook/completed"],
+    ["codex", "item/reasoning/summaryPartAdded"],
+    ["codex", "item/reasoning/summaryTextDelta"],
+    ["codex", "thread/tokenUsage/updated"],
+    ["codex", "account/rateLimits/updated"],
+    ["workbench", "workbench/thread-state/updated"],
+  ] as const;
+
+  for (const [harness, method] of frequentEvents) {
+    logger.record("out", harness, method, 10);
+    logger.record("out", harness, method, 20);
+  }
+  logger.record("out", "codex", "unlisted", 10);
+  logger.record("out", "codex", "unlisted", 20);
+  logger.record("in", "codex", "item/started", 10);
+  logger.record("in", "codex", "item/started", 20);
+
+  assert.equal(lines.length, frequentEvents.length + 2);
+  advance(2_000);
+  assert.equal(lines.length, frequentEvents.length + 4);
+  assert.match(lines.at(-2)!, /out codex:unlisted .*count: 1, out: 20B/);
+  assert.match(lines.at(-1)!, /in codex:item\/started .*count: 1, in: 20B/);
+
+  advance(7_999);
+  assert.equal(lines.length, frequentEvents.length + 4);
+  advance(1);
+  assert.equal(lines.length, frequentEvents.length * 2 + 4);
+  for (const [harness, method] of frequentEvents) {
+    const label = harness === "workbench" ? "wb:thread-state/updated" : `${harness}:${method}`;
+    assert.ok(lines.some(line => line.includes(`out ${label}`) && line.includes("count: 1, out: 20B")));
+  }
   logger.dispose();
 });
 

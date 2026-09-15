@@ -1,5 +1,4 @@
 /*
- * Keywords: websocket, event, logging, throttle, independent windows.
  * Exports:
  * - WorkbenchWebSocketEventLogOptions: clock, scheduler and log ports.
  * - default WorkbenchWebSocketEventLog: aggregate traffic logs independently per event type and direction.
@@ -9,7 +8,20 @@ import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/we
 import { formatWebSocketEventSummary, webSocketMethodLabel } from "./websocket-log-format";
 
 type Timer = ReturnType<typeof setTimeout>;
-const WINDOW_MS = 2_000;
+const DEFAULT_WINDOW_MS = 2_000;
+const FREQUENT_OUTBOUND_WINDOW_MS = 10_000;
+const FREQUENT_OUTBOUND_LABELS = new Set([
+  "codex:item/started",
+  "codex:item/completed",
+  "codex:item/fileChange/patchUpdated",
+  "codex:hook/started",
+  "codex:hook/completed",
+  "codex:item/reasoning/summaryPartAdded",
+  "codex:item/reasoning/summaryTextDelta",
+  "codex:thread/tokenUsage/updated",
+  "codex:account/rateLimits/updated",
+  "wb:thread-state/updated",
+]);
 const EXCLUDED_EVENTS = new Set([
   `in:${webSocketMethodLabel("workbench", WORKBENCH_EVENT_STREAM_ACK_METHOD)}`,
 ]);
@@ -20,6 +32,7 @@ interface EventWindow {
   deadline: number;
   direction: "in" | "out";
   label: string;
+  windowMs: number;
 }
 
 export interface WorkbenchWebSocketEventLogOptions {
@@ -35,6 +48,7 @@ export default class WorkbenchWebSocketEventLog {
   private readonly now: NonNullable<WorkbenchWebSocketEventLogOptions["now"]>;
   private readonly schedule: NonNullable<WorkbenchWebSocketEventLogOptions["setTimeout"]>;
   private timer: Timer | null = null;
+  private timerDeadline: number | null = null;
   private readonly windows = new Map<string, EventWindow>();
   private readonly writeLine: NonNullable<WorkbenchWebSocketEventLogOptions["writeLine"]>;
 
@@ -57,14 +71,21 @@ export default class WorkbenchWebSocketEventLog {
     if (EXCLUDED_EVENTS.has(key)) return;
     const now = this.now();
     const window = this.windows.get(key) ?? {
-      bytes: 0, count: 0, deadline: now, direction, label,
+      bytes: 0,
+      count: 0,
+      deadline: now,
+      direction,
+      label,
+      windowMs: direction === "out" && FREQUENT_OUTBOUND_LABELS.has(label)
+        ? FREQUENT_OUTBOUND_WINDOW_MS
+        : DEFAULT_WINDOW_MS,
     };
     window.bytes += bytes;
     window.count += 1;
     this.windows.set(key, window);
     if (window.deadline <= now) {
       this.flush(window);
-      window.deadline = now + WINDOW_MS;
+      window.deadline = now + window.windowMs;
     }
     this.scheduleNext();
   }
@@ -74,6 +95,7 @@ export default class WorkbenchWebSocketEventLog {
     this.state = "disposed";
     if (this.timer !== null) this.cancel(this.timer);
     this.timer = null;
+    this.timerDeadline = null;
     for (const window of this.windows.values()) this.flush(window);
     this.windows.clear();
   }
@@ -83,6 +105,7 @@ export default class WorkbenchWebSocketEventLog {
     this.state = "suspended";
     if (this.timer !== null) this.cancel(this.timer);
     this.timer = null;
+    this.timerDeadline = null;
   }
 
   resumeAfterFailedReload() {
@@ -92,12 +115,19 @@ export default class WorkbenchWebSocketEventLog {
   }
 
   private scheduleNext() {
-    if (this.timer !== null || !this.windows.size || this.state !== "active") return;
+    if (!this.windows.size || this.state !== "active") return;
     let deadline = Infinity;
     for (const window of this.windows.values()) deadline = Math.min(deadline, window.deadline);
+    if (this.timer !== null) {
+      if (this.timerDeadline !== null && this.timerDeadline <= deadline) return;
+      this.cancel(this.timer);
+      this.timer = null;
+      this.timerDeadline = null;
+    }
     const timer = this.schedule(() => {
       if (this.timer !== timer || this.state !== "active") return;
       this.timer = null;
+      this.timerDeadline = null;
       const now = this.now();
       for (const [key, window] of this.windows) {
         if (window.deadline > now) continue;
@@ -105,12 +135,13 @@ export default class WorkbenchWebSocketEventLog {
           this.windows.delete(key);
         } else {
           this.flush(window);
-          window.deadline = now + WINDOW_MS;
+          window.deadline = now + window.windowMs;
         }
       }
       this.scheduleNext();
     }, Math.max(0, deadline - this.now()));
     this.timer = timer;
+    this.timerDeadline = deadline;
   }
 
   private flush(window: EventWindow) {
