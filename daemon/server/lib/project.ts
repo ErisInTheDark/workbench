@@ -40,6 +40,7 @@ export const projectRoot = path.resolve(appRoot, "..");
 export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.trim() || path.dirname(projectRoot));
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
+const reportedDuplicateProjectOrigins = new Set<ProjectId>();
 const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
 
@@ -676,9 +677,11 @@ export async function discoverProjectIdentities(signal?: AbortSignal): Promise<W
       }
     }
   }));
-  for (const locations of origins.values()) {
+  for (const [projectId, locations] of origins) {
     if (locations.length < 2) continue;
     for (const key of locations) classifications.get(key)!.excluded = true;
+    if (reportedDuplicateProjectOrigins.has(projectId)) continue;
+    reportedDuplicateProjectOrigins.add(projectId);
     const paths = locations.map(key => normalizeRelativePath(path.relative(projectsRoot, roots.get(key)!))
       .replace(/[\r\n\t]/gu, " ").slice(0, 300) || ".").sort();
     console.warn(`[projects] skipped checkouts sharing one origin: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` (+${paths.length - 10} more)` : ""}`);

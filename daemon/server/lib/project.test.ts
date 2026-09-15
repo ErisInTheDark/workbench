@@ -139,6 +139,11 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.equal(warnings.length, 1);
   assert.ok(!ambiguous.data.some(project => project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)));
   assert.ok(ambiguous.data.some(project => project.rootPath === canonicalRootPath));
+  const repeatedAmbiguous = await discoverProjectIdentities();
+  assert.equal(warnings.length, 1);
+  assert.ok(!repeatedAmbiguous.data.some(project => (
+    project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)
+  )));
 
   await git("-C", canonicalProjectRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
     "commit", "--quiet", "--allow-empty", "-m", "fixture");
