@@ -24,7 +24,8 @@ import type {
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import {
   createProjectFilePathDisambiguationIndexCooperatively,
   readCachedProjectFilePathDisambiguationIndex,
@@ -366,7 +367,7 @@ export default memo(function ThreadViewContent ({
   draftLeadingContent?: ReactNode;
   mobileFullBleed?: boolean;
   fontSizeRem: number;
-  getThreadHref?: (target: WorkbenchThreadTarget) => string;
+  getThreadHref?: (target: WorkbenchThreadTarget) => string | undefined;
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
@@ -404,6 +405,7 @@ export default memo(function ThreadViewContent ({
   const thread = rootThreadController.state.document!;
   const daemon = useWorkbenchDaemonClient();
   const clientStateController = useWorkbenchClientStateController();
+  const projectHref = useWorkbenchProjectNavigation();
   const clientState = useWorkbenchClientStateSnapshot();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const activeThreadId = selectedThreadId ?? thread.id;
@@ -838,8 +840,8 @@ export default memo(function ThreadViewContent ({
     const target: WorkbenchThreadTarget = threadId === thread.id
       ? { harness: thread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(thread.id) }
       : { harness: getSubagentHarness(subagents, threadId, thread.harness), kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(threadId) };
-    return getThreadHref?.(target) ?? createThreadHref(projectId, target);
-  }, [getThreadHref, projectId, subagents, thread.harness, thread.id]);
+    return getThreadHref?.(target) ?? projectHref(createThreadRoute(projectId, target));
+  }, [getThreadHref, projectHref, projectId, subagents, thread.harness, thread.id]);
 
   const handleSubagentPinToggle = useCallback((threadId: string) => {
     const subagent = getSubagentSummary(subagents, threadId);

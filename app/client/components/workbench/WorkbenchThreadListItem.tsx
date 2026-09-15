@@ -170,7 +170,7 @@ export default function WorkbenchThreadListItem({
   draggable?: boolean;
   dragTargets?: ReactNode;
   entry: ThreadListEntry;
-  href: string;
+  href: string | undefined;
   id?: string;
   isDragActive?: boolean;
   isShiftPressed?: boolean;

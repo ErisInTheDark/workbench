@@ -17,7 +17,6 @@ async function start() {
     { default: WorkbenchAppRuntimeClient },
     { readWorkbenchAppPort },
     { resolveWorkbenchBrowserStateIdentity },
-    { createWorkbenchProjectHref },
     { installBrowserNavigationEvents },
     { default: WorkbenchBrowserApp },
   ] = await Promise.all([
@@ -27,7 +26,6 @@ async function start() {
     import("./workbench/app/WorkbenchAppRuntimeClient.ts"),
     import("./workbench/app/workbench-app-port-client.ts"),
     import("./workbench/state/workbench-browser-state-identity.ts"),
-    import("workbench-shared/navigation/workbench-route-path"),
     import("./workbench/navigation/browser-navigation.ts"),
     import("./WorkbenchBrowserApp.tsx"),
   ]);
@@ -56,14 +54,6 @@ async function start() {
     });
     const activeController = controller;
     await Promise.all([activeController.bootstrap(), runtime.bootstrap()]);
-    if (window.location.pathname === "/launch") {
-      const target = activeController.records("lastLaunchTarget")[0];
-      window.history.replaceState(
-        window.history.state,
-        "",
-        target ? createWorkbenchProjectHref(target.projectId) : "/",
-      );
-    }
     const theme = activeController.records("globalPreference").find((record) => (
       record.preference.key === "theme"
     ))?.preference.value;

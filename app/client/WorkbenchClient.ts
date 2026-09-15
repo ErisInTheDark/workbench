@@ -1020,7 +1020,10 @@ export async function WorkbenchClient(
       } : route;
       const canonicalRoute = await threadIdentity.resolveRoute(projectRoute);
       if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
-      if (!isSameWorkbenchRoute(route, projectRoute)) return { ok: true, canonicalRoute };
+      // Project addresses are a navigation concern, not a reason to redirect.
+      // Keep the current generation while applying its canonical internal scope.
+      route = projectRoute;
+      activeRoute = projectRoute;
       if (route.view === "thread") {
         const projectId = route.threadOwnerProjectId || route.projectId;
         const references = new Set(workbenchBindings.clientStateController?.getSnapshot().records.flatMap((record) => (
@@ -1126,11 +1129,17 @@ export async function WorkbenchClient(
 
   async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
     let result: WorkbenchRouteLoadResult = { ok: false };
-    await threadSidebarClient.guardNavigation(async () => { result = await applyRouteOwned(route); });
-    if (route.view === "thread" && activeRoute === route && !result.ok && result.error) {
+    let generation: number | undefined;
+    await threadSidebarClient.guardNavigation(async () => {
+      generation = activeRouteGeneration + 1;
+      result = await applyRouteOwned(route);
+    });
+    if (route.view === "thread" && activeRouteGeneration === generation && !result.ok && result.error) {
       const target = route.threadTarget ?? { kind: "provider" as const, threadId: ThreadReferenceSchema.parse(route.threadId) };
       if (target.kind !== "new") {
-        threadClient.getThreadController(route.threadOwnerProjectId || route.projectId, target.kind === "subagent"
+        const owner = route.threadOwnerProjectId || route.projectId;
+        const projectId = workbenchBindings.clientStateController?.resolveProjectId(owner) ?? owner;
+        threadClient.getThreadController(projectId, target.kind === "subagent"
           ? { kind: "provider", threadId: target.parentThreadId } : target).fail(new Error(result.error));
       }
     }

@@ -169,6 +169,10 @@ export default class WorkbenchClientStateController {
     return this.#projectAliases.get(projectId) ?? projectId;
   }
 
+  getProjectAliases(): readonly WorkbenchProjectAlias[] {
+    return [...this.#projectAliases].map(([alias, projectId]) => ({ alias, projectId: projectId as WorkbenchProjectAlias["projectId"] }));
+  }
+
   async adoptProjectAliases(aliases: readonly WorkbenchProjectAlias[]) {
     if (!aliases.length) return;
     const prior = this.#projectRemap;

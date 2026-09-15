@@ -16,7 +16,8 @@ import {
 } from "react";
 
 import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
-import { createStatsHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createStatsRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type {
   WorkbenchStatsImportProgress,
   WorkbenchStatsRange,
@@ -53,6 +54,7 @@ export default function WorkbenchStatsView({
   projects: readonly Pick<WorkbenchProjectOption, "id" | "name" | "kind" | "roots">[];
 }) {
   const daemon = useContext(WorkbenchDaemonClientContext);
+  const projectHref = useWorkbenchProjectNavigation();
   const client = useMemo(() => daemon ? new WorkbenchStatsClient(daemon) : null, [daemon]);
   const clientRef = useRef(client);
   clientRef.current = client;
@@ -132,7 +134,7 @@ export default function WorkbenchStatsView({
           <div aria-label="Statistics scope" className="flex max-w-full items-end gap-4 text-[0.9rem]" role="tablist">
             <WorkbenchTab
               selected={projectId === null}
-              href={createStatsHref(null)}
+              href={projectHref(createStatsRoute(null))}
               onClick={(event) => onNavigate(event, null)}
             >
               Global
@@ -140,7 +142,7 @@ export default function WorkbenchStatsView({
             {availableProjectId ? (
               <WorkbenchTab
                 selected={projectId !== null}
-                href={createStatsHref(availableProjectId)}
+                href={projectHref(createStatsRoute(availableProjectId))}
                 onClick={(event) => onNavigate(event, availableProjectId)}
               >
                 {projectLabel}

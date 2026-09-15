@@ -9,7 +9,7 @@ type TabProps = {
   children: ReactNode;
   selected: boolean;
 } & ({
-  href: string;
+  href: string | undefined;
   onClick: (event: MouseEvent<HTMLAnchorElement>) => void;
 } | {
   href?: never;
@@ -23,7 +23,7 @@ export default function WorkbenchTab(props: TabProps) {
     ${props.selected ? "border-text text-text" : "border-transparent text-fg/muted hover:text-text"}
   `;
   const content = <span className="truncate">{props.children}</span>;
-  return props.href !== undefined
+  return "href" in props
     ? <a aria-selected={props.selected} className={className} href={props.href} onClick={props.onClick} role="tab">{content}</a>
     : <button aria-selected={props.selected} className={className} onClick={props.onClick} role="tab" type="button">{content}</button>;
 }

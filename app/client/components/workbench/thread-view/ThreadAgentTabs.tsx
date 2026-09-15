@@ -75,7 +75,7 @@ export default function ThreadAgentTabs ({
   tabs,
 }: {
   activeThreadId: string;
-  getThreadHref: (threadId: string) => string;
+  getThreadHref: (threadId: string) => string | undefined;
   hasSettledSubagents: boolean;
   isSettledSubagentsVisible: boolean;
   isRevealingMore: boolean;

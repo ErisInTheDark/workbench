@@ -39,17 +39,12 @@ import {
     createFileRoute,
     createHomeHref,
     createHomeRoute,
-    createHomeThreadHref,
     createHomeThreadRoute,
     createMosaicRoute,
-    createPinnedThreadHref,
     createPinnedThreadRoute,
     createProjectRoute,
-    createSettingsHref,
     createSettingsRoute,
-    createStatsHref,
     createStatsRoute,
-    createThreadHref,
     createThreadRoute,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
@@ -78,6 +73,8 @@ import {
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
 import { useWorkbenchRoute } from "../workbench/navigation/use-workbench-route";
+import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
+import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import {
     handleWorkbenchActionShortcut,
     runWorkbenchAction,
@@ -458,14 +455,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
-  const { navigateToRoute, route } = useWorkbenchRoute();
-  const currentRouteRef = useRef<WorkbenchRoute>(route);
-  currentRouteRef.current = route;
+  const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
+    .readRoute(typeof window === "undefined" ? "/" : window.location.href,
+      clientState.records.find(record => record.kind === "lastLaunchTarget")?.projectId);
+  const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
   const workbenchClient = useWorkbenchClientMount({
     clientStateController,
     getDomSurfaces: getWorkbenchDomSurfaces,
-    initialRoute: currentRouteRef.current,
+    initialRoute,
   });
+  const { navigateToRoute, route } = useWorkbenchRoute(workbenchClient);
+  const projectHref = useWorkbenchProjectNavigation(workbenchClient);
+  currentRouteRef.current = route;
   const threads = useWorkbenchThreads(workbenchClient);
   const explorer = workbenchClient.explorer;
   const projectThreadSidebars = useWorkbenchProjectThreadSidebars(workbenchClient);
@@ -2632,7 +2633,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open statistics"
                     display="hover-border"
-                    href={createStatsHref(activeProjectId)}
+                    href={projectHref(createStatsRoute(activeProjectId))}
                     onClick={(event) => openStatsScopeFromLink(event, activeProjectId)}
                     title="Open statistics"
                   >
@@ -2643,7 +2644,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open settings"
                     display="hover-border"
-                    href={createSettingsHref(activeProjectId, "global")}
+                    href={projectHref(createSettingsRoute(activeProjectId, "global"))}
                     onClick={openSettingsFromLink}
                     title="Open settings"
                   >
@@ -2970,10 +2971,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       draftLeadingContent={projectRotator}
                       fontSizeRem={displayedEditorFontSize}
                       getThreadHref={(target) => !activeProjectId
-                        ? createHomeThreadHref(threadProjectId, target)
+                        ? projectHref(createHomeThreadRoute(threadProjectId, target))
                         : isForeignThreadProject
-                          ? createPinnedThreadHref(activeProjectId, threadProjectId, target)
-                          : createThreadHref(activeProjectId, target)}
+                          ? projectHref(createPinnedThreadRoute(activeProjectId, threadProjectId, target))
+                          : projectHref(createThreadRoute(activeProjectId, target))}
                       mobileFullBleed={isDirectMobileThreadSurface}
                       onDraftHarnessChange={handleHarnessChange}
                       onOpenThread={(target) => { void openThreadFromExplorer(target, threadProjectId); }}
@@ -3010,7 +3011,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         </div>
                         <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
                           <a
-                            href={createSettingsHref(activeProjectId, "global")}
+                            href={projectHref(createSettingsRoute(activeProjectId, "global"))}
                             role="tab"
                             aria-selected={settingsScope === "global"}
                             className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
@@ -3023,7 +3024,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             Global
                           </a>
                           <a
-                            href={createSettingsHref(activeProjectId, "project")}
+                            href={projectHref(createSettingsRoute(activeProjectId, "project"))}
                             role="tab"
                             aria-selected={settingsScope === "project"}
                             className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"

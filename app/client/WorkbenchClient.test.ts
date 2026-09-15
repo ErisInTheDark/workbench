@@ -12,6 +12,7 @@ import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/W
 import { WorkbenchClient, areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
 import { createHomeRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
+import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -89,7 +90,7 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
 
-for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
+for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias"] as const) {
   test(`route completion never reopens the winning route: ${order}`, async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
@@ -101,7 +102,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
     const rootPath = "C:/repo";
     const firstId = crypto.randomUUID();
     const secondId = crypto.randomUUID();
-    const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+    const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse(order === "project-alias" ? "remote://github.com/team/repo" : "project");
     const roots = [{ id: "root", isPrimary: true, name: "repo", relativePath: ".", rootPath }];
     const entries = [firstId, secondId].map(threadId => ({
       entryKind: "thread", title: threadId, activityAt: 1,
@@ -126,9 +127,10 @@ for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
           case "workbench/daemon/reload-dirt/read": result = { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }; break;
           case "workbench/thread-state/open":
             result = {
-              catalog: { data: [{ id: projectId, kind: "git", name: "repo", relativePath: ".", rootPath, roots, lastCommitTimeMs: null }], rootPath },
+              catalog: { data: [{ id: projectId, kind: "git", name: "repo", relativePath: "web/repo", rootPath, roots, lastCommitTimeMs: null }], rootPath,
+                aliases: order === "project-alias" ? [{ alias: "web/repo", projectId }] : [] },
               project: { projectId, revision: 1, updateKind: "project", snapshot: { projectId, root: "repo", rootPath, roots, changes: {}, tree: [], workbenchStorageRootPath: `${rootPath}/.workbench` } },
-              sidebar: { ...sidebar(), entries },
+              sidebar: { ...sidebar(), projectId, entries },
             };
             break;
           case "thread/identity/resolve": result = { data: { threadId, harness: "codex", projectId } }; break;
@@ -162,12 +164,29 @@ for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
       cancelAnimationFrame: clearImmediate,
     } as unknown as Window & typeof globalThis;
     let client: Awaited<ReturnType<typeof WorkbenchClient>> | undefined;
+    const clientStateController = new WorkbenchClientStateController();
     const route = (id: string): WorkbenchRoute => ({
       ...createHomeRoute(), projectId, view: "thread", threadId: id,
       threadTarget: { kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(id), harness: "codex" },
     });
     try {
-      client = await WorkbenchClient({ initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" } });
+      client = await WorkbenchClient({ clientStateController, initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" } });
+      if (order === "project-alias") {
+        const result = await client.controls.applyRoute({
+          ...createHomeRoute(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("web/repo"), view: "project",
+        });
+        assert.equal(result.ok, true);
+        assert.equal(result.canonicalRoute, undefined, "project alias adoption must not require a public URL redirect");
+        assert.equal(clientStateController.resolveProjectId("web/repo"), projectId);
+        const target = { kind: "draft" as const, draftId: fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID()) };
+        const failed = await client.controls.applyRoute({
+          ...createHomeRoute(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("web/repo"),
+          view: "thread", threadId: target.draftId, threadTarget: target,
+        });
+        assert.equal(failed.ok, false);
+        assert.equal(client.getThreadController(projectId, target).getSnapshot().status, "failed");
+        return;
+      }
       const first = client.controls.applyRoute(route(firstId));
       await firstPage.promise;
       if (order === "leave-thread") {
@@ -190,6 +209,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread"] as const) {
     } finally {
       await (client?.threadSidebar as ThreadSidebarClient | undefined)?.close();
       client?.dispose();
+      clientStateController.dispose();
       globalThis.window = originalWindow;
       globalThis.document = originalDocument;
       globalThis.WebSocket = originalWebSocket;

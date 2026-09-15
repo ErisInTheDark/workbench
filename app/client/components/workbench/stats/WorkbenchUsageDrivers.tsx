@@ -4,7 +4,8 @@
  */
 import type { MouseEvent } from "react";
 
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { compactNumber, formatMoney, providerLabel } from "./stats-formatters";
 
@@ -19,6 +20,7 @@ export default function WorkbenchUsageDrivers({
   projectNamesById: ReadonlyMap<string, string>;
   stats: Pick<WorkbenchStatsResponse, "models" | "topThreads"> | null;
 }) {
+  const projectHref = useWorkbenchProjectNavigation();
   return (
     <section aria-labelledby="drivers-heading" className="space-y-3">
       <h2 className="m-0 text-[1rem] font-semibold text-text" id="drivers-heading">Usage drivers</h2>
@@ -49,7 +51,7 @@ export default function WorkbenchUsageDrivers({
                 <li className="flex min-w-0 items-baseline justify-between gap-4" key={`${thread.projectId}:${thread.threadId}`}>
                   <a
                     className="min-w-0 truncate rounded-sm text-[0.8rem] font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                    href={createThreadHref(thread.projectId, thread.threadId)}
+                    href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
                     onClick={(event) => onNavigateThread(event, thread.projectId, thread.threadId)}
                   >
                     {thread.title || thread.threadId}

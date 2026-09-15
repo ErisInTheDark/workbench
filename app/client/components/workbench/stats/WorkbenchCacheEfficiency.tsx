@@ -3,7 +3,8 @@
  * - default WorkbenchCacheEfficiency: present independent cache percentages and lowest-cache thread links.
  */
 import type { MouseEvent } from "react";
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { hasStatsCategoryCosts } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import WorkbenchStatsChart from "./WorkbenchStatsChart";
@@ -25,6 +26,7 @@ export default function WorkbenchCacheEfficiency({
   stats: WorkbenchStatsResponse | null;
 }) {
   const cache = stats && hasStatsCategoryCosts(stats) ? stats.cacheEfficiency : undefined;
+  const projectHref = useWorkbenchProjectNavigation();
   return (
     <section aria-labelledby="cache-efficiency-heading" className="space-y-3 [--hue-chroma:50%]">
       <div className="space-y-1">
@@ -74,7 +76,7 @@ export default function WorkbenchCacheEfficiency({
                   <li className="flex min-w-0 items-baseline justify-between gap-3" key={thread.threadId}>
                     <a
                       className="min-w-0 truncate rounded-sm text-[0.8rem] font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                      href={createThreadHref(thread.projectId, thread.threadId)}
+                      href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
                       onClick={(event) => onNavigateThread(event, thread.projectId, thread.threadId)}
                       title={thread.title || thread.threadId}
                     >

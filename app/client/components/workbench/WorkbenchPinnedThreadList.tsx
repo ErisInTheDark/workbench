@@ -15,7 +15,8 @@ import {
   WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
   type WorkbenchDragPayload,
 } from "../../workbench/layout/workbench-drag";
-import { createPinnedThreadHref, createThreadHref, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { createPinnedThreadRoute, createThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import {
   getProjectQualifiedThreadDisplayKey,
@@ -123,6 +124,7 @@ export default function WorkbenchPinnedThreadList({
   const isShiftPressed = useNonTextInputShiftKey();
   const { preferences, setFolderOpen } = useWorkbenchSidebarPreferences();
   const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const projectHref = useWorkbenchProjectNavigation();
   const currentlyPinnedEntries = useMemo(() => actions.projectThreadSummaries.projects.flatMap((summary) => {
     if (selectedProjectPinPlacement === "threads-section" && summary.projectId === projectId) return [];
     const project = projectsById.get(summary.projectId);
@@ -161,8 +163,8 @@ export default function WorkbenchPinnedThreadList({
   if (!items.length && !priorityDropVisible) return null;
 
   const threadHref = (target: WorkbenchThreadTarget, ownerProjectId: string) => ownerProjectId === projectId
-    ? createThreadHref(projectId, target)
-    : createPinnedThreadHref(projectId, ownerProjectId, target);
+    ? projectHref(createThreadRoute(projectId, target))
+    : projectHref(createPinnedThreadRoute(projectId, ownerProjectId, target));
   const renderEntry = ({ entry, project }: GlobalPinnedEntry) => {
     const target = targetForEntry(entry);
     const projectSourceKey = displayKeyForEntry(entry);

@@ -54,6 +54,8 @@ test("observation requests validate canonical ownership and outbound state needs
       nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"], state: "inProgress", createdAt: 2, startedAt: 2, endedAt: null, durationMs: null,
     });
     const owners = { threads, items };
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)")
+      .run("old/project", thread.projectId);
     const entry = {
       entryKind: "thread" as const, identity: { harness: "codex" as const, threadId: thread.threadId },
       activityAt: 1, title: "Thread", metadata: { archived: false as const, pinned: false, snoozed: false },
@@ -126,6 +128,14 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.ok(childRequest.method === "workbench/thread-state/observe" && childRequest.target.kind === "subagent");
     assert.equal(childRequest.target.threadId, child.threadId);
     assert.equal(childRequest.target.parentThreadId, thread.threadId);
+    for (const target of [request.target, childRequest.target]) {
+      const aliased = await mapWorkbenchThreadStateRequest(owners, {
+        method: "workbench/thread-state/observe", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"),
+        subscriptionId: source.subscriptionId, version: 1, target,
+      });
+      assert.ok(aliased.method === "workbench/thread-state/observe");
+      assert.deepEqual(aliased.target, target);
+    }
     await assert.rejects(mapWorkbenchThreadStateRequest(owners, {
       method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["foreign"], subscriptionId: source.subscriptionId, version: 1,
       target: { kind: "provider", harness: "codex", threadId: thread.threadId },

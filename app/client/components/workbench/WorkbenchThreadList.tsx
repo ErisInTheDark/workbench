@@ -130,7 +130,7 @@ export default function WorkbenchThreadList({
   currentTarget: WorkbenchThreadTarget | null;
   displayOrder?: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
-  getThreadHref: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string;
+  getThreadHref: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string | undefined;
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
   activeDragPayload?: WorkbenchDragPayload | null;
   nowMs?: number;

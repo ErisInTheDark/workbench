@@ -8,7 +8,8 @@ import { memo, type PointerEvent, type ReactNode } from "react";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { FolderId, ProjectId } from "workbench-shared/workbench/identity";
@@ -43,6 +44,7 @@ export default memo(function WorkbenchThreadSidebar({
   selectedProjectPinPlacement,
   showMosaicView,
 }: WorkbenchThreadSidebarProps) {
+  const projectHref = useWorkbenchProjectNavigation();
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
   if (actions.isLoading) return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
   if (!projectId) return null;
@@ -58,7 +60,7 @@ export default memo(function WorkbenchThreadSidebar({
           currentTarget={currentTarget}
           displayOrder={actions.displayOrder}
           entries={actions.entries}
-          getThreadHref={(target) => createThreadHref(projectId, target)}
+          getThreadHref={(target) => projectHref(createThreadRoute(projectId, target))}
           getThreadContextMenu={actions.getThreadContextMenu}
           nowMs={actions.nowMs}
           onAction={actions.onAction}

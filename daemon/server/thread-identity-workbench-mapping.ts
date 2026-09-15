@@ -120,9 +120,8 @@ async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, i
     const thread = await owners.threads.resolve(input)
       ?? (identity.harness ? await owners.resolveThreadIdentity?.(input) : null);
     if (!thread) throw new Error("Thread metadata has not been admitted for public projection.");
-    if (projectId && thread.projectId !== projectId) {
-      throw new Error(`Thread reference belongs to project ${JSON.stringify(thread.projectId)}, not the requested project.`);
-    }
+    // The scoped resolver owns alias-aware project validation. Comparing its
+    // canonical result with the original address would reject retained aliases.
     return thread;
   } catch (cause) {
     const context = Object.fromEntries(Object.entries(input).map(([key, value]) => [

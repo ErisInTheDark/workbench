@@ -5,7 +5,8 @@
 "use client";
 
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import ProjectFileLinkList from "../ProjectFileLinkList";
@@ -21,6 +22,7 @@ export default function ThreadGitArcConflictList({
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   projectId: string;
 }) {
+  const projectHref = useWorkbenchProjectNavigation();
   if (!entries.length) return null;
   const projectFilePaths = entries.flatMap(({ paths }) => paths);
   return (
@@ -30,7 +32,7 @@ export default function ThreadGitArcConflictList({
           className="pb-px"
           compact
           entry={entry}
-          href={createThreadHref(projectId, { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId })}
+          href={projectHref(createThreadRoute(projectId, { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId }))}
           key={`${entry.identity.harness}:${entry.identity.threadId}`}
           onActivate={onOpenThread}
           projectId={ProjectIdSchema.parse(projectId)}

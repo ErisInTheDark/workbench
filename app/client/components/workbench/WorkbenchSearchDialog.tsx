@@ -8,7 +8,8 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
@@ -22,6 +23,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
   projectSummaries: WorkbenchProjectThreadSummaries;
 }) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const projectHref = useWorkbenchProjectNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
 
@@ -135,7 +137,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
                     compact
                     dimmedOverride={false}
                     entry={thread}
-                    href={createThreadHref(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId })}
+                    href={projectHref(createThreadRoute(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
                     id={id}
                     onActivate={() => controller.activate(result)}
                     project={project}

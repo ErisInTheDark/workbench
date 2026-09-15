@@ -6,7 +6,8 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import { createProjectHref } from "workbench-shared/workbench/navigation/workbench-route";
+import { createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
@@ -72,6 +73,7 @@ export default function WorkbenchProjectListItem({
   showTooltip?: boolean;
   tabIndex?: number;
 }) {
+  const projectHref = useWorkbenchProjectNavigation();
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
   const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => (counts[key] ?? 0) > 0) ?? null;
@@ -148,7 +150,7 @@ export default function WorkbenchProjectListItem({
             aria-label={`Open ${project.name || project.id}`}
             aria-selected={role === "option" ? selected : undefined}
             className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            href={createProjectHref(project.id)}
+            href={projectHref(createProjectRoute(project.id))}
             id={id}
             onClick={(event) => onProjectLinkClick(event, project.id)}
             role={role}

@@ -16,7 +16,8 @@ import {
   type WorkbenchDragPayload,
   type WorkbenchThreadDragSection,
 } from "../../workbench/layout/workbench-drag";
-import { createHomeThreadHref, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import {
   getWorkbenchHomeFolderKey,
   projectWorkbenchHomeThreadList,
@@ -118,6 +119,7 @@ export default function WorkbenchHomeThreadList({
   selectedOwnerProjectId: string;
 }) {
   const isShiftPressed = useNonTextInputShiftKey();
+  const projectHref = useWorkbenchProjectNavigation();
   const {
     preferences,
     setDisclosureOpen,
@@ -217,7 +219,7 @@ export default function WorkbenchHomeThreadList({
         draggable={draggable}
         dragTargets={dragTargets}
         entry={entry}
-        href={createHomeThreadHref(projectId, target)}
+        href={projectHref(createHomeThreadRoute(projectId, target))}
         isDragActive={isDragActive}
         isShiftPressed={isShiftPressed}
         key={threadKey}
@@ -309,7 +311,7 @@ export default function WorkbenchHomeThreadList({
             compact={false}
             dimmedOverride={false}
             entry={homeEntry.entry}
-            href={createHomeThreadHref(homeEntry.projectId, target)}
+            href={projectHref(createHomeThreadRoute(homeEntry.projectId, target))}
             key={`tooltip:${homeEntry.threadKey}`}
             nowMs={actions.nowMs}
             onActivate={(activatedTarget) => onOpenThread(activatedTarget, homeEntry.projectId)}
@@ -344,7 +346,7 @@ export default function WorkbenchHomeThreadList({
     const selected = selectedOwnerProjectId === item.projectId && isWorkbenchThreadTargetSelected(target, currentTarget);
     return (
       <a
-        href={createHomeThreadHref(item.projectId, target)}
+        href={projectHref(createHomeThreadRoute(item.projectId, target))}
         title="Create new thread"
         aria-current={selected ? "page" : undefined}
         className={`
@@ -428,7 +430,7 @@ export default function WorkbenchHomeThreadList({
   return (
     <DropTargetBoundary className="space-y-1">
       <a
-        href={createHomeThreadHref(createProject.id, { kind: "new" })}
+        href={projectHref(createHomeThreadRoute(createProject.id, { kind: "new" }))}
         title="Create new thread"
         aria-current={blankThreadSelected ? "page" : undefined}
         className={`
