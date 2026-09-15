@@ -108,8 +108,8 @@ export function formatToolCallOutput({
       ? dynamicText.join("\n\n")
       : mcpText.every((entry): entry is string => entry !== null)
         ? mcpText.join("\n\n")
-        : "";
-    if (text.trim()) return text;
+        : null;
+    if (text !== null) return text;
     return formatStructuredOutput(content as readonly JsonValue[]);
   }
   return formatStructuredOutput(fallback);

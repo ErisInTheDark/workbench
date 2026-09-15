@@ -49,5 +49,8 @@ test("tool output prefers text and preserves structured fallbacks", () => {
   assert.equal(formatToolCallOutput({
     content: [{ type: "text", text: "first" }, { type: "text", text: "second" }],
   }), "first\n\nsecond");
+  assert.equal(formatToolCallOutput({
+    content: [{ type: "text", text: "" }],
+  }), "");
   assert.equal(formatToolCallOutput({ fallback: { ok: true } }), '{\n  "ok": true\n}');
 });
