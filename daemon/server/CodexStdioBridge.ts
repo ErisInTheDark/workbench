@@ -3422,12 +3422,44 @@ export default class CodexStdioBridge {
       if (!Array.isArray(activeTurns)) {
         return { id: requestId, error: { code: -32000, message: "Codex admission could not read the active turn." } };
       }
-      return await this.dispatchManagedMessageSteer(
+      const steerResponse = await this.dispatchManagedMessageSteer(
         requestId,
         threadId,
         this.readManagedActiveTurn(readThread, activeTurns as Turn[]),
         startRequest,
         steerRequest,
+      );
+      if (!steerResponse.error || !steerRequest) return steerResponse;
+      if (!steerResponse.error.message.toLowerCase().includes("no active turn to steer")) {
+        return steerResponse;
+      }
+      const recoveryRead = await this.dispatchManagedProviderRequest({
+        id: `workbench:admission-recovery-read:${String(requestId ?? Date.now())}`,
+        method: "thread/read",
+        params: { includeTurns: false, threadId },
+      }, signal);
+      signal.throwIfAborted();
+      if (recoveryRead.error) return steerResponse;
+      const recoveryThread = asRecord(recoveryRead.result)?.thread as ThreadReadResponse["thread"] | undefined;
+      if (
+        !recoveryThread
+        || recoveryThread.id !== threadId
+        || isThreadStatusActive(recoveryThread.status)
+        || (
+          recoveryThread.status.type !== "idle"
+          && recoveryThread.status.type !== "notLoaded"
+          && recoveryThread.status.type !== "systemError"
+        )
+      ) {
+        return steerResponse;
+      }
+      return await this.admitKnownInactiveCodexTurn(
+        requestId,
+        recoveryThread,
+        resumeRequest,
+        startRequest,
+        steerRequest,
+        signal,
       );
     }
     if (
@@ -3438,13 +3470,32 @@ export default class CodexStdioBridge {
       return { id: requestId, error: { code: -32000, message: `The Codex thread is ${readThread.status.type}, not inactive.` } };
     }
 
+    return await this.admitKnownInactiveCodexTurn(
+      requestId,
+      readThread,
+      resumeRequest,
+      startRequest,
+      steerRequest,
+      signal,
+    );
+  }
+
+  private async admitKnownInactiveCodexTurn(
+    requestId: number | string | null,
+    thread: Thread,
+    resumeRequest: JsonRpcRequest,
+    startRequest: JsonRpcRequest,
+    steerRequest: JsonRpcRequest | null,
+    signal: AbortSignal,
+  ) {
+    const threadId = thread.id;
     if (this.withThreadAdmission) {
-      return this.withThreadAdmission(readThread, { resumeRequest, startRequest }, (requests) => (
+      return this.withThreadAdmission(thread, { resumeRequest, startRequest }, (requests) => (
         this.admitInactiveCodexTurn(requestId, threadId, requests.resumeRequest, requests.startRequest, steerRequest, signal)
       ), signal, this.unmaterializedThreadIds.has(threadId));
     }
     if (this.prepareThreadConfiguration) {
-      ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }, signal));
+      ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(thread, { resumeRequest, startRequest }, signal));
       signal.throwIfAborted();
       this.assertAcceptingWork();
     }

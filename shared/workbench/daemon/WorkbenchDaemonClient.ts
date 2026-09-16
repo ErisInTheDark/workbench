@@ -144,6 +144,9 @@ export class WorkbenchDaemonClient {
       steers: (params: WorkbenchDaemonParams<"thread/steers/read">) => this.request("thread/steers/read", params),
       browse: (params: WorkbenchDaemonParams<"thread/browse/read">) => this.request("thread/browse/read", params),
     },
+    questionnaire: {
+      respond: (params: WorkbenchDaemonParams<"questionnaire/respond">) => this.request("questionnaire/respond", params),
+    },
     create: (params: WorkbenchDaemonParams<"thread/create">) => this.request("thread/create", params),
     read: (params: WorkbenchDaemonParams<"thread/metadata/read">) => this.request("thread/metadata/read", params),
     page: (params: WorkbenchDaemonParams<"thread/page/read">) => this.request("thread/page/read", params),

@@ -4075,6 +4075,113 @@ test("managed admission steers a provider-confirmed active turn without changing
   }
 });
 
+test("managed continuation starts the unchanged input when its active turn ends before steer", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-steer-race-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
+  const activeThread = { ...bridgeThread(), turns: [] };
+  const idleThread = { ...bridgeThread(), status: { type: "idle" as const }, turns: [] };
+  const startedTurn = { ...activeTurn, id: "continued-turn" };
+  let readCount = 0;
+  let steerError = "transport failed";
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      const result = message.method === "thread/read"
+        ? { thread: readCount++ === 0 ? activeThread : idleThread }
+        : message.method === "thread/turns/list"
+          ? { data: [activeTurn], nextCursor: null }
+          : message.method === "thread/unsubscribe"
+            ? { status: "unsubscribed" }
+            : message.method === "thread/resume"
+              ? { initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null }, thread: idleThread }
+              : message.method === "turn/start"
+                ? { turn: startedTurn }
+                : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(message.method === "turn/steer"
+          ? { id: message.id ?? null, error: { code: -32000, message: steerError } }
+          : result
+            ? { id: message.id ?? null, result }
+            : { id: message.id ?? null, error: { code: -32000, message: `unexpected ${message.method}` } });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    prepareTurnStart: async () => undefined,
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const input = [
+    { text: "questionnaire response", text_elements: [], type: "text" as const },
+    { image_url: "data:image/png;base64,aGVsbG8=", type: "input_image" as const },
+  ];
+  try {
+    const ambiguousFailure = await bridge.handleBridgeRequest({
+      id: 722,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: { clientUserMessageId: "questionnaire-response", input, threadId: "thread" },
+        },
+        steerRequest: { method: "turn/steer", params: {} },
+        threadId: "thread",
+      },
+    });
+    assert.equal(ambiguousFailure.error?.message, "transport failed");
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/turns/list",
+      "turn/steer",
+    ]);
+
+    upstreamRequests.length = 0;
+    readCount = 0;
+    steerError = "no active turn to steer";
+    const response = await bridge.handleBridgeRequest({
+      id: 723,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: { clientUserMessageId: "questionnaire-response", input, threadId: "thread" },
+        },
+        steerRequest: { method: "turn/steer", params: {} },
+        threadId: "thread",
+      },
+    });
+
+    assert.deepEqual(response.result, { kind: "started", turn: startedTurn });
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/turns/list",
+      "turn/steer",
+      "thread/read",
+      "thread/unsubscribe",
+      "thread/resume",
+      "turn/start",
+    ]);
+    assert.deepEqual(upstreamRequests.at(-1)?.params, {
+      clientUserMessageId: "questionnaire-response",
+      input,
+      threadId: "thread",
+    });
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("managed admission rejects active metadata without a newest in-progress turn", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-active-turn-missing-"));
   const upstreamRequests: JsonRpcRequest[] = [];

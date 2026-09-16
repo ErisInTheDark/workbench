@@ -4920,7 +4920,7 @@ function WorkbenchThreadClient(
     const hasActivatedSkills = Boolean(options.activatedSkillPaths?.length);
     const projectId = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId).projectId;
     if (!projectId) throw new Error("The questionnaire thread has no selected project.");
-    const submitResult = await daemon.request("questionnaire/respond", {
+    const submitResult = await daemon.threads.questionnaire.respond({
       ...(options.activatedSkillPaths?.length ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
       insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
       insertAfterItemIndex: options.insertAfterItemIndex ?? null,

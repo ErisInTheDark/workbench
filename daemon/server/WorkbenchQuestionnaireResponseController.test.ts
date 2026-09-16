@@ -186,7 +186,10 @@ function request() {
     projectId,
     requestKey: questionnaire.requestKey,
     response,
-    supplementalInput: [{ text: "extra context", text_elements: [], type: "text" as const }],
+    supplementalInput: [
+      { text: "extra context", text_elements: [], type: "text" as const },
+      { type: "image" as const, url: "data:image/png;base64,aGVsbG8=" },
+    ],
     threadId,
     turnId,
   };
