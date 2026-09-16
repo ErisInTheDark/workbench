@@ -14,6 +14,12 @@ const fixtureIdentityValues = {
   NativeThreadId: {
     "thread-one": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread-one"),
   },
+  ProjectId: {
+    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  },
+  WorkbenchThreadId: {
+    "thread-one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("workbench-thread-one"),
+  },
 };
 
 function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHarnessAdapter {
@@ -155,4 +161,43 @@ test("usage hydration dispatches only to adapters that own it", async () => {
     harness: "copilot", kind: "usage", projectId: "project", threadId: "thread",
   }), /unavailable for copilot/u);
   assert.deepEqual(calls, ["usage:codex:thread"]);
+});
+
+test("durable-only identity resolution never probes the provider while default resolution can admit metadata", async () => {
+  let admitted = false;
+  let providerReads = 0;
+  const identity = {
+    bindings: [],
+    projectId: fixtureIdentityValues.ProjectId["project"],
+    projectRoot: "C:/project",
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
+  };
+  const controller = new WorkbenchHarnessController([
+    createAdapter("codex"),
+  ], {
+    identities: {
+      resolve: async () => admitted ? identity : null,
+    } as never,
+    providers: {
+      get: () => ({
+        threads: {
+          read: async () => {
+            providerReads += 1;
+            admitted = true;
+            return {} as never;
+          },
+        },
+      }) as never,
+    },
+  });
+  const lookup = {
+    harness: "codex" as const,
+    projectId: fixtureIdentityValues.ProjectId["project"],
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
+  };
+
+  assert.equal(await controller.resolveThreadIdentity(lookup, { allowProviderAdmission: false }), null);
+  assert.equal(providerReads, 0);
+  assert.equal((await controller.resolveThreadIdentity(lookup))?.threadId, identity.threadId);
+  assert.equal(providerReads, 1);
 });

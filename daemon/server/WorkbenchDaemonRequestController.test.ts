@@ -299,6 +299,30 @@ test("thread lookup resolves native and WB inputs without publishing native bind
   }
 });
 
+test("thread lookup forwards whether provider identity admission is allowed", async () => {
+  const policies: boolean[] = [];
+  const { controller } = createController({
+    threadIdentity: {
+      resolve: async (_input, options?: { allowProviderAdmission?: boolean }) => {
+        policies.push(options?.allowProviderAdmission ?? true);
+        return null;
+      },
+    },
+  });
+
+  assert.deepEqual(await controller.handle({
+    id: 1,
+    method: "thread/identity/resolve",
+    params: { threadId: "default-provider-admission" },
+  }), { id: 1, result: { data: null } });
+  assert.deepEqual(await controller.handle({
+    id: 2,
+    method: "thread/identity/resolve",
+    params: { allowProviderAdmission: false, threadId: "durable-only" },
+  }), { id: 2, result: { data: null } });
+  assert.deepEqual(policies, [true, false]);
+});
+
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
   const { controller, fileWrites } = createController();
   const invalid = await controller.handle({

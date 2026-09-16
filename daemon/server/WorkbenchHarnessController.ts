@@ -180,10 +180,14 @@ export default class WorkbenchHarnessController {
     return this.identities ? mapWorkbenchProviderRequest(this.identities, harness, request) : { harness, request };
   }
 
-  async resolveThreadIdentity(input: WorkbenchThreadIdentityLookup) {
+  async resolveThreadIdentity(
+    input: WorkbenchThreadIdentityLookup,
+    { allowProviderAdmission = true }: { allowProviderAdmission?: boolean } = {},
+  ) {
     if (!this.identities) throw new Error("Thread identity resolution is unavailable.");
     const known = await this.identities.resolve(input);
     if (known) return known;
+    if (!allowProviderAdmission) return null;
     const harness = this.resolveHarness(input.harness, { defaultToCodex: true });
     await this.provider(harness).threads.read(input.threadId);
     return await this.identities.resolve(input);

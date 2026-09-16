@@ -44,7 +44,7 @@ import type WorkbenchNativeFileController from "./WorkbenchNativeFileController"
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -208,7 +208,7 @@ export default class WorkbenchDaemonRequestController {
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
-    threadIdentity: Pick<WorkbenchThreadIdentityController, "resolve">;
+    threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
     questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
   }) {}
 
@@ -256,7 +256,8 @@ export default class WorkbenchDaemonRequestController {
         case "thread/identity/resolve": {
           const parsed = WorkbenchThreadIdentityResolveRequestSchema.safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid thread identity lookup.");
-          const identity = await this.owners.threadIdentity.resolve(parsed.data);
+          const { allowProviderAdmission, ...lookup } = parsed.data;
+          const identity = await this.owners.threadIdentity.resolve(lookup, { allowProviderAdmission });
           result = { data: identity ? WorkbenchThreadIdentityResolutionSchema.parse({
             threadId: identity.threadId,
             projectId: identity.projectId,

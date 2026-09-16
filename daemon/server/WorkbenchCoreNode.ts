@@ -315,7 +315,7 @@ function createWorkbenchCoreFeature(
     search,
     settings: new WorkbenchServerSettings(),
     stats,
-    threadIdentity: { resolve: (input) => harnesses.resolveThreadIdentity(input) },
+    threadIdentity: { resolve: (input, options) => harnesses.resolveThreadIdentity(input, options) },
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
   const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({

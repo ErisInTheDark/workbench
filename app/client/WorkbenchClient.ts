@@ -1029,7 +1029,11 @@ export async function WorkbenchClient(
         const references = new Set(workbenchBindings.clientStateController?.getSnapshot().records.flatMap((record) => (
           (record.kind === "composerDraft" || record.kind === "questionnaireDraft") && record.projectId === projectId ? [record.threadId] : []
         )));
-        const resolvedDrafts = await Promise.allSettled([...references].map((threadId) => threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: projectId || undefined })));
+        const resolvedDrafts = await Promise.allSettled([...references].map((threadId) => threadIdentity.resolve({
+          allowProviderAdmission: false,
+          threadId: ThreadReferenceSchema.parse(threadId),
+          projectId: projectId || undefined,
+        })));
         if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
         if (resolvedDrafts.some((result) => result.status === "rejected")) {
           reportStatusMessage("Some saved draft identities could not be resolved. Their stored drafts remain unchanged.");
