@@ -1267,8 +1267,15 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   [data-thread-scroll-target="true"] {
     --thread-scroll-inline-padding: 1.25rem;
     --thread-scroll-snap-distance: var(--thread-scroll-near-end-distance);
-    overflow-anchor: none;
     scroll-snap-type: none;
+  }
+
+  [data-thread-scroll-target="true"] > [data-thread-scroll-content="true"] {
+    overflow-anchor: none;
+  }
+
+  [data-thread-scroll-target="true"] > [data-thread-scroll-anchor="true"] {
+    overflow-anchor: auto;
   }
 
   [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {

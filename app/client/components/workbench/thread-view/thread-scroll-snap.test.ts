@@ -11,7 +11,6 @@ import {
   getPreservedThreadScrollTop,
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
-  resolveThreadEndFollowing,
   resolveThreadScrollProximity,
 } from "./thread-scroll-snap";
 
@@ -40,13 +39,6 @@ test("thread scroll proximity becomes near only inside the bottom threshold", ()
   assert.equal(resolveThreadScrollProximity(metrics, 480), "near");
   assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 720 }, 480), "far");
   assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 719 }, 480), "far");
-});
-
-test("thread end following arms near the bottom and releases only on upward movement", () => {
-  assert.equal(resolveThreadEndFollowing(false, "down", "far"), false);
-  assert.equal(resolveThreadEndFollowing(false, "down", "near"), true);
-  assert.equal(resolveThreadEndFollowing(true, "down", "far"), true);
-  assert.equal(resolveThreadEndFollowing(true, "up", "near"), false);
 });
 
 test("thread end detection uses the normal top-origin boundary", () => {

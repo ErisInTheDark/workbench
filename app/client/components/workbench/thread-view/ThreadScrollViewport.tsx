@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping and off-screen layout preservation.
+ * - default ThreadScrollViewport: own native end anchoring, normal-flow snapping, and off-screen layout preservation.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -21,10 +21,8 @@ import {
   didThreadScrollReattach,
   isThreadScrollAtEnd,
   getPreservedThreadScrollTop,
-  resolveThreadEndFollowing,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
-  THREAD_COARSE_POINTER_MEDIA_QUERY,
   type ThreadScrollDirection,
   type ThreadScrollMetrics,
   type ThreadScrollProximity,
@@ -89,13 +87,11 @@ function ActiveThreadScrollViewport ({
 }: ActiveThreadScrollViewportProps) {
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
-  const endFollowingRef = useRef(true);
   const initialPlacementPendingRef = useRef(true);
   const nearEndDistancePxRef = useRef(0);
   const pointerScrollActiveRef = useRef(false);
   const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
-  const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
@@ -125,7 +121,6 @@ function ActiveThreadScrollViewport ({
     if (scrollTop === null) return;
     viewport.scrollTop = scrollTop;
     previousScrollTopRef.current = viewport.scrollTop;
-    endFollowingRef.current = true;
     syncScrollProximity(viewport);
     initialPlacementPendingRef.current = false;
   }, [syncScrollProximity]);
@@ -169,10 +164,7 @@ function ActiveThreadScrollViewport ({
 
   useEffect(() => {
     const viewport = viewportRef.current;
-    const content = contentRef.current;
     if (!viewport) return;
-    // Coarse-touch WebKit needs managed growth following because active CSS snap suppresses momentum.
-    const managesEndFollowing = matchMedia(THREAD_COARSE_POINTER_MEDIA_QUERY).matches;
 
     const setScrollDirection = (direction: ThreadScrollDirection) => {
       if (direction === directionRef.current) return;
@@ -188,14 +180,7 @@ function ActiveThreadScrollViewport ({
       ));
       pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = viewport.scrollTop;
-      const proximity = syncScrollProximity(viewport);
-      if (managesEndFollowing) {
-        endFollowingRef.current = resolveThreadEndFollowing(
-          endFollowingRef.current,
-          directionRef.current,
-          proximity,
-        );
-      }
+      syncScrollProximity(viewport);
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
@@ -226,15 +211,6 @@ function ActiveThreadScrollViewport ({
       pointerScrollMovedRef.current = false;
     };
 
-    const contentResizeObserver = managesEndFollowing && content
-      ? new ResizeObserver(() => {
-        if (!endFollowingRef.current || viewportRef.current !== viewport) return;
-        viewport.scrollTop = viewport.scrollHeight;
-        previousScrollTopRef.current = viewport.scrollTop;
-        syncScrollProximity(viewport);
-      })
-      : null;
-    if (content && contentResizeObserver) contentResizeObserver.observe(content);
     viewport.addEventListener("keydown", handleKeyDown);
     viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
     viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
@@ -243,7 +219,6 @@ function ActiveThreadScrollViewport ({
     viewport.ownerDocument.addEventListener("pointercancel", handlePointerEnd, { passive: true });
     viewport.ownerDocument.addEventListener("pointerup", handlePointerEnd, { passive: true });
     return () => {
-      contentResizeObserver?.disconnect();
       pointerScrollActiveRef.current = false;
       pointerScrollMovedRef.current = false;
       viewport.removeEventListener("keydown", handleKeyDown);
@@ -269,9 +244,17 @@ function ActiveThreadScrollViewport ({
       style={THREAD_SCROLL_VIEWPORT_STYLE}
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
-        <div ref={contentRef} className={joinClasses("min-h-full shrink-0", contentClassName)}>
+        <div
+          className={joinClasses("min-h-full shrink-0", contentClassName)}
+          data-thread-scroll-content="true"
+        >
           {children}
         </div>
+        <div
+          aria-hidden="true"
+          className="h-px shrink-0"
+          data-thread-scroll-anchor="true"
+        />
       </ThreadScrollViewportContext.Provider>
     </div>
   );
