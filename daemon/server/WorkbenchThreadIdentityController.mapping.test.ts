@@ -26,7 +26,7 @@ import {
   admitCodexTranscriptObservations as admitNativeTranscriptObservations,
   mapCodexTranscriptObservation as mapNativeTranscriptObservation,
 } from "./CodexProviderObservations";
-import { createNativeQuestionnaireStatePorts, mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import { createWorkbenchQuestionnaireStatePorts, mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
@@ -251,7 +251,7 @@ test("Git arc mutations and state callbacks share the canonical Workbench owner"
   }
 });
 
-test("native questionnaire ports resolve, publish, clear and observe the canonical thread", async () => {
+test("questionnaire ports retain WB identities through resolve, publication, clearing and observation", async () => {
   const { database, owners, native, parent, turn } = await setup();
   const questionnaire = {
     itemId: randomUUID(), turnId: turn.turnId, requestKey: "question",
@@ -273,7 +273,7 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
   };
   new WorkbenchThreadStateRelationalRepository(database).writeRecords([{ ...storedEntry, pendingQuestionnaire: null }]);
   const questionnaires = new WorkbenchThreadStateQuestionnaireRepository(database);
-  const ports = createNativeQuestionnaireStatePorts(owners, {
+  const ports = createWorkbenchQuestionnaireStatePorts(owners, {
     getCanonicalThreadEntry: async () => storedEntry,
     setPendingQuestionnaire: async (_projectId, threadId, questionnaire) => {
       questionnaires.replace(threadId, { pending: questionnaire, history: [] });
@@ -288,34 +288,34 @@ test("native questionnaire ports resolve, publish, clear and observe the canonic
     subscribe: callback => { listener = callback; return () => { listener = undefined; return true; }; },
   }, async () => parent.projectId);
   try {
-    const resolved = await ports.resolveThread(native.nativeLocation, native.nativeThreadId);
-    assert.equal(resolved.turnId, native.nativeTurnId);
-    assert.equal(resolved.pendingQuestionnaire?.turnId, native.nativeTurnId);
+    const resolved = await ports.resolveThread(native.nativeLocation, parent.threadId);
+    assert.equal(resolved.turnId, turn.turnId);
+    assert.equal(resolved.pendingQuestionnaire?.turnId, turn.turnId);
     assert.equal(resolved.pendingQuestionnaire?.itemId, questionnaire.itemId);
-    await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
+    await ports.publishPending(parent.threadId, questionnaire);
     assert.equal(observed[0]?.threadId, parent.threadId);
     const pending = observed[0]?.questionnaire;
     assert.ok(pending);
     assert.equal(pending.turnId, turn.turnId);
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
-    await ports.publishPending(native.nativeThreadId, { ...questionnaire, turnId: native.nativeTurnId });
+    await ports.publishPending(parent.threadId, questionnaire);
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM workbench_transcript_item_identities WHERE id = ?")
       .get(questionnaire.itemId) as { count: number }).count, 1);
     const published = observed.length;
     owners.items.admit = async () => { throw new Error("item admission failed"); };
-    await assert.rejects(ports.publishPending(native.nativeThreadId, {
-      ...questionnaire, itemId: randomUUID(), turnId: native.nativeTurnId,
+    await assert.rejects(ports.publishPending(parent.threadId, {
+      ...questionnaire, itemId: randomUUID(),
     }), /item admission failed/);
     assert.equal(observed.length, published);
     assert.equal(questionnaires.read(parent.threadId).pending?.itemId, questionnaire.itemId);
-    await ports.clearPending(native.nativeThreadId, questionnaire.requestKey);
+    await ports.clearPending(parent.threadId, questionnaire.requestKey);
     assert.equal(observed.at(-1)?.threadId, parent.threadId);
     assert.equal(questionnaires.read(parent.threadId).pending, null);
     const notices: Array<{ threadId: string; requestKey: string | null }> = [];
     const stop = ports.subscribePending(notice => notices.push(notice));
     listener?.(parent.projectId, entry);
-    assert.equal(notices[0]?.threadId, native.nativeThreadId);
+    assert.equal(notices[0]?.threadId, parent.threadId);
     assert.equal(notices[0]?.requestKey, questionnaire.requestKey);
     stop();
   } finally {

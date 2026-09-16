@@ -315,7 +315,7 @@ export async function WorkbenchClient(
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
   const threadIdentity = new ThreadIdentityController(async (request) => {
-    const { data } = await daemon.request("thread/identity/resolve", request);
+    const { data } = await daemon.threads.resolveIdentity(request);
     if (data) workbenchBindings.clientStateController?.rememberThreadIdentityAlias(data.projectId, request.threadId, data.threadId);
     return data;
   });
@@ -329,7 +329,7 @@ export async function WorkbenchClient(
     transport: {
       createEntry: async (projectId, parentPath, name, type) => WorkbenchCreateEntryResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/entry/create", { name, parentPath, projectId, type })),
       deleteFile: async (projectId, filePath, options) => WorkbenchDeleteFileResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/file/delete", { confirmUntracked: options.confirmUntracked, path: filePath, projectId })),
-      readCatalog: async () => await daemon.request("project/catalog/read", {}),
+      readCatalog: async () => await daemon.projects.catalog(),
       refresh: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/project/refresh", { projectId }); },
     },
   });
@@ -1175,9 +1175,9 @@ export async function WorkbenchClient(
         },
         draftStore,
         fileTransport: {
-          read: async (projectId, path) => await daemon.request("project/file/read", { path, projectId }),
-          reset: async (projectId, path, expectedMtimeMs, force) => await daemon.request("project/file/reset", { expectedMtimeMs, force, path, projectId }),
-          save: async (projectId, path, content, expectedMtimeMs, force) => await daemon.request("project/file/save", { content, expectedMtimeMs, force, path, projectId }),
+          read: async (projectId, path) => await daemon.projects.files.read({ path, projectId }),
+          reset: async (projectId, path, expectedMtimeMs, force) => await daemon.projects.files.reset({ expectedMtimeMs, force, path, projectId }),
+          save: async (projectId, path, content, expectedMtimeMs, force) => await daemon.projects.files.save({ content, expectedMtimeMs, force, path, projectId }),
         },
         emitExplorerStateChange,
         expandProjectPath: (filePath) => {

@@ -13,11 +13,30 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const local = get("codexConfiguration");
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
+    const network = get("codexSandboxNetwork");
+    const readNetwork = async (projectId: string) => ({
+      ...await network.read(projectId), label: "Codex sandbox network access",
+    });
     return {
       registrations: { codexProvider: {
         threads,
+        tools: get("codexTools"),
+        recovery: get("codexRecovery"),
+        browse: threads.browse,
         interactions: threads.interactions,
         configuration: {
+          sandboxNetwork: {
+            read: readNetwork,
+            update: async input => {
+              if (input.scope === "global") {
+                if (input.enabled === null) throw new Error("Global sandbox network access requires a boolean.");
+                await network.setGlobal(input.enabled);
+              } else {
+                await network.setProjectOverride(input.projectId, input.enabled);
+              }
+              return readNetwork(input.projectId);
+            },
+          },
           modelContext: local,
           models: { read: () => configuration.models(() => local.read()) },
           guidance: { contains: sections => local.containsGlobalGuidance(sections) },
@@ -36,7 +55,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload the Codex provider definition.",
   lifecycle: "atomic",
   provides: ["codexProvider"],
-  requires: ["codexConfiguration", "codexThreadOperations", "codexNativeConfiguration"],
+  requires: ["codexConfiguration", "codexSandboxNetwork", "codexThreadOperations", "codexNativeConfiguration", "codexTools", "codexRecovery"],
   safeAll: true,
   scope: "server:codex/def",
   sources: "daemon/server/CodexProvider.ts",

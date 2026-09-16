@@ -10,7 +10,7 @@ import type { WorkbenchUserInput } from "./provider-input.ts";
 export interface WorkbenchProviderInteractionResponse { warning?: string }
 
 export interface WorkbenchProviderInteractions {
-  pending(): Promise<WorkbenchPendingUserInputRequest[]>;
+  pending(options?: { background?: boolean }): Promise<WorkbenchPendingUserInputRequest[]>;
   interruptRetaining(input: { threadId: string; turnId: string | null; requestKey: string }, isCurrent: () => Promise<boolean>): Promise<boolean>;
   canDeliver(threadId: string, requestKey: string): Promise<boolean>;
   deliver(input: { threadId: string; requestKey: string; response: WorkbenchUserInputResponse }): Promise<boolean>;

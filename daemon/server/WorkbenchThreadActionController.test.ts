@@ -20,8 +20,9 @@ function fixture(providerWarning?: string) {
   let titleFailure = false;
   const provider: WorkbenchProvider = {
     threads: {
+      readLatest: unused, messageAgent: unused,
       latestTurn: unused, admitTurn: unused,
-      history: { questionnaires: unused, steers: unused, browse: unused },
+      history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
       create: unused, list: unused, read: unused, page: unused,
       submit: async input => { messages.push(input); return { kind: "steered", turnId: "wb-turn", ...(providerWarning ? { warning: providerWarning } : {}) }; },
       rename: unused, compact: unused,

@@ -15,6 +15,8 @@ import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from "workbench-shared/workbench/identity";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
@@ -22,6 +24,12 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   create: (context, build) => {
     const gitArc = build.get("gitArc");
     const harnesses = build.get("harnesses");
+    const providers = new WorkbenchProviderDispatcher(build.run);
+    const provider = (harness: string) => {
+      const key = installedProviderKeys.find(key => key === harness);
+      if (!key) throw new Error(`Provider ${harness} is not installed.`);
+      return providers.get(key);
+    };
     const projectCatalog = build.get("projectCatalog");
     const database = build.get("database");
     const stats = build.get("stats");
@@ -58,14 +66,9 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId) });
       const turn = turnId && identity ? await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(turnId) }) : null;
       const binding = turn?.native ?? identity?.bindings[0];
-      if (!binding || (turnId && !turn) || binding.harness !== "codex") throw new Error("Thread Recall has no matching native Codex execution.");
-      const response = await harnesses.request("codex", {
-        id: 0,
-        method: "workbench/thread-recall/materialize",
-        params: { threadId: binding.nativeThreadId, turnId: turn?.native.nativeTurnId ?? null },
-      });
+      if (!identity || !binding || (turnId && !turn)) throw new Error("Thread Recall has no matching provider execution.");
+      await provider(binding.harness).threads.history.materialize(identity.threadId, turn?.turnId ?? null, signal);
       signal.throwIfAborted();
-      if (response.error) throw new Error(response.error.message);
     };
     const threadRecall = new WorkbenchThreadRecallController({
       materializeTurn,
@@ -91,13 +94,15 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       },
     });
     const agentCommand = new WorkbenchAgentCommandController(context.localDaemonOrigin, {
-      checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
+      patchClaims: (harness, input, signal) => provider(harness).tools.patchClaims(
+        input, ({ cwd, harness, paths, threadId }) => gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths), signal,
+      ),
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
       executeQuestionnaireRequest: async (body, signal) => {
         const request = WorkbenchRequestUserInputCommandSchema.parse(body);
-        const { binding } = await nativeTarget(request.callerThreadId, request.cwd, "codex");
-        return Response.json(await questionnaires.request({ ...request, callerThreadId: binding.nativeThreadId }, signal));
+        const { identity } = await nativeTarget(request.callerThreadId, request.cwd);
+        return Response.json(await questionnaires.request({ ...request, callerThreadId: identity.threadId }, signal));
       },
       executeThreadGitRequest: async (body, signal) => {
         signal.throwIfAborted();
@@ -128,7 +133,9 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return { threadId: identity.threadId, nativeThreadId: binding.nativeThreadId, harness: WorkbenchHarnessSchema.parse(binding.harness) };
       },
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
-      requestCodex: async (request) => await harnesses.request("codex", request),
+      executeReadOnly: async (harness, request, signal) => {
+        return provider(harness).tools.executeReadOnly(request, signal);
+      },
       requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
         : await subagents.handleRequest(request),
@@ -152,7 +159,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/WorkbenchAgentCommandNode.ts",
     "daemon/server/WorkbenchAgentCommandController*.ts",
     "daemon/server/WorkbenchAgentCommandLogger*.ts",
-    "daemon/server/CodexCommandExecController*.ts",
     "daemon/server/WorkbenchRipgrepController*.ts",
     "daemon/server/WorkbenchTokenCountController*.ts",
     "daemon/server/WorkbenchClaimStatsController*.ts",

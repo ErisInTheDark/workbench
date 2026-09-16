@@ -12,7 +12,6 @@ import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeOptions, CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { CodexHealthMonitorOptions } from "./CodexHealthMonitor";
-import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
 import type { WorkbenchHardReloadOptions } from "./WorkbenchDaemonReloadController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -41,7 +40,6 @@ export interface DaemonProcessContext {
     resolveProjectById: WorkbenchBrowseProjectIdResolver;
     resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
   };
-  browseResultCallbacks: WorkbenchBrowseResultCallbacks;
   codexAppServerOptions: Omit<ConstructorParameters<typeof CodexAppServer>[0], "onFatalExit" | "onMessage">;
   codexBridgeUrl: string;
   codexHealthOptions: CodexHealthMonitorOptions;

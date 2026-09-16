@@ -10,7 +10,7 @@ import WorkbenchTranscriptIdentityRepository from "./database/transcript/Workben
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import { createNativeQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
+import { createWorkbenchQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
 import { admitNativeTranscriptObservations } from "./thread-identity-transcript-mapping";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -70,13 +70,13 @@ test("observation requests validate canonical ownership and outbound state needs
       clearPendingQuestionnaire: async () => entry,
       subscribe: () => () => true,
     };
-    const ports = createNativeQuestionnaireStatePorts(owners, questionnaireState, async cwd => (
+    const ports = createWorkbenchQuestionnaireStatePorts(owners, questionnaireState, async cwd => (
       cwd === "/repo" ? thread.projectId : fixtureIdentityValues.ProjectId.foreign
     ));
-    const admittedQuestionnaire = await ports.resolveThread("/repo", native.nativeThreadId);
+    const admittedQuestionnaire = await ports.resolveThread("/repo", thread.threadId);
     assert.equal(admittedQuestionnaire.projectId, thread.projectId);
     assert.equal(admittedQuestionnaire.turnId, null);
-    await assert.rejects(ports.resolveThread("/foreign", native.nativeThreadId));
+    await assert.rejects(ports.resolveThread("/foreign", thread.threadId));
     const [question] = await items.admit([{ threadId: thread.threadId, sources: [], legacyAliases: [] }]);
     const source: WorkbenchThreadObservationSnapshot = {
       projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",

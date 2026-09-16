@@ -1,17 +1,18 @@
 /*
  * Exports:
- * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection. Keywords: subagent, questionnaire, empty response.
- * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: produce native wait stdout for paused and settled subagent turns. Keywords: subagent, wait, commentary, final.
- * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output. Keywords: subagent, multiplex, wait, output.
+ * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection.
+ * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns.
+ * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output.
+ * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and settlement receipts.
  */
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 
 export function createEmptySubagentQuestionnaireResponse(request: WorkbenchUserInputRequest): WorkbenchUserInputResponse {
   return { answers: Object.fromEntries(request.questions.map((question) => [question.id, { answers: [] }])) };
 }
 
-function trailingCommentary(thread: Thread) {
+function trailingCommentary(thread: { turns: Turn[] }) {
   const items = thread.turns.at(-1)?.items ?? [];
   const messages: string[] = [];
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -30,11 +31,11 @@ function renderQuestion(request: WorkbenchUserInputRequest) {
   }).join("\n\n");
 }
 
-export function renderSubagentQuestionnaireOutput(thread: Thread, request: WorkbenchUserInputRequest) {
+export function renderSubagentQuestionnaireOutput(thread: { turns: Turn[] }, request: WorkbenchUserInputRequest) {
   return [trailingCommentary(thread), renderQuestion(request)].filter(Boolean).join("\n\n");
 }
 
-export function renderSubagentTurnOutput(thread: Thread) {
+export function renderSubagentTurnOutput(thread: { turns: Turn[] }) {
   const messages = (thread.turns.at(-1)?.items ?? []).filter((item): item is Extract<typeof item, { type: "agentMessage" }> => (
     item.type === "agentMessage" && Boolean(item.text.trim())
   ));

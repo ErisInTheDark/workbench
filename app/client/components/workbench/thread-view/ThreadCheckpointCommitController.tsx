@@ -192,8 +192,7 @@ function ThreadCheckpointCommitController({
     if (!proposalId) return;
     setState((current) => current.status === "loaded" ? current : { status: "pending" });
     try {
-      const proposal = await daemon.requestGitArc(
-        "git/arc/proposal/read",
+      const proposal = await daemon.git.arc.proposal.read(
         { cwd, harness, includeNewer, includeUnclaimed, proposalId, threadId },
       );
       if (signal?.aborted) return;
@@ -254,8 +253,7 @@ function ThreadCheckpointCommitController({
     if (!proposalId || !title.trim() || committing) return;
     setCommitting(true);
     try {
-      const proposal = await daemon.requestGitArc(
-        "git/arc/proposal/commit",
+      const proposal = await daemon.git.arc.proposal.commit(
         {
           cwd,
           description,

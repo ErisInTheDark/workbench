@@ -6,13 +6,12 @@
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
-import { createNativeQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
+import { ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexHealthMonitor from "./CodexHealthMonitor";
@@ -50,7 +49,7 @@ import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
-import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import type CodexRecoveryController from "./CodexRecoveryController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
@@ -61,17 +60,18 @@ function createModules(): DaemonReloadableModules {
 
 function createRecoveryCapability(
   harness: string,
-  controller: WorkbenchTurnRecoveryController,
+  controller: CodexRecoveryController,
 ): WorkbenchHarnessAdapter["recovery"] {
   return {
     kind: "turn",
     observeNotification: (notification) => controller.observeNotification(harness, notification),
     observeRequest: (request) => controller.observeRequest(harness, request),
     resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
+    completeObservedTurn: (notification, lifecycle) => controller.completeObservedTurn(harness, notification, lifecycle),
   };
 }
 
-function createHarnessAdapters(context: DaemonProcessContext, controller: WorkbenchTurnRecoveryController): WorkbenchHarnessAdapter[] {
+function createHarnessAdapters(context: DaemonProcessContext, controller: CodexRecoveryController): WorkbenchHarnessAdapter[] {
   const ports = context.harnessPorts;
   return [
     {
@@ -95,9 +95,8 @@ function createWorkbenchCoreFeature(
   run: ReloadableNodeBuild<DaemonRuntimeObjects>["run"],
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
-  turnRecovery: WorkbenchTurnRecoveryController,
+  turnRecovery: CodexRecoveryController,
   database: DaemonDatabaseRegistration,
-  codexSandboxNetwork: DaemonRuntimeObjects["codexSandboxNetwork"],
   transcript: Pick<DaemonTranscriptRegistration, "read">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
@@ -217,21 +216,11 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   const subagents = new WorkbenchSubagentFeature({
-    bridgeUrl: context.codexBridgeUrl,
-    identities: { threads: threadIdentity, items: transcriptIdentity },
-    requestNativeHarness: async (harness, request) => {
-      const response = await harnesses.request(harness, request);
-      if (!response.error && response.result && typeof response.result === "object") {
-        const result = response.result as { thread?: Thread; turn?: Turn };
-        if (result.thread) await harnesses.admitThreads(harness, [result.thread]);
-        if (result.turn && request.params && typeof request.params === "object" && "threadId" in request.params
-          && typeof request.params.threadId === "string") {
-          await harnesses.admitNotifications(harness, NativeThreadIdSchema.parse(request.params.threadId), [{
-            method: "turn/started", params: { threadId: request.params.threadId, turn: result.turn },
-          }]);
-        }
-      }
-      return response;
+    identities: threadIdentity,
+    provider: harness => {
+      const key = installedProviderKeys.find(key => key === harness);
+      if (!key) throw new Error(`Provider ${harness} is unavailable.`);
+      return providers.get(key);
     },
     onRelationshipCommitted: (record) => requireThreadState().installSubagentRelationship(record),
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
@@ -267,7 +256,7 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   const questionnaires = new WorkbenchQuestionnaireController({
-    ...createNativeQuestionnaireStatePorts({ threads: threadIdentity, items: transcriptIdentity }, threadState.controller, async cwd => {
+    ...createWorkbenchQuestionnaireStatePorts({ threads: threadIdentity, items: transcriptIdentity }, threadState.controller, async cwd => {
       const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
       return ProjectIdSchema.parse(resolved.project.id);
     }),
@@ -301,7 +290,6 @@ function createWorkbenchCoreFeature(
       (projectId) => projectCatalog.resolveProjectById(projectId),
       sections => providers.get("codex").configuration.guidance.contains(sections),
     ),
-    codexSandboxNetwork,
     files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),
@@ -380,7 +368,7 @@ function createWorkbenchCoreFeature(
     },
     observeProviderNotification: async ({ harness, notification, observation: facts }) => {
       if (!lease.isCurrent()) {
-        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        await harnesses.completeObservedTurn(harness, notification, null);
         return;
       }
       stats.observeProviderNotification(harness, facts);
@@ -388,31 +376,14 @@ function createWorkbenchCoreFeature(
       try {
         observation = await threadState!.observeProviderNotification(harness, facts);
       } catch (error) {
-        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        await harnesses.completeObservedTurn(harness, notification, null);
         throw error;
       }
       if (!lease.isCurrent()) {
-        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        await harnesses.completeObservedTurn(harness, notification, null);
         return;
       }
-      await turnRecovery.completeObservedTurn(harness, notification, observation?.lifecycle ?? null, async (candidate, request) => {
-        if (candidate.harness === "codex") {
-          if (!candidate.resumeRequest) throw new Error("The unfinished Codex turn has no captured thread/resume request.");
-          const response = await harnesses.request("codex", {
-            id: `unfinished-admit:${candidate.recoveryId}`,
-            method: "workbench/codex/message/admit",
-            params: {
-              resumeRequest: candidate.resumeRequest,
-              startRequest: request,
-              threadId: candidate.threadId,
-            },
-          });
-          if (response.error) throw new Error(response.error.message);
-          return;
-        }
-        const response = await harnesses.request(candidate.harness, request);
-        if (response.error) throw new Error(response.error.message);
-      });
+      await harnesses.completeObservedTurn(harness, notification, observation?.lifecycle ?? null);
     },
     registrations,
     start: async (reportPhase) => {
@@ -440,9 +411,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     run,
     lease,
     get("reloadDirt"),
-    get("turnRecovery"),
+    get("codexRecovery"),
     get("database"),
-    get("codexSandboxNetwork"),
     get("transcript"),
     get("threadIdentity"),
     get("transcriptIdentity"),
@@ -451,7 +421,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["codexSandboxNetwork", "database", "reloadDirt", "turnRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "reloadDirt", "codexRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:core",
   sources: [

@@ -118,6 +118,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
   const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
   const provider: WorkbenchProvider = {
     threads: operations, interactions: operations.interactions,
+    recovery: { refresh: threadId => options.harnesses.resumeThread("codex", threadId) },
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const feature = new WorkbenchThreadStateFeature({
@@ -1470,7 +1471,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     id: 2,
     result: { accepted: true, threadId: "thread-one", turnId: "turn-one" },
   });
-  assert.deepEqual(resumes, [{ harness: "codex", threadId: "native:thread-one" }]);
+  assert.deepEqual(resumes, [{ harness: "codex", threadId: "thread-one" }]);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });

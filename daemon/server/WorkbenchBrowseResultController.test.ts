@@ -5,11 +5,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
-import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent } from "./lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
-import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
+type ThreadReadResponse = { thread: Pick<ThreadPayload, "turns"> };
 
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
@@ -24,33 +23,6 @@ function createThreadResponse(
 ): ThreadReadResponse {
   return {
     thread: {
-      agentNickname: null,
-      agentRole: null,
-      canAcceptDirectInput: null,
-      cliVersion: "test",
-      createdAt: 0,
-      cwd: "C:/workspace",
-      ephemeral: false,
-      extra: null,
-      forkedFromId: null,
-      gitInfo: null,
-      historyMode: "legacy",
-      id: threadId,
-      modelProvider: "test",
-      model: null,
-      projectId: null,
-      reasoningEffort: null,
-      name: null,
-      parentThreadId: null,
-      path: null,
-      preview: "",
-      recencyAt: null,
-      section: null,
-      sectionEnteredAt: null,
-      sessionId: "session-1",
-      source: "appServer",
-      status: { activeFlags: [], type: "active" },
-      threadSource: null,
       turns: [{
         completedAt: null,
         durationMs: null,
@@ -61,7 +33,6 @@ function createThreadResponse(
         startedAt: 0,
         status: "inProgress",
       }],
-      updatedAt: 0,
     },
   };
 }
@@ -91,7 +62,7 @@ test("expired enrichment cannot write or steer after rollback resumes the owner"
     logError: () => {},
     readThread: async () => { entered.resolve(); return await read.promise; },
     recordResult: async entry => { writes.push(entry); },
-    steerTurn: async () => { steers++; return "turn"; },
+    screenshot: async () => { steers++; return { kind: "steered", turnId: "turn" }; },
   });
   const capture = controller.captureOrigin("thread-1");
   const captureRejected = assert.rejects(capture, /retired/);
@@ -118,7 +89,7 @@ test("expiry retains the barrier for a result write that has already started", a
     logError: () => {},
     readThread: async () => createThreadResponse("thread-1", "turn"),
     recordResult: async () => { writing.resolve(); await release.promise; },
-    steerTurn: async () => null,
+    screenshot: async () => { throw new Error("Unexpected screenshot"); },
   });
   controller.record(createEvent("issued"), await controller.captureOrigin("thread-1"));
   await writing.promise;
@@ -139,7 +110,7 @@ test("records one thread's deferred results in emission order", async () => {
     logError: () => undefined,
     readThread: async () => createThreadResponse("thread-1", "turn-1"),
     recordResult: async (entry) => { await writeGate.promise; recorded.push(entry); },
-    steerTurn: async () => null,
+    screenshot: async () => { throw new Error("Unexpected screenshot"); },
   });
 
   const origin = await controller.captureOrigin("thread-1");
@@ -174,7 +145,7 @@ test("attaches Browse sidecars to the active wbex MCP Browse item", async () => 
     logError: () => undefined,
     readThread: async () => response,
     recordResult: async (entry) => { recorded.push(entry); },
-    steerTurn: async () => null,
+    screenshot: async () => { throw new Error("Unexpected screenshot"); },
   });
 
   controller.record(createEvent("snapshot"), await controller.captureOrigin("thread-1"));
@@ -190,7 +161,7 @@ test("logs background metadata failures without rejecting Browse execution", asy
     logError: (message) => { errors.push(message); },
     readThread: async () => { throw new Error("thread unavailable"); },
     recordResult: async () => undefined,
-    steerTurn: async () => null,
+    screenshot: async () => { throw new Error("Unexpected screenshot"); },
   });
 
   controller.record(createEvent("status"), await controller.captureOrigin("thread-1"));
@@ -205,7 +176,7 @@ test("delayed results keep their originating command after a newer turn starts",
     logError: assert.fail,
     readThread: async () => createThreadResponse("thread-1", "new-turn"),
     recordResult: async entry => { recorded.push(entry); },
-    steerTurn: async () => null,
+    screenshot: async () => { throw new Error("Unexpected screenshot"); },
   });
   controller.record(createEvent("click"), {
     commandItemId: "original-command", harness: "codex", turnId: "original-turn",
@@ -215,20 +186,15 @@ test("delayed results keep their originating command after a newer turn starts",
   assert.equal(recorded[0]?.commandItemId, "original-command");
 });
 
-test("screenshot delivery resolves canonical turn references before native injection", async () => {
+test("screenshot delivery keeps canonical turn references at the provider boundary", async () => {
   const controller = new WorkbenchBrowseResultController({
     listHarnesses: () => ["codex"],
     logError: assert.fail,
     readThread: async () => createThreadResponse("thread-1", "public-turn"),
-    resolveNativeTurnId: async (harness, threadId, turnId) => {
-      assert.deepEqual([harness, threadId, turnId], ["codex", "thread-1", "public-turn"]);
-      return "native-turn";
-    },
     recordResult: async () => {},
-    steerTurn: async () => { throw new Error("Unexpected steer"); },
-    injectToolContext: async request => {
-      assert.equal(request.expectedTurnId, "native-turn");
-      return { acceptedAt: 1, itemId: "image", turnId: "native-turn" };
+    screenshot: async (harness, request) => {
+      assert.deepEqual([harness, request.threadId, request.turnId], ["codex", "thread-1", "public-turn"]);
+      return { kind: "injected", acceptedAt: 1, turnId: "public-turn" };
     },
   });
   await controller.deliverScreenshot("thread-1", "image");
@@ -241,9 +207,9 @@ test("resolves non-codex screenshot steering behind the thread-owned boundary", 
     logError: () => undefined,
     readThread: async () => createThreadResponse("thread-1", "turn-1"),
     recordResult: async () => undefined,
-    steerTurn: async (_harness, threadId, turnId) => {
+    screenshot: async (_harness, { threadId, turnId }) => {
       steers.push(`${threadId}:${turnId}`);
-      return "turn-2";
+      return { kind: "steered", turnId: "turn-2" };
     },
   });
 
@@ -251,26 +217,22 @@ test("resolves non-codex screenshot steering behind the thread-owned boundary", 
   assert.deepEqual(steers, ["thread-1:turn-1"]);
 });
 
-test("codex screenshots use passive context and return queue acceptance, not a steer", async () => {
+test("provider screenshot delivery preserves passive acceptance without provider-name branching", async () => {
   const delivered: object[] = [];
   const controller = new WorkbenchBrowseResultController({
-    listHarnesses: () => ["codex"],
+    listHarnesses: () => ["another-provider"],
     logError() {}, recordResult: async () => undefined,
     readThread: async () => createThreadResponse("thread-1", "turn-1"),
-    steerTurn: async () => { throw new Error("Codex screenshot must not steer."); },
-    injectToolContext: async (request) => {
+    screenshot: async (harness, request) => {
+      assert.equal(harness, "another-provider");
       delivered.push(request);
-      return { acceptedAt: 123, itemId: "image-output", turnId: "turn-1" };
+      return { kind: "injected", acceptedAt: 123, turnId: "turn-1" };
     },
   });
   const url = "data:image/png;base64,AA==";
   assert.deepEqual(await controller.deliverScreenshot("thread-1", url), { kind: "injected", acceptedAt: 123, turnId: "turn-1" });
   assert.deepEqual(delivered, [{
-    threadId: "thread-1", expectedTurnId: "turn-1",
-    toolOutput: { name: "screenshot", namespace: "workbench", output: [
-      { type: "input_text", text: createAgentScreenshotSteerText() },
-      { type: "input_image", image_url: url },
-    ] },
+    threadId: "thread-1", turnId: "turn-1", imageUrl: url,
   }]);
 });
 
@@ -282,13 +244,11 @@ test("screenshot delivery never wakes stopped targets and propagates injection f
     readThread: async () => {
       const response = createThreadResponse("thread-1", "turn-1");
       if (!active) {
-        response.thread.status = { type: "idle" };
         response.thread.turns[0].status = "completed";
       }
       return response;
     },
-    steerTurn: async () => { throw new Error("Unexpected steer."); },
-    injectToolContext: async () => { injections++; throw new Error("provider rejected injection"); },
+    screenshot: async () => { injections++; throw new Error("provider rejected injection"); },
   });
   await assert.rejects(controller.deliverScreenshot("thread-1", "image"), /no active turn/);
   assert.equal(injections, 0);

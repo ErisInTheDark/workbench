@@ -40,7 +40,7 @@ test("accepted Codex steers cancel the mapped Workbench thread wait before publi
   };
   const registrations = {
     codexAppServer: parent,
-    codexMcpGeneration: { bump() {} },
+    toolRevision: { revision: "catalogue" },
     threadIdentity: {
       knownNativeBinding: (_harness: string, threadId: string) => {
         assert.equal(threadId, nativeThreadId);
@@ -125,7 +125,7 @@ for (const mode of ["initial", "replacement"] as const) {
     };
     const registrations = {
       codexAppServer: parent,
-      codexMcpGeneration: { bump() {} },
+      toolRevision: { revision: "catalogue" },
       codexHealth: { start() {} },
       transcript: { pendingRecoveryThreadIds: Promise.resolve(["thread"]) },
     } as unknown as DaemonRuntimeObjects;

@@ -331,7 +331,7 @@ await new Promise((resolve, reject) => {
         && question.request.questions.some(question => question.id === questionId))!;
     };
     const answerQuestion = async (question: WorkbenchPendingUserInputRequest, proof: string, instructions?: string) =>
-      runtime.daemon.request("questionnaire/respond", {
+      runtime.daemon.threads.questionnaire.respond({
         projectId: project.id, threadId: threadId!, requestKey: question.requestKey,
         response: { answers: { [question.request.questions[0].id]: { answers: [proof] } } },
         ...(instructions ? { supplementalInput: [{ type: "text" as const, text: instructions, text_elements: [] }] } : {}),

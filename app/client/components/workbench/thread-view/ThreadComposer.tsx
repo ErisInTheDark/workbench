@@ -269,7 +269,7 @@ export default function ThreadComposer ({
     void composerProfileController.refreshProfiles();
   };
   const loadAvailableAgents = useCallback(() => profileEditor.loadAgents(async () => {
-    const payload = await daemon.request("agents/list", { projectId });
+    const payload = await daemon.agents.list({ projectId });
     return payload.data ?? [];
   }), [daemon, profileEditor, projectId]);
   const loadAvailableModels = useCallback((forceRefresh = false) => profileEditor.loadModels(

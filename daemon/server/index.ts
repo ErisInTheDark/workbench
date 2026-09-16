@@ -8,7 +8,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
     DaemonReloadResponse,
     DaemonReloadScope,
@@ -251,13 +251,6 @@ function createDaemonFeatureContext(): DaemonProcessContext {
     browseProjectResolvers: {
       resolveProjectById: (projectId) => featureHost.run("projectCatalog", (controller) => controller.resolveProjectById(projectId), "project catalog: browse project id"),
       resolveProjectFromCwd: (cwd, options) => featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options), "project catalog: browse cwd"),
-    },
-    browseResultCallbacks: {
-      listHarnesses: () => featureHost.get("harnesses").listHarnesses(),
-      logError: (message) => logError("browse-results", message),
-      readThread: async (harness, threadId) => await featureHost.get("harnesses").readThread(harness, NativeThreadIdSchema.parse(threadId)),
-      recordResult: async (entry) => await runAfterCodexBridgeReload((bridge) => bridge.recordBrowseResultForBrowse(entry)),
-      steerTurn: async (harness, threadId, expectedTurnId, input) => await featureHost.get("harnesses").steerTurn(harness, NativeThreadIdSchema.parse(threadId), NativeTurnIdSchema.parse(expectedTurnId), input),
     },
     codexAppServerOptions: {
       log,

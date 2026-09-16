@@ -71,7 +71,7 @@ export default function ThreadGitArcLifecycleCard({
     const controller = new AbortController();
     void (async () => {
       try {
-        const comparison = await daemon.requestGitArc("git/arc/compare", { cwd, harness, refs: [], roots: [], threadId });
+        const comparison = await daemon.git.arc.compare({ cwd, harness, refs: [], roots: [], threadId });
         setChangeState(getGitArcClaimReleaseAction(
           comparison.changes.length,
           comparison.hasUncommittedChanges,
@@ -94,7 +94,7 @@ export default function ThreadGitArcLifecycleCard({
     try {
       if (action === "restore" || action === "restoreAndUnclaim") {
         const confirmRestore = action === "restoreAndUnclaim";
-        await daemon.requestGitArc("git/arc/restore", memberRefs.length ? {
+        await daemon.git.arc.restore(memberRefs.length ? {
             confirmRestore,
             cwd,
             harness,
@@ -113,7 +113,7 @@ export default function ThreadGitArcLifecycleCard({
             threadId,
           });
       } else {
-        await daemon.requestGitArc("git/arc/release", {
+        await daemon.git.arc.release({
           cwd,
           disown: true,
           harness,

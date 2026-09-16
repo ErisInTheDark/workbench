@@ -14,6 +14,7 @@ import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thre
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 
 async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
   nativeQuestionnaireRequestKey?: string;
@@ -43,7 +44,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   };
   const operations = new CodexThreadOperations({
     identities: database.identities,
-    resolveProject: async () => { throw new Error("Known thread operations must not rediscover the project"); },
+    resolveProject: async () => ({ id: thread.projectId, rootPath: "C:/project" }),
     bridge,
     questionnaires: {
       canDeliver: (_threadId, requestKey) => requestKey === options.workbenchQuestionnaireRequestKey,
@@ -83,6 +84,84 @@ for (const fails of [false, true]) {
   });
 }
 
+test("subagent interruption preserves its goal policy while translating identities", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  await fixture.operations.interrupt(fixture.threadId, fixture.turnId, { preserveGoal: true });
+  assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+    { method: "turn/interrupt", params: { threadId: "native-thread", turnId: "native-turn" } },
+  ]);
+});
+
+test("Browse screenshots stay passive and records retain native storage references", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return request.method === "workbench/thread/inject-tool-context"
+      ? { acceptedAt: 123, itemId: "image-item", turnId: "native-turn" }
+      : { ok: true };
+  });
+  const imageUrl = "data:image/png;base64,AA==";
+  assert.deepEqual(await fixture.operations.browse.screenshot({
+    threadId: fixture.threadId, turnId: fixture.turnId, imageUrl,
+  }), { kind: "injected", acceptedAt: 123, turnId: fixture.turnId });
+  const injection = requests[0];
+  assert.equal(injection.method, "workbench/thread/inject-tool-context");
+  const params = injection.params as {
+    threadId: string; expectedTurnId: string; toolOutput: { output: { type: string; image_url?: string }[] };
+  };
+  assert.equal(params.threadId, "native-thread");
+  assert.equal(params.expectedTurnId, "native-turn");
+  assert.ok(params.toolOutput.output.some(part => part.type === "input_image" && part.image_url === imageUrl));
+  const entry = {
+    threadId: fixture.threadId, turnId: fixture.turnId, entryKey: "browse-entry", commandItemId: null,
+    action: "snapshot", actionIndex: 0, assetUrl: "/retained-asset", detailKind: "result" as const,
+    detailLabel: null, detailText: "snapshot", durationMs: 1, recordedAt: 123, session: "research", state: "completed" as const,
+  };
+  await fixture.operations.browse.record(entry);
+  assert.deepEqual(requests.map(request => request.method), [
+    "workbench/thread/inject-tool-context", "browse/result/record",
+  ]);
+  assert.deepEqual(requests[1].params, { ...entry, threadId: "native-thread", turnId: "native-turn" });
+});
+
+test("agent messages retain tool authority and WB attribution at the native admission edge", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  const message = { message: "continue the review", senderName: "iris", senderThreadId: "wb-parent" };
+  await fixture.operations.messageAgent({
+    threadId: fixture.threadId, cwd: "C:/project", message,
+    context: { subagentName: "lily", workflowIds: ["subagent"] },
+  });
+  const request = requests[0];
+  assert.equal(request.method, "turn/start");
+  const params = request.params as { threadId: string; input: object[]; toolOutput: { namespace: string; name: string; output: string } };
+  assert.equal(params.threadId, "native-thread");
+  assert.deepEqual(params.input, []);
+  assert.equal(params.toolOutput.namespace, "workbench");
+  assert.equal(params.toolOutput.name, "agent_message");
+  assert.deepEqual(readWorkbenchAgentMessageText(params.toolOutput.output), message);
+  assert.equal((request.workbenchPromptContext as { threadId: string }).threadId, fixture.threadId);
+});
+
+test("latest content reads stay bounded and metadata polls remain item-free", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return { thread: {
+      id: request.method === "thread/context/read" ? fixture.threadId : "native-thread", cwd: "C:/project", name: "thread", preview: "", source: "appServer",
+      status: { type: "idle" }, createdAt: 1, updatedAt: 2, turns: [], parentThreadId: null,
+    } };
+  });
+  await fixture.operations.read(fixture.threadId, { background: true });
+  assert.equal((await fixture.operations.readLatest(fixture.threadId)).id, fixture.threadId);
+  assert.equal(requests[0].workbenchRequestSource, "autoRefresh");
+  assert.deepEqual(requests[0].params, { threadId: "native-thread", includeTurns: false });
+  assert.equal(requests[1].method, "thread/context/read");
+  assert.deepEqual(requests[1].params, { threadId: "native-thread", includeTurns: false });
+  assert.deepEqual(requests[1].workbenchThreadHydration, { mode: "latest" });
+});
+
 test("materialisation sends native identifiers while compaction never starts a turn", async () => {
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => { requests.push(request); return {}; });
@@ -104,6 +183,21 @@ test("cancelled materialisation does not dispatch provider history work", async 
     /subscription replaced/,
   );
   assert.deepEqual(requests, []);
+});
+
+test("recall materialises catalogue or exact native turn without dispatch after cancellation", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  const cancellation = new AbortController();
+  await fixture.operations.history.materialize(fixture.threadId, null, cancellation.signal);
+  await fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal);
+  assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+    { method: "workbench/thread-recall/materialize", params: { threadId: "native-thread", turnId: null } },
+    { method: "workbench/thread-recall/materialize", params: { threadId: "native-thread", turnId: "native-turn" } },
+  ]);
+  cancellation.abort(new Error("recall cancelled"));
+  await assert.rejects(fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal), /recall cancelled/);
+  assert.equal(requests.length, 2);
 });
 
 test("questionnaire delivery derives liveness from native and Workbench wait owners", async () => {

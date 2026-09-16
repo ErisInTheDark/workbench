@@ -52,11 +52,11 @@ test("profile recency defaults for old servers and rejects malformed values", as
   const logged: string[] = [];
   context.mock.method(console, "error", (message: string) => { logged.push(message); });
   const legacy = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ profiles: [{ id: "profile" }] }) as TResponse });
-  assert.equal((await legacy.request("profiles/read", {})).profiles[0]?.lastUsedAt, null);
+  assert.equal((await legacy.profiles.read()).profiles[0]?.lastUsedAt, null);
   const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
     profiles: [{ id: "profile", lastUsedAt: "private-recency-marker" }],
   }) as TResponse });
-  await assert.rejects(malformed.request("profiles/read", {}), /response was invalid/);
+  await assert.rejects(malformed.profiles.read(), /response was invalid/);
   assert.ok(logged.length > 0);
   assert.ok(logged.every(message => message.length < 1200 && !message.includes("private-recency-marker")));
 });
@@ -66,9 +66,9 @@ test("model capabilities reject invalid bounds at the daemon response boundary",
   context.after(() => assert.equal(diagnostics.length, 1));
   const valid = { data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] };
   const client = new WorkbenchDaemonClient({ request: async <TResponse>() => valid as TResponse });
-  assert.deepEqual(await client.request("models/context/read", {}), valid);
+  assert.deepEqual(await client.models.context(), valid);
   const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ data: [{ model: "model", defaultTokens: 1000000, maximumTokens: 128000 }] }) as TResponse });
-  await assert.rejects(malformed.request("models/context/read", {}), /response was invalid/);
+  await assert.rejects(malformed.models.context(), /response was invalid/);
 });
 
 test("transport failures never fall back to app HTTP", async () => {
@@ -81,7 +81,7 @@ test("transport failures never fall back to app HTTP", async () => {
   try {
     const unavailable = new WorkbenchDaemonClient({ request: async () => { throw new Error("daemon disconnected"); } });
     await assert.rejects(
-      unavailable.request("local-capabilities/read", {}),
+      unavailable.localCapabilities.read(),
       /daemon disconnected/u,
     );
     assert.equal(fetches, 0);
@@ -90,7 +90,7 @@ test("transport failures never fall back to app HTTP", async () => {
       request: async () => { throw new WorkbenchDaemonRequestError("method not found", -32601); },
     });
     await assert.rejects(
-      missingMethod.request("local-capabilities/read", {}),
+      missingMethod.localCapabilities.read(),
       /method not found/u,
     );
     assert.equal(fetches, 0);
@@ -99,36 +99,38 @@ test("transport failures never fall back to app HTTP", async () => {
   }
 });
 
-test("Codex sandbox network responses require the complete server-owned settings snapshot", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected codex-sandbox-network/read response:"));
+test("sandbox network responses require the complete declared settings snapshot", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected sandbox-network/read response:"));
   context.after(() => assert.equal(diagnostics.length, 1));
   const snapshot = {
-    codexSandboxNetwork: {
+    data: [{
+      provider: "codex", label: "Sandbox network access",
       effectiveEnabled: false,
       globalEnabled: true,
       projectId: "project",
       projectOverride: false,
-    },
+    }],
   };
   const valid = new WorkbenchDaemonClient({
     request: async <TResponse>() => snapshot as TResponse,
   });
   assert.deepEqual(
-    await valid.request("codex-sandbox-network/read", { projectId: "project" }),
+    await valid.sandboxNetwork.read({ projectId: "project" }),
     snapshot,
   );
 
   const malformed = new WorkbenchDaemonClient({
     request: async <TResponse>() => ({
-      codexSandboxNetwork: {
+      data: [{
+        provider: "codex", label: "Sandbox network access",
         effectiveEnabled: true,
         globalEnabled: false,
         projectId: "project",
-      },
+      }],
     }) as TResponse,
   });
   await assert.rejects(
-    malformed.request("codex-sandbox-network/read", { projectId: "project" }),
+    malformed.sandboxNetwork.read({ projectId: "project" }),
     /response was invalid/u,
   );
 });
@@ -146,7 +148,7 @@ test("Git arc requests return exact domain results and preserve structured failu
     request: async <TResponse>() => comparison as TResponse,
   });
   assert.deepEqual(
-    await success.requestGitArc("git/arc/compare", {
+    await success.git.arc.compare({
       cwd: "C:/git/web/workbench",
       harness: "codex",
       refs: [],
@@ -168,7 +170,7 @@ test("Git arc requests return exact domain results and preserve structured failu
     },
   });
   await assert.rejects(
-    rejected.requestGitArc("git/arc/compare", {
+    rejected.git.arc.compare({
       cwd: "C:/git/web/workbench",
       harness: "codex",
       refs: [],
@@ -189,13 +191,13 @@ test("detailed stats retain category costs and reject malformed remote values wi
   });
   const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
   const valid = new WorkbenchDaemonClient({ request: async <TResponse>() => detailed as TResponse });
-  assert.deepEqual(await valid.request("stats/read/detailed", { projectId: null, range: "7d", tokenTypes: [] }), detailed);
+  assert.deepEqual(await valid.stats.detailed({ projectId: null, range: "7d", tokenTypes: [] }), detailed);
   const logged: string[] = [];
   context.mock.method(console, "error", (message: string) => { logged.push(message); });
   const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
     ...detailed, cost: { ...detailed.cost, byTokenType: { input: "private-payload-marker", cache: 0, output: 0 } },
   }) as TResponse });
-  await assert.rejects(malformed.request("stats/read/detailed", { projectId: null, range: "7d" }), /response was invalid/);
+  await assert.rejects(malformed.stats.detailed({ projectId: null, range: "7d" }), /response was invalid/);
   assert.ok(logged.length > 0);
   assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-payload-marker")));
   const cacheEfficiency = {
@@ -203,26 +205,26 @@ test("detailed stats retain category costs and reject malformed remote values wi
   };
   const enriched = { ...detailed, cacheEfficiency };
   const cacheClient = new WorkbenchDaemonClient({ request: async <TResponse>() => enriched as TResponse });
-  assert.deepEqual(await cacheClient.request("stats/read/efficiency", { projectId: null, range: "7d" }), enriched);
+  assert.deepEqual(await cacheClient.stats.efficiency({ projectId: null, range: "7d" }), enriched);
   const badCache = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
     ...enriched, cacheEfficiency: { ...cacheEfficiency, totals: { ...cacheEfficiency.totals, cacheHitPercent: "private-cache-marker" } },
   }) as TResponse });
   const previousLogs = logged.length;
-  await assert.rejects(badCache.request("stats/read/efficiency", { projectId: null, range: "7d" }), /response was invalid/);
+  await assert.rejects(badCache.stats.efficiency({ projectId: null, range: "7d" }), /response was invalid/);
   assert.ok(logged.length > previousLogs);
   assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-cache-marker")));
   const current = { ...enriched, cacheEfficiency: { ...cacheEfficiency,
     worstThreads: [{ ...cacheEfficiency.totals, projectId: "project", threadId: "thread", title: "Thread", cacheWriteInputTokens: 10 }],
   } };
   const currentClient = new WorkbenchDaemonClient({ request: async <TResponse>() => current as TResponse });
-  assert.deepEqual(await currentClient.request("stats/read/efficiency/v2", { projectId: null, range: "7d" }), current);
+  assert.deepEqual(await currentClient.stats.efficiencyV2({ projectId: null, range: "7d" }), current);
   const badWrites = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
     ...current, cacheEfficiency: { ...current.cacheEfficiency,
       worstThreads: [{ ...current.cacheEfficiency.worstThreads[0], cacheWriteInputTokens: "private-write-marker" }],
     },
   }) as TResponse });
   const beforeWriteLogs = logged.length;
-  await assert.rejects(badWrites.request("stats/read/efficiency/v2", { projectId: null, range: "7d" }), /response was invalid/);
+  await assert.rejects(badWrites.stats.efficiencyV2({ projectId: null, range: "7d" }), /response was invalid/);
   assert.ok(logged.length > beforeWriteLogs);
   assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-write-marker")));
 });
@@ -242,7 +244,7 @@ test("search responses require the complete discriminated result contract", asyn
   const valid = new WorkbenchDaemonClient({
     request: async <TResponse>() => response as TResponse,
   });
-  assert.deepEqual(await valid.request("search/query", { projectId: "", query: "home" }), response);
+  assert.deepEqual(await valid.search.query({ projectId: "", query: "home" }), response);
 
   const malformed = new WorkbenchDaemonClient({
     request: async <TResponse>() => ({
@@ -250,7 +252,7 @@ test("search responses require the complete discriminated result contract", asyn
     }) as TResponse,
   });
   await assert.rejects(
-    malformed.request("search/query", { projectId: "", query: "home" }),
+    malformed.search.query({ projectId: "", query: "home" }),
     /response was invalid/u,
   );
 });

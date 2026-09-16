@@ -1,16 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchRipgrepController: own safe ripgrep arguments and exit semantics above shared Codex command execution.
+ * - default WorkbenchRipgrepController: own safe ripgrep arguments and exit semantics above provider execution.
  */
 import { WorkbenchRipgrepExecutionRequestSchema } from "./lib/workbench/commands/ripgrep-command-definition";
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import CodexCommandExecController from "./CodexCommandExecController";
+import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 
 interface WorkbenchRipgrepControllerOptions {
-  commandExec?: Pick<CodexCommandExecController, "execute">;
-  createProcessId?: () => string;
-  reportError?: (message: string) => void;
-  requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  execute: (harness: string, ...args: Parameters<WorkbenchProviderTools["executeReadOnly"]>) => ReturnType<WorkbenchProviderTools["executeReadOnly"]>;
 }
 
 function combinedOutput(stdout: string, stderr: string) {
@@ -27,12 +23,7 @@ function forbiddenProcessArgument(argument: string) {
 }
 
 export default class WorkbenchRipgrepController {
-  private readonly commandExec: Pick<CodexCommandExecController, "execute">;
-
-  constructor({ commandExec, createProcessId, reportError, requestCodex }: WorkbenchRipgrepControllerOptions) {
-    if (!commandExec && !requestCodex) throw new Error("Codex command execution is not configured.");
-    this.commandExec = commandExec ?? new CodexCommandExecController({ createProcessId, reportError, requestCodex: requestCodex! });
-  }
+  constructor(private readonly options: WorkbenchRipgrepControllerOptions) {}
 
   async execute(input: object, signal: AbortSignal) {
     const request = WorkbenchRipgrepExecutionRequestSchema.safeParse(input);
@@ -43,12 +34,10 @@ export default class WorkbenchRipgrepController {
     if (signal.aborted) throw signal.reason;
 
     try {
-      const result = await this.commandExec.execute({
+      const result = await this.options.execute(request.data.harness, {
         command: ["rg", "--no-config", "--heading", ...request.data.args],
         cwd: request.data.cwd,
-        disableTimeout: true,
         env: { RIPGREP_CONFIG_PATH: null },
-        sandboxPolicy: { type: "dangerFullAccess" },
       }, signal);
       const output = combinedOutput(result.stdout, result.stderr);
       if (result.exitCode === 0 || result.exitCode === 1) return new Response(output);

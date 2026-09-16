@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { recoverCodexTurn } from "./codex-turn-recovery";
-import type { WorkbenchObservedTurnCandidate } from "./WorkbenchTurnRecoveryController";
+import type { CodexObservedTurnCandidate as WorkbenchObservedTurnCandidate } from "./CodexRecoveryController";
 
 function candidate(): WorkbenchObservedTurnCandidate {
   return {

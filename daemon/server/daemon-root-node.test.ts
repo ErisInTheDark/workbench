@@ -67,7 +67,6 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:turns",
     "server:database",
     "harness:codex",
-    "server:codex/configuration",
   ]);
   const { nodes, parents } = flattenParents(graph.roots);
 
@@ -78,6 +77,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:codex/configuration",
     "server:codex/def",
     "server:codex/instructions",
+    "server:codex/recovery",
+    "server:codex/tools",
     "server:commands",
     "server:core",
     "server:database",
@@ -87,10 +88,10 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:turns",
     "server:websocket",
   ]);
-  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:codex/recovery", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
-  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/instructions", "server:core", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex/instructions")!], ["server:database"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
@@ -103,14 +104,14 @@ test("the root knows only direct roots and parents declare every dependant", () 
     provides: nodes.get("server:turns")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["codexMcpGeneration", "reloadController", "reloadDirt", "turnRecovery"],
+    provides: ["toolRevision", "reloadController", "reloadDirt", "turnRecovery"],
   });
   assert.deepEqual({
     lifecycle: nodes.get("server:database")!.lifecycle,
     provides: nodes.get("server:database")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript"],
+    provides: ["database", "threadIdentity", "transcriptIdentity", "transcript"],
   });
   assert.deepEqual({
     lifecycle: nodes.get("server:codex/instructions")!.lifecycle,
@@ -133,7 +134,7 @@ test("every child requirement is registered by one of its direct parents", () =>
 
 test("provider configuration reload owns its definition without acquiring the harness", () => {
   const { parents } = flattenParents(graph.roots);
-  assert.equal(parents.has("server:codex/configuration"), false);
+  assert.deepEqual([...parents.get("server:codex/configuration")!], ["server:database"]);
   const { dependantClosure } = readReloadNodeSourceState();
   assert.deepEqual(dependantClosure(["server:codex/def"]), ["server:codex/def"]);
   const configurationClosure = dependantClosure(["server:codex/configuration"]);
@@ -178,7 +179,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   ]);
   assert.deepEqual(
     owners("daemon/server/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
-    ["server:database"],
+    ["server:codex/configuration", "server:database"],
   );
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
   assert.equal(descriptors.get("server:process")!.paths.includes("daemon/server/WorkbenchCoreNode.ts"), false);

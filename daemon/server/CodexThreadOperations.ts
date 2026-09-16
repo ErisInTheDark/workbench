@@ -29,6 +29,10 @@ import type CodexStdioBridge from "./CodexStdioBridge";
 import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
+import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 export interface CodexThreadOperationOwners {
   bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest">;
@@ -51,6 +55,22 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     return NativeThreadIdSchema.parse(record(mapped.request.params)?.threadId);
   }
 
+  private async workbenchThreadId(threadId: string) {
+    const thread = await this.owners.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+    if (!thread) throw new Error("The questionnaire thread has no admitted identity.");
+    return thread.threadId;
+  }
+
+  async resolvePatchCaller(threadId: string, cwd: string) {
+    const project = await this.owners.resolveProject(cwd);
+    const thread = await this.owners.identities.threads.resolve({
+      threadId: ThreadReferenceSchema.parse(threadId), harness: "codex", projectId: project.id,
+    });
+    const binding = thread?.bindings.find(binding => binding.harness === "codex");
+    if (!thread || !binding) throw new Error("The patch caller has no Codex execution in this project.");
+    return { threadId: thread.threadId, nativeThreadId: binding.nativeThreadId };
+  }
+
   private interactionResult(value: unknown) {
     const warning = record(value)?.warning;
     return typeof warning === "string" && warning.trim() ? { warning: warning.slice(0, 500) } : {};
@@ -60,8 +80,8 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     interruptRetaining: async (input, isCurrent) => {
       const questionnaires = this.owners.questionnaires;
       if (!questionnaires) throw new Error("Questionnaire interruption is unavailable.");
-      const nativeId = await this.nativeThreadId(input.threadId);
-      return questionnaires.interruptRetainingQuestionnaire(nativeId, input.requestKey, async () => {
+      const threadId = await this.workbenchThreadId(input.threadId);
+      return questionnaires.interruptRetainingQuestionnaire(threadId, input.requestKey, async () => {
         if (!await isCurrent()) return false;
         if (!input.turnId) return true;
         await this.clearGoal(input.threadId);
@@ -70,18 +90,21 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
         return isCurrent();
       });
     },
-    pending: async () => {
-      const result = await this.mapped({ method: "questionnaire/list", params: {} }) as { data: Omit<WorkbenchPendingUserInputRequest, "harness">[] };
+    pending: async options => {
+      const result = await this.mapped({
+        method: "questionnaire/list", params: {},
+        ...(options?.background ? { workbenchRequestSource: "autoRefresh" as const } : {}),
+      }) as { data: Omit<WorkbenchPendingUserInputRequest, "harness">[] };
       return result.data.map(request => ({ ...request, harness: "codex" }));
     },
     canDeliver: async (threadId, requestKey) => {
       const nativeId = await this.nativeThreadId(threadId);
       return this.owners.bridge.canDeliverQuestionnaire(nativeId, requestKey)
-        || (this.owners.questionnaires?.canDeliver(nativeId, requestKey) ?? false);
+        || (this.owners.questionnaires?.canDeliver(await this.workbenchThreadId(threadId), requestKey) ?? false);
     },
     deliver: async input => {
-      const nativeId = await this.nativeThreadId(input.threadId);
-      return Boolean(await this.owners.questionnaires?.deliver({ ...input, threadId: nativeId }));
+      const threadId = await this.workbenchThreadId(input.threadId);
+      return Boolean(await this.owners.questionnaires?.deliver({ ...input, threadId }));
     },
     respond: async input => this.interactionResult(await this.mapped({
       method: "questionnaire/respond", params: input,
@@ -101,6 +124,15 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
   };
 
   readonly history: WorkbenchProviderThreads["history"] = {
+    materialize: async (threadId, turnId, signal) => {
+      signal.throwIfAborted();
+      const { request } = await mapWorkbenchProviderRequest(this.owners.identities.threads, "codex", {
+        method: "workbench/thread-recall/materialize", params: { threadId, turnId },
+      });
+      signal.throwIfAborted();
+      this.result(await this.dispatch(request));
+      signal.throwIfAborted();
+    },
     questionnaires: async threadId => {
       const result = await this.mapped({ method: "questionnaire/history/list", params: { threadId } }) as { data: WorkbenchQuestionnaireHistoryEntry[] };
       return result.data;
@@ -112,6 +144,25 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     browse: async threadId => {
       const result = await this.mapped({ method: "browse/result/list", params: { threadId } }) as { data: WorkbenchBrowseResultEntry[] };
       return result.data;
+    },
+  };
+
+  readonly browse: WorkbenchProviderBrowse = {
+    record: async entry => {
+      await this.mapped({ method: "browse/result/record", params: entry });
+    },
+    screenshot: async input => {
+      const result = WorkbenchToolContextResponseSchema.parse(await this.mapped({
+        method: WORKBENCH_TOOL_CONTEXT_METHOD,
+        params: {
+          threadId: input.threadId, expectedTurnId: input.turnId,
+          toolOutput: { name: "screenshot", namespace: "workbench", output: [
+            { type: "input_text", text: createAgentScreenshotSteerText() },
+            { type: "input_image", image_url: input.imageUrl },
+          ] },
+        },
+      }));
+      return { kind: "injected", acceptedAt: result.acceptedAt, turnId: input.turnId };
     },
   };
 
@@ -157,7 +208,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     try {
       return await this.mappedResponse(request);
     } catch (error) {
-      if (request.method === "thread/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
+      if (request.method === "thread/read" || request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
         if (message.includes("rollout at") && message.includes("is empty")
           || message.includes("no rollout found by id") || message.includes("no rollout found for thread id")) {
@@ -173,7 +224,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     const response = await this.dispatch(native);
     this.result(response);
     const result = record(response.result);
-    if (result?.thread && request.method !== WORKBENCH_THREAD_PAGE_READ_METHOD) {
+    if (result?.thread && request.method !== "thread/context/read" && request.method !== WORKBENCH_THREAD_PAGE_READ_METHOD) {
       await this.observeThread(result.thread as Thread);
     }
     const turns = result?.turn ? [result.turn as NativeTurn]
@@ -255,6 +306,35 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       throw new Error("Codex returned unrecognised turn metadata.");
     }
     return toThreadTurn(turn, "codex");
+  }
+
+  async readLatest(threadId: string): Promise<ThreadPayload> {
+    const { thread } = await this.mapped({
+      method: "thread/context/read", params: { threadId, includeTurns: false },
+      workbenchThreadHydration: { mode: "latest" },
+    }) as { thread: Thread };
+    return {
+      ...toThreadPayload(thread, "codex", thread.model, thread.reasoningEffort),
+      id: this.owners.identities.threads.knownThread(ThreadReferenceSchema.parse(thread.id)).threadId,
+      isDraft: false,
+    };
+  }
+
+  async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {
+    await this.mapped({
+      method: "turn/start",
+      params: {
+        threadId: input.threadId, cwd: input.cwd, input: [],
+        toolOutput: createWorkbenchAgentMessageOutput(input.message),
+        ...(input.context?.subagentName ? {
+          collaborationMode: { mode: "plan", settings: { developer_instructions: "" } },
+          summary: "detailed",
+        } : {}),
+      },
+      ...(input.context ? { workbenchPromptContext: {
+        ...input.context, cwd: input.cwd, threadId: input.threadId, harness: "codex",
+      } } : {}),
+    });
   }
 
   async admitTurn(threadId: string, turnReference: string) {
@@ -373,8 +453,8 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     };
   }
 
-  async interrupt(threadId: string, turnId: string) {
-    await this.mapped({ id: 0, method: "thread/goal/clear", params: { threadId } });
+  async interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }) {
+    if (!options?.preserveGoal) await this.mapped({ id: 0, method: "thread/goal/clear", params: { threadId } });
     await this.mapped({ id: 0, method: "turn/interrupt", params: { threadId, turnId } });
   }
 

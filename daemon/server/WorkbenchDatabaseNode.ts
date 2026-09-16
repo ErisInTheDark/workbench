@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchDatabaseNode: own SQLite readiness, identity, transcript and sandbox network registrations, replacement and closure.
+ * - default WorkbenchDatabaseNode: own SQLite readiness, identity and transcript registrations, replacement and closure.
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -13,10 +13,10 @@ import type {
   DaemonRuntimeObjects,
   DaemonTranscriptRegistration,
 } from "./daemon-runtime-objects";
-import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import type { WorkbenchCodexSandboxNetworkDatabase } from "./WorkbenchCodexSandboxNetworkController";
+import CodexConfigurationNode from "./CodexConfigurationNode";
+import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
@@ -29,7 +29,7 @@ import WorkbenchCodexInstructionNode from "./WorkbenchCodexInstructionNode";
 
 type DatabaseControllerConstructor = new (
   options: import("./database/WorkbenchDatabaseController").WorkbenchDatabaseControllerOptions,
-) => DaemonDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & Pick<
+) => DaemonDatabaseRegistration & Pick<
   import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission" | "settleTranscript"
 >;
 
@@ -45,10 +45,6 @@ type ThreadIdentityControllerConstructor = new (
 type TranscriptIdentityControllerConstructor = new (
   database: DaemonDatabaseRegistration,
 ) => WorkbenchTranscriptIdentityController;
-
-type CodexSandboxNetworkControllerConstructor = new (
-  database: WorkbenchCodexSandboxNetworkDatabase,
-) => WorkbenchCodexSandboxNetworkController;
 
 type CaptureGapController = import("./database/transcript/WorkbenchTranscriptCaptureGapController").default;
 
@@ -77,12 +73,7 @@ function loadDatabaseControllers() {
   const CaptureGapController = (
     require("./database/transcript/WorkbenchTranscriptCaptureGapController") as { default: CaptureGapControllerConstructor }
   ).default;
-  const CodexSandboxNetworkController = (
-    require("./WorkbenchCodexSandboxNetworkController") as {
-      default: CodexSandboxNetworkControllerConstructor;
-    }
-  ).default;
-  return { CaptureGapController, CodexSandboxNetworkController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
+  return { CaptureGapController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
 }
 
 export default new ReloadableNode<
@@ -102,11 +93,10 @@ export default new ReloadableNode<
     "daemon/server/lib/git.ts",
     "daemon/server/lib/workbench/project/project-identity.ts",
   ].join("\n"),
-  children: [WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
+  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
     const {
       CaptureGapController,
-      CodexSandboxNetworkController,
       DatabaseController,
       ThreadIdentityController,
       TranscriptIdentityController,
@@ -127,7 +117,6 @@ export default new ReloadableNode<
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();
     const threadIdentity = new ThreadIdentityController(database);
     const transcriptIdentity = new TranscriptIdentityController(database);
-    const codexSandboxNetwork = new CodexSandboxNetworkController(database);
     const captureGaps = new CaptureGapController({
       database,
       resolveReference: async (reference) => {
@@ -180,7 +169,7 @@ export default new ReloadableNode<
           commit: shutdown,
         };
       },
-      registrations: { codexSandboxNetwork, database, threadIdentity, transcriptIdentity, transcript },
+      registrations: { database, threadIdentity, transcriptIdentity, transcript },
       start: async (_reportPhase, signal) => {
         signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
@@ -196,13 +185,12 @@ export default new ReloadableNode<
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
   lifecycle: "handoff",
-  provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript"],
+  provides: ["database", "threadIdentity", "transcriptIdentity", "transcript"],
   requires: [],
   safeAll: true,
   scope: "server:database",
   sources: [
     "daemon/server/WorkbenchDatabaseNode.ts",
-    "daemon/server/WorkbenchCodexSandboxNetworkController.ts",
     "daemon/server/WorkbenchThreadIdentityController.ts",
     "daemon/server/WorkbenchTranscriptIdentityController.ts",
     "shared/workbench/thread/workbench-thread-items.ts",

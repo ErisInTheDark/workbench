@@ -109,7 +109,7 @@ import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComp
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
-import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
+import SandboxNetworkSettings from "./workbench/SandboxNetworkSettings";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
@@ -560,7 +560,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const searchController = useMemo(() => new WorkbenchSearchController({
     activate: (result) => searchActivationRef.current(result),
     request: async (request) => controls
-      ? await controls.daemon.request("search/query", request)
+      ? await controls.daemon.search.query(request)
       : { results: [] },
   }), [controls]);
   const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
@@ -779,7 +779,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setBrowseSessionsError("");
     try {
       if (!controls) return;
-      const payload = await controls.daemon.request("browse/sessions/read", {
+      const payload = await controls.daemon.browse.sessions.read({
         cwd: null,
         includeRuntime: true,
         projectId,
@@ -922,7 +922,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setIsLocalCapabilitySettingsLoading(true);
     setLocalCapabilitySettingsError("");
     if (!controls) return () => { cancelled = true; };
-    void controls.daemon.request("local-capabilities/read", {})
+    void controls.daemon.localCapabilities.read()
       .then((payload) => {
         if (cancelled) {
           return;
@@ -956,7 +956,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setIsLocalCapabilitySettingsLoading(true);
     setLocalCapabilitySettingsError("");
     if (!controls) return;
-    void controls.daemon.request("local-capabilities/update", {
+    void controls.daemon.localCapabilities.update({
         localCapabilities: {
           browseRawCommandsEnabled: enabled,
         },
@@ -1139,7 +1139,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
     if (!controls) return false;
     try {
-      await controls.daemon.request("native/file/open", payload);
+      await controls.daemon.nativeFiles.open(payload);
     } catch (error) {
       console.error(error instanceof Error ? error.message : "Unable to open file in VS Code.");
       return false;
@@ -1244,8 +1244,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     if (!controls) return;
     try {
-      const method = action === "forget" ? "browse/sessions/forget" : "browse/sessions/stop";
-      const payload = await controls.daemon.request(method, {
+      const operation = controls.daemon.browse.sessions[action];
+      const payload = await operation({
         force: options.force === true,
         projectId: activeProjectId,
         session: session.name,
@@ -2036,7 +2036,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     try {
       const request: RevealProjectEntryRequest = { path, projectId };
       if (!controls) throw new Error("The daemon is not ready.");
-      await controls.daemon.request("native/file/reveal", request);
+      await controls.daemon.nativeFiles.reveal(request);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Unable to show that entry in the file explorer.");
     }
@@ -2309,7 +2309,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const projectId = explorer.currentProjectId || route.projectId;
     void Promise.all(quickOpenPaths.map(async (path) => {
       if (!controls) return null;
-      const payload = await controls.daemon.request("project/file/read", { path, projectId }).catch(() => null);
+      const payload = await controls.daemon.projects.files.read({ path, projectId }).catch(() => null);
       if (!payload) return null;
       return [path, payload.updatedAt] as const;
     })).then((entries) => {
@@ -2422,7 +2422,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       <div className="min-w-0">
         <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Local command capabilities</h3>
       </div>
-      <CodexSandboxNetworkSetting key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
+      <SandboxNetworkSettings key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
       <WorkbenchOptionCard
         description="Allow raw Browse CLI usage outside the sandbox."
         disabled={isLocalCapabilitySettingsLoading}
@@ -3052,7 +3052,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           : (
                             <>
                               {SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
-                              <CodexSandboxNetworkSetting key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
+                              <SandboxNetworkSettings key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
                             </>
                           )}
                       </div>

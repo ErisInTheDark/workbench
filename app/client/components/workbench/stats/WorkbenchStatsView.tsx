@@ -93,7 +93,7 @@ export default function WorkbenchStatsView({
     let active = true;
     const start = async () => {
       try {
-        const progress = await daemon.request("stats/import/start", {});
+        const progress = await daemon.stats.startImport();
         if (active) {
           setActionError("");
           setImportProgress(progress);

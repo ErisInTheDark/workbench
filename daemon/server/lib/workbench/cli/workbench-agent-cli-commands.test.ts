@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import WorkbenchAgentCommandController from "../../../WorkbenchAgentCommandController.ts";
+import CodexToolsController from "../../../CodexToolsController";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchAgentCliEnvironment from "../../../WorkbenchAgentCliEnvironment.ts";
@@ -373,11 +374,19 @@ before(async () => {
       nativeThreadId: NativeThreadIdSchema.parse(threadId === "hook-thread" ? threadId : `native:${threadId}`),
       harness: WorkbenchHarnessSchema.parse(harness),
     }),
-    checkApplyPatchClaims: async ({ paths }) => {
+    patchClaims: async (_harness, input, signal) => new CodexToolsController({
+      resolvePatchCaller: async threadId => ({
+        threadId: WorkbenchThreadIdSchema.parse(threadId === "hook-thread" ? "wb:hook-thread" : threadId),
+        nativeThreadId: NativeThreadIdSchema.parse(threadId === "hook-thread" ? threadId : `native:${threadId}`),
+      }),
+      readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
+      shell: { execute: async () => { throw new Error("Unexpected shell"); } },
+      commandExec: { execute: async () => { throw new Error("Unexpected execution"); } },
+    }).patchClaims(input, async ({ paths }) => {
       if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
       const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));
       return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
-    },
+    }, signal),
     executeBrowseRequest: async () => { throw new Error("unexpected direct Browse dispatch"); },
     executeSessionRequest: async () => { throw new Error("unexpected direct Browse session dispatch"); },
     executeThreadRecallRequest: async (request) => {
@@ -937,7 +946,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], { cwd: "C:/workspace" });
   assert.equal(ripgrep.kind, "request");
   assert.deepEqual(ripgrep.request, {
-    body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/workspace" },
+    body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/workspace", harness: "codex" },
     method: "POST",
     path: "/api/rg",
     responseKind: "native",
@@ -945,7 +954,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const ripgrepHelp = await parseWorkbenchAgentCliCommand(["rg", "--", "--help"], { cwd: "C:/workspace" });
   assert.equal(ripgrepHelp.kind, "request");
-  assert.deepEqual(ripgrepHelp.request.body, { args: ["--help"], cwd: "C:/workspace" });
+  assert.deepEqual(ripgrepHelp.request.body, { args: ["--help"], cwd: "C:/workspace", harness: "codex" });
 
   const browse = await parseWorkbenchAgentCliCommand([
     "browse", "run", "--thread", "thread-1", "--session", "research",

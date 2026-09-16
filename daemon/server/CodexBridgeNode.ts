@@ -5,9 +5,12 @@
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import CodexProviderObservations from "./CodexProviderObservations";
+import CodexQuestionnaireAdapter from "./CodexQuestionnaireAdapter";
 import CodexProvider from "./CodexProvider";
+import CodexToolsNode from "./CodexToolsNode";
 import CodexThreadOperations from "./CodexThreadOperations";
 import CodexConfigurationController from "./CodexConfigurationController";
+import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -75,10 +78,11 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   boundarySources: [
     "daemon/server/codex-transcript-*.ts",
   ].join("\n"),
-  children: [CodexProvider],
+  children: [CodexProvider, CodexToolsNode],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
-    const codexMcpGeneration = build.get("codexMcpGeneration");
+    const toolRevision = build.get("toolRevision");
+    const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(() => toolRevision.revision);
     const codexSandboxNetwork = build.get("codexSandboxNetwork");
     const codexInstructions = build.get("codexInstructions");
     const projectCatalog = build.get("projectCatalog");
@@ -86,7 +90,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const transcript = build.get("transcript");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
-    const turnRecovery = build.get("turnRecovery");
+    const turnRecovery = build.get("codexRecovery");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
     let recovery: { controller: AbortController; completion: Promise<void> } | null = null;
@@ -234,7 +238,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return outcome.result;
       },
       prepareTurnStart,
-      questionnaires,
+      questionnaires: new CodexQuestionnaireAdapter(questionnaires, threadIdentity),
       sqliteReader: new CodexSqliteTranscriptReader(
         request => transcript.read(request),
         threadId => build.get("database").readTranscriptContext!(threadId),
@@ -279,7 +283,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
           context.onCodexBridgeUnavailable(true);
         }
         parent.attachBridge(bridge);
-        if (build.mode === "replacement") codexMcpGeneration.bump();
         bridge.resumePendingToolContexts();
         void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
         build.get("codexHealth").start({ armed: true });
@@ -335,13 +338,14 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "codexRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
     "daemon/server/CodexBridgeNode.ts",
     "daemon/server/CodexThreadOperations.ts",
     "daemon/server/CodexConfigurationController.ts",
+    "daemon/server/WorkbenchCodexMcpGenerationController.ts",
     "daemon/server/codex-sandbox-policy.ts",
     "daemon/server/CodexStdioBridge.ts",
     "daemon/server/CodexProviderObservations.ts",

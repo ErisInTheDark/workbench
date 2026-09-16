@@ -12,9 +12,6 @@
  * - WorkbenchLocalCapabilitySettings: local capability settings contract.
  * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
  * - WorkbenchLocalCapabilitySettingsUpdateRequest: local capability update request.
- * - WorkbenchCodexSandboxNetworkSettings: resolved server-owned Codex sandbox network settings.
- * - WorkbenchCodexSandboxNetworkSettingsResponse: Codex sandbox network settings response.
- * - WorkbenchCodexSandboxNetworkSettingsUpdateRequest: global or project Codex sandbox network mutation.
  * - WorkbenchBrowseCommandRequest: Browse command request contract.
  * - WorkbenchBrowseCommandResponse: Browse command response contract.
  * - WorkbenchBrowseSessionMode: Browse headed/headless mode.
@@ -218,23 +215,6 @@ export interface WorkbenchLocalCapabilitySettingsResponse {
 
 export interface WorkbenchLocalCapabilitySettingsUpdateRequest {
   localCapabilities: Partial<WorkbenchLocalCapabilitySettings>;
-}
-
-export interface WorkbenchCodexSandboxNetworkSettings {
-  effectiveEnabled: boolean;
-  globalEnabled: boolean;
-  projectId: string;
-  projectOverride: boolean | null;
-}
-
-export interface WorkbenchCodexSandboxNetworkSettingsResponse {
-  codexSandboxNetwork: WorkbenchCodexSandboxNetworkSettings;
-}
-
-export interface WorkbenchCodexSandboxNetworkSettingsUpdateRequest {
-  enabled: boolean | null;
-  projectId: string;
-  scope: "global" | "project";
 }
 
 export interface WorkbenchBrowseCommandRequest {

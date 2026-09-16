@@ -361,14 +361,9 @@ export default class WorkbenchThreadStateFeature {
       }
       if (request.method === "workbench/thread/resume") {
         if (!turnId) throw new Error("The managed thread has no current turn to resume.");
-        const native = this.context.identities
-          ? await mapWorkbenchProviderRequest(this.context.identities.threads, resolved.harness, {
-            method: "thread/resume", params: { threadId: resolved.thread.id },
-          })
-          : { harness: resolved.harness, request: { params: { threadId: resolved.thread.id } } };
-        const nativeThreadId = asRecord(native.request.params)?.threadId;
-        if (typeof nativeThreadId !== "string") throw new Error("The managed thread has no provider binding.");
-        await this.context.harnesses.resumeThread(native.harness, NativeThreadIdSchema.parse(nativeThreadId));
+        const recovery = this.provider(resolved.harness).recovery;
+        if (!recovery) throw new Error(`Managed refresh is unavailable for ${resolved.harness} threads.`);
+        await recovery.refresh(resolved.thread.id);
         return { id, result: { accepted: true, threadId: resolved.thread.id, turnId } };
       }
       throw new Error("Unsupported managed thread command.");

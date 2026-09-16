@@ -6,9 +6,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
-import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
+import type WorkbenchProvider from "./WorkbenchProvider";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -34,21 +33,26 @@ const questionnaire: WorkbenchUserInputRequest = {
   title: "Direction",
 };
 
-function thread(threadId: string, cwd: string, active: boolean): Thread {
+function thread(threadId: string, cwd: string, active: boolean): ThreadPayload {
   return {
     cwd,
-    id: threadId,
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    harness: "codex",
     name: threadId,
     preview: "",
     source: "appServer",
-    status: { type: active ? "active" : "idle" },
+    status: active ? "active" : "idle",
     turns: [{
       id: `${threadId}-turn`,
-      items: active ? [] : [{ id: "final", memoryCitation: null, phase: "final_answer", text: "Finished", type: "agentMessage" }],
+      items: active ? [] : [{ id: "final", memoryCitation: null, phase: "final_answer", text: "Finished", type: "agentMessage", delivery: null, questions: null }],
+      itemsView: "full",
       status: active ? "inProgress" : "completed",
+      completedAt: null, durationMs: null, startedAt: null, error: null,
     }],
     updatedAt: 1,
-  } as Thread;
+    createdAt: 1, path: null, agentNickname: null, agentRole: null, isDraft: false,
+    model: null, reasoningEffort: null, serviceTier: null, agentPath: null, tokenUsage: null, turnHistory: [],
+  };
 }
 
 function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string; projectId: string; threadId: string }): WorkbenchSubagentRelationship {
@@ -68,37 +72,44 @@ function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string
   };
 }
 
-class FakeHarnessClient {
+class FakeProvider {
   questionnaireVisible = true;
   questionnaireListCalls = 0;
   threadReadCalls = 0;
+  readonly contentReads: string[] = [];
   private readonly cwd: string;
 
   constructor(cwd: string) { this.cwd = cwd; }
-  async connect() {}
-  close() {}
-
-  async sendRequest<T>(message: { method: string; params?: unknown }): Promise<CodexJsonRpcResponse<T>> {
-    const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
-      ? message.params as Record<string, unknown>
-      : {};
-    if (message.method === "thread/read") {
-      this.threadReadCalls += 1;
-      const threadId = String(params.threadId ?? "");
-      return { id: 1, result: { thread: thread(threadId, this.cwd, threadId === questionnaireThreadId) } as T };
-    }
-    if (message.method === "questionnaire/list") {
+  private unused = async () => { throw new Error("unexpected provider operation"); };
+  readonly threads: WorkbenchProvider["threads"] = {
+    read: async threadId => {
+      this.threadReadCalls++;
+      return { ...thread(threadId, this.cwd, threadId === questionnaireThreadId), turns: [] };
+    },
+    readLatest: async threadId => {
+      this.contentReads.push(threadId);
+      return thread(threadId, this.cwd, threadId === questionnaireThreadId);
+    },
+    create: this.unused, list: this.unused, page: this.unused, submit: this.unused,
+    messageAgent: this.unused, rename: this.unused, compact: this.unused, interrupt: this.unused,
+    latestTurn: this.unused, admitTurn: this.unused, materialize: this.unused,
+    history: { materialize: this.unused, questionnaires: this.unused, steers: this.unused, browse: this.unused },
+  };
+  readonly interactions: NonNullable<WorkbenchProvider["interactions"]> = {
+    pending: async () => {
       this.questionnaireListCalls += 1;
-      return { id: 1, result: { data: this.questionnaireVisible ? [{
+      return this.questionnaireVisible ? [{
+        harness: "codex",
         itemId: "item-1",
         request: questionnaire,
         requestKey: "request-key",
         threadId: questionnaireThreadId,
         turnId: `${questionnaireThreadId}-turn`,
-      }] : [] } as T };
-    }
-    return { id: 1, result: {} as T };
-  }
+      }] : [];
+    },
+    interruptRetaining: this.unused, canDeliver: this.unused, deliver: this.unused,
+    respond: this.unused, supplement: this.unused, record: this.unused,
+  };
 }
 
 test("multiplexed wait immediately prefers questionnaires, then inactive turns", async (context) => {
@@ -115,7 +126,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
     const reservation = await subagentStore.reserve({ ...metadata, reservationId });
     await subagentStore.replace(callerThreadId, reservationId, { ...record, directSubagentIndex: reservation.directSubagentIndex });
   }
-  const client = new FakeHarnessClient(cwd);
+  const client = new FakeProvider(cwd);
   const controller = new WorkbenchSubagentController({
     identities: database.identities.threads,
     publicThreadId: async (threadId, projectId) => {
@@ -123,8 +134,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
       assert.ok(identity);
       return identity.threadId;
     },
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => client,
+    provider: () => client,
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
@@ -141,6 +151,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   assert.match(String((questionnaireResult.result as { output?: string } | undefined)?.output), /^Subagent Momo \(questionnaire-child\) needs interaction\./u);
   assert.equal(client.questionnaireListCalls, 1);
   assert.equal(client.threadReadCalls, 2);
+  assert.deepEqual(client.contentReads, [questionnaireThreadId]);
 
   client.questionnaireVisible = false;
   const inactiveResult = await controller.handleRequest({
@@ -151,4 +162,5 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   assert.equal((inactiveResult.result as { output?: string } | undefined)?.output, "Subagent Yuzu (inactive-child) finished its current turn.\n\nFinished");
   assert.equal(client.questionnaireListCalls, 2);
   assert.equal(client.threadReadCalls, 4);
+  assert.deepEqual(client.contentReads, [questionnaireThreadId, inactiveThreadId]);
 });

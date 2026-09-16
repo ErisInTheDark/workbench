@@ -1,29 +1,24 @@
 /*
  * Exports:
- * - WorkbenchBrowseResultCallbacks: bridge-owned thread operations injected into result enrichment.
+ * - WorkbenchBrowseResultCallbacks: provider operations injected into shared result enrichment.
  * - default WorkbenchBrowseResultController: capture invocation ownership, serialize sidecars, and deliver explicit screenshots.
  */
 import { createHash } from "node:crypto";
 
-import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
-import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ThreadPayload } from "workbench-shared/types";
 import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultOrigin, WorkbenchBrowseResultSink, WorkbenchBrowseScreenshotDelivery } from "./lib/workbench/browse/browse-result-events";
-import type { WorkbenchToolContextRequest, WorkbenchToolContextResponse } from "workbench-shared/workbench/thread/thread-tool-output";
-import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 const IDLE_TAIL = Promise.resolve();
-type ThreadReadResponse = Pick<WorkbenchThreadContextReadResponse, "thread">;
+type ThreadReadResponse = { thread: Pick<ThreadPayload, "turns"> };
 
 export interface WorkbenchBrowseResultCallbacks {
   logError: (message: string) => void;
   listHarnesses: () => readonly WorkbenchHarness[];
   readThread: (harness: WorkbenchHarness, threadId: string) => Promise<ThreadReadResponse>;
-  resolveNativeTurnId?: (harness: WorkbenchHarness, threadId: string, turnId: string) => Promise<string>;
-  recordResult: (entry: WorkbenchBrowseResultEntry) => Promise<void>;
-  steerTurn: (harness: WorkbenchHarness, threadId: string, expectedTurnId: string, input: UserInput[]) => Promise<string | null>;
-  injectToolContext?: (request: WorkbenchToolContextRequest) => Promise<WorkbenchToolContextResponse>;
+  recordResult: (entry: WorkbenchBrowseResultEntry, harness: WorkbenchHarness) => Promise<void>;
+  screenshot: (harness: WorkbenchHarness, input: { threadId: string; turnId: string; imageUrl: string }) => Promise<WorkbenchBrowseScreenshotDelivery>;
 }
 
 function isActiveBrowseCommandItem(item: ThreadReadResponse["thread"]["turns"][number]["items"][number]) {
@@ -68,7 +63,7 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     const previous = this.tails.get(event.threadId) ?? IDLE_TAIL;
     const current = previous.catch(() => undefined).then(async () => {
       signal.throwIfAborted();
-      const write = this.callbacks.recordResult(this.createEntry(event, origin));
+      const write = this.callbacks.recordResult(this.createEntry(event, origin), origin.harness);
       this.writes.add(write);
       try { await write; }
       finally { this.writes.delete(write); }
@@ -86,25 +81,7 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     const activeThread = origin === undefined ? await this.readActiveThread(threadId, signal) : origin;
     signal.throwIfAborted();
     if (!activeThread) throw new Error("Unable to deliver screenshot because the target thread has no active turn.");
-    if (activeThread.harness === "codex") {
-      if (!this.callbacks.injectToolContext) throw new Error("Codex screenshot context delivery is not configured.");
-      const accepted = await this.callbacks.injectToolContext({
-        threadId, expectedTurnId: activeThread.turnId,
-        toolOutput: { name: "screenshot", namespace: "workbench", output: [
-          { type: "input_text", text: createAgentScreenshotSteerText() },
-          { type: "input_image", image_url: imageUrl },
-        ] },
-      });
-      return { kind: "injected", acceptedAt: accepted.acceptedAt, turnId: accepted.turnId };
-    }
-    const input = [
-      { type: "text" as const, text: createAgentScreenshotSteerText(), text_elements: [] },
-      { type: "image" as const, url: imageUrl },
-    ];
-    return {
-      kind: "steered",
-      turnId: await this.callbacks.steerTurn(activeThread.harness, threadId, activeThread.turnId, input) ?? activeThread.turnId,
-    };
+    return this.callbacks.screenshot(activeThread.harness, { threadId, turnId: activeThread.turnId, imageUrl });
   }
 
   async waitForIdle() {
@@ -151,10 +128,7 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
       const turn = getCurrentInProgressTurn(response.thread);
       if (turn) {
         const commandItemId = findLatestBrowseCommandItemId(response);
-        const turnId = this.callbacks.resolveNativeTurnId
-          ? await this.callbacks.resolveNativeTurnId(harness, threadId, turn.id) : turn.id;
-        signal.throwIfAborted();
-        return { commandItemId, harness, turnId };
+        return { commandItemId, harness, turnId: turn.id };
       }
     }
     if (!readSucceeded && lastError) throw lastError;

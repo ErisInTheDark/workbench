@@ -3,7 +3,7 @@
  * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement.
  */
 import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntime";
-import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchBrowseRequestHandler from "./lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchBrowseProfileStore from "./lib/workbench/browse/WorkbenchBrowseProfileStore";
@@ -15,7 +15,9 @@ import ReloadableNode from "./ReloadableNode";
 import WorkbenchBrowseController, { type WorkbenchBrowseIdentityPort } from "./WorkbenchBrowseController";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
-import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { logError } from "./process-helpers";
 
 class BrowseExecution implements DaemonBrowseExecution {
   private controller: WorkbenchBrowseController | null = null;
@@ -27,7 +29,6 @@ class BrowseExecution implements DaemonBrowseExecution {
     context: DaemonProcessContext,
     private readonly resultCallbacks: WorkbenchBrowseResultCallbacks,
     private readonly identity: WorkbenchBrowseIdentityPort,
-    private readonly publicTurnId: (threadId: string, turnId: string) => Promise<string>,
     private readonly settings: WorkbenchServerSettings,
     private readonly database: Pick<WorkbenchDatabaseController, "query" | "executeTransaction" | "writeTranscriptAsset">,
   ) {
@@ -88,19 +89,7 @@ class BrowseExecution implements DaemonBrowseExecution {
 
   private getController() {
     if (!this.controller) {
-      const nativeResults = new WorkbenchBrowseResultController(this.resultCallbacks);
-      const results = {
-        captureOrigin: nativeResults.captureOrigin.bind(nativeResults),
-        expire: nativeResults.expire.bind(nativeResults),
-        resume: nativeResults.resume.bind(nativeResults),
-        record: nativeResults.record.bind(nativeResults),
-        waitForIdle: nativeResults.waitForIdle.bind(nativeResults),
-        deliverScreenshot: async (...args: Parameters<WorkbenchBrowseResultController["deliverScreenshot"]>) => {
-          const [threadId] = args;
-          const result = await nativeResults.deliverScreenshot(...args);
-          return { ...result, turnId: await this.publicTurnId(threadId, result.turnId) };
-        },
-      };
+      const results = new WorkbenchBrowseResultController(this.resultCallbacks);
       this.controller = new WorkbenchBrowseController(results, this.runtime,
         new WorkbenchBrowseRequestHandler(results, this.runtime, { profileStore: this.profiles, registry: this.sessions },
           (threadId) => this.identity.publicThreadId(threadId), () => this.settings.readLocalCapabilities(), this.database),
@@ -115,6 +104,12 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   children: [],
   create: (context, build) => {
     const harnesses = build.get("harnesses");
+    const providers = new WorkbenchProviderDispatcher(build.run);
+    const provider = (harness: string) => {
+      const key = installedProviderKeys.find(key => key === harness);
+      if (!key) throw new Error(`Provider ${harness} is unavailable.`);
+      return providers.get(key);
+    };
     const threads = build.get("threadIdentity");
     const projects = build.get("projectCatalog");
     const identity: WorkbenchBrowseIdentityPort = {
@@ -135,29 +130,20 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return thread.threadId;
       },
     };
-    const publicTurnId = async (threadId: string, turnId: string) => {
-      const canonicalThreadId = await identity.publicThreadId(threadId);
-      const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId: TurnReferenceSchema.parse(turnId) });
-      if (!turn) throw new Error("Browse result has no observed Workbench turn identity.");
-      return turn.turnId;
-    };
     const callbacks: WorkbenchBrowseResultCallbacks = {
-      ...context.browseResultCallbacks,
-      resolveNativeTurnId: async (harness, threadId, turnId) => {
-        const canonicalThreadId = await identity.publicThreadId(threadId);
-        const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId: TurnReferenceSchema.parse(turnId) });
-        if (!turn?.native.nativeTurnId || turn.native.harness !== harness || turn.native.nativeThreadId !== threadId) {
-          throw new Error("Browse result has no matching native turn execution.");
-        }
-        return turn.native.nativeTurnId;
+      logError: message => logError("browse-results", message),
+      listHarnesses: () => installedProviderKeys,
+      readThread: async (harness, threadId) => ({
+        thread: await provider(harness).threads.readLatest(await identity.publicThreadId(threadId)),
+      }),
+      recordResult: async (entry, harness) => {
+        await provider(harness).browse.record({ ...entry, threadId: await identity.publicThreadId(entry.threadId) });
       },
-      injectToolContext: async (params) => {
-        const response = await harnesses.request("codex", { method: WORKBENCH_TOOL_CONTEXT_METHOD, params });
-        if (response.error) throw new Error(response.error.message);
-        return WorkbenchToolContextResponseSchema.parse(response.result);
+      screenshot: async (harness, input) => {
+        return provider(harness).browse.screenshot({ ...input, threadId: await identity.publicThreadId(input.threadId) });
       },
     };
-    const execution = new BrowseExecution(context, callbacks, identity, publicTurnId, new WorkbenchServerSettings(build.get("database")), build.get("database"));
+    const execution = new BrowseExecution(context, callbacks, identity, new WorkbenchServerSettings(build.get("database")), build.get("database"));
     let unregisterBrowse: (() => void) | null = null;
     return {
       afterCommit: () => {

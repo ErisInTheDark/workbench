@@ -9,6 +9,7 @@ import { after, before, test } from "node:test";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
+let CodexConfigurationNode: typeof import("./CodexConfigurationNode").default;
 let discoveryRoot: string;
 const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
 const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -20,6 +21,7 @@ before(async () => {
   process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
   ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
+  ({ default: CodexConfigurationNode } = await import("./CodexConfigurationNode"));
 });
 
 after(async () => {
@@ -47,16 +49,32 @@ function createDatabaseNode(directory: string) {
   );
 }
 
+function createConfigurationNode(database: NonNullable<ReturnType<typeof createDatabaseNode>["registrations"]["database"]>) {
+  return CodexConfigurationNode.create({} as DaemonProcessContext, {
+    get: key => {
+      if (key !== "database") throw new Error(`Unexpected configuration dependency ${key}.`);
+      return database as never;
+    },
+    run: () => { throw new Error("Unexpected graph operation in configuration fixture"); },
+    getSourceState: () => { throw new Error("Unexpected source access in configuration fixture"); },
+    handoffState: undefined,
+    isReplacing: () => false,
+    lease: { isCurrent: () => true },
+    mode: "initial",
+  });
+}
+
 test("Codex sandbox network settings persist global and project inheritance", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-codex-network-"));
   let databaseNode = createDatabaseNode(directory);
+  let configurationNode = createConfigurationNode(databaseNode.registrations.database!);
   try {
     await databaseNode.start();
     const projects = databaseNode.registrations.database!.readInitialProjectCatalog().catalog;
     const projectId = projects.find(record => record.project.name === "project")?.project.id;
     const otherId = projects.find(record => record.project.name === "other")?.project.id;
     assert.ok(projectId && otherId);
-    let settings = databaseNode.registrations.codexSandboxNetwork!;
+    let settings = configurationNode.registrations.codexSandboxNetwork!;
     assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: false,
       globalEnabled: false,
@@ -76,10 +94,12 @@ test("Codex sandbox network settings persist global and project inheritance", as
     });
 
     await settings.setProjectOverride(otherId, true);
+    await configurationNode.dispose();
     await databaseNode.dispose();
     databaseNode = createDatabaseNode(directory);
     await databaseNode.start();
-    settings = databaseNode.registrations.codexSandboxNetwork!;
+    configurationNode = createConfigurationNode(databaseNode.registrations.database!);
+    settings = configurationNode.registrations.codexSandboxNetwork!;
     assert.equal((await settings.read(projectId)).projectOverride, false);
     assert.equal((await settings.read(otherId)).effectiveEnabled, true);
 
@@ -95,6 +115,7 @@ test("Codex sandbox network settings persist global and project inheritance", as
     assert.equal(await settings.resolve(projectId), false);
     assert.equal(await settings.resolve(otherId), true);
   } finally {
+    await configurationNode.dispose();
     await databaseNode.dispose();
     await rm(directory, { recursive: true, force: true });
   }

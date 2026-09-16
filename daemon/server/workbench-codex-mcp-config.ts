@@ -24,6 +24,7 @@ function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean) {
   const protocol = url.protocol === "wss:" ? "https:" : "http:";
   const port = url.port || (url.protocol === "wss:" ? "443" : "80");
   const mcpUrl = new URL(`/daemon/mcp`, `${protocol}//127.0.0.1:${port}`);
+  mcpUrl.searchParams.set("provider", "codex");
   mcpUrl.searchParams.set("client", randomUUID());
   if (projectLocal) mcpUrl.searchParams.set("project-local", "true");
   return mcpUrl.toString();

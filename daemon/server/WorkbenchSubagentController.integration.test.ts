@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire delivery ordering.
+ * - No production exports; tests protect profile selection, durable relationships, ownership and questionnaire delivery ordering.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -8,11 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
-import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
-import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
-import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import type { ThreadPayload, WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
+import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -41,12 +38,7 @@ interface HarnessCall {
 
 function incomingAgentMessage(call: HarnessCall | undefined) {
   assert.ok(call);
-  assert.deepEqual(call.params.input, []);
-  const item = readWorkbenchToolOutput({
-    ...(call.params.toolOutput as object), id: "provider-output", type: "functionCallOutput",
-  });
-  assert.ok(item);
-  return readWorkbenchAgentMessageItem(item);
+  return call.params.message;
 }
 
 const callerThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent-thread");
@@ -82,23 +74,24 @@ const questionnaire: WorkbenchUserInputRequest = {
   title: "Direction",
 };
 
-function thread(id: string, cwd: string, status: "completed" | "inProgress" = "completed"): Thread {
+function thread(id: string, cwd: string, status: "completed" | "inProgress" = "completed"): ThreadPayload {
   return {
     cwd,
-    id,
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id),
+    harness: "codex",
     name: id,
     preview: "",
     source: "appServer",
-    status: { type: status === "inProgress" ? "active" : "idle" },
-    turns: [{ id: `${id}-turn`, items: [], status }],
+    status: status === "inProgress" ? "active" : "idle",
+    turns: [{ id: `${id}-turn`, items: [], itemsView: "full", status, completedAt: null, durationMs: null, startedAt: null, error: null }],
     updatedAt: 1,
-  } as Thread;
+    createdAt: 1, path: null, agentNickname: null, agentRole: null, isDraft: false,
+    model: null, reasoningEffort: null, serviceTier: null, agentPath: null, tokenUsage: null, turnHistory: [],
+  };
 }
 
-class FakeHarnessClient {
+class FakeProvider {
   readonly calls: HarnessCall[] = [];
-  closeCount = 0;
-  connectCount = 0;
   private readonly cwd: string;
   private readonly childStatus: "completed" | "inProgress";
   private readonly failTurnStart: boolean;
@@ -116,39 +109,38 @@ class FakeHarnessClient {
     this.parentStatus = parentStatus;
   }
 
-  async connect() { this.connectCount += 1; }
-  close() { this.closeCount += 1; }
-
-  async sendRequest<T>(message: { method: string; params?: unknown } & Record<string, unknown>): Promise<CodexJsonRpcResponse<T>> {
-    const harness = typeof message.workbenchHarness === "string" ? message.workbenchHarness : "codex";
-    const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
-      ? message.params as Record<string, unknown>
-      : {};
-    const promptContext = message.workbenchPromptContext
-      && typeof message.workbenchPromptContext === "object"
-      && !Array.isArray(message.workbenchPromptContext)
-      ? message.workbenchPromptContext as Record<string, unknown>
-      : null;
-    this.calls.push({ harness, method: message.method, params, promptContext });
-
-    if (message.method === "thread/read") {
-      if (harness !== "codex") return { error: { code: -32000, message: "Thread not found." }, id: 1 };
-      const threadId = String(params.threadId ?? "");
-      const result = { thread: thread(threadId, this.cwd, threadId === childThreadId ? this.childStatus : this.parentStatus) };
-      return { id: 1, result: result as T };
-    }
-    if (message.method === "thread/start") return { id: 1, result: { thread: thread(childThreadId, this.cwd) } as T };
-    if (message.method === "turn/start" && this.failTurnStart) return { error: { code: -32000, message: "Turn failed to start." }, id: 1 };
-    if (message.method === "questionnaire/list") {
-      return {
-        id: 1,
-        result: {
-          data: [{ itemId: "item-1", request: questionnaire, requestKey: "request-key", threadId: childThreadId, turnId: `${childThreadId}-turn` }],
-        } as T,
-      };
-    }
-    return { id: 1, result: {} as T };
-  }
+  private unused = async () => { throw new Error("Unexpected provider operation"); };
+  private read = async (id: string) => {
+    this.calls.push({ harness: "codex", method: "read", params: { threadId: id }, promptContext: null });
+    return thread(id, this.cwd, id === childThreadId ? this.childStatus : this.parentStatus);
+  };
+  readonly threads: WorkbenchProvider["threads"] = {
+    read: this.read, readLatest: this.read,
+    latestTurn: async id => (await this.read(id)).turns.at(-1) ?? null,
+    create: async input => {
+      this.calls.push({ harness: "codex", method: "create", params: { ...input }, promptContext: input.context ?? null });
+      return thread(childThreadId, this.cwd);
+    },
+    messageAgent: async input => {
+      this.calls.push({ harness: "codex", method: "messageAgent", params: { ...input }, promptContext: input.context ?? null });
+      if (this.failTurnStart) throw new Error("Turn failed to start.");
+    },
+    interrupt: async (threadId, turnId, options) => {
+      assert.equal(options?.preserveGoal, true);
+      this.calls.push({ harness: "codex", method: "interrupt", params: { threadId, turnId }, promptContext: null });
+    },
+    rename: async () => {}, list: this.unused, admitTurn: this.unused, page: this.unused,
+    compact: this.unused, submit: this.unused, materialize: this.unused,
+    history: { materialize: this.unused, questionnaires: this.unused, steers: this.unused, browse: this.unused },
+  };
+  readonly interactions: NonNullable<WorkbenchProvider["interactions"]> = {
+    pending: async () => [{ harness: "codex", itemId: "item-1", request: questionnaire, requestKey: "request-key", threadId: childThreadId, turnId: `${childThreadId}-turn` }],
+    respond: async input => {
+      this.calls.push({ harness: "codex", method: "respond", params: { ...input }, promptContext: null });
+      return {};
+    },
+    interruptRetaining: this.unused, canDeliver: this.unused, deliver: this.unused, supplement: this.unused, record: this.unused,
+  };
 }
 
 function createPreReloadStoreSurface(store: WorkbenchSubagentStore) {
@@ -200,23 +192,18 @@ function createProjectResolver(expectedCwd: string) {
   };
 }
 
-test("creates with one client and delivers native agent output before empty questionnaire resolution", async (context) => {
+test("creates with the selected profile and delivers agent information before empty questionnaire resolution", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
-  const clients: FakeHarnessClient[] = [];
+  const provider = new FakeProvider(cwd);
   const committed: WorkbenchSubagentRelationship[] = [];
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => {
-      const client = new FakeHarnessClient(cwd);
-      clients.push(client);
-      return client;
-    },
+    provider: () => provider,
     onRelationshipCommitted: async (record) => {
-      assert.equal(clients[0]?.calls.some(({ method }) => method === "turn/start"), false);
+      assert.equal(provider.calls.some(({ method }) => method === "messageAgent"), false);
       committed.push(record);
     },
     resolveProjectFromCwd: createProjectResolver(cwd),
@@ -234,25 +221,16 @@ test("creates with one client and delivers native agent output before empty ques
   });
   assert.deepEqual(created, { id: 3, result: { threadId: childThreadId } });
   assert.deepEqual(committed.map(({ threadId }) => threadId), [childThreadId]);
-  assert.equal(clients.length, 1);
-  assert.equal(clients[0].connectCount, 1);
-  assert.equal(clients[0].closeCount, 1);
-  assert.deepEqual(clients[0].calls.filter(({ method }) => method === "thread/start" || method === "turn/start").map(({ method }) => method), [
-    "thread/start",
-    "turn/start",
+  assert.deepEqual(provider.calls.filter(({ method }) => method === "create" || method === "messageAgent").map(({ method }) => method), [
+    "create",
+    "messageAgent",
   ]);
 
-  const threadStart = clients[0].calls.find(({ method }) => method === "thread/start");
-  const turnStart = clients[0].calls.find(({ method }) => method === "turn/start");
-  assert.equal(threadStart?.params.effort, "medium");
-  assert.equal(turnStart?.params.effort, "medium");
-  assert.equal(threadStart?.promptContext?.instructionScope, undefined);
-  assert.deepEqual(turnStart?.promptContext, {
-    ...threadStart?.promptContext,
-    threadId: childThreadId,
-  });
-  assert.equal((turnStart?.params.collaborationMode as { settings?: { reasoning_effort?: string } })?.settings?.reasoning_effort, "medium");
-  assert.equal((turnStart?.params.collaborationMode as { settings?: { developer_instructions?: string } })?.settings?.developer_instructions, "");
+  const threadStart = provider.calls.find(({ method }) => method === "create");
+  const turnStart = provider.calls.find(({ method }) => method === "messageAgent");
+  assert.equal((threadStart?.params.profile as { settings: { reasoningEffort: string } }).settings.reasoningEffort, "medium");
+  assert.deepEqual(turnStart?.promptContext, threadStart?.promptContext);
+  assert.deepEqual(turnStart?.promptContext?.workflowIds, ["subagent"]);
   assert.deepEqual(incomingAgentMessage(turnStart), {
     message: "Inspect the code.",
     senderName: "parent agent",
@@ -265,17 +243,15 @@ test("creates with one client and delivers native agent output before empty ques
   });
   assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
+  const previousCalls = provider.calls.length;
   const messaged = await controller.handleRequest({
     id: 5,
     method: "workbench/subagent/message",
     params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
   });
   assert.deepEqual(messaged, { id: 5, result: {} });
-  assert.equal(clients.length, 2);
-  assert.equal(clients[1].connectCount, 1);
-  assert.equal(clients[1].closeCount, 1);
-  const lifecycleCalls = clients[1].calls.filter(({ method }) => method === "turn/start" || method === "questionnaire/respond");
-  assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["turn/start", "questionnaire/respond"]);
+  const lifecycleCalls = provider.calls.slice(previousCalls).filter(({ method }) => method === "messageAgent" || method === "respond");
+  assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["messageAgent", "respond"]);
   assert.deepEqual(incomingAgentMessage(lifecycleCalls[0]), {
     message: "Take the safer route.",
     senderName: "parent agent",
@@ -310,24 +286,19 @@ test("creates with one client and delivers native agent output before empty ques
     params: { callerThreadId: childThreadId, cwd, message: "Create another child.", name: "Nana", profileId: profile().id, title: "Nested child" },
   });
   assert.match(nestedCreate.error?.message ?? "", /cannot create their own subagents/u);
-  assert.equal(clients.flatMap(({ calls }) => calls).filter(({ method }) => method === "thread/start").length, 1);
+  assert.equal(provider.calls.filter(({ method }) => method === "create").length, 1);
 });
 
 test("starts an idle direct parent through the pre-reload store surface", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
-  const clients: FakeHarnessClient[] = [];
+  const provider = new FakeProvider(cwd);
   const subagentStore = new WorkbenchSubagentStore(fixture.database);
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => {
-      const client = new FakeHarnessClient(cwd);
-      clients.push(client);
-      return client;
-    },
+    provider: () => provider,
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
@@ -346,34 +317,25 @@ test("starts an idle direct parent through the pre-reload store surface", async 
     method: "workbench/subagent/message",
     params: { callerThreadId: childThreadId, cwd, message: "The safe route is ready.", parent: true },
   }), { id: 3, result: {} });
-  assert.deepEqual(
-    clients[1].calls.filter(({ method }) => method === "thread/read").map(({ harness }) => harness),
-    ["codex", "codex"],
-  );
-  const parentTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
+  const parentTurnStart = provider.calls.find(({ method, params }) => method === "messageAgent" && params.threadId === callerThreadId);
   assert(parentTurnStart);
   assert.deepEqual(incomingAgentMessage(parentTurnStart), {
     message: "The safe route is ready.",
     senderName: "Mimi",
     senderThreadId: childThreadId,
   });
-  assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
+  assert.equal(provider.calls.some(({ method }) => method === "respond"), false);
 });
 
 test("starts an idle child with attributed input after its stored definition is deleted", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
-  const clients: FakeHarnessClient[] = [];
+  const provider = new FakeProvider(cwd, false, "completed", "completed");
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => {
-      const client = new FakeHarnessClient(cwd, false, "completed", "completed");
-      clients.push(client);
-      return client;
-    },
+    provider: () => provider,
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
@@ -393,7 +355,7 @@ test("starts an idle child with attributed input after its stored definition is 
     method: "workbench/subagent/message",
     params: { callerThreadId, cwd, message: "Continue with the safe route.", threadId: childThreadId },
   }), { id: 3, result: {} });
-  const childTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === childThreadId);
+  const childTurnStart = provider.calls.findLast(({ method, params }) => method === "messageAgent" && params.threadId === childThreadId);
   assert(childTurnStart);
   assert.deepEqual(incomingAgentMessage(childTurnStart), {
     message: "Continue with the safe route.",
@@ -402,20 +364,15 @@ test("starts an idle child with attributed input after its stored definition is 
   });
 });
 
-test("delivers native output to an active direct parent and rejects callers without a relationship", async (context) => {
+test("delivers information to an active direct parent and rejects callers without a relationship", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
-  const clients: FakeHarnessClient[] = [];
+  const provider = new FakeProvider(cwd, false, "inProgress");
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => {
-      const client = new FakeHarnessClient(cwd, false, "inProgress");
-      clients.push(client);
-      return client;
-    },
+    provider: () => provider,
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
@@ -434,14 +391,14 @@ test("delivers native output to an active direct parent and rejects callers with
     method: "workbench/subagent/message",
     params: { callerThreadId: childThreadId, cwd, message: "Active parent note.", parent: true },
   }), { id: 3, result: {} });
-  const parentOutput = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
+  const parentOutput = provider.calls.find(({ method, params }) => method === "messageAgent" && params.threadId === callerThreadId);
   assert(parentOutput);
   assert.deepEqual(incomingAgentMessage(parentOutput), {
     message: "Active parent note.",
     senderName: "Mimi",
     senderThreadId: childThreadId,
   });
-  assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
+  assert.equal(provider.calls.some(({ method }) => method === "respond"), false);
 
   const denied = await controller.handleRequest({
     id: 4,
@@ -458,8 +415,7 @@ test("keeps relationship storage independent from lifecycle through create, mess
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => new FakeHarnessClient(cwd),
+    provider: () => new FakeProvider(cwd),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
@@ -505,8 +461,7 @@ test("keeps a created child durable when its first turn fails to start", async (
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => new FakeHarnessClient(cwd, true),
+    provider: () => new FakeProvider(cwd, true),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,

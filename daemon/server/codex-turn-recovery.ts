@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - CodexTurnRecoveryPort: direct Codex request boundary used during turn replacement. Keywords: codex, recovery, port.
- * - recoverCodexTurn: deduplicate, interrupt, and delegate replacement to managed admission. Keywords: codex, recovery, resume.
+ * - CodexTurnRecoveryPort: direct Codex request boundary used during turn replacement.
+ * - recoverCodexTurn: deduplicate, interrupt, and delegate replacement to managed admission.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { createWorkbenchThreadRecoveryInput, isWorkbenchThreadRecoveryUserMessage } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type { WorkbenchObservedTurnCandidate } from "./WorkbenchTurnRecoveryController";
+import type { CodexObservedTurnCandidate as WorkbenchObservedTurnCandidate } from "./CodexRecoveryController";
 
 export interface CodexTurnRecoveryPort {
   request(request: JsonRpcRequest): Promise<JsonRpcResponse>;

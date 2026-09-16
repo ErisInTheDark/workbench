@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
- * - WorkbenchShellControllerOptions: inject Codex execution and host environment.
- * - default WorkbenchShellController: run host-shell commands through the Codex thread's exact sandbox state.
+ * - CodexShellControllerOptions: inject Codex execution and host environment.
+ * - default CodexShellController: run host-shell commands through the Codex thread's exact sandbox state.
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -44,7 +44,7 @@ const SandboxStateSchema = z.object({
 
 export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the current Codex turn sandbox. This tool never escalates or opens an approval prompt. If a necessary command fails because the sandbox blocked it, diagnose that restriction before retrying with the direct shell_command tool and require_escalated.";
 
-export interface WorkbenchShellControllerOptions {
+export interface CodexShellControllerOptions {
   commandExec?: Pick<CodexCommandExecController, "execute">;
   platform?: NodeJS.Platform;
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
@@ -92,12 +92,12 @@ function codexSandboxLaunch(codexArgs: string[], platform: NodeJS.Platform) {
   };
 }
 
-export default class WorkbenchShellController {
+export default class CodexShellController {
   private readonly commandExec: Pick<CodexCommandExecController, "execute">;
   private readonly platform: NodeJS.Platform;
   private readonly shellEnvironment: NodeJS.ProcessEnv;
 
-  constructor({ commandExec, platform = process.platform, requestCodex, shellEnvironment = process.env }: WorkbenchShellControllerOptions) {
+  constructor({ commandExec, platform = process.platform, requestCodex, shellEnvironment = process.env }: CodexShellControllerOptions) {
     if (!commandExec && !requestCodex) throw new Error("Codex command execution is not configured.");
     this.commandExec = commandExec ?? new CodexCommandExecController({ requestCodex: requestCodex! });
     this.platform = platform;

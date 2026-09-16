@@ -81,7 +81,7 @@ export default function ThreadCheckpointDiffItem({
 
     const abortController = new AbortController();
     setState({ status: "loading" });
-    void daemon.requestGitArc("git/arc/diff-artifact/read", buildFullDiffRequestBody({
+    void daemon.git.arc.diffArtifact(buildFullDiffRequestBody({
         cwd,
         diffArtifactId,
         harness: gitArcPresentation?.harness ?? "codex",

@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - WorkbenchCodexMcpGenerationState: reload-handoff state for Codex MCP freshness. Keywords: MCP, generation, handoff.
- * - default WorkbenchCodexMcpGenerationController: own MCP generation, coalesced Codex refresh, and failure-safe freshness admission. Keywords: MCP, generation, refresh, lifecycle.
+ * - default WorkbenchCodexMcpGenerationController: coalesce native MCP preparation for one Codex bridge and the current shared catalogue.
  */
 import { randomUUID } from "node:crypto";
 
@@ -10,44 +9,15 @@ interface RefreshFlight {
   promise: Promise<void>;
 }
 
-export interface WorkbenchCodexMcpGenerationState {
-  counter: number;
-  epoch: string;
-  refreshedGeneration: string | null;
-}
-
 export default class WorkbenchCodexMcpGenerationController {
-  private readonly epoch: string;
-  private counter = 0;
+  private readonly epoch = randomUUID();
   private refreshedGeneration: string | null = null;
   private refreshFlight: RefreshFlight | null = null;
 
-  constructor(state: WorkbenchCodexMcpGenerationState | string = randomUUID()) {
-    if (typeof state === "string") {
-      this.epoch = state;
-      return;
-    }
-    this.epoch = state.epoch;
-    this.counter = state.counter;
-    this.refreshedGeneration = state.refreshedGeneration;
-  }
+  constructor(private readonly readRevision: () => string) {}
 
   get generation() {
-    return `${this.epoch}:${this.counter}`;
-  }
-
-  bump() {
-    this.counter += 1;
-    return this.generation;
-  }
-
-  detachForReload(): WorkbenchCodexMcpGenerationState {
-    if (this.refreshFlight) throw new Error("Codex MCP generation cannot detach while a refresh is active.");
-    return {
-      counter: this.counter,
-      epoch: this.epoch,
-      refreshedGeneration: this.refreshedGeneration,
-    };
+    return `${this.epoch}:${this.readRevision()}`;
   }
 
   async prepare(threadGeneration: string | null, refresh: () => Promise<void>) {
@@ -63,10 +33,11 @@ export default class WorkbenchCodexMcpGenerationController {
 
   private async ensureRefreshed(generation: string, refresh: () => Promise<void>) {
     if (this.refreshedGeneration === generation) return;
-    if (this.refreshFlight) {
+    while (this.refreshFlight) {
       await this.refreshFlight.promise;
       if (this.refreshedGeneration === generation) return;
     }
+    if (generation !== this.generation) return;
     const promise = refresh().then(() => {
       this.refreshedGeneration = generation;
     });

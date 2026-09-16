@@ -571,7 +571,7 @@ export default memo(function ThreadViewContent ({
 
   useEffect(() => {
     let cancelled = false;
-    void daemon.request("skills/read", { projectId: projectId || null }).then((payload) => {
+    void daemon.skills.read({ projectId: projectId || null }).then((payload) => {
       if (!cancelled) {
         setWorkbenchSkills(payload.data ?? []);
       }

@@ -174,9 +174,9 @@ export default class IsolatedWorkbench {
     try {
       await this.withSignal(client.connect(this.origin.replace("http:", "ws:")), this.signal);
       // The daemon announces capabilities on the first WB request, not socket open.
-      await this.daemon.request("project/catalog/read", {});
+      await this.daemon.projects.catalog();
       await this.withSignal(ready, this.signal);
-      for (const profile of profiles) await this.daemon.request("profiles/upsert", { profile });
+      for (const profile of profiles) await this.daemon.profiles.upsert({ profile });
     } finally {
       stopAvailability();
     }

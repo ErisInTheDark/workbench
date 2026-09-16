@@ -5,16 +5,17 @@
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchDaemonHttpRouter from "./WorkbenchDaemonHttpRouter";
 import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
   "bridgeRequest",
-  "codexMcpGeneration",
+  "toolRevision",
   "database",
   "gitArc",
   "harnesses",
@@ -31,8 +32,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   children: [],
   create: (context, build) => {
     const agentCommand = build.get("agentCommand");
-    const harnesses = build.get("harnesses");
-    const codexMcpGeneration = build.get("codexMcpGeneration");
+    const providers = new WorkbenchProviderDispatcher(build.run);
+    const toolRevision = build.get("toolRevision");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     build.get("reloadController");
@@ -49,17 +50,17 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     };
     let stopWaitObservation: (() => void) | null = null;
     const mcp = new WorkbenchAgentMcpController({
-      resolveThreadId: async (threadId, cwd) => {
-        const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench MCP" });
-        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness: "codex" });
-        if (!identity) throw new Error("The managed Codex thread has no Workbench identity.");
-        return identity.threadId;
+      tools: selector => {
+        const key = installedProviderKeys.find(key => key === selector);
+        if (!key) throw new Error(`Provider ${selector} is not installed.`);
+        const tools = providers.get(key).tools;
+        if (!tools) throw new Error(`Provider ${selector} does not support managed tools.`);
+        return tools;
       },
       executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       daemonOrigin: context.localDaemonOrigin,
       requestRegistry,
-      requestCodex: async (request) => await harnesses.request("codex", request),
       runLoggedCommand: async (label, signal, operation, succeeded) => (
         await agentCommand.runLoggedCommand(label, signal, operation, succeeded)
       ),
@@ -79,13 +80,19 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         activateCommandExecutor();
         stopWaitObservation ??= requestRegistry.subscribeThreadWaits(
           ({ threadId, toolNames }) => {
-            threadState.controller.setThreadWaitState("codex", threadId, toolNames);
+            for (const binding of threadIdentity.knownThread(threadId).bindings) {
+              threadState.controller.setThreadWaitState(binding.harness, threadId, toolNames);
+            }
           },
-          nativeThreadId => threadIdentity.workbenchIdForNative(
-            threadIdentity.knownNativeBinding("codex", nativeThreadId),
-          ),
+          nativeThreadId => {
+            const binding = installedProviderKeys
+              .map(key => threadIdentity.findNativeBinding(key, nativeThreadId))
+              .find(binding => binding !== undefined);
+            if (!binding) throw new Error("A retained MCP wait has no admitted provider binding.");
+            return threadIdentity.workbenchIdForNative(binding);
+          },
         );
-        if (build.mode === "replacement") codexMcpGeneration.bump();
+        if (build.mode === "replacement") toolRevision.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
       dispose: () => {
@@ -116,7 +123,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/WorkbenchAgentMcpController.ts",
     "daemon/server/WorkbenchDaemonHttpRouter.ts",
     "daemon/server/WorkbenchTranscriptAssetController.ts",
-    "daemon/server/WorkbenchShellController*.ts",
     "shared/workbench/commands/workbench-shell-command.ts",
     "daemon/server/workbench-agent-mcp-request-registry.ts",
   ].join("\n"),

@@ -151,8 +151,7 @@ function useExternalFileLinkRoots(markdown: string) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const payload: ResolveExternalFileLinkRootsResponse | null = await daemon.request(
-          "native/file/link-roots",
+        const payload: ResolveExternalFileLinkRootsResponse | null = await daemon.nativeFiles.linkRoots(
           { paths: unresolvedPaths },
         );
         const roots = Array.isArray(payload?.roots) ? payload.roots : [];

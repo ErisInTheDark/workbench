@@ -14,6 +14,7 @@ import type {
 } from "../thread/thread-actions.ts";
 import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
+import type { WorkbenchAgentMessage } from "../thread/thread-agent-message.ts";
 
 export const WORKBENCH_THREAD_HISTORY_PENDING = -32010;
 export class WorkbenchThreadHistoryPendingError extends Error {}
@@ -34,6 +35,7 @@ export interface WorkbenchProviderThreadList {
 }
 export interface WorkbenchProviderThreads {
   history: {
+    materialize(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
     questionnaires(threadId: string): Promise<WorkbenchQuestionnaireHistoryEntry[]>;
     steers(threadId: string): Promise<WorkbenchSteerHistoryEntry[]>;
     browse(threadId: string): Promise<WorkbenchBrowseResultEntry[]>;
@@ -41,12 +43,14 @@ export interface WorkbenchProviderThreads {
   create(input: WorkbenchProviderThreadCreate): Promise<ThreadPayload>;
   list(input: WorkbenchProviderThreadList): Promise<{ data: ThreadPayload[]; nextCursor: string | null }>;
   read(threadId: string, options?: { background?: boolean }): Promise<ThreadPayload>;
+  readLatest(threadId: string): Promise<ThreadPayload>;
   latestTurn(threadId: string): Promise<Turn | null>;
   admitTurn(threadId: string, turnReference: string): Promise<void>;
   page(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult>;
   submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult>;
+  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<void>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string): Promise<void>;
-  interrupt(threadId: string, turnId: string): Promise<void>;
+  interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }): Promise<void>;
   materialize(threadId: string, turnIds: string[], signal?: AbortSignal): Promise<void>;
 }

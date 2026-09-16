@@ -37,7 +37,7 @@ import type WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServ
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
-import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
+import { WorkbenchSandboxNetworkUpdateSchema } from "workbench-shared/workbench/provider/provider-settings";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
@@ -64,7 +64,7 @@ const METHODS = new Set([
   "models/list", "account/limits/read",
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
-  "codex-sandbox-network/read", "codex-sandbox-network/update",
+  "sandbox-network/read", "sandbox-network/update",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
@@ -198,7 +198,6 @@ export default class WorkbenchDaemonRequestController {
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
-    codexSandboxNetwork: Pick<WorkbenchCodexSandboxNetworkController, "read" | "setGlobal" | "setProjectOverride">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
@@ -265,29 +264,26 @@ export default class WorkbenchDaemonRequestController {
           }) : null };
           break;
         }
-        case "codex-sandbox-network/read": {
+        case "sandbox-network/read": {
           const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
-          result = { codexSandboxNetwork: await this.owners.codexSandboxNetwork.read(projectId) };
+          if (!this.owners.providers) throw new Error("Provider settings are unavailable.");
+          const settings = await Promise.all(installedProviderKeys.map(async provider => {
+            const setting = await this.owners.providers!.get(provider).configuration.sandboxNetwork?.read(projectId);
+            return setting ? { ...setting, provider } : null;
+          }));
+          result = { data: settings.filter(setting => setting !== null) };
           break;
         }
-        case "codex-sandbox-network/update": {
-          const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
-          if (params.scope === "global") {
-            if (typeof params.enabled !== "boolean") {
-              throw new InvalidParamsError("A global Codex sandbox network update requires a boolean enabled value.");
-            }
-            const enabled = params.enabled as boolean;
-            await this.owners.codexSandboxNetwork.setGlobal(enabled);
-          } else if (params.scope === "project") {
-            if (typeof params.enabled !== "boolean" && params.enabled !== null) {
-              throw new InvalidParamsError("A project Codex sandbox network update requires a boolean or null enabled value.");
-            }
-            const enabled = params.enabled === null ? null : params.enabled as boolean;
-            await this.owners.codexSandboxNetwork.setProjectOverride(projectId, enabled);
-          } else {
-            throw new InvalidParamsError("scope must be global or project.");
-          }
-          result = { codexSandboxNetwork: await this.owners.codexSandboxNetwork.read(projectId) };
+        case "sandbox-network/update": {
+          const parsed = WorkbenchSandboxNetworkUpdateSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid sandbox network setting update.");
+          const { provider: requestedProvider, ...input } = parsed.data;
+          const { id: projectId } = await this.owners.projects.resolveProjectById(input.projectId);
+          const provider = installedProviderKeys.find(provider => provider === requestedProvider);
+          if (!provider) throw new InvalidParamsError("The requested provider is not installed.");
+          const capability = this.owners.providers?.get(provider).configuration.sandboxNetwork;
+          if (!capability) throw new InvalidParamsError("The requested provider does not expose sandbox network settings.");
+          result = { data: [{ ...await capability.update({ ...input, projectId }), provider }] };
           break;
         }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;

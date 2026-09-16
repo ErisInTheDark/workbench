@@ -5,17 +5,20 @@
 import CodexModelCatalog from "./CodexModelCatalog";
 import { readCodexGlobalGuidance, containsExactGuidanceText } from "./lib/codex/CodexGlobalGuidance";
 import CodexProvider from "./CodexProvider";
+import CodexBridgeNode from "./CodexBridgeNode";
+import WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import ReloadableNode from "./ReloadableNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [CodexProvider],
-  create: () => {
+  children: [CodexProvider, CodexBridgeNode],
+  create: (_context, { get }) => {
     const catalog = new CodexModelCatalog();
+    const network = new WorkbenchCodexSandboxNetworkController(get("database"));
     return {
-      registrations: { codexConfiguration: {
+      registrations: { codexSandboxNetwork: network, codexConfiguration: {
         read: () => catalog.read(),
         containsGlobalGuidance: async (sections: string[]) => {
           const guidance = await readCodexGlobalGuidance();
@@ -23,13 +26,13 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         },
       } },
       start: () => undefined,
-      dispose: () => undefined,
+      dispose: () => network.waitForIdle(),
     };
   },
   description: "Reload local Codex configuration and its provider definition.",
   lifecycle: "atomic",
-  provides: ["codexConfiguration"],
-  requires: [],
+  provides: ["codexConfiguration", "codexSandboxNetwork"],
+  requires: ["database"],
   safeAll: true,
   scope: "server:codex/configuration",
   sources: [

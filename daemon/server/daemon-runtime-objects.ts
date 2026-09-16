@@ -53,7 +53,7 @@ import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandbox
 import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
-import type WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
+import type WorkbenchToolRevisionController from "./WorkbenchToolRevisionController";
 import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
@@ -74,6 +74,7 @@ import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityCon
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/workbench-transcript-types";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import type CodexRecoveryController from "./CodexRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
@@ -183,6 +184,7 @@ export interface DaemonRuntimeObjects {
   };
   codexThreadOperations: CodexThreadOperations;
   codexNativeConfiguration: CodexConfigurationController;
+  codexTools: import("./CodexToolsController").default;
   codexProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
@@ -191,7 +193,7 @@ export interface DaemonRuntimeObjects {
   codexAppServer: DaemonCodexAppServerRuntime;
   codexBridge: CodexStdioBridge;
   codexHealth: CodexHealthMonitor;
-  codexMcpGeneration: WorkbenchCodexMcpGenerationController;
+  toolRevision: WorkbenchToolRevisionController;
   codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: DaemonDatabaseRegistration;
@@ -215,5 +217,6 @@ export interface DaemonRuntimeObjects {
   threadState: WorkbenchThreadStateFeature;
   transcript: DaemonTranscriptRegistration;
   turnRecovery: WorkbenchTurnRecoveryController;
+  codexRecovery: CodexRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

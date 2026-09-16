@@ -764,7 +764,7 @@ function WorkbenchThreadClient(
           },
         },
         observations: threadObservations,
-        readGitArcProposal: async input => await daemon.requestGitArc("git/arc/proposal/read", {
+        readGitArcProposal: async input => await daemon.git.arc.proposal.read({
           ...input,
           includeNewer: false,
         }),
@@ -4257,7 +4257,7 @@ function WorkbenchThreadClient(
   async function readThreadProfileSnapshot<Thread extends ThreadPayload>(thread: Thread, projectId: ProjectId): Promise<Thread> {
     if (thread.isDraft) return thread;
     try {
-      const { selection } = await daemon.request("profiles/target/read", { slot: { kind: "thread", projectId, harness: thread.harness, threadId: thread.id } });
+      const { selection } = await daemon.profiles.target.read({ slot: { kind: "thread", projectId, harness: thread.harness, threadId: thread.id } });
       const settings = selection?.settings;
       return { ...thread, model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null, serviceTier: settings?.serviceTier ?? null, agentPath: settings?.agentPath ?? null, contextWindowTokens: settings?.contextWindowTokens ?? null };
     } catch (error) {

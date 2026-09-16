@@ -116,7 +116,7 @@ import {
 } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
 import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionAdapter";
-import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
+import type { CodexQuestionnairePort } from "./CodexQuestionnaireAdapter";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import type CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
@@ -198,7 +198,7 @@ export type CodexStdioBridgeOptions = {
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
     signal: AbortSignal,
   ) => Promise<void>;
-  questionnaires?: Pick<WorkbenchQuestionnaireController, "list" | "respond">;
+  questionnaires?: CodexQuestionnairePort;
   recordSqliteTranscript?: (
     observations: readonly WorkbenchTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
@@ -227,7 +227,7 @@ const UNCONFIGURED_CODEX_INSTRUCTIONS: WorkbenchCodexInstructionPort = {
   createThreadResume: () => { throw new Error("Codex instruction adaptation is not configured."); },
 };
 
-const UNCONFIGURED_WORKBENCH_QUESTIONNAIRES: Pick<WorkbenchQuestionnaireController, "list" | "respond"> = {
+const UNCONFIGURED_WORKBENCH_QUESTIONNAIRES: CodexQuestionnairePort = {
   list: () => ({ data: [] }),
   respond: async () => null,
 };
@@ -1519,7 +1519,7 @@ export default class CodexStdioBridge {
         case "questionnaire/list":
           return {
             id: requestId,
-            result: this.listPendingQuestionnaires(),
+            result: await this.listPendingQuestionnaires(),
           };
         case "questionnaire/history/list":
           return {
@@ -2633,7 +2633,7 @@ export default class CodexStdioBridge {
     });
   }
 
-  private listPendingQuestionnaires() {
+  private async listPendingQuestionnaires() {
     return {
       data: [
         ...Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
@@ -2643,7 +2643,7 @@ export default class CodexStdioBridge {
           threadId: pendingRequest.threadId,
           turnId: pendingRequest.turnId,
         })),
-        ...this.questionnaires.list().data,
+        ...(await this.questionnaires.list()).data,
       ],
     };
   }

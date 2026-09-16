@@ -30,6 +30,7 @@ export function createWorkbenchTextInput(text: string): Extract<WorkbenchUserInp
 }
 
 export const WorkbenchMessageContextSchema = z.object({
+  subagentName: z.string().optional(),
   activatedSkillPaths: z.array(z.string()).optional(),
   instructionInjections: z.record(z.string(), z.string()).optional(),
   instructionScope: z.enum(["full", "threadUtilities"]).optional(),

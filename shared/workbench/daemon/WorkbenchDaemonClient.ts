@@ -2,7 +2,6 @@
  * Exports:
  * - WorkbenchDaemonTransport: existing socket request port.
  * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data.
- * - WorkbenchDaemonClient: typed semantic daemon request client.
  * - default WorkbenchDaemonClient: create the browser daemon client.
  */
 import type {
@@ -13,6 +12,7 @@ import type {
 } from "./workbench-daemon-requests.ts";
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
+import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -66,15 +66,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "models/list": return z.object({ data: z.array(WorkbenchModelOptionSchema) });
     case "account/limits/read": return WorkbenchAccountLimitsSchema;
     case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
-    case "codex-sandbox-network/read":
-    case "codex-sandbox-network/update": return z.object({
-      codexSandboxNetwork: z.object({
-        effectiveEnabled: z.boolean(),
-        globalEnabled: z.boolean(),
-        projectId: z.string(),
-        projectOverride: z.boolean().nullable(),
-      }).strict(),
-    }).strict();
+    case "sandbox-network/read":
+    case "sandbox-network/update": return WorkbenchSandboxNetworkSettingsResponseSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
     case "project/file/read": return z.object({
@@ -127,11 +120,12 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   }
 }
 
-export class WorkbenchDaemonClient {
+class WorkbenchDaemonClient {
   constructor(private readonly transport: WorkbenchDaemonTransport) {}
 
   readonly models = {
     list: (provider: string) => this.request("models/list", { provider }),
+    context: () => this.request("models/context/read", {}),
   };
 
   readonly account = {
@@ -139,6 +133,7 @@ export class WorkbenchDaemonClient {
   };
 
   readonly threads = {
+    resolveIdentity: (params: WorkbenchDaemonParams<"thread/identity/resolve">) => this.request("thread/identity/resolve", params),
     history: {
       questionnaires: (params: WorkbenchDaemonParams<"thread/questionnaires/read">) => this.request("thread/questionnaires/read", params),
       steers: (params: WorkbenchDaemonParams<"thread/steers/read">) => this.request("thread/steers/read", params),
@@ -165,6 +160,85 @@ export class WorkbenchDaemonClient {
     pending: () => this.request("questionnaires/pending/read", {}),
   };
 
+  readonly projects = {
+    catalog: () => this.request("project/catalog/read", {}),
+    files: {
+      read: (params: WorkbenchDaemonParams<"project/file/read">) => this.request("project/file/read", params),
+      reset: (params: WorkbenchDaemonParams<"project/file/reset">) => this.request("project/file/reset", params),
+      save: (params: WorkbenchDaemonParams<"project/file/save">) => this.request("project/file/save", params),
+    },
+  };
+
+  readonly profiles = {
+    read: () => this.request("profiles/read", {}),
+    upsert: (params: WorkbenchDaemonParams<"profiles/upsert">) => this.request("profiles/upsert", params),
+    delete: (params: WorkbenchDaemonParams<"profiles/delete">) => this.request("profiles/delete", params),
+    target: {
+      read: (params: WorkbenchDaemonParams<"profiles/target/read">) => this.request("profiles/target/read", params),
+      set: (params: WorkbenchDaemonParams<"profiles/target/set">) => this.request("profiles/target/set", params),
+    },
+  };
+
+  readonly agents = {
+    list: (params: WorkbenchDaemonParams<"agents/list">) => this.request("agents/list", params),
+    read: (params: WorkbenchDaemonParams<"agents/read">) => this.request("agents/read", params),
+  };
+
+  readonly skills = {
+    read: (params: WorkbenchDaemonParams<"skills/read">) => this.request("skills/read", params),
+  };
+
+  readonly search = {
+    query: (params: WorkbenchDaemonParams<"search/query">) => this.request("search/query", params),
+  };
+
+  readonly localCapabilities = {
+    read: () => this.request("local-capabilities/read", {}),
+    update: (params: WorkbenchDaemonParams<"local-capabilities/update">) => this.request("local-capabilities/update", params),
+  };
+
+  readonly sandboxNetwork = {
+    read: (params: WorkbenchDaemonParams<"sandbox-network/read">) => this.request("sandbox-network/read", params),
+    update: (params: WorkbenchDaemonParams<"sandbox-network/update">) => this.request("sandbox-network/update", params),
+  };
+
+  readonly nativeFiles = {
+    open: (params: WorkbenchDaemonParams<"native/file/open">) => this.request("native/file/open", params),
+    reveal: (params: WorkbenchDaemonParams<"native/file/reveal">) => this.request("native/file/reveal", params),
+    linkRoots: (params: WorkbenchDaemonParams<"native/file/link-roots">) => this.request("native/file/link-roots", params),
+  };
+
+  readonly browse = {
+    sessions: {
+      read: (params: WorkbenchDaemonParams<"browse/sessions/read">) => this.request("browse/sessions/read", params),
+      forget: (params: WorkbenchDaemonParams<"browse/sessions/forget">) => this.request("browse/sessions/forget", params),
+      stop: (params: WorkbenchDaemonParams<"browse/sessions/stop">) => this.request("browse/sessions/stop", params),
+    },
+  };
+
+  readonly stats = {
+    read: (params: WorkbenchDaemonParams<"stats/read">) => this.request("stats/read", params),
+    detailed: (params: WorkbenchDaemonParams<"stats/read/detailed">) => this.request("stats/read/detailed", params),
+    efficiency: (params: WorkbenchDaemonParams<"stats/read/efficiency">) => this.request("stats/read/efficiency", params),
+    efficiencyV2: (params: WorkbenchDaemonParams<"stats/read/efficiency/v2">) => this.request("stats/read/efficiency/v2", params),
+    startImport: () => this.request("stats/import/start", {}),
+    refreshRateLimits: () => this.request("stats/rate-limits/refresh", {}),
+  };
+
+  readonly git = {
+    arc: {
+      compare: (params: WorkbenchDaemonParams<"git/arc/compare">) => this.requestGitArc("git/arc/compare", params),
+      release: (params: WorkbenchDaemonParams<"git/arc/release">) => this.requestGitArc("git/arc/release", params),
+      remove: (params: WorkbenchDaemonParams<"git/arc/remove">) => this.requestGitArc("git/arc/remove", params),
+      restore: (params: WorkbenchDaemonParams<"git/arc/restore">) => this.requestGitArc("git/arc/restore", params),
+      diffArtifact: (params: WorkbenchDaemonParams<"git/arc/diff-artifact/read">) => this.requestGitArc("git/arc/diff-artifact/read", params),
+      proposal: {
+        read: (params: WorkbenchDaemonParams<"git/arc/proposal/read">) => this.requestGitArc("git/arc/proposal/read", params),
+        commit: (params: WorkbenchDaemonParams<"git/arc/proposal/commit">) => this.requestGitArc("git/arc/proposal/commit", params),
+      },
+    },
+  };
+
   onReconnect(listener: () => void) {
     return this.transport.onReconnect?.(listener) ?? (() => undefined);
   }
@@ -181,7 +255,7 @@ export class WorkbenchDaemonClient {
     }) ?? (() => undefined);
   }
 
-  async request<TMethod extends WorkbenchDaemonMethod>(
+  private async request<TMethod extends WorkbenchDaemonMethod>(
     method: TMethod,
     params: WorkbenchDaemonParams<TMethod>,
   ): Promise<WorkbenchDaemonResult<TMethod>> {
@@ -197,7 +271,7 @@ export class WorkbenchDaemonClient {
     return result;
   }
 
-  async requestGitArc<TMethod extends WorkbenchDaemonGitArcMethod>(
+  private async requestGitArc<TMethod extends WorkbenchDaemonGitArcMethod>(
     method: TMethod,
     params: WorkbenchDaemonParams<TMethod>,
   ): Promise<WorkbenchDaemonResult<TMethod>> {

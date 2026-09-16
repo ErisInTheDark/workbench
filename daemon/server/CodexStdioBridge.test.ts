@@ -42,6 +42,7 @@ import type { ServerNotification } from "workbench-shared/codex/generated/app-se
 import { NativeThreadIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import CodexRecoveryController from "./CodexRecoveryController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import { recoverCodexTurn } from "./codex-turn-recovery";
 
@@ -4002,8 +4003,12 @@ test("explicit refresh rebuilds the current instruction prefix and prepares MCP 
     prepareTurnStart: async () => { order.push("prepare:mcp"); },
   });
   const failures: unknown[] = [];
-  const controller = new WorkbenchTurnRecoveryController(() => undefined, async (_candidate, error) => { failures.push(error); }, undefined, {
-    codex: async candidate => recoverCodexTurn(candidate, {
+  const controller = new CodexRecoveryController({
+    coordinator: new WorkbenchTurnRecoveryController(() => undefined),
+    log: () => undefined,
+    reportFailure: async (_candidate, error) => { failures.push(error); },
+    runTask: async (_label, task) => task(),
+    recover: async candidate => recoverCodexTurn(candidate, {
       request: async request => request.method === "thread/read"
         ? { id: request.id, result: { thread } }
         : await bridge.handleBridgeRequest(request),

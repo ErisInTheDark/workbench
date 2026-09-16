@@ -1,5 +1,6 @@
 /*
  * WorkbenchCodexSandboxNetworkSnapshot: resolved global and project Codex sandbox network state.
+ * WorkbenchCodexSandboxNetworkDatabase: database operations required by the native setting owner.
  * default WorkbenchCodexSandboxNetworkController: own persisted global and project Codex sandbox network settings.
  */
 import {
@@ -15,13 +16,9 @@ import {
   codexSandboxNetworkGlobalSettings,
   codexSandboxNetworkProjectOverrides,
 } from "./lib/workbench/database/schema/codex-sandbox-network-schema";
+import type { WorkbenchSandboxNetworkSnapshot } from "workbench-shared/workbench/provider/provider-settings";
 
-export interface WorkbenchCodexSandboxNetworkSnapshot {
-  effectiveEnabled: boolean;
-  globalEnabled: boolean;
-  projectId: string;
-  projectOverride: boolean | null;
-}
+export type WorkbenchCodexSandboxNetworkSnapshot = WorkbenchSandboxNetworkSnapshot;
 
 export interface WorkbenchCodexSandboxNetworkDatabase {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<{ changes: number }>;
@@ -32,6 +29,10 @@ export default class WorkbenchCodexSandboxNetworkController {
   private operationQueue = Promise.resolve();
 
   constructor(private readonly database: WorkbenchCodexSandboxNetworkDatabase) {}
+
+  waitForIdle() {
+    return this.operationQueue;
+  }
 
   async read(projectId: string): Promise<WorkbenchCodexSandboxNetworkSnapshot> {
     return await this.enqueue(async () => await this.readSnapshot(projectId));

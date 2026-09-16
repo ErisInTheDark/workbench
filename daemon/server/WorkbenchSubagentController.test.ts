@@ -3,10 +3,9 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { TurnStartParams } from "workbench-shared/codex/generated/app-server/v2/TurnStartParams";
-import type { WorkbenchComposerProfile, WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { ThreadPayload, WorkbenchComposerProfile, WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type WorkbenchProvider from "./WorkbenchProvider";
+import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import type { JsonRpcRequest } from "./bridge-types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -21,12 +20,13 @@ const fixtureIdentityValues = {
   },
 };
 
-function thread(id: string, active: boolean): Thread {
+function thread(id: string, active: boolean): ThreadPayload {
   return {
-    agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
-    extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id, modelProvider: "openai", name: null, parentThreadId: null,
-    model: null, projectId: null, reasoningEffort: null, path: null, preview: "", recencyAt: null, section: null, sectionEnteredAt: null,
-    sessionId: "session", source: "appServer", status: active ? { activeFlags: [], type: "active" } : { type: "idle" }, threadSource: null,
+    agentNickname: null, agentRole: null, createdAt: 1, cwd: "C:/repo", harness: "test-provider",
+    id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id), name: null,
+    model: null, reasoningEffort: null, path: null, preview: "", recencyAt: null,
+    agentPath: null, tokenUsage: null, turnHistory: [], serviceTier: null, isDraft: false,
+    source: "appServer", status: active ? "active" : "idle",
     turns: [{
       completedAt: active ? null : 2, durationMs: null, error: null, id: `turn-${id}`, items: [], itemsView: "full",
       startedAt: 1, status: active ? "inProgress" : "completed",
@@ -36,11 +36,11 @@ function thread(id: string, active: boolean): Thread {
 
 type Route = "create" | "child-active" | "child-idle" | "parent-active" | "parent-idle";
 
-async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery = false, nativePort = false) {
+async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery = false, publicIds = false) {
   const requests: JsonRpcRequest[] = [];
   const identities = new Map(["parent", "child"].map(name => {
     const record = {
-      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(nativePort ? `public-${name}` : name),
+      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(publicIds ? `public-${name}` : name),
       projectId: fixtureIdentityValues.ProjectId.project,
       projectRoot: "C:/repo",
       bindings: [{
@@ -65,49 +65,38 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     profileId: profile.id, profileName: profile.name, projectId: fixtureIdentityValues.ProjectId["project"], threadId: knownThread("child").threadId, title: "review", updatedAt: 1,
   };
   let relationships = route === "create" ? [] : [relationship];
-  const provider = {
-      connect: async () => {},
-      close() {},
-      async sendRequest<T>(request: JsonRpcRequest) {
-        requests.push(request);
-        const params = request.params as Record<string, unknown>;
-        if (request.workbenchHarness !== harness) return { id: 1, error: { code: -32000, message: "not this harness" } };
-        if (rejectDelivery && (request.method === "turn/start" || request.method === "turn/steer")) {
-          return { id: 1, error: { code: -32000, message: "delivery rejected" } };
-        }
-        let result: object = {};
-        switch (request.method) {
-          case "thread/read": result = { thread: thread(String(params.threadId), route.endsWith("active")) }; break;
-          case "thread/start": result = { thread: thread("child", false) }; break;
-          case "questionnaire/list": result = { data: route === "child-active" ? [{
-            requestKey: "question", threadId: "child", turnId: "turn-child",
-            request: { id: "question", title: "review", summary: "", submitLabel: "send", questions: [{
-              id: "choice", header: "", question: "continue?", options: [], allowOther: true, isSecret: false,
-            }] },
-          }] : [] }; break;
-        }
-        return { id: 1, result: result as T };
+  const unused = async () => { throw new Error("unexpected provider operation"); };
+  const read = async (id: string) => thread(knownThread(id).threadId, route.endsWith("active"));
+  const provider: Pick<WorkbenchProvider, "threads" | "interactions"> = {
+    threads: {
+      read, readLatest: read, latestTurn: unused, admitTurn: unused,
+      history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
+      create: async input => {
+        requests.push({ method: "create", params: input });
+        return thread(knownThread("child").threadId, false);
       },
-    };
+      messageAgent: async input => {
+        requests.push({ method: "messageAgent", params: input });
+        if (rejectDelivery) throw new Error("delivery rejected");
+      },
+      rename: async () => {}, list: unused, page: unused, submit: unused,
+      compact: unused, interrupt: unused, materialize: unused,
+    },
+    interactions: {
+      pending: async () => route === "child-active" ? [{
+        harness, requestKey: "question", threadId: knownThread("child").threadId, turnId: "turn-child", itemId: "item",
+        request: { id: "question", title: "review", summary: "", submitLabel: "send", questions: [{
+          id: "choice", header: "", question: "continue?", options: [], allowOther: true, isSecret: false,
+        }] },
+      }] : [],
+      respond: async input => { requests.push({ method: "respond", params: input }); return {}; },
+      interruptRetaining: unused, canDeliver: unused, deliver: unused, supplement: unused, record: unused,
+    },
+  };
   const controller = new WorkbenchSubagentController({
-    bridgeUrl: "ws://unused",
+    provider: selected => { assert.equal(selected, harness); return provider; },
     identities: { resolve: async ({ threadId }) => knownThread(threadId), knownThread },
     publicThreadId: async threadId => knownThread(threadId).threadId,
-    createHarnessClient: () => {
-      assert.equal(nativePort, false, "Internal provider work must not connect through the public socket.");
-      return provider;
-    },
-    ...(nativePort ? {
-      requestNativeHarness: (providerHarness: WorkbenchHarness, request: JsonRpcRequest) => {
-        const params = request.params as Record<string, unknown> | undefined;
-        return provider.sendRequest<object>({
-          ...request, workbenchHarness: providerHarness,
-          ...(typeof params?.threadId === "string"
-            ? { params: { ...params, threadId: knownThread(params.threadId).bindings[0].nativeThreadId } }
-            : {}),
-        });
-      },
-    } : {}),
     onRelationshipCommitted: async () => {},
     profileStore: {
       read: async () => ({ profiles: [profile] }),
@@ -149,7 +138,7 @@ test("subagent disposal drains admitted requests and rejects new admission", asy
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const controller = new WorkbenchSubagentController({
-    bridgeUrl: "ws://unused", onRelationshipCommitted: async () => {},
+    provider: () => { throw new Error("Profiles do not call providers."); }, onRelationshipCommitted: async () => {},
     identities: {
       resolve: async () => { throw new Error("Profiles do not resolve thread identities."); },
       knownThread: () => { throw new Error("Profiles do not resolve thread identities."); },
@@ -186,50 +175,39 @@ test("subagent disposal drains admitted requests and rejects new admission", asy
   }
 });
 
-for (const harness of ["codex", "copilot"] as const) {
+for (const harness of ["codex", "another-provider"] as const) {
   for (const route of ["create", "child-active", "child-idle", "parent-active", "parent-idle"] as const) {
     test(`${harness} ${route} messages retain sender authority and questionnaire ordering`, async () => {
       const { message, requests, response } = await exercise(route, harness);
       assert.equal(response.error, undefined);
-      const deliveries = requests.filter((request) => request.method === "turn/start" || request.method === "turn/steer");
+      const deliveries = requests.filter((request) => request.method === "messageAgent");
       assert.equal(deliveries.length, 1);
       const delivery = deliveries[0]!;
-      const params = delivery.params as TurnStartParams;
-      const attributed = harness === "codex"
-        ? typeof params.toolOutput?.output === "string" ? readWorkbenchAgentMessageText(params.toolOutput.output) : null
-        : readWorkbenchAgentMessageInput(params.input);
-      assert.deepEqual(attributed, {
+      const params = delivery.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+      assert.deepEqual(params.message, {
         message, senderName: route.startsWith("parent") ? "iris" : "parent agent", senderThreadId: route.startsWith("parent") ? "child" : "parent",
       });
-      if (harness === "codex") {
-        assert.equal(delivery.method, "turn/start");
-        assert.deepEqual(params.input, []);
-      } else {
-        assert.equal(delivery.method, route.endsWith("active") ? "turn/steer" : "turn/start");
-        assert.equal(params.toolOutput, undefined);
-      }
-      const questionnaireIndex = requests.findIndex((request) => request.method === "questionnaire/respond");
+      const questionnaireIndex = requests.findIndex((request) => request.method === "respond");
       if (route === "child-active") assert.ok(questionnaireIndex > requests.indexOf(delivery));
       else assert.equal(questionnaireIndex, -1);
     });
   }
 }
 
-test("failed native agent admission does not release a waiting child questionnaire", async () => {
+test("failed agent admission does not release a waiting child questionnaire", async () => {
   const { requests, response } = await exercise("child-active", "codex", true);
   assert.match(response.error?.message ?? "", /delivery rejected/u);
-  assert.equal(requests.some(({ method }) => method === "questionnaire/respond"), false);
+  assert.equal(requests.some(({ method }) => method === "respond"), false);
 });
 
-test("the native subagent port keeps native destinations and canonical prompt/sender context", async () => {
+test("subagent operations use canonical destinations and sender identity", async () => {
   for (const route of ["create", "child-idle"] as const) {
     const { requests, response } = await exercise(route, "codex", false, true);
     assert.equal(response.error, undefined);
-    const delivery = requests.find(({ method }) => method === "turn/start")!;
-    const params = delivery.params as TurnStartParams;
-    assert.equal(params.threadId, "native-child");
-    assert.equal((delivery.workbenchPromptContext as { threadId: string }).threadId, "public-child");
-    const sender = readWorkbenchAgentMessageText(params.toolOutput!.output as string);
-    assert.equal(sender?.senderThreadId, "public-parent");
+    const delivery = requests.find(({ method }) => method === "messageAgent")!;
+    const params = delivery.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+    assert.equal(params.threadId, "public-child");
+    assert.equal(params.context?.subagentName, "iris");
+    assert.equal(params.message.senderThreadId, "public-parent");
   }
 });

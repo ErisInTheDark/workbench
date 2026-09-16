@@ -27,21 +27,22 @@ test("node replay maps a live pre-reload native wait to its Workbench thread", a
     requestsByClient: Map<string, Map<number, { threadId?: string }>>;
   };
   state.requestsByClient.get(clientScope)!.get(1)!.threadId = nativeThreadId;
-  const waitStates: Array<{ threadId: string; toolNames: readonly string[] }> = [];
+  const waitStates: Array<{ harness: string; threadId: string; toolNames: readonly string[] }> = [];
   const registrations = {
     agentCommand: { executeStructuredRequest: async () => new Response("unused") },
-    codexMcpGeneration: { bump() {} },
+    toolRevision: { bump() {} },
     threadIdentity: {
-      knownNativeBinding: (_harness: string, candidate: string) => {
+      findNativeBinding: (_harness: string, candidate: string) => {
         assert.equal(candidate, nativeThreadId);
         return { harness: "codex", nativeLocation: "C:/repo", nativeThreadId };
       },
       workbenchIdForNative: () => workbenchThreadId,
+      knownThread: () => ({ bindings: [{ harness: "codex" }, { harness: "another-provider" }] }),
     },
     threadState: {
       controller: {
-        setThreadWaitState: (_harness: string, threadId: string, toolNames: readonly string[]) => {
-          waitStates.push({ threadId, toolNames });
+        setThreadWaitState: (harness: string, threadId: string, toolNames: readonly string[]) => {
+          waitStates.push({ harness, threadId, toolNames });
         },
       },
     },
@@ -60,9 +61,15 @@ test("node replay maps a live pre-reload native wait to its Workbench thread", a
   });
   try {
     instance.afterCommit?.();
-    assert.deepEqual(waitStates, [{ threadId: workbenchThreadId, toolNames: ["git_arc_wait"] }]);
+    assert.deepEqual(waitStates, [
+      { harness: "codex", threadId: workbenchThreadId, toolNames: ["git_arc_wait"] },
+      { harness: "another-provider", threadId: workbenchThreadId, toolNames: ["git_arc_wait"] },
+    ]);
     wait.unregister();
-    assert.deepEqual(waitStates.at(-1), { threadId: workbenchThreadId, toolNames: [] });
+    assert.deepEqual(waitStates.slice(-2), [
+      { harness: "codex", threadId: workbenchThreadId, toolNames: [] },
+      { harness: "another-provider", threadId: workbenchThreadId, toolNames: [] },
+    ]);
   } finally {
     wait.unregister();
     await instance.dispose();
@@ -73,7 +80,7 @@ test("restoring the MCP node installs a usable executor without bumping freshnes
   let bumps = 0;
   const registrations = {
     agentCommand: { executeStructuredRequest: async () => new Response("restored") },
-    codexMcpGeneration: { bump: () => { bumps += 1; } },
+    toolRevision: { bump: () => { bumps += 1; } },
     threadState: { controller: { setThreadWaitState: () => undefined } },
   } as unknown as DaemonRuntimeObjects;
   const instance = WorkbenchMcpNode.create({
@@ -139,7 +146,7 @@ for (const outcome of ["replacement", "retiring success", "rollback", "admitted 
           },
         };
         registrations.threadState = { controller: { setThreadWaitState: () => undefined } };
-        registrations.codexMcpGeneration = { bump: () => undefined };
+        registrations.toolRevision = { bump: () => undefined };
         return { registrations, dispose: () => undefined, start: () => undefined };
       },
     });
@@ -195,7 +202,7 @@ test("candidate activation failure leaves the live MCP executor and freshness in
         executeStructuredRequest: async () => new Response(build.mode),
       };
       registrations.threadState = { controller: { setThreadWaitState: () => {} } };
-      registrations.codexMcpGeneration = { bump: () => { bumps += 1; } };
+      registrations.toolRevision = { bump: () => { bumps += 1; } };
       return { registrations, start: () => {}, dispose: () => {} };
     },
   });

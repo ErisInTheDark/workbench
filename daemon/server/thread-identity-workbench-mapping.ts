@@ -6,7 +6,7 @@
  * - mapNativeThreadStateResult: derive draft wire aliases in canonical open and context responses.
  * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation and observation targets.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
- * - createNativeQuestionnaireStatePorts: validate questionnaire thread ownership without live-turn admission.
+ * - createWorkbenchQuestionnaireStatePorts: validate WB questionnaire ownership without live-turn admission.
  */
 import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -35,23 +35,16 @@ import type { NativeThreadId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } fr
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type { WorkbenchQuestionnaireControllerOptions } from "./WorkbenchQuestionnaireController";
 
-export function createNativeQuestionnaireStatePorts(
+export function createWorkbenchQuestionnaireStatePorts(
   owners: NativeTranscriptIdentityOwners,
   state: Pick<WorkbenchThreadStateController, "getCanonicalThreadEntry" | "setPendingQuestionnaire" | "clearPendingQuestionnaire" | "subscribe">,
   resolveProject: (cwd: string) => Promise<ProjectId>,
 ): Pick<WorkbenchQuestionnaireControllerOptions, "clearPending" | "publishPending" | "resolveThread" | "subscribePending"> {
   const { threads, items } = owners;
-  const resolveThread = async (threadId: NativeThreadId, projectId?: ProjectId) => {
-    const thread = await threads.resolve({ threadId, harness: "codex", ...(projectId ? { projectId } : {}) });
+  const resolveThread = async (threadId: WorkbenchThreadId, projectId?: ProjectId) => {
+    const thread = await threads.resolve({ threadId, ...(projectId ? { projectId } : {}) });
     if (!thread) throw new Error("The questionnaire caller has no admitted thread identity.");
     return thread;
-  };
-  const nativeTurn = async (threadId: WorkbenchThreadId, nativeThreadId: NativeThreadId, turnId: WorkbenchTurnId) => {
-    const turn = await threads.resolveTurn({ threadId, turnId });
-    if (!turn || turn.native.harness !== "codex" || turn.native.nativeThreadId !== nativeThreadId || turn.native.nativeTurnId === null) {
-      return null;
-    }
-    return turn.native.nativeTurnId;
   };
   return {
     clearPending: async (threadId, requestKey) => {
@@ -85,21 +78,15 @@ export function createNativeQuestionnaireStatePorts(
       const lifecycleTurnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
       return {
         projectId,
-        turnId: lifecycleTurnId === null ? null : await nativeTurn(thread.threadId, threadId, lifecycleTurnId),
-        pendingQuestionnaire: pending ? {
-          ...pending,
-          turnId: pending.turnId === null ? null : await nativeTurn(thread.threadId, threadId, pending.turnId),
-        } : pending === null ? null : undefined,
+        turnId: lifecycleTurnId,
+        pendingQuestionnaire: pending,
       };
     },
     subscribePending: listener => state.subscribe((projectId, entry) => {
       if (entry.entryKind === "draft") return;
       const thread = threads.knownThread(entry.identity.threadId);
       if (thread.projectId !== projectId) throw new Error("Questionnaire observation crossed project ownership.");
-      for (const binding of thread.bindings) {
-        if (binding.harness !== "codex") continue;
-        listener({ projectId: thread.projectId, requestKey: entry.pendingQuestionnaire?.requestKey ?? null, threadId: binding.nativeThreadId });
-      }
+      listener({ projectId: thread.projectId, requestKey: entry.pendingQuestionnaire?.requestKey ?? null, threadId: thread.threadId });
     }),
   };
 }

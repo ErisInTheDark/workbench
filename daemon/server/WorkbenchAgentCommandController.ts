@@ -11,23 +11,19 @@ import {
   type WorkbenchAgentCliRequest,
 } from "./lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-agent-cli-responses";
-import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook, type CodexApplyPatchClaimHookDecision } from "./lib/workbench/codex-apply-patch-claim-hook";
-import {
-  createWorkbenchFileChangeFailureSystemMessage,
-  WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
-} from "workbench-shared/workbench/thread/workbench-file-change";
 import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
+import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
   resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId; harness: WorkbenchHarness }>;
-  checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: WorkbenchThreadId }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+  patchClaims?: (harness: string, input: { raw: string; callerThreadId: string | null }, signal: AbortSignal) => Promise<string>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeQuestionnaireRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -39,7 +35,7 @@ interface WorkbenchAgentDirectPort {
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
-  requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  executeReadOnly?: (harness: string, ...args: Parameters<WorkbenchProviderTools["executeReadOnly"]>) => ReturnType<WorkbenchProviderTools["executeReadOnly"]>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
 }
@@ -156,9 +152,9 @@ export default class WorkbenchAgentCommandController {
     private readonly commandLogger = new WorkbenchAgentCommandLogger(),
   ) {
     this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({
-      requestCodex: async (request) => {
-        if (!this.direct.requestCodex) throw new Error("Codex command execution is not configured.");
-        return await this.direct.requestCodex(request);
+      execute: async (harness, request, signal) => {
+        if (!this.direct.executeReadOnly) throw new Error("Provider command execution is not configured.");
+        return await this.direct.executeReadOnly(harness, request, signal);
       },
     });
   }
@@ -284,36 +280,13 @@ export default class WorkbenchAgentCommandController {
     response: http.ServerResponse,
     signal: AbortSignal,
   ) {
-    let decision: CodexApplyPatchClaimHookDecision;
-    try {
-      if (callerHarness !== "codex") throw new Error("A managed Codex thread is required for the apply_patch claim hook.");
-      if (!this.direct.checkApplyPatchClaims) throw new Error("The apply_patch claim checker is not configured.");
-      const hook = parseCodexApplyPatchClaimHook(form.get("hookInput") ?? "");
-      if (!this.direct.resolveCaller) throw new Error("The apply_patch caller identity resolver is not configured.");
-      const caller = await this.direct.resolveCaller(callerThreadId ?? hook.sessionId, hook.cwd, callerHarness);
-      if (hook.sessionId !== caller.nativeThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
-      const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: caller.threadId });
-      if (result.allowed) {
-        decision = allowCodexApplyPatch();
-      } else {
-        const uncoveredPaths = new Set(result.uncoveredPaths);
-        const uncoveredChanges = hook.changes.filter((change) => (
-          uncoveredPaths.has(change.path)
-          || (change.kind.type === "update" && !!change.kind.move_path && uncoveredPaths.has(change.kind.move_path))
-        ));
-        decision = denyCodexApplyPatch(
-          `${WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX}${result.uncoveredPaths.join(", ")}. Claim every path before editing.`,
-          createWorkbenchFileChangeFailureSystemMessage(uncoveredChanges) ?? undefined,
-        );
-      }
-    } catch (error) {
-      decision = denyCodexApplyPatch(`apply_patch claim check failed. ${error instanceof Error ? error.message : String(error)}`);
-    }
+    if (!this.direct.patchClaims) throw new Error("The provider patch claim hook is not configured.");
+    const decision = await this.direct.patchClaims(callerHarness, { raw: form.get("hookInput") ?? "", callerThreadId }, signal);
     if (!response.destroyed && !response.writableEnded) {
       response.statusCode = 200;
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", "application/json; charset=utf-8");
-      response.end(`${JSON.stringify(decision)}\n`);
+      response.end(`${decision}\n`);
     }
   }
 

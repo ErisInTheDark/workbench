@@ -22,24 +22,24 @@ export interface ComposerProfileTargetPersistence {
 export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient): ComposerProfilePersistence {
   return {
     mutate: async (mutation) => mutation.kind === "delete"
-      ? await daemon.request("profiles/delete", { profileId: mutation.profileId })
-      : await daemon.request("profiles/upsert", { profile: mutation.profile, ...(mutation.changes ? { changes: mutation.changes } : {}) }),
-    read: async () => await daemon.request("profiles/read", {}),
+      ? await daemon.profiles.delete({ profileId: mutation.profileId })
+      : await daemon.profiles.upsert({ profile: mutation.profile, ...(mutation.changes ? { changes: mutation.changes } : {}) }),
+    read: async () => await daemon.profiles.read(),
   };
 }
 
 export function createComposerProfileTargetPersistence(
-  daemon: Pick<WorkbenchDaemonClient, "request">,
+  daemon: Pick<WorkbenchDaemonClient, "profiles">,
   flushDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>,
 ): ComposerProfileTargetPersistence {
   return {
     read: async (slot) => {
       if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
-      return (await daemon.request("profiles/target/read", { slot })).selection;
+      return (await daemon.profiles.target.read({ slot })).selection;
     },
     write: async (slot, selection) => {
       if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
-      await daemon.request("profiles/target/set", { selection, slot });
+      await daemon.profiles.target.set({ selection, slot });
     },
   };
 }

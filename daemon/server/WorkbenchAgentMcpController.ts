@@ -7,12 +7,7 @@ import type http from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
-import {
-  NativeThreadIdSchema,
-  WorkbenchThreadIdSchema,
-  type NativeThreadId,
-  type WorkbenchThreadId,
-} from "workbench-shared/workbench/identity";
+import { ProviderToolMetadataSchema, type WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -30,17 +25,12 @@ import {
   WorkbenchShellInputSchema,
   WorkbenchShellResultSchema,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { logError } from "./process-helpers";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
-import WorkbenchShellController, {
-  WORKBENCH_SHELL_SANDBOX_CAPABILITY,
-  WORKBENCH_SHELL_TOOL_DESCRIPTION,
-} from "./WorkbenchShellController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const LEGACY_MCP_CLIENT_SCOPE = "legacy";
@@ -48,20 +38,18 @@ const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
-  resolveThreadId?: (nativeThreadId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
+  tools: (provider: string) => WorkbenchProviderTools;
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   lifecycleLogError?: (name: string, message: string) => void;
   daemonOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
-  requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   runLoggedCommand?: <TValue>(
     label: string,
     signal: AbortSignal,
     operation: () => Promise<TValue>,
     succeeded?: (value: TValue) => boolean,
   ) => Promise<TValue>;
-  shell?: Pick<WorkbenchShellController, "execute">;
 }
 
 function isLoopbackAddress(address: string | undefined) {
@@ -112,53 +100,32 @@ function readClientScope(url: URL) {
   return value.toLowerCase();
 }
 
-function readThreadCwd(response: JsonRpcResponse) {
-  if (response.error) throw new Error(response.error.message);
-  const result = response.result && typeof response.result === "object" ? response.result as Record<string, object> : null;
-  const thread = result?.thread && typeof result.thread === "object" ? result.thread as Record<string, string> : null;
-  const cwd = typeof thread?.cwd === "string" ? thread.cwd.trim() : "";
-  if (!cwd) throw new Error("Codex thread/read returned no working directory.");
-  return cwd;
-}
-
-function readThreadId(meta: Record<string, unknown> | undefined) {
-  const value = meta?.threadId;
-  if (typeof value !== "string" || !value.trim()) throw new Error("Codex did not provide trusted MCP thread identity.");
-  return NativeThreadIdSchema.parse(value.trim());
-}
-
 export default class WorkbenchAgentMcpController {
   private readonly executeCommand: WorkbenchAgentMcpControllerOptions["executeCommand"];
   private readonly getReloadScopeCatalog: NonNullable<WorkbenchAgentMcpControllerOptions["getReloadScopeCatalog"]>;
   private readonly lifecycleLogError: NonNullable<WorkbenchAgentMcpControllerOptions["lifecycleLogError"]>;
   private readonly daemonOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
-  private readonly requestCodex: WorkbenchAgentMcpControllerOptions["requestCodex"];
+  private readonly tools: WorkbenchAgentMcpControllerOptions["tools"];
   private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
-  private readonly shell: Pick<WorkbenchShellController, "execute">;
-  private readonly resolveThreadId: NonNullable<WorkbenchAgentMcpControllerOptions["resolveThreadId"]>;
 
   constructor({
     executeCommand,
     getReloadScopeCatalog = () => [],
     lifecycleLogError = logError,
     daemonOrigin,
-    requestCodex,
+    tools,
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
-    shell,
-    resolveThreadId = async (threadId) => WorkbenchThreadIdSchema.parse(threadId),
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
     this.lifecycleLogError = lifecycleLogError;
     this.daemonOrigin = daemonOrigin;
     this.requestRegistry = requestRegistry;
-    this.requestCodex = requestCodex;
+    this.tools = tools;
     this.runLoggedCommand = runLoggedCommand;
-    this.resolveThreadId = resolveThreadId;
-    this.shell = shell ?? new WorkbenchShellController({ requestCodex });
   }
 
   beginRuntimeDrain() {
@@ -198,28 +165,32 @@ export default class WorkbenchAgentMcpController {
     // The accepted HTTP request owns its response and transport after the reloadable feature lease returns.
     const url = new URL(request.url ?? "/", "http://localhost");
     let clientScope: string;
+    let tools: WorkbenchProviderTools;
     try {
       clientScope = readClientScope(url);
+      const provider = url.searchParams.get("provider");
+      if (!provider) throw new Error("Workbench MCP requires a provider selector.");
+      tools = this.tools(provider);
     } catch (error) {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
     }
-    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true");
+    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true", tools);
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean) {
+  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean, tools: WorkbenchProviderTools) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
     };
-    const server = this.createServer(requestAbort.signal, clientScope, projectLocal);
+    let server: McpServer | undefined;
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     let closed = false;
     const close = () => {
       if (closed) return;
       closed = true;
       void transport.close().catch(() => undefined);
-      void server.close().catch(() => undefined);
+      if (server) void server.close().catch(() => undefined);
     };
     request.once("aborted", abortDisconnectedRequest);
     response.once("close", () => {
@@ -227,6 +198,8 @@ export default class WorkbenchAgentMcpController {
       close();
     });
     try {
+      server = await this.createServer(requestAbort.signal, clientScope, projectLocal, tools);
+      requestAbort.signal.throwIfAborted();
       const body = await readJsonBody(request);
       await server.connect(transport);
       await transport.handleRequest(request, response, body);
@@ -239,9 +212,11 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean) {
+  private async createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean, tools: WorkbenchProviderTools) {
+    const description = await tools.describe();
+    requestSignal.throwIfAborted();
     const server = new McpServer({ name: "wb", version: "1.0.0" }, {
-      capabilities: { experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} } },
+      capabilities: { experimental: description.experimental },
     });
     server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
       this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
@@ -255,7 +230,7 @@ export default class WorkbenchAgentMcpController {
         openWorldHint: false,
         readOnlyHint: false,
       },
-      description: WORKBENCH_SHELL_TOOL_DESCRIPTION,
+      description: description.shellDescription,
       inputSchema: WorkbenchShellInputSchema,
       outputSchema: WorkbenchShellResultSchema,
     }, async (input, extra) => await this.callShell(
@@ -264,6 +239,7 @@ export default class WorkbenchAgentMcpController {
       clientScope,
       extra.requestId,
       AbortSignal.any([requestSignal, extra.signal]),
+      tools,
     ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
       if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)) continue;
@@ -286,6 +262,7 @@ export default class WorkbenchAgentMcpController {
         clientScope,
         extra.requestId,
         AbortSignal.any([requestSignal, extra.signal]),
+        tools,
       ));
     }
     return server;
@@ -297,10 +274,10 @@ export default class WorkbenchAgentMcpController {
     clientScope: string,
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
+    tools: WorkbenchProviderTools,
   ) {
     let unregister: (() => void) | null = null;
     try {
-      const callerThreadId = readThreadId(meta);
       const registration = this.requestRegistry.register(clientScope, requestId, {
         owner: this.runtimeOwner,
         policy: undefined,
@@ -313,18 +290,7 @@ export default class WorkbenchAgentMcpController {
         "wb shell",
         signal,
         async () => {
-          const threadResponse = await this.requestCodex({
-            id: 0,
-            method: "thread/read",
-            params: { includeTurns: false, threadId: callerThreadId },
-          });
-          if (signal.aborted) throw signal.reason;
-          const workbenchThreadId = await this.resolveThreadId(callerThreadId, readThreadCwd(threadResponse));
-          if (signal.aborted) throw signal.reason;
-          return await this.shell.execute(input, meta, signal, {
-            nativeThreadId: callerThreadId,
-            workbenchThreadId,
-          });
+          return await tools.shell(WorkbenchShellInputSchema.parse(input), ProviderToolMetadataSchema.parse(meta ?? {}), signal);
         },
         (value) => value.exitCode === 0,
       );
@@ -351,11 +317,11 @@ export default class WorkbenchAgentMcpController {
     clientScope: string,
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
+    tools: WorkbenchProviderTools,
   ) {
     let unregister: (() => void) | null = null;
     try {
       const toolName = getWorkbenchAgentCommandToolName(definition);
-      const callerThreadId = readThreadId(meta);
       const registration = this.requestRegistry.register(clientScope, requestId, {
         owner: this.runtimeOwner,
         policy: definition.mcpRuntimeDrainPolicy,
@@ -364,20 +330,13 @@ export default class WorkbenchAgentMcpController {
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
-      const threadResponse = await this.requestCodex({
-        id: 0,
-        method: "thread/read",
-        params: { includeTurns: false, threadId: callerThreadId },
-      });
+      const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal);
       if (signal.aborted) throw signal.reason;
-      const cwd = readThreadCwd(threadResponse);
-      const workbenchThreadId = await this.resolveThreadId(callerThreadId, cwd);
-      if (signal.aborted) throw signal.reason;
-      registration.setWorkbenchThreadId(workbenchThreadId);
+      registration.setWorkbenchThreadId(caller.threadId);
       const request = await definition.buildRequestFromJson(input, {
-        callerHarness: "codex",
-        callerThreadId: workbenchThreadId,
-        cwd,
+        callerHarness: caller.harness,
+        callerThreadId: caller.threadId,
+        cwd: caller.cwd,
         workbenchOrigin: this.daemonOrigin,
       });
       if (

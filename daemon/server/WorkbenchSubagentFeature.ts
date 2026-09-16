@@ -10,15 +10,14 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
-import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type { WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import type { WorkbenchSubagentPersistence } from "./database/thread-state/workbench-thread-state-persistence";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export interface WorkbenchSubagentFeatureContext {
-  bridgeUrl: string;
-  identities: NativeTranscriptIdentityOwners;
-  requestNativeHarness?: (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  identities: WorkbenchThreadIdentityController;
+  provider: WorkbenchSubagentControllerOptions["provider"];
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
@@ -37,15 +36,10 @@ export default class WorkbenchSubagentFeature {
   constructor(private readonly context: WorkbenchSubagentFeatureContext) {
     this.store = new WorkbenchSubagentStore(context.persistence);
     this.controller = new WorkbenchSubagentController({
-      bridgeUrl: context.bridgeUrl,
-      identities: context.identities.threads,
-      requestNativeHarness: context.requestNativeHarness && context.identities ? async (harness, request) => {
-        const mapped = await mapWorkbenchProviderRequest(context.identities!.threads, harness, request);
-        const response = await context.requestNativeHarness!(mapped.harness, mapped.request);
-        return mapNativeProviderResponse(context.identities!, mapped.harness, mapped.request, response);
-      } : context.requestNativeHarness,
+      provider: context.provider,
+      identities: context.identities,
       publicThreadId: async (threadId, projectId) => {
-        const identity = await context.identities.threads.resolve({ threadId, projectId });
+        const identity = await context.identities.resolve({ threadId, projectId });
         if (!identity) throw new Error("Subagent metadata is unavailable for public output.");
         return identity.threadId;
       },

@@ -1,5 +1,4 @@
 /*
- * Keywords: shell, identity, environment, sandbox, platform transport.
  * No exports. Tests protect caller isolation, sandbox forwarding, launch transport, and fail-closed state handling.
  */
 import assert from "node:assert/strict";
@@ -8,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { CodexCommandExecRequest } from "./CodexCommandExecController";
-import WorkbenchShellController from "./WorkbenchShellController";
+import WorkbenchShellController from "./CodexShellController";
 
 const caller = { nativeThreadId: "native-session", workbenchThreadId: "workbench-thread" };
 

@@ -13,6 +13,8 @@ import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/
 
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
+import CodexToolsController from "./CodexToolsController";
+import type { WorkbenchPatchClaimCheck } from "workbench-shared/workbench/provider/provider-execution";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const reloadCatalog = [
@@ -22,6 +24,22 @@ const reloadCatalog = [
   { access: "cli" as const, description: "Codex harness", destructive: true, safeAll: false, scope: "harness:codex" },
   { access: "operator" as const, description: "Process", destructive: true, safeAll: false, scope: "server:process" },
 ];
+
+function patchClaimPort(
+  resolvePatchCaller: ConstructorParameters<typeof CodexToolsController>[0]["resolvePatchCaller"],
+  check: WorkbenchPatchClaimCheck,
+) {
+  const tools = new CodexToolsController({
+    resolvePatchCaller,
+    readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
+    shell: { execute: async () => { throw new Error("Unexpected shell"); } },
+    commandExec: { execute: async () => { throw new Error("Unexpected execution"); } },
+  });
+  return (harness: string, input: Parameters<CodexToolsController["patchClaims"]>[0], signal: AbortSignal) => {
+    assert.equal(harness, "codex");
+    return tools.patchClaims(input, check, signal);
+  };
+}
 
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
@@ -263,17 +281,16 @@ test("answers the private apply_patch hook from the active claim owner", async (
     "http://127.0.0.1:4500",
     {
         ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-        resolveCaller: async (threadId) => {
+        patchClaims: patchClaimPort(async (threadId) => {
           assert.ok(threadId === "97d84a45-0d43-4d20-a996-e6b8bd8ad149" || threadId === "provider-thread");
           return { harness: "codex", threadId: WorkbenchThreadIdSchema.parse("97d84a45-0d43-4d20-a996-e6b8bd8ad149"), nativeThreadId: NativeThreadIdSchema.parse("provider-thread") };
-        },
-      checkApplyPatchClaims: async ({ paths, threadId }) => {
+        }, async ({ paths, threadId }) => {
         checkedPaths.push(paths);
         checkedThreadIds.push(threadId);
         return paths.some((filePath) => filePath.endsWith("unclaimed.ts"))
           ? { allowed: false, uncoveredPaths: paths.filter((filePath) => filePath.endsWith("unclaimed.ts")) }
           : { allowed: true, uncoveredPaths: [] };
-      },
+      }),
     },
     async () => { throw new Error("claim denial must not wait on marker transport"); },
     undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
@@ -330,11 +347,10 @@ test("returns Codex deny decisions for mismatched identity, malformed input, and
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      checkApplyPatchClaims: async () => { throw new Error("claim registry unavailable"); },
-      resolveCaller: async () => ({
+      patchClaims: patchClaimPort(async () => ({
         harness: "codex", threadId: WorkbenchThreadIdSchema.parse("97d84a45-0d43-4d20-a996-e6b8bd8ad149"),
         nativeThreadId: NativeThreadIdSchema.parse("parent-thread"),
-      }),
+      }), async () => { throw new Error("claim registry unavailable"); }),
     },
     undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
@@ -443,6 +459,7 @@ test("dispatches ripgrep directly with one argument-vector request", async () =>
     assert.deepEqual(received?.input, {
       args: ["-n", "a pattern with 'quotes'", "webapp"],
       cwd: process.cwd(),
+      harness: "codex",
     });
     assert.equal(received?.signal.aborted, false);
   } finally {

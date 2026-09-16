@@ -9,16 +9,53 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
 import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
-import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
+import WorkbenchAgentMcpController, { type WorkbenchAgentMcpControllerOptions } from "./WorkbenchAgentMcpController";
+import CodexToolsController from "./CodexToolsController";
+import CodexShellController from "./CodexShellController";
+import CodexCommandExecController from "./CodexCommandExecController";
+import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
-import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./WorkbenchShellController";
+import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./CodexShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
+function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tools"> & {
+  requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  resolveThreadId?: (nativeId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
+  shell?: Pick<CodexShellController, "execute">;
+}) {
+  const tools = new CodexToolsController({
+    resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
+    commandExec: new CodexCommandExecController({ requestCodex: options.requestCodex }),
+    readCallerThread: async nativeId => {
+      const response = await options.requestCodex({
+        id: 0, method: "thread/read", params: { includeTurns: false, threadId: nativeId },
+      });
+      if (response.error) throw new Error(response.error.message);
+      const result = response.result as { thread: { cwd: string } };
+      return {
+        id: options.resolveThreadId
+          ? await options.resolveThreadId(nativeId, result.thread.cwd)
+          : WorkbenchThreadIdSchema.parse(nativeId),
+        cwd: result.thread.cwd,
+      };
+    },
+    shell: options.shell ?? new CodexShellController({ requestCodex: options.requestCodex }),
+  });
+  return new WorkbenchAgentMcpController({
+    ...options,
+    tools: provider => {
+      assert.equal(provider, "codex");
+      return tools;
+    },
+  });
+}
+
 test("MCP preserves typed Git rejections before and after dispatch", async () => {
   let dispatches = 0;
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async () => { dispatches += 1; throw new GitArcRejectionError({ reason: "missingActiveArc" }); },
     daemonOrigin: "http://127.0.0.1:4500",
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
@@ -54,7 +91,7 @@ test("MCP preserves typed Git rejections before and after dispatch", async () =>
 
 for (const failResolution of [false, true]) test(`shell resolves caller identity from thread cwd with resolution failure=${failResolution}`, async () => {
   const identities: object[] = [];
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async () => Response.json({}),
     daemonOrigin: "http://127.0.0.1:4500",
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
@@ -120,7 +157,7 @@ async function startController(getController: WorkbenchAgentMcpController | (() 
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     },
     getReleasedRequestCount: () => releasedRequestCount,
-    url: new URL(`http://127.0.0.1:${address.port}/daemon/mcp`),
+    url: new URL(`http://127.0.0.1:${address.port}/daemon/mcp?provider=codex`),
   };
 }
 
@@ -139,12 +176,48 @@ function responseText(result: unknown) {
   )).join("\n");
 }
 
+test("the explicit provider owns MCP metadata and supplies WB command identity", async () => {
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const controller = new WorkbenchAgentMcpController({
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    executeCommand: async request => { executed.push(request); return Response.json({ title: "proof" }); },
+    tools: provider => {
+      assert.equal(provider, "another-provider");
+      return {
+        describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution" }),
+        caller: async metadata => {
+          assert.deepEqual(metadata, { session: "provider-owned" });
+          return { cwd: "/trusted", harness: provider, threadId: WorkbenchThreadIdSchema.parse("wb-caller") };
+        },
+        shell: async () => { throw new Error("unexpected shell"); },
+        executeReadOnly: async () => { throw new Error("unexpected execution"); },
+        patchClaims: async () => { throw new Error("unexpected patch"); },
+      };
+    },
+  });
+  const server = await startController(controller);
+  server.url.searchParams.set("provider", "another-provider");
+  const client = await connectClient(server.url);
+  try {
+    await client.callTool({ name: "task_get", arguments: {}, _meta: { session: "provider-owned" } });
+    const definition = listWorkbenchAgentCommands([], "agent").find(definition => definition.words.join("_") === "task_get")!;
+    assert.deepEqual(executed, [await definition.buildRequestFromJson({}, {
+      callerHarness: "another-provider", callerThreadId: "wb-caller", cwd: "/trusted",
+      workbenchOrigin: "http://127.0.0.1:4500",
+    })]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
   const loggedCommands: Array<{ label: string; succeeded: boolean }> = [];
   const shellCalls: Array<{ input: object; meta: Record<string, unknown> | undefined }> = [];
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async (request) => {
       executed.push(request);
       return Response.json({ title: "Typed Workbench" });
@@ -330,7 +403,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     });
     assert.equal(searchResult.isError, false);
     assert.deepEqual(executed.at(-1), {
-      body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/authoritative" },
+      body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/authoritative", harness: "codex" },
       method: "POST",
       path: "/api/rg",
       responseKind: "native",
@@ -425,7 +498,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
   let codexReadCount = 0;
   let failThreadRead = false;
   const logged: string[] = [];
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async () => { throw new Error("unexpected execution"); },
     lifecycleLogError: (_name, message) => { logged.push(message); },
     daemonOrigin: "http://127.0.0.1:4500",
@@ -476,7 +549,7 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
   const bothStarted = deferred<void>();
   const firstAborted = deferred<unknown>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
       const callerThreadId = String(request.body?.callerThreadId ?? "");
       executions.set(callerThreadId, { resolve, signal });
@@ -535,7 +608,7 @@ test("releases HTTP admission and propagates caller cancellation across controll
   const executionAborted = deferred<unknown>();
   const logged: string[] = [];
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
-  const createController = () => new WorkbenchAgentMcpController({
+  const createController = () => codexController({
     executeCommand: async (_request, signal) => {
       executionStarted.resolve(signal);
       return await new Promise<Response>((_resolve, reject) => {
@@ -584,7 +657,7 @@ test("thread steer interruption ends declared waits but preserves questionnaires
   const stopWaitObservation = requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
     waitStates.push({ threadId, toolNames });
   });
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     resolveThreadId: async (nativeId, cwd) => {
       assert.equal(nativeId, "thread-1");
       assert.equal(cwd, "C:/authoritative");
@@ -664,7 +737,7 @@ test("declared waits survive runtime drain and finish through the replacement co
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
   });
-  const controller = new WorkbenchAgentMcpController({
+  const controller = codexController({
     executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
     lifecycleLogError: () => undefined,
     daemonOrigin: "http://127.0.0.1:4500",

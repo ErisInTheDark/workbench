@@ -18,7 +18,7 @@ import type {
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
 import { createComposerProfileTargetPersistence } from "./composer-profile-api";
-import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -194,9 +194,9 @@ test("draft profile reads wait for persistence and propagate save failures", asy
   let release!: () => void;
   const saving = new Promise<void>((resolve) => { release = resolve; });
   let reads = 0;
-  const daemon: Pick<WorkbenchDaemonClient, "request"> = {
-    request: async () => { reads++; return { selection: { kind: "custom", settings: CODEX_SETTINGS } } as never; },
-  };
+  const daemon = new WorkbenchDaemonClient({
+    request: async <TResponse>() => { reads++; return { selection: { kind: "custom", settings: CODEX_SETTINGS } } as TResponse; },
+  });
   const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
   const persistence = createComposerProfileTargetPersistence(daemon, async (projectId, draftId) => {
     assert.equal(projectId, slot.projectId);
@@ -218,9 +218,9 @@ test("draft profile edits cannot overtake a queued draft save", async () => {
   let release!: () => void;
   const saving = new Promise<void>((resolve) => { release = resolve; });
   let writes = 0;
-  const daemon: Pick<WorkbenchDaemonClient, "request"> = {
-    request: async () => { writes++; return {} as never; },
-  };
+  const daemon = new WorkbenchDaemonClient({
+    request: async <TResponse>() => { writes++; return { ok: true } as TResponse; },
+  });
   const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
   const selection = { kind: "custom" as const, settings: CODEX_SETTINGS };
   const persistence = createComposerProfileTargetPersistence(daemon, async () => saving);

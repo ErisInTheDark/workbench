@@ -14,7 +14,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsHydrationResult } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsUsageImportCandidate } from "./database/stats/WorkbenchStatsImportRepository";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type { WorkbenchTurnRecoveryPort } from "./WorkbenchTurnRecoveryController";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { mapWorkbenchProviderRequest, mapNativeProviderResponse } from "./thread-identity-workbench-mapping";
@@ -30,7 +30,6 @@ export interface WorkbenchHarnessRuntimePort {
   request(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse>;
   readThread(threadId: NativeThreadId): Promise<Pick<WorkbenchThreadContextReadResponse, "thread">>;
   steerTurn(threadId: NativeThreadId, expectedTurnId: NativeTurnId, input: UserInput[]): Promise<string | null>;
-  recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
   readLoadedThreads?: () => readonly Thread[];
 }
 
@@ -46,6 +45,7 @@ type WorkbenchHarnessRecoveryCapability =
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
       resumeThread(threadId: NativeThreadId): Promise<void>;
+      completeObservedTurn?(notification: JsonRpcNotification, lifecycle: WorkbenchThreadLifecycle | null): Promise<boolean>;
     };
 
 export interface WorkbenchHarnessAdapter {
@@ -240,6 +240,11 @@ export default class WorkbenchHarnessController {
     const recovery = this.getAdapter(harness).recovery;
     if (recovery.kind !== "turn") throw new Error(`Manual thread resume is unavailable for ${harness} threads.`);
     await recovery.resumeThread(threadId);
+  }
+
+  async completeObservedTurn(harness: WorkbenchHarness, notification: JsonRpcNotification, lifecycle: WorkbenchThreadLifecycle | null) {
+    const recovery = this.getAdapter(harness).recovery;
+    return recovery.kind === "turn" ? await recovery.completeObservedTurn?.(notification, lifecycle) ?? false : false;
   }
 
   private getAdapter(harness: WorkbenchHarness) {

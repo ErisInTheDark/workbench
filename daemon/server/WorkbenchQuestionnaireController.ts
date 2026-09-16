@@ -1,9 +1,9 @@
 /*
  * Exports:
  * - WorkbenchQuestionnaireControllerOptions: caller resolution, durable projection, and dismissal ports.
- * - WorkbenchNativeQuestionnaire: thread questionnaire with optional transcript placement.
- * - WorkbenchAnsweredQuestionnaire: consumed native questionnaire and response.
- * - default WorkbenchQuestionnaireController: own pending native questionnaire waits, viability, delivery, correlation, and restart-preserving disposal.
+ * - WorkbenchQuestionnaire: durable questionnaire with WB transcript placement.
+ * - WorkbenchAnsweredQuestionnaire: consumed WB questionnaire and response.
+ * - default WorkbenchQuestionnaireController: own pending questionnaire waits, viability, delivery, correlation, and restart-preserving disposal.
  */
 import { randomUUID } from "node:crypto";
 
@@ -12,26 +12,26 @@ import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { WorkbenchRequestUserInputCommandInput } from "./lib/workbench/commands/questionnaire-command-definition";
-import type { NativeThreadId, NativeTurnId, ProjectId } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
 
-export type WorkbenchNativeQuestionnaire = Omit<WorkbenchDurableQuestionnaire, "turnId"> & { turnId: NativeTurnId | null };
+export type WorkbenchQuestionnaire = WorkbenchDurableQuestionnaire;
 
 export interface WorkbenchQuestionnaireControllerOptions {
-  clearPending(threadId: NativeThreadId, requestKey: string): Promise<void>;
+  clearPending(threadId: WorkbenchThreadId, requestKey: string): Promise<void>;
   createRequestKey?: () => string;
   logError?: (message: string) => void;
-  publishPending(threadId: NativeThreadId, questionnaire: WorkbenchNativeQuestionnaire): Promise<void>;
-  resolveThread(cwd: string, threadId: NativeThreadId): Promise<{
+  publishPending(threadId: WorkbenchThreadId, questionnaire: WorkbenchQuestionnaire): Promise<void>;
+  resolveThread(cwd: string, threadId: WorkbenchThreadId): Promise<{
     projectId: ProjectId;
-    turnId: NativeTurnId | null;
-    pendingQuestionnaire?: WorkbenchNativeQuestionnaire | null;
+    turnId: WorkbenchTurnId | null;
+    pendingQuestionnaire?: WorkbenchQuestionnaire | null;
   }>;
-  subscribePending(listener: (state: { projectId: ProjectId; requestKey: string | null; threadId: NativeThreadId }) => void): () => void;
+  subscribePending(listener: (state: { projectId: ProjectId; requestKey: string | null; threadId: WorkbenchThreadId }) => void): () => void;
 }
 
-export interface WorkbenchAnsweredQuestionnaire extends WorkbenchNativeQuestionnaire {
+export interface WorkbenchAnsweredQuestionnaire extends WorkbenchQuestionnaire {
   response: WorkbenchUserInputResponse;
-  threadId: NativeThreadId;
+  threadId: WorkbenchThreadId;
 }
 
 type PendingQuestionnaire = {
@@ -39,20 +39,20 @@ type PendingQuestionnaire = {
   completion: Promise<void>;
   projectId: ProjectId;
   projected: boolean;
-  questionnaire: WorkbenchNativeQuestionnaire;
+  questionnaire: WorkbenchQuestionnaire;
   reject: (error: unknown) => void;
   releaseReason: unknown | null;
   resolve: (response: WorkbenchUserInputResponse) => void;
   signal: AbortSignal;
   status: "waiting" | "responding" | "cancelling";
   stopAbort: (() => void) | null;
-  threadId: NativeThreadId;
+  threadId: WorkbenchThreadId;
 };
 
 export default class WorkbenchQuestionnaireController {
   private disposed = false;
   private readonly options: WorkbenchQuestionnaireControllerOptions;
-  private readonly pendingByThreadId = new Map<NativeThreadId, PendingQuestionnaire>();
+  private readonly pendingByThreadId = new Map<WorkbenchThreadId, PendingQuestionnaire>();
   private readonly stopPendingSubscription: () => void;
 
   constructor(options: WorkbenchQuestionnaireControllerOptions) {
@@ -100,7 +100,7 @@ export default class WorkbenchQuestionnaireController {
     };
   }
 
-  async request(input: Omit<WorkbenchRequestUserInputCommandInput, "callerThreadId"> & { callerThreadId: NativeThreadId }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
+  async request(input: Omit<WorkbenchRequestUserInputCommandInput, "callerThreadId"> & { callerThreadId: WorkbenchThreadId }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
     this.assertActive();
     signal.throwIfAborted();
     if (this.pendingByThreadId.has(input.callerThreadId)) {
@@ -117,7 +117,7 @@ export default class WorkbenchQuestionnaireController {
     const requestKey = input.requestKey
       ?? (this.options.createRequestKey ?? (() => `${WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX}${randomUUID()}`))();
     const restored = pendingQuestionnaire?.requestKey === requestKey ? pendingQuestionnaire : null;
-    const questionnaire: WorkbenchNativeQuestionnaire = {
+    const questionnaire: WorkbenchQuestionnaire = {
       itemId: restored?.itemId ?? randomUUID(),
       request: {
         id: requestKey,
@@ -180,7 +180,7 @@ export default class WorkbenchQuestionnaireController {
   async respond(input: {
     requestKey: string;
     response: WorkbenchUserInputResponse;
-    threadId: NativeThreadId;
+    threadId: WorkbenchThreadId;
   }): Promise<WorkbenchAnsweredQuestionnaire | null> {
     const pending = this.pendingByThreadId.get(input.threadId);
     if (!pending || !this.canDeliver(input.threadId, input.requestKey)) return null;
@@ -205,7 +205,7 @@ export default class WorkbenchQuestionnaireController {
     return this.finishDelivery(pending, input.response);
   }
 
-  canDeliver(threadId: NativeThreadId, requestKey: string) {
+  canDeliver(threadId: WorkbenchThreadId, requestKey: string) {
     const pending = this.pendingByThreadId.get(threadId);
     return Boolean(
       pending
@@ -218,7 +218,7 @@ export default class WorkbenchQuestionnaireController {
   async deliver(input: {
     requestKey: string;
     response: WorkbenchUserInputResponse;
-    threadId: NativeThreadId;
+    threadId: WorkbenchThreadId;
   }): Promise<WorkbenchAnsweredQuestionnaire | null> {
     const pending = this.pendingByThreadId.get(input.threadId);
     if (!pending || !this.canDeliver(input.threadId, input.requestKey)) return null;
@@ -246,7 +246,7 @@ export default class WorkbenchQuestionnaireController {
     if (this.disposed) throw new Error("The questionnaire controller was disposed.");
   }
 
-  async interruptRetainingQuestionnaire(threadId: NativeThreadId, requestKey: string, interrupt: () => Promise<boolean>) {
+  async interruptRetainingQuestionnaire(threadId: WorkbenchThreadId, requestKey: string, interrupt: () => Promise<boolean>) {
     const pending = this.pendingByThreadId.get(threadId);
     if (!pending || pending.questionnaire.requestKey !== requestKey) return interrupt();
     const reason = new Error("The questionnaire wait ended because its turn is being interrupted.");

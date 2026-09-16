@@ -22,7 +22,7 @@ test("context capability bounds reject invalid target mutations without writing"
   const unused = async (): Promise<never> => { throw new Error("Profile validation must only read model context."); };
   const { controller, targetWrites } = createController({
     providers: { get: () => ({
-      threads: { history: { questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
       configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
       read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
     } } }) },
@@ -66,8 +66,36 @@ function createController(options: {
   const searchRequests: object[] = [];
   const statsRequests: object[] = [];
   let statsRefreshes = 0;
+  const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation."); };
+  const readNetwork = async (projectId: string) => {
+    const projectOverride = projectNetworkOverrides.get(projectId) ?? null;
+    return {
+      label: "Sandbox network access", effectiveEnabled: projectOverride ?? globalNetworkEnabled,
+      globalEnabled: globalNetworkEnabled, projectId, projectOverride,
+    };
+  };
   const controller = new WorkbenchDaemonRequestController({
-    providers: options.providers,
+    providers: options.providers ?? { get: () => ({
+      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      configuration: {
+        modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused },
+        sandboxNetwork: {
+          read: readNetwork,
+          update: async ({ enabled, projectId, scope }) => {
+            if (scope === "global") {
+              assert.notEqual(enabled, null);
+              networkWrites.push({ enabled, scope });
+              globalNetworkEnabled = enabled!;
+            } else {
+              networkWrites.push({ enabled, projectId, scope });
+              if (enabled === null) projectNetworkOverrides.delete(projectId);
+              else projectNetworkOverrides.set(projectId, enabled);
+            }
+            return readNetwork(projectId);
+          },
+        },
+      },
+    }) },
     threadIdentity: options.threadIdentity ?? { resolve: async () => null },
     agents: {
       listAgents: async () => ({ data: [] }),
@@ -91,26 +119,6 @@ function createController(options: {
       linkRoots: async () => ({ roots: [] }),
       open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? null : ProjectIdSchema.parse(request.projectId), target: request.path }),
       reveal: async (request) => ({ ok: true, path: request.path, projectId: request.projectId == null ? undefined : ProjectIdSchema.parse(request.projectId) }),
-    },
-    codexSandboxNetwork: {
-      read: async (projectId) => {
-        const projectOverride = projectNetworkOverrides.get(projectId) ?? null;
-        return {
-          effectiveEnabled: projectOverride ?? globalNetworkEnabled,
-          globalEnabled: globalNetworkEnabled,
-          projectId,
-          projectOverride,
-        };
-      },
-      setGlobal: async (enabled) => {
-        networkWrites.push({ enabled, scope: "global" });
-        globalNetworkEnabled = enabled;
-      },
-      setProjectOverride: async (projectId, enabled) => {
-        networkWrites.push({ enabled, projectId, scope: "project" });
-        if (enabled === null) projectNetworkOverrides.delete(projectId);
-        else projectNetworkOverrides.set(projectId, enabled);
-      },
     },
     profiles: options.profiles ?? {
       mutate: async () => ({ profiles: [] }),
@@ -499,43 +507,44 @@ test("cache efficiency uses the detailed owner while older routes keep their exa
   assert.deepEqual(statsRequests, [params, params, params]);
 });
 
-test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {
+test("sandbox network requests validate project ownership and preserve explicit override intent", async () => {
   const { controller, networkWrites } = createController({ rejectProjectId: "missing" });
   const rejected = await controller.handle({
     id: 1,
-    method: "codex-sandbox-network/update",
-    params: { enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), scope: "project" },
+    method: "sandbox-network/update",
+    params: { provider: "codex", enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), scope: "project" },
   });
   assert.match(rejected.error?.message ?? "", /Unknown project/u);
   assert.deepEqual(networkWrites, []);
 
   const global = await controller.handle({
     id: 2,
-    method: "codex-sandbox-network/update",
-    params: { enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "global" },
+    method: "sandbox-network/update",
+    params: { provider: "codex", enabled: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "global" },
   });
   assert.deepEqual(global.result, {
-    codexSandboxNetwork: {
+    data: [{
+      provider: "codex", label: "Sandbox network access",
       effectiveEnabled: true,
       globalEnabled: true,
       projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       projectOverride: null,
-    },
+    }],
   });
 
   const disabled = await controller.handle({
     id: 3,
-    method: "codex-sandbox-network/update",
-    params: { enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
+    method: "sandbox-network/update",
+    params: { provider: "codex", enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
   });
-  assert.equal((disabled.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, false);
+  assert.equal((disabled.result as { data: { effectiveEnabled: boolean }[] }).data[0].effectiveEnabled, false);
 
   const inherited = await controller.handle({
     id: 4,
-    method: "codex-sandbox-network/update",
-    params: { enabled: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
+    method: "sandbox-network/update",
+    params: { provider: "codex", enabled: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
   });
-  assert.equal((inherited.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, true);
+  assert.equal((inherited.result as { data: { effectiveEnabled: boolean }[] }).data[0].effectiveEnabled, true);
   assert.deepEqual(networkWrites, [
     { enabled: true, scope: "global" },
     { enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
@@ -548,7 +557,7 @@ test("project-scoped network, search, and stats requests use the resolved owner 
   const { controller, networkWrites, searchRequests, statsRequests } = createController({ canonicalProjectId });
   const projectId = "old-request";
   const network = await controller.handle({
-    id: 1, method: "codex-sandbox-network/update", params: { projectId, enabled: true, scope: "project" },
+    id: 1, method: "sandbox-network/update", params: { provider: "codex", projectId, enabled: true, scope: "project" },
   });
   assert.equal(network.error, undefined);
   assert.deepEqual(networkWrites, [{ projectId: canonicalProjectId, enabled: true, scope: "project" }]);

@@ -11,6 +11,7 @@ import type {
   WorkbenchBrowseResultEntryState,
   WorkbenchHarness,
 } from "workbench-shared/types";
+import type { WorkbenchScreenshotDelivery } from "workbench-shared/workbench/provider/provider-browse";
 
 export interface WorkbenchBrowseResultOrigin {
   commandItemId: string | null;
@@ -38,6 +39,4 @@ export interface WorkbenchBrowseResultSink {
   waitForIdle(): Promise<void>;
 }
 
-export type WorkbenchBrowseScreenshotDelivery =
-  | { kind: "injected"; acceptedAt: number; turnId: string }
-  | { kind: "steered"; turnId: string };
+export type WorkbenchBrowseScreenshotDelivery = WorkbenchScreenshotDelivery;

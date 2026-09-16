@@ -7,13 +7,13 @@ import { z } from "zod";
 
 import WorkbenchQuestionnaireController, {
   type WorkbenchQuestionnaireControllerOptions,
-  type WorkbenchNativeQuestionnaire,
+  type WorkbenchQuestionnaire,
 } from "./WorkbenchQuestionnaireController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
-    "thread-one": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread-one"),
+    "thread-one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"),
   },
   ProjectId: {
     "project-one": fixtureIdentitySchemas.ProjectIdSchema.parse("project-one"),
@@ -45,11 +45,11 @@ function createHarness(options: {
   beforeClear?: () => Promise<void>;
   beforePublish?: () => Promise<void>;
   publishUnrelatedStateFirst?: boolean;
-  restoredQuestionnaire?: WorkbenchNativeQuestionnaire;
+  restoredQuestionnaire?: WorkbenchQuestionnaire;
 } = {}) {
   const listeners = new Set<Parameters<WorkbenchQuestionnaireControllerOptions["subscribePending"]>[0]>();
-  const published = deferred<WorkbenchNativeQuestionnaire>();
-  let pending: WorkbenchNativeQuestionnaire | null = null;
+  const published = deferred<WorkbenchQuestionnaire>();
+  let pending: WorkbenchQuestionnaire | null = null;
   let clearCount = 0;
   const notify = () => {
     for (const listener of listeners) {
@@ -72,7 +72,7 @@ function createHarness(options: {
       notify();
     },
     resolveThread: async () => ({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-one"), turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn-one"), pendingQuestionnaire: options.restoredQuestionnaire,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-one"), turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-one"), pendingQuestionnaire: options.restoredQuestionnaire,
     }),
     subscribePending: (listener) => {
       listeners.add(listener);
@@ -270,7 +270,7 @@ test("a resumed wait keeps the durable questionnaire identity and original turn"
   Reflect.set(reload, Symbol.for("workbench.agentMcpRuntimeReloadInterruption.v1"), true);
   cancellation.abort(reload);
   await assert.rejects(waiting, /reload/u);
-  const restored = { ...questionnaire, itemId: "984090b6-1d94-44cc-ab26-e6470965597e", turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("original-turn") };
+  const restored = { ...questionnaire, itemId: "984090b6-1d94-44cc-ab26-e6470965597e", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("original-turn") };
   const resumed = createHarness({ restoredQuestionnaire: restored });
   const resumedWaiting = resumed.controller.request({ ...freeformInput, requestKey: restored.requestKey }, new AbortController().signal);
   const published = await resumed.published;

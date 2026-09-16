@@ -30,8 +30,6 @@ import type {
   WorkbenchComposerProfileSlot,
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerProfileStorePayload,
-  WorkbenchCodexSandboxNetworkSettingsResponse,
-  WorkbenchCodexSandboxNetworkSettingsUpdateRequest,
   WorkbenchLocalCapabilitySettingsResponse,
   WorkbenchLocalCapabilitySettingsUpdateRequest,
   WorkbenchProjectsPayload,
@@ -131,8 +129,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
   "browse/sessions/read": { params: WorkbenchBrowseSessionListRequest; result: WorkbenchBrowseSessionListResponse };
   "browse/sessions/stop": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
-  "codex-sandbox-network/read": { params: { projectId: string }; result: WorkbenchCodexSandboxNetworkSettingsResponse };
-  "codex-sandbox-network/update": { params: WorkbenchCodexSandboxNetworkSettingsUpdateRequest; result: WorkbenchCodexSandboxNetworkSettingsResponse };
+  "sandbox-network/read": { params: { projectId: string }; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
+  "sandbox-network/update": { params: import("../provider/provider-settings").WorkbenchSandboxNetworkUpdate; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
   "git/arc/compare": { params: GitArcParams<"compare">; result: GitCheckpointCompareResult };
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };
   "git/arc/proposal/commit": { params: GitArcParams<"proposalCommit">; result: GitCheckpointProposal };
