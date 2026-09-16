@@ -9,7 +9,7 @@ import path from "node:path";
 import { appRoot } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTree } from "../../../process-helpers";
-import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
+import type WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 import type WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -18,7 +18,7 @@ const MAX_TIMEOUT_MS = 10 * 60_000;
 export default class WorkbenchBrowseRawCli {
   constructor(
     private readonly runtime: Pick<WorkbenchBrowseRuntime, "resolveExecutionContext">,
-    private readonly profileStore = new WorkbenchBrowseProfileStore(),
+    private readonly profileStore: Pick<WorkbenchBrowseProfileStore, "resolveProfilePath">,
   ) {}
 
   async run(request: WorkbenchBrowseCommandRequest, signal?: AbortSignal): Promise<WorkbenchBrowseCommandResponse> {

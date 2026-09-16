@@ -1,15 +1,13 @@
 /*
  * Exports:
  * - WorkbenchComposerProfileDatabase: shared database worker port.
- * - default WorkbenchComposerProfileStore: own durable named profiles, import and ordered mutations.
+ * - default WorkbenchComposerProfileStore: own durable named profiles and ordered mutations.
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import type { WorkbenchComposerProfile } from "workbench-shared/types";
-import { deleteRows, insertRow, selectRows, updateRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
+import { deleteRows, selectRows, updateRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 import type { SelectRow } from "workbench-shared/database/schema/schema-definition";
 import { applyComposerProfileMutation, normalizeComposerProfile, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
-import { composerProfileImports, composerProfiles } from "./lib/workbench/database/schema/composer-profile-schema";
+import { composerProfiles } from "./lib/workbench/database/schema/composer-profile-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 
@@ -50,11 +48,11 @@ export default class WorkbenchComposerProfileStore {
   private pendingWrite: Promise<{ changes: number }> | null = null;
   private startup: Promise<void> | null = null;
 
-  constructor(private readonly storageRoot: string, private readonly database: WorkbenchComposerProfileDatabase) {}
+  constructor(private readonly database: WorkbenchComposerProfileDatabase) {}
 
   start(): Promise<void> {
     if (this.closed) return Promise.reject(this.closedError);
-    this.startup ??= this.enqueue(() => this.importLegacy());
+    this.startup ??= this.enqueue(async () => { await this.readProfiles(); });
     return this.startup;
   }
 
@@ -136,38 +134,6 @@ export default class WorkbenchComposerProfileStore {
   private projectAdmissions(profiles: readonly WorkbenchComposerProfile[]) {
     const ids = new Set(profiles.flatMap(profile => profile.scope.kind === "project" ? [profile.scope.projectId] : []));
     return [...ids].map(id => upsertRow(projectTables.projects, { id }, { conflictColumns: ["id"], updateColumns: ["id"] }));
-  }
-
-  private async importLegacy() {
-    const imported = await this.database.query(selectRows(composerProfileImports, { where: { id: "legacy-json" } }));
-    this.assertOpen();
-    if (imported.length) return;
-    let source: string;
-    try {
-      source = await readFile(path.join(this.storageRoot, ".workbench", "runtime", "composer-profiles.json"), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      source = '{"version":1,"profiles":{}}';
-    }
-    this.assertOpen();
-    const raw: unknown = JSON.parse(source);
-    if (!raw || typeof raw !== "object" || !("profiles" in raw) || !raw.profiles || typeof raw.profiles !== "object" || Array.isArray(raw.profiles)) {
-      throw new Error("Legacy composer profile catalogue is invalid.");
-    }
-    const profiles = await this.canonicalProfiles(Object.entries(raw.profiles).map(([id, value]) => {
-      const profile = normalizeComposerProfile(value);
-      if (!profile || profile.id !== id || (profile.scope.kind === "global" && profile.agentSource === "project")) {
-        throw new Error("Legacy composer profile entry is invalid.");
-      }
-      return profile;
-    }));
-    await this.write([
-      ...this.projectAdmissions(profiles),
-      ...[...new Set(profiles.map(profile => profile.harness))].map(id =>
-        upsertRow(workbenchHarnesses, { id }, { conflictColumns: ["id"], updateColumns: ["id"] })),
-      ...profiles.map((profile) => insertRow(composerProfiles, row(profile))),
-      insertRow(composerProfileImports, { id: "legacy-json" }),
-    ]);
   }
 
   private enqueue<Result>(operation: () => Promise<Result>, requirePriorSuccess = false): Promise<Result> {

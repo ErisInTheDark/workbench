@@ -1,27 +1,17 @@
 /*
  * Exports:
- * - DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: safe defaults for local server capabilities. Keywords: settings, capabilities, browse, default.
- * - WORKBENCH_LOCAL_CAPABILITY_SETTINGS_PATH: repository-local persisted local capability settings file. Keywords: settings, file, .workbench.
- * - normalizeWorkbenchLocalCapabilitySettings: normalize persisted local capability settings. Keywords: settings, normalize, capabilities.
- * - default WorkbenchServerSettings: server-readable Workbench settings controller. Keywords: settings, server, local capabilities, browse.
+ * - DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: safe defaults for local server capabilities.
+ * - normalizeWorkbenchLocalCapabilitySettings: conform capability inputs at the owner boundary.
+ * - default WorkbenchServerSettings: own serialised SQLite capability updates.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
-import { projectRoot } from "../../project";
+import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
+import { selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { localCapabilities } from "../database/schema/local-capability-schema";
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 
 export const DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
   browseRawCommandsEnabled: false,
 };
-
-export const WORKBENCH_LOCAL_CAPABILITY_SETTINGS_PATH = path.join(
-  projectRoot,
-  ".workbench",
-  "settings",
-  "local-capabilities.json",
-);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -34,40 +24,20 @@ export function normalizeWorkbenchLocalCapabilitySettings(value: unknown): Workb
   };
 }
 
-async function writeJsonFile(filePath: string, value: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await fs.rename(tempPath, filePath);
-  } catch (error) {
-    await fs.rm(tempPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
 export default class WorkbenchServerSettings {
   private writeQueue = Promise.resolve();
 
-  constructor(private readonly localCapabilitySettingsPath = WORKBENCH_LOCAL_CAPABILITY_SETTINGS_PATH) {}
+  constructor(private readonly database: Pick<WorkbenchDatabaseController, "query" | "executeTransaction">) {}
 
   async readLocalCapabilities() {
-    try {
-      const rawValue = JSON.parse(await fs.readFile(this.localCapabilitySettingsPath, "utf8"));
-      return normalizeWorkbenchLocalCapabilitySettings(rawValue);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw error;
-      }
-
-      return DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS;
-    }
+    const [row] = await this.database.query(selectRows(localCapabilities, { where: { id: "global" } }));
+    return { browseRawCommandsEnabled: row?.browse_raw_commands_enabled === 1 };
   }
 
   async writeLocalCapabilities(settings: WorkbenchLocalCapabilitySettings) {
     const normalizedSettings = normalizeWorkbenchLocalCapabilitySettings(settings);
     await this.enqueueWrite(async () => {
-      await writeJsonFile(this.localCapabilitySettingsPath, normalizedSettings);
+      await this.persist(normalizedSettings);
     });
     return normalizedSettings;
   }
@@ -79,7 +49,7 @@ export default class WorkbenchServerSettings {
     await this.enqueueWrite(async () => {
       const currentSettings = await this.readLocalCapabilities();
       nextSettings = normalizeWorkbenchLocalCapabilitySettings(updater(currentSettings));
-      await writeJsonFile(this.localCapabilitySettingsPath, nextSettings);
+      await this.persist(nextSettings);
     });
     return nextSettings;
   }
@@ -88,5 +58,11 @@ export default class WorkbenchServerSettings {
     const nextWrite = this.writeQueue.catch(() => undefined).then(task);
     this.writeQueue = nextWrite.then(() => undefined, () => undefined);
     await nextWrite;
+  }
+
+  private async persist(settings: WorkbenchLocalCapabilitySettings) {
+    await this.database.executeTransaction([upsertRow(localCapabilities, {
+      id: "global", browse_raw_commands_enabled: settings.browseRawCommandsEnabled ? 1 : 0,
+    }, { conflictColumns: ["id"], updateColumns: ["browse_raw_commands_enabled"] })]);
   }
 }

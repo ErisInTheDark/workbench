@@ -5,7 +5,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { conformSelectedRow, conformSelectedRows } from "./schema-conformance.ts";
-import { booleanInteger, defineTable, enumText, integer, jsonText, primaryKey, publishCurrentTable, text } from "./schema-definition.ts";
+import { blob, booleanInteger, defineTable, enumText, integer, jsonText, primaryKey, publishCurrentTable, text } from "./schema-definition.ts";
+
+test("binary conformance preserves typed bytes and rejects JSON-shaped substitutes", () => {
+  const binary = defineTable("conformance_binary", { bytes: blob().notNull(), optional_bytes: blob() });
+  const bytes = new Uint8Array([0, 255, 128]);
+  const result = conformSelectedRow(binary, { bytes });
+  assert.ok(result.success);
+  assert.equal(result.data.bytes, bytes);
+  assert.equal(result.data.optional_bytes, null);
+  for (const invalid of ["AP+A", [0, 255, 128], { type: "Buffer", data: [0, 255, 128] }, null]) {
+    assert.equal(conformSelectedRow(binary, { bytes: invalid }).success, false);
+  }
+});
 
 const table = publishCurrentTable(defineTable("conformance_examples", {
   id: text().primaryKey(),

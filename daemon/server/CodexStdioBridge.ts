@@ -4,9 +4,7 @@
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
  * - default CodexStdioBridge: own request translation, transcript recovery, questionnaires, and reload state around a stable app-server.
  */
-import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   NativeThreadIdSchema,
   NativeTurnIdSchema,
@@ -114,7 +112,6 @@ import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnosti
 import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-event-routing";
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import {
-  encodeTranscriptPathSegment,
   extractItem,
 } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
@@ -215,6 +212,7 @@ export type CodexStdioBridgeOptions = {
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
+  transcriptAssets?: Pick<import("./database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
   sqliteReader?: CodexSqliteTranscriptReader;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
 };
@@ -872,7 +870,7 @@ export default class CodexStdioBridge {
   private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
-  private readonly storageRoot: string;
+  private readonly transcriptAssets: CodexStdioBridgeOptions["transcriptAssets"];
   private readonly sqliteReader?: CodexSqliteTranscriptReader;
   private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
   private readonly threadPageReads = new CodexThreadPageReadController();
@@ -918,7 +916,7 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, transcriptAssets, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
@@ -946,7 +944,7 @@ export default class CodexStdioBridge {
     this.instructions = instructions;
     this.identities = identities;
     this.sendToClient = sendToClient;
-    this.storageRoot = storageRoot;
+    this.transcriptAssets = transcriptAssets;
     this.fileChanges = new CodexFileChangeController(structuredClone(initialState?.fileChanges ?? {
       items: initialState?.fileChangeFailureMarkers ?? new Map(),
       turnCursors: initialState?.fileChangeTurnCursors ?? new Map(),
@@ -1362,7 +1360,7 @@ export default class CodexStdioBridge {
     const turns = await loader.recoverThread(thread, async ({ turn, previousCursor }) => {
       signal?.throwIfAborted();
       await this.captureTranscript(`sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
-        const normalized = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(turn, { storageRoot: this.storageRoot, threadId: nativeThreadId }))).value;
+        const normalized = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(turn, { assets: this.transcriptAssets, threadId: nativeThreadId }))).value;
         await this.persistTranscript(() => this.recordTranscript([
             createCodexTranscriptProviderThreadObservation(nativeThreadId, context),
             createCodexTranscriptProviderTurnScopeObservation({ context, threadId: nativeThreadId, turn: normalized }),
@@ -1746,7 +1744,7 @@ export default class CodexStdioBridge {
         if (error || patch) return;
         const accepted = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages({
           ...item, workbenchInjectionAcceptedAt: acceptedAt,
-        }, { storageRoot: this.storageRoot, threadId }))).value;
+        }, { assets: this.transcriptAssets, threadId }))).value;
         await this.persistTranscript(() => this.recordTranscript([createCodexTranscriptProviderItemObservation({
             threadId, turnId, item: accepted, lifecycle: "completed", observedAt: acceptedAt,
           })], { source: "workbench" }));
@@ -2076,7 +2074,7 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
           ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
         const normalisedMessage = threadId
-          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { storageRoot: this.storageRoot, threadId }))).value
+          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { assets: this.transcriptAssets, threadId }))).value
           : message;
         const providerObservations = await this.createSqliteProviderResponseObservations(
           pending.upstreamRequest,
@@ -2288,7 +2286,7 @@ export default class CodexStdioBridge {
         const threadId = asString(asRecord(message.params)?.threadId)
           ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
         const normalisedMessage = threadId
-          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { storageRoot: this.storageRoot, threadId }))).value
+          ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { assets: this.transcriptAssets, threadId }))).value
           : message;
         const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage, settingsTurnId);
         if (syntheticFileChangeNotification) {
@@ -3049,46 +3047,15 @@ export default class CodexStdioBridge {
 
     const encodedThreadId = decodeURIComponent(match[1]!);
     const fileName = decodeURIComponent(match[2]!);
-    const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
-    const nativeSegments = identity
-      ? identity.bindings.filter((binding) => binding.harness === "codex").map((binding) => encodeTranscriptPathSegment(binding.nativeThreadId))
-      : [encodeTranscriptPathSegment(threadId)];
-    const segments = encodedThreadId === identity?.threadId ? [...new Set(nativeSegments)] : [encodedThreadId];
-    if (encodedThreadId !== identity?.threadId && !nativeSegments.includes(encodedThreadId)) {
-      throw new Error("Browse asset URL belongs to another thread.");
-    }
-
-    const fileMatch = /^([a-f0-9]{64})\.(png|jpg|webp|gif)$/u.exec(fileName);
-    if (!fileMatch) throw new Error("Browse asset URL has an invalid content-addressed filename.");
-    const [, digest, extension] = fileMatch;
-    const threadsRoot = path.resolve(
-      this.storageRoot,
-      ".workbench",
-      "transcripts",
-      "codex",
-      "threads",
-    );
-    let bytes: Buffer | null = null;
-    for (const segment of segments) {
-      const assetPath = path.resolve(threadsRoot, segment, "assets", fileName);
-      if (!assetPath.startsWith(`${threadsRoot}${path.sep}`)) {
-        throw new Error("Browse asset URL resolves outside the transcript store.");
-      }
-      try {
-        bytes = await readFile(assetPath);
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    if (!bytes) throw new Error("Browse asset was not found in its thread's native storage.");
-    const actualDigest = createHash("sha256").update(bytes).digest("hex");
-    if (actualDigest !== digest) throw new Error("Browse asset contents do not match its digest.");
-
+    if (!this.transcriptAssets) throw new Error("Transcript image storage is not configured.");
+    const asset = await this.transcriptAssets.readTranscriptAsset({
+      threadId: encodedThreadId, assetName: fileName, ownerThreadId: threadId,
+    });
+    if (!asset) throw new Error("Browse asset was not found in its thread's SQLite storage.");
     return {
-      byteLength: bytes.byteLength,
-      digest,
-      mimeType: extension === "jpg" ? "image/jpeg" : `image/${extension}`,
+      byteLength: asset.byteLength,
+      digest: asset.digest,
+      mimeType: asset.mimeType,
       storageKey: assetUrl,
     };
   }
@@ -3252,7 +3219,7 @@ export default class CodexStdioBridge {
           const providerThread = (await externalizeCodexTranscriptInlineImages({
             ...recording.thread,
             turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
-          }, { storageRoot: this.storageRoot, threadId: recording.thread.id })).value;
+          }, { assets: this.transcriptAssets, threadId: recording.thread.id })).value;
           if (recording.source === "workbench") {
             if (!this.identities || !context) {
               throw new Error("Workbench transcript recovery requires admitted identities and thread context.");

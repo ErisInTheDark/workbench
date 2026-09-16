@@ -1,14 +1,13 @@
 /*
  * Exports:
  * - composerProfiles: named profiles with typed settings and scope.
- * - composerProfileImports: durable legacy-import completion.
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
 import { check, defineTable, enumText, evolveTable, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
-import { addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "workbench-shared/database/schema/schema-history";
+import { addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion, retireTableHistory } from "workbench-shared/database/schema/schema-history";
 
 const profiles = defineTable("workbench_composer_profiles", {
   id: text().primaryKey(),
@@ -67,6 +66,8 @@ const importHistory = defineTableHistory({
   versions: [tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: imports, migration: createTable(imports) })],
 });
 export const composerProfiles = profileHistory.current;
-export const composerProfileImports = importHistory.current;
-export const composerProfileTables = Object.freeze({ composerProfiles, composerProfileImports });
-export const composerProfileSchemaHistory = defineSubsystemHistory([ownProjectReferences(profileHistory, "scope_project_id"), importHistory]);
+export const composerProfileTables = Object.freeze({ composerProfiles });
+export const composerProfileSchemaHistory = defineSubsystemHistory([
+  ownProjectReferences(profileHistory, "scope_project_id"),
+  retireTableHistory(importHistory, databaseReleases.retireLegacyImportReceipts.version),
+]);

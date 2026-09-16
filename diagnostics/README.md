@@ -21,7 +21,7 @@ Run only by exact filename:
 pnpm test:codex -- diagnostics/workbench-codex.test.ts
 ````
 
-Uses real Codex usage with the stored `luna.low` profile. Requires installed dependencies, Codex authentication and Git. Not part of ordinary `pnpm test`.
+Uses real Codex usage with the SQLite-stored `luna.low` profile, seeded through the isolated daemon's profile API. Requires installed dependencies, Codex authentication and Git. Not part of ordinary `wb test`.
 
 Boots current source in a private fixture with separate WB storage, Codex home, library, CLI shims and loopback listener. Copies authentication without logging it. Never restarts the user's app or daemon.
 
@@ -39,6 +39,8 @@ pnpm test:lifecycle
 
 One explicitly selected test, outside ordinary discovery. Starts copied app/daemon entrypoints with private storage and loopback ports. Uses real SQLite, compiler, HTTP and WebSocket ingress. No model turns, copied authentication or Windows sandbox identity. Installed provider binaries may initialise in private homes; this is not an offline-provider test.
 
-Checks startup and served assets, database reload, reload-all, process-dirt stability, the real old-work grace, failed candidate activation, migrated-schema rollback, same-process retry and cold reopening. Seeds a SQL transcript and image without the JSON recorder. Verifies SQL reads, incremental baseline delivery through the real shared socket, HTTP image bytes and durable provider cursors before and after reload, rollback and reopen. Retained legacy evidence stays unchanged; no transcript JSON/journals may be created. Fault instrumentation and a synthetic schema release exist only in the copied fixture. Production lifecycle and migration code remain intact. Does not prove React rendering, provider conversations or live text generation.
+Checks startup and served assets, database reload, reload-all, process-dirt stability, the real old-work grace, failed candidate activation, migrated-schema rollback, same-process retry and cold reopening. Captures the current migrated database (schema 33 or later), upgrades a private copy and verifies retained relational facts. Older JSON-era installations are unsupported.
+
+Seeds a SQL transcript and image plus pre-port capability/Browse catalogues, image bytes and legacy diff text. Startup converts loose inputs into SQLite. Verifies relational readback, incremental socket delivery, HTTP images/diffs and provider cursors across reload, rollback and reopen. Rollback inputs remain unchanged; runtime operations must not recreate retired stores. Fault instrumentation and synthetic schema releases exist only in the copied fixture. Does not prove React rendering or provider conversations.
 
 The scenario has a ten-minute failure budget, each reload a 90-second observation budget, and cleanup independent 45-second budgets per owned app/daemon. Fixture-only IPC invokes their real shutdown handlers on Windows and Linux. Each subsystem closes its own resources; the fixture never scans or kills process trees and has no elevated cleanup fallback. Windows provider retirement uses the existing PowerShell 7 runtime; Linux uses owned process groups. Failed startup must also clean up and exit. Logs and copied fixture remain under `.workbench/diagnostics`. Never operates on the user's running app or daemon. Run again after fixes; ordinary regression execution uses `pnpm test`, static validation uses `pnpm typecheck`.

@@ -12,9 +12,6 @@
  */
 import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import path from "node:path";
-
-import { projectRoot } from "../../project";
 import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
@@ -80,8 +77,6 @@ export type { GitArcPlanState } from "./GitArcPlanController";
 export type { GitArcNoopResult } from "./GitArcPlanController";
 export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
 export type { GitArcRetentionResult } from "./GitArcRetentionController";
-
-const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
 
 export interface GitArcActiveClaim extends GitArcRegistryEntry {
   proposalStatus: GitArcProposalStatus | null;
@@ -222,18 +217,6 @@ async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness
   return checkpoint;
 }
 
-function diffArtifactPath(threadId: string, artifactId: string) {
-  if (!CHECKPOINT_DIFF_ARTIFACT_PATTERN.test(artifactId)) throw new Error("Invalid checkpoint diff artifact id.");
-  return path.join(
-    projectRoot,
-    ".workbench",
-    "git-checkpoint-diffs",
-    "threads",
-    normalizeThreadId(threadId),
-    `${artifactId}.diff`,
-  );
-}
-
 export default class WorkbenchGitCheckpointController {
   private readonly plans: GitArcPlanController;
   private readonly proposals: GitArcProposalController;
@@ -242,6 +225,7 @@ export default class WorkbenchGitCheckpointController {
   constructor(
     proposalDiffs = new GitArcProposalDiffController(),
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+    private readonly legacyDiffs?: Pick<import("../../../database/WorkbenchDatabaseController").default, "readLegacyDiffArtifact">,
   ) {
     this.plans = new GitArcPlanController(resolveThreadIdentity);
     this.proposals = new GitArcProposalController(proposalDiffs, resolveThreadIdentity);
@@ -988,12 +972,10 @@ export default class WorkbenchGitCheckpointController {
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {
-    try {
-      return await fs.readFile(diffArtifactPath(threadId, artifactId), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Checkpoint diff artifact not found.");
-      throw error;
-    }
+    if (!this.legacyDiffs) throw new Error("Legacy diff storage is not configured.");
+    const diff = await this.legacyDiffs.readLegacyDiffArtifact({ artifactId, threadId });
+    if (diff === null) throw new Error("Checkpoint diff artifact not found.");
+    return diff;
   }
 
   async restore({

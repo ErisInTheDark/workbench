@@ -3,13 +3,12 @@
  * - default WorkbenchBrowseRequestHandler: execute typed Browse actions, BrowseMD scripts, sessions, streaming sequences, screenshots, and transcript recording for the daemon-owned Browse lifecycle.
  * - WorkbenchBrowseSerializedRunner: daemon-owned FIFO callback used to serialize command producers only.
  */
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { normalizeRelativePath, projectRoot, safeResolveProjectPath } from "../../project";
-import { encodeTranscriptPathSegment } from "../../../codex-transcript-normalizers";
+import { normalizeRelativePath, safeResolveProjectPath } from "../../project";
+import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
@@ -53,7 +52,7 @@ import {
   runBrowseMarkdownFileCommand as executeBrowseMarkdownFileCommand,
   serializeBrowseMarkdownTokens,
 } from "./browse-markdown-runtime";
-import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 
 const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
 const MAX_BROWSE_TIMEOUT_MS = 10 * 60_000;
@@ -863,7 +862,7 @@ function extensionForScreenshotMimeType(mimeType: string) {
   }
 }
 
-async function writeScreenshotTranscriptAsset(threadId: string, image: ScreenshotImagePayload, publicThreadId: string) {
+async function writeScreenshotTranscriptAsset(threadId: string, image: ScreenshotImagePayload, assets: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">) {
   const extension = extensionForScreenshotMimeType(image.mimeType);
   if (!extension) {
     throw new Error(`Unsupported screenshot image type: ${image.mimeType}.`);
@@ -874,18 +873,9 @@ async function writeScreenshotTranscriptAsset(threadId: string, image: Screensho
     throw new Error("Browse screenshot output was empty.");
   }
 
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const fileName = `${digest}.${extension}`;
-  const assetsDirectoryPath = path.join(projectRoot, ".workbench", "transcripts", "codex", "threads", encodeTranscriptPathSegment(threadId), "assets");
-  const assetPath = path.join(assetsDirectoryPath, fileName);
-  await fs.mkdir(assetsDirectoryPath, { recursive: true });
-  await fs.writeFile(assetPath, bytes, { flag: "wx" }).catch((error) => {
-    if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") {
-      throw error;
-    }
-  });
-
-  return `/api/transcript-assets/codex/${encodeURIComponent(publicThreadId)}/${encodeURIComponent(fileName)}`;
+  return (await assets.writeTranscriptAsset({
+    threadId, bytes, mimeType: extension === "jpg" ? "image/jpeg" : `image/${extension}`,
+  })).assetUrl;
 }
 
 async function captureBrowseSessionScreenshotAsset(
@@ -1253,13 +1243,18 @@ export default class WorkbenchBrowseRequestHandler {
 
   constructor(
     results: WorkbenchBrowseResultSink,
-    runtime = new WorkbenchBrowseRuntime(),
+    runtime: WorkbenchBrowseRuntime,
+    stores: Pick<ConstructorParameters<typeof WorkbenchBrowseSessionController>[0], "profileStore" | "registry"> & {
+      profileStore: ConstructorParameters<typeof WorkbenchBrowseRawCli>[1];
+    },
     private readonly publicThreadId: (nativeThreadId: string) => Promise<string> = async (threadId) => threadId,
+    private readonly readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings> = async () => ({ browseRawCommandsEnabled: false }),
+    private readonly assets?: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">,
   ) {
     this.results = results;
     this.runtime = runtime;
-    this.rawCli = new WorkbenchBrowseRawCli(runtime);
-    this.sessions = new WorkbenchBrowseSessionController({ runtime });
+    this.rawCli = new WorkbenchBrowseRawCli(runtime, stores.profileStore);
+    this.sessions = new WorkbenchBrowseSessionController({ runtime, ...stores });
   }
 
   async handle(body: Buffer, signal: AbortSignal, runSerialized: WorkbenchBrowseSerializedRunner) {
@@ -1267,9 +1262,8 @@ export default class WorkbenchBrowseRequestHandler {
     const execution: WorkbenchBrowseExecutionContext = {
       persistScreenshot: async (threadId, image) => {
         signal.throwIfAborted();
-        const publicThreadId = await this.publicThreadId(threadId);
-        signal.throwIfAborted();
-        const write = writeScreenshotTranscriptAsset(threadId, image, publicThreadId);
+        if (!this.assets) throw new Error("Browse screenshot storage is not configured.");
+        const write = writeScreenshotTranscriptAsset(threadId, image, this.assets);
         this.assetWrites.add(write);
         try { return await write; }
         finally { this.assetWrites.delete(write); }
@@ -1391,8 +1385,7 @@ export default class WorkbenchBrowseRequestHandler {
       }, { status: 400 });
     }
 
-    const settings = new WorkbenchServerSettings();
-    const localCapabilities = await settings.readLocalCapabilities();
+    const localCapabilities = await this.readLocalCapabilities();
     if (!localCapabilities.browseRawCommandsEnabled) {
       return browseCommandResponse({
         disabled: true,

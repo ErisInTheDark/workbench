@@ -5,6 +5,9 @@
  * WorkbenchDatabaseController: owns one worker and the complete database lifecycle.
  */
 import { Worker } from "node:worker_threads";
+import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
+import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
+import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import type {
@@ -241,6 +244,34 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "getInventory" });
     if (response.type !== "inventory") throw new WorkbenchDatabaseFailure(`Unexpected database inventory response: ${response.type}`);
     return response.inventory;
+  }
+
+  async writeTranscriptAsset(input: TranscriptAssetWrite) {
+    await this.start();
+    const response = await this.#request({ type: "writeTranscriptAsset", input });
+    if (response.type !== "transcriptAssetWritten") throw new WorkbenchDatabaseFailure(`Unexpected asset write response: ${response.type}`);
+    return response.asset;
+  }
+
+  async readLegacyDiffArtifact(input: LegacyDiffArtifactReference) {
+    await this.start();
+    const response = await this.#request({ type: "readLegacyDiffArtifact", input });
+    if (response.type !== "legacyDiffArtifact") throw new WorkbenchDatabaseFailure(`Unexpected legacy diff response: ${response.type}`);
+    return response.diff;
+  }
+
+  async executeThreadGitSelection(command: ThreadGitSelectionCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadGitSelection", command });
+    if (response.type !== "threadGitSelection") throw new WorkbenchDatabaseFailure(`Unexpected thread Git selection response: ${response.type}`);
+    return response.result;
+  }
+
+  async readTranscriptAsset(input: TranscriptAssetRead) {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptAsset", input });
+    if (response.type !== "transcriptAssetContent") throw new WorkbenchDatabaseFailure(`Unexpected asset read response: ${response.type}`);
+    return response.asset;
   }
 
   async executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult> {

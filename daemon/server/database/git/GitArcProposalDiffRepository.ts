@@ -9,6 +9,7 @@ import { GitCheckpointFileChangeSchema } from "workbench-shared/workbench/git/gi
 import {
   compileWorkbenchDatabaseStatement,
   deleteRows,
+  insertRow,
   selectRows,
   updateRows,
   upsertRow,
@@ -22,6 +23,8 @@ import { gitArcProposalDiffTables, workbenchDatabaseTables } from "../workbench-
 
 const ChangesSchema = z.array(GitCheckpointFileChangeSchema);
 type CacheRow = SelectRow<typeof gitArcProposalDiffTables.gitArcProposalDiffs>;
+type PathRow = SelectRow<typeof gitArcProposalDiffTables.gitArcProposalDiffPaths>;
+type ChangeRow = SelectRow<typeof gitArcProposalDiffTables.gitArcProposalDiffChanges>;
 
 function pathsEqual(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -37,7 +40,12 @@ export default class GitArcProposalDiffRepository {
       }));
       if (!row) return { kind: "miss" as const };
       try {
-        const paths = z.array(z.string()).parse(JSON.parse(row.paths_json));
+        const pathRows = this.database.prepare(`
+          SELECT position, path FROM workbench_git_arc_proposal_diff_paths
+          WHERE cache_key = ? ORDER BY position
+        `).all(identity.key) as PathRow[];
+        if (pathRows.some((path, index) => path.position !== index)) throw new Error("Cached proposal path order is corrupt.");
+        const paths = pathRows.map(path => path.path);
         if (
           row.repository_root !== identity.repositoryRoot
           || row.base_tree !== identity.baseTree
@@ -47,7 +55,20 @@ export default class GitArcProposalDiffRepository {
         ) {
           throw new Error("Cached proposal diff identity does not match its key.");
         }
-        const changes = ChangesSchema.parse(JSON.parse(row.changes_json));
+        const changeRows = this.database.prepare(`
+          SELECT * FROM workbench_git_arc_proposal_diff_changes
+          WHERE cache_key = ? ORDER BY position
+        `).all(identity.key) as ChangeRow[];
+        if (changeRows.some((change, index) => change.position !== index)) throw new Error("Cached proposal change order is corrupt.");
+        const changes = ChangesSchema.parse(changeRows.map(change => ({
+          additions: change.additions,
+          deletions: change.deletions,
+          diff: change.diff,
+          path: change.path,
+          kind: change.kind === "update"
+            ? { type: change.kind, move_path: change.move_path }
+            : { type: change.kind },
+        })));
         this.run(updateRows(
           gitArcProposalDiffTables.gitArcProposalDiffs,
           { last_accessed_at: this.now() },
@@ -65,14 +86,16 @@ export default class GitArcProposalDiffRepository {
 
   write(value: GitArcProposalDiffCacheValue, maxBytes: number) {
     this.database.transaction(() => {
-      const pathsJson = JSON.stringify(value.paths);
-      const changesJson = JSON.stringify(value.changes);
+      const paths = z.array(z.string()).parse(value.paths);
+      const changes = ChangesSchema.parse(value.changes);
       const byteSize = Buffer.byteLength(value.key)
         + Buffer.byteLength(value.repositoryRoot)
         + Buffer.byteLength(value.baseTree)
         + Buffer.byteLength(value.targetTree)
-        + Buffer.byteLength(pathsJson)
-        + Buffer.byteLength(changesJson)
+        + paths.reduce((total, path) => total + Buffer.byteLength(path) + 8, 0)
+        + changes.reduce((total, change) => total + Buffer.byteLength(change.path)
+          + Buffer.byteLength(change.diff) + Buffer.byteLength(change.kind.type)
+          + (change.kind.type === "update" && change.kind.move_path ? Buffer.byteLength(change.kind.move_path) : 0) + 24, 0)
         + 8;
       if (byteSize > maxBytes) {
         this.run(deleteRows(gitArcProposalDiffTables.gitArcProposalDiffs, { cache_key: value.key }));
@@ -82,19 +105,27 @@ export default class GitArcProposalDiffRepository {
         base_tree: value.baseTree,
         byte_size: byteSize,
         cache_key: value.key,
-        changes_json: changesJson,
         format_version: value.version,
         last_accessed_at: this.now(),
-        paths_json: pathsJson,
         repository_root: value.repositoryRoot,
         target_tree: value.targetTree,
       }, {
         conflictColumns: ["cache_key"],
         updateColumns: [
-          "repository_root", "base_tree", "target_tree", "paths_json", "changes_json",
+          "repository_root", "base_tree", "target_tree",
           "byte_size", "last_accessed_at", "format_version",
         ],
       }));
+      this.run(deleteRows(gitArcProposalDiffTables.gitArcProposalDiffPaths, { cache_key: value.key }));
+      this.run(deleteRows(gitArcProposalDiffTables.gitArcProposalDiffChanges, { cache_key: value.key }));
+      paths.forEach((path, position) => this.run(insertRow(gitArcProposalDiffTables.gitArcProposalDiffPaths, {
+        cache_key: value.key, position, path,
+      })));
+      changes.forEach((change, position) => this.run(insertRow(gitArcProposalDiffTables.gitArcProposalDiffChanges, {
+        cache_key: value.key, position, path: change.path, kind: change.kind.type,
+        move_path: change.kind.type === "update" ? change.kind.move_path : null,
+        additions: change.additions, deletions: change.deletions, diff: change.diff,
+      })));
       const rows = this.database.prepare(`
         SELECT cache_key, byte_size
         FROM workbench_git_arc_proposal_diffs

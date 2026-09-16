@@ -41,7 +41,6 @@ test("accepted Codex steers cancel the mapped Workbench thread wait before publi
   const registrations = {
     codexAppServer: parent,
     codexMcpGeneration: { bump() {} },
-    harnesses: { recoverAvailable: async () => undefined },
     threadIdentity: {
       knownNativeBinding: (_harness: string, threadId: string) => {
         assert.equal(threadId, nativeThreadId);
@@ -49,7 +48,7 @@ test("accepted Codex steers cancel the mapped Workbench thread wait before publi
       },
       workbenchIdForNative: () => workbenchThreadId,
     },
-    transcript: { cutoverFailure: null, pendingRecoveryThreadIds: [], record: async () => undefined },
+    transcript: { pendingRecoveryThreadIds: Promise.resolve([]), record: async () => undefined },
   } as unknown as DaemonRuntimeObjects;
   const instance = CodexBridgeNode.create({
     createCodexBridgeOptions: () => ({
@@ -102,7 +101,6 @@ for (const mode of ["initial", "replacement"] as const) {
     t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
     let bridge!: CodexStdioBridge;
     let cancelled = false;
-    let available = 0;
     const parent = {
       appServer: {
         async retirePrevious() {},
@@ -129,8 +127,7 @@ for (const mode of ["initial", "replacement"] as const) {
       codexAppServer: parent,
       codexMcpGeneration: { bump() {} },
       codexHealth: { start() {} },
-      harnesses: { recoverAvailable: async () => { available++; } },
-      transcript: { pendingRecoveryThreadIds: ["thread"], cutoverFailure: null },
+      transcript: { pendingRecoveryThreadIds: Promise.resolve(["thread"]) },
     } as unknown as DaemonRuntimeObjects;
     const instance = CodexBridgeNode.create({
       createCodexBridgeOptions: () => ({
@@ -169,7 +166,6 @@ for (const mode of ["initial", "replacement"] as const) {
         await Promise.resolve();
         assert.equal(activated, true, "provider recovery must not keep reload activation pending");
       }
-      assert.equal(available, mode === "initial" ? 0 : 1, "initialisation must not duplicate process-owned turn recovery");
       await entered.promise;
       const handoff = instance.beginHandoff!({ isReplacing: () => false });
       handoff.expire();

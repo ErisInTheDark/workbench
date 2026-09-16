@@ -12,6 +12,32 @@ function insertProfile(database: Database.Database, id: string, harness: string)
   `).run(id, harness);
 }
 
+test("retiring stale projections preserves canonical state and foreign-key integrity", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database, { targetVersion: 33 });
+    database.exec(`
+      INSERT INTO workbench_projects(id) VALUES ('local:///retained');
+      INSERT INTO workbench_harnesses(id) VALUES ('codex');
+      INSERT INTO workbench_threads(id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES ('canonical', 'local:///retained', '/retained', 'current title', 3, 1, 2, 3);
+      INSERT INTO workbench_thread_state_threads
+        (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed, created_at, updated_at, activity_at)
+      VALUES ('stale', 'local:///retained', 'topLevel', 'visible', 'old title', 0, 0, 0, 1, 1, 2, 3);
+      INSERT INTO workbench_thread_state_provider_identities
+        (project_id, harness_id, provider_thread_id, thread_id)
+      VALUES ('local:///retained', 'codex', 'native', 'stale');
+    `);
+    const before = database.prepare("SELECT * FROM workbench_threads").all();
+    installWorkbenchDatabaseSchema(database);
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_threads").all(), before);
+    assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'workbench_thread_state_*'").all(), []);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+  } finally { database.close(); }
+});
+
 test("project overrides require a retained project owner", () => {
   const database = new Database(":memory:");
   try {

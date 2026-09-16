@@ -16,6 +16,7 @@ import WorkbenchSocketClient from "../shared/workbench/WorkbenchSocketClient";
 import { isWorkbenchRpcFailure } from "../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
+import type { WorkbenchComposerProfile } from "../shared/types";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
 
@@ -116,7 +117,7 @@ export default class IsolatedWorkbench {
     return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, signal, options.codexIdentity);
   }
 
-  async start(profileDocument: object = { version: 1, profiles: {} }, prefixProof = "lifecycle") {
+  async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
     this.closed = false;
     const logOffset = this.log.length;
     const home = path.join(this.root, "codex");
@@ -124,8 +125,6 @@ export default class IsolatedWorkbench {
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(library, { recursive: true });
     await fs.mkdir(path.join(this.root, "user"), { recursive: true });
-    await fs.mkdir(path.join(this.project, ".workbench", "runtime"), { recursive: true });
-    await fs.writeFile(path.join(this.project, ".workbench", "runtime", "composer-profiles.json"), JSON.stringify(profileDocument));
     await fs.writeFile(path.join(this.project, "AGENTS.md"), `The diagnostic passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
     if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
@@ -177,6 +176,7 @@ export default class IsolatedWorkbench {
       // The daemon announces capabilities on the first WB request, not socket open.
       await this.daemon.request("project/catalog/read", {});
       await this.withSignal(ready, this.signal);
+      for (const profile of profiles) await this.daemon.request("profiles/upsert", { profile });
     } finally {
       stopAvailability();
     }

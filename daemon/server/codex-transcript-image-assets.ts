@@ -1,13 +1,10 @@
 /*
  * Exports:
- * - CodexTranscriptImageAssetContext: recorder-independent destination or retained migration destination.
+ * - CodexTranscriptImageAssetContext: thread-scoped SQLite image admission port.
  * - CodexTranscriptImageAssetExternalization: immutable image externalisation result.
  * - default externalizeCodexTranscriptInlineImages: persist content-addressed image bytes and replace inline URLs.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
-import { createHash } from "node:crypto";
-import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 
 const DATA_IMAGE_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const IMAGE_FIELDS: Readonly<Record<string, string>> = {
@@ -16,11 +13,10 @@ const IMAGE_FIELDS: Readonly<Record<string, string>> = {
   input_image: "image_url",
 };
 
-interface AssetDestination {
-  encodedThreadId: string;
-  threadDirectoryPath: string;
+export interface CodexTranscriptImageAssetContext {
+  threadId: string;
+  assets: Pick<WorkbenchDatabaseController, "writeTranscriptAsset"> | undefined;
 }
-export type CodexTranscriptImageAssetContext = AssetDestination | { storageRoot: string; threadId: string };
 
 export interface CodexTranscriptImageAssetExternalization<TValue> {
   assetCount: number;
@@ -44,7 +40,7 @@ function extensionForImageMimeType(mimeType: string) {
   }
 }
 
-async function writeImageAsset(context: AssetDestination, dataUrl: string) {
+async function writeImageAsset(context: CodexTranscriptImageAssetContext, dataUrl: string) {
   const match = DATA_IMAGE_URL_PATTERN.exec(dataUrl);
   if (!match) {
     return null;
@@ -61,23 +57,16 @@ async function writeImageAsset(context: AssetDestination, dataUrl: string) {
     return null;
   }
 
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const fileName = `${digest}.${extension}`;
-  const assetsDirectoryPath = path.join(context.threadDirectoryPath, "assets");
-  const assetPath = path.join(assetsDirectoryPath, fileName);
-  await fs.mkdir(assetsDirectoryPath, { recursive: true });
-  await fs.writeFile(assetPath, bytes, { flag: "wx" }).catch((error) => {
-    if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") {
-      throw error;
-    }
-  });
-
-  return `/api/transcript-assets/codex/${encodeURIComponent(context.encodedThreadId)}/${encodeURIComponent(fileName)}`;
+  if (!context.assets) throw new Error("Transcript image storage is not configured.");
+  return (await context.assets.writeTranscriptAsset({
+    threadId: context.threadId, bytes,
+    mimeType: extension === "jpg" ? "image/jpeg" : `image/${extension}`,
+  })).assetUrl;
 }
 
 async function externalizeValue(
   value: unknown,
-  context: AssetDestination,
+  context: CodexTranscriptImageAssetContext,
 ): Promise<CodexTranscriptImageAssetExternalization<unknown>> {
   if (!value || typeof value !== "object") {
     return {
@@ -138,11 +127,7 @@ export default async function externalizeCodexTranscriptInlineImages<TValue>(
   value: TValue,
   context: CodexTranscriptImageAssetContext,
 ): Promise<CodexTranscriptImageAssetExternalization<TValue>> {
-  const destination = "storageRoot" in context ? {
-    encodedThreadId: encodeTranscriptPathSegment(context.threadId),
-    threadDirectoryPath: path.join(context.storageRoot, ".workbench", "transcripts", "codex", "threads", encodeTranscriptPathSegment(context.threadId)),
-  } : context;
-  const result = await externalizeValue(value, destination);
+  const result = await externalizeValue(value, context);
   return {
     assetCount: result.assetCount,
     changed: result.changed,

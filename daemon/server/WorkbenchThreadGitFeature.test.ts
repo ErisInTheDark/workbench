@@ -57,7 +57,7 @@ test("serializes sibling thread Git operations per worktree while unrelated work
       add: async () => ({ changedPaths: [], selectedPaths: [] }),
       commit: async () => {
         events.push(`${threadId}:start`);
-        if (threadId === "thread-one") {
+        if (threadId === "wb:thread-one") {
           announceFirst();
           await firstGate;
         }
@@ -79,11 +79,11 @@ test("serializes sibling thread Git operations per worktree while unrelated work
   const sibling = request("thread-two");
   const unrelated = request("thread-three", "D:/Git/Other");
   await unrelated;
-  assert.deepEqual(events, ["thread-one:start", "thread-three:start", "thread-three:end"]);
+  assert.deepEqual(events, ["wb:thread-one:start", "wb:thread-three:start", "wb:thread-three:end"]);
 
   releaseFirst();
   await Promise.all([first, sibling]);
   assert.deepEqual(events, [
-    "thread-one:start", "thread-three:start", "thread-three:end", "thread-one:end", "thread-two:start", "thread-two:end",
+    "wb:thread-one:start", "wb:thread-three:start", "wb:thread-three:end", "wb:thread-one:end", "wb:thread-two:start", "wb:thread-two:end",
   ]);
 });

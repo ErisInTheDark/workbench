@@ -1,40 +1,6 @@
 /*
  * Exports:
- * - workbenchThreadStateGlobals: authoritative global documents.
- * - workbenchThreadStateProjectionStatus: shadow health and source coverage.
- * - workbenchThreadStateThreads: projected canonical thread roots.
- * - workbenchThreadStateProviderIdentities: private native references.
- * - workbenchThreadStateLifecycles: thread lifecycle variants.
- * - workbenchThreadStateSubagents: child thread metadata.
- * - workbenchThreadStateSubagentParents: parent identity and next child index.
- * - workbenchThreadStateSubagentRelationships: stable relationship roots.
- * - workbenchThreadStatePendingSubagentRelationships: pending reservation details.
- * - workbenchThreadStateActiveSubagentRelationships: active child references.
- * - workbenchThreadStateRetention: thread cleanup metadata.
- * - workbenchThreadStateProfiles: thread profile selections.
- * - workbenchThreadStateProjectProfiles: project profile defaults.
- * - workbenchThreadStateSnoozeDependencies: wake dependencies.
- * - workbenchThreadStateDrafts: durable draft inputs.
- * - workbenchThreadStateDraftAttachments: opaque attachment values.
- * - workbenchThreadStateLayouts: stable layout roots.
- * - workbenchThreadStateProjectLayouts: project layout owners.
- * - workbenchThreadStateGlobalLayouts: global layout owners.
- * - workbenchThreadStateLayoutFolders: folder metadata.
- * - workbenchThreadStateLayoutItems: stable typed layout members.
- * - workbenchThreadStateLayoutThreadItems: thread member targets.
- * - workbenchThreadStateLayoutDraftItems: draft member targets.
- * - workbenchThreadStateLayoutFolderItems: folder member targets.
- * - workbenchThreadStateLayoutRelations: sidebar ordering relations.
- * - workbenchThreadStateFolderMembers: ordered folder membership.
- * - workbenchThreadStatePinnedImports: imported project markers.
- * - workbenchThreadStateQuestionnaires: interaction roots.
- * - workbenchThreadStateQuestionnaireQuestions: ordered questions.
- * - workbenchThreadStateQuestionnaireOptions: offered choices.
- * - workbenchThreadStateQuestionnaireAnswers: settled answers.
- * - threadStateRelationalTables: non-serving relational projection inventory.
- * - threadStateTables: complete thread-state table inventory.
- * - ThreadStateSchemaRows: current row types.
- * - threadStateSchemaHistory: private table histories.
+ * - threadStateSchemaHistory: sealed histories and retirement of obsolete shadow projections.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { admitProjectReferences, ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
@@ -53,7 +19,6 @@ import {
   sql,
   text,
   unique,
-  type SelectRow,
   type SqlFragment,
   type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
@@ -91,7 +56,6 @@ const workbenchThreadStateGlobalsV1 = defineTable("workbench_thread_state_global
   updated_at: integer().notNull().nonNegative(),
 });
 const workbenchThreadStateGlobalsHistory = initialHistory(workbenchThreadStateGlobalsV1, databaseReleases.threadStateGlobals.version);
-export const workbenchThreadStateGlobals = workbenchThreadStateGlobalsHistory.current;
 
 const workbenchThreadStateProjectionStatusV1 = defineTable("workbench_thread_state_projection_status", {
   id: integer().primaryKey(),
@@ -152,7 +116,6 @@ const workbenchThreadStateProjectionStatusHistory = defineTableHistory({
   ],
   current: workbenchThreadStateProjectionStatusV2,
 });
-export const workbenchThreadStateProjectionStatus = workbenchThreadStateProjectionStatusHistory.current;
 
 const workbenchThreadStateThreadsV1 = defineTable("workbench_thread_state_threads", {
   id: text().primaryKey(),
@@ -208,7 +171,6 @@ const workbenchThreadStateThreadsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateThreadsV2,
 });
-export const workbenchThreadStateThreads = workbenchThreadStateThreadsHistory.current;
 
 const workbenchThreadStateProviderIdentitiesV1 = defineTable("workbench_thread_state_provider_identities", {
   thread_id: text().primaryKey().references("workbench_thread_state_threads", "id", { onDelete: "CASCADE" }),
@@ -273,7 +235,6 @@ const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
   ],
   current: workbenchThreadStateProviderIdentitiesV4,
 });
-export const workbenchThreadStateProviderIdentities = workbenchThreadStateProviderIdentitiesHistory.current;
 
 const workbenchThreadStateLifecyclesV1 = defineTable("workbench_thread_state_lifecycles", {
   thread_id: text().primaryKey().references("workbench_thread_state_threads", "id", { onDelete: "CASCADE" }),
@@ -349,7 +310,6 @@ const workbenchThreadStateLifecyclesV1 = defineTable("workbench_thread_state_lif
   ],
 }));
 const workbenchThreadStateLifecyclesHistory = initialHistory(workbenchThreadStateLifecyclesV1);
-export const workbenchThreadStateLifecycles = workbenchThreadStateLifecyclesHistory.current;
 
 const workbenchThreadStateSubagentsV1 = defineTable("workbench_thread_state_subagents", {
   thread_id: text().primaryKey(),
@@ -392,7 +352,6 @@ const workbenchThreadStateSubagentsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateSubagentsV2,
 });
-export const workbenchThreadStateSubagents = workbenchThreadStateSubagentsHistory.current;
 
 const workbenchThreadStateSubagentParentsV1 = defineTable("workbench_thread_state_subagent_parents", {
   id: text().primaryKey(),
@@ -432,7 +391,6 @@ const workbenchThreadStateSubagentParentsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateSubagentParentsV3,
 });
-export const workbenchThreadStateSubagentParents = workbenchThreadStateSubagentParentsHistory.current;
 
 const workbenchThreadStateSubagentRelationshipsV1 = defineTable("workbench_thread_state_subagent_relationships", {
   id: text().primaryKey(),
@@ -463,7 +421,6 @@ const workbenchThreadStateSubagentRelationshipsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateSubagentRelationshipsV2,
 });
-export const workbenchThreadStateSubagentRelationships = workbenchThreadStateSubagentRelationshipsHistory.current;
 
 const workbenchThreadStatePendingSubagentRelationshipsV1 = defineTable("workbench_thread_state_pending_subagent_relationships", {
   relationship_id: text().primaryKey(),
@@ -501,7 +458,6 @@ const workbenchThreadStatePendingSubagentRelationshipsHistory = defineTableHisto
   ],
   current: workbenchThreadStatePendingSubagentRelationshipsV2,
 });
-export const workbenchThreadStatePendingSubagentRelationships = workbenchThreadStatePendingSubagentRelationshipsHistory.current;
 
 const workbenchThreadStateActiveSubagentRelationshipsV1 = defineTable("workbench_thread_state_active_subagent_relationships", {
   relationship_id: text().primaryKey(),
@@ -513,7 +469,6 @@ const workbenchThreadStateActiveSubagentRelationshipsV1 = defineTable("workbench
   })],
 }));
 const workbenchThreadStateActiveSubagentRelationshipsHistory = initialHistory(workbenchThreadStateActiveSubagentRelationshipsV1, databaseReleases.threadStateRelationships.version);
-export const workbenchThreadStateActiveSubagentRelationships = workbenchThreadStateActiveSubagentRelationshipsHistory.current;
 
 const workbenchThreadStateRetentionV1 = defineTable("workbench_thread_state_retention", {
   thread_id: text().primaryKey().references("workbench_thread_state_threads", "id", { onDelete: "CASCADE" }),
@@ -527,7 +482,6 @@ const workbenchThreadStateRetentionV1 = defineTable("workbench_thread_state_rete
   `)],
 }));
 const workbenchThreadStateRetentionHistory = initialHistory(workbenchThreadStateRetentionV1);
-export const workbenchThreadStateRetention = workbenchThreadStateRetentionHistory.current;
 
 const profileColumns = {
   selection_kind: enumText("custom", "profile").notNull(),
@@ -566,7 +520,6 @@ const workbenchThreadStateProfilesHistory = defineTableHistory({
     }),
   ],
 });
-export const workbenchThreadStateProfiles = workbenchThreadStateProfilesHistory.current;
 
 const workbenchThreadStateProjectProfilesV1 = defineTable("workbench_thread_state_project_profiles", {
   project_id: text().primaryKey(),
@@ -594,7 +547,6 @@ const workbenchThreadStateProjectProfilesHistory = defineTableHistory({
     }),
   ],
 });
-export const workbenchThreadStateProjectProfiles = workbenchThreadStateProjectProfilesHistory.current;
 
 const workbenchThreadStateSnoozeDependenciesV1 = defineTable("workbench_thread_state_snooze_dependencies", {
   source_thread_id: text().primaryKey(),
@@ -616,7 +568,6 @@ const workbenchThreadStateSnoozeDependenciesV1 = defineTable("workbench_thread_s
   ],
 }));
 const workbenchThreadStateSnoozeDependenciesHistory = initialHistory(workbenchThreadStateSnoozeDependenciesV1);
-export const workbenchThreadStateSnoozeDependencies = workbenchThreadStateSnoozeDependenciesHistory.current;
 
 const workbenchThreadStateDraftsV1 = defineTable("workbench_thread_state_drafts", {
   draft_id: text().primaryKey(),
@@ -654,7 +605,6 @@ const workbenchThreadStateDraftsHistory = defineTableHistory({
     }),
   ],
 });
-export const workbenchThreadStateDrafts = workbenchThreadStateDraftsHistory.current;
 
 const workbenchThreadStateDraftAttachmentsV1 = defineTable("workbench_thread_state_draft_attachments", {
   draft_id: text().notNull().references("workbench_thread_state_drafts", "draft_id", { onDelete: "CASCADE" }),
@@ -664,7 +614,6 @@ const workbenchThreadStateDraftAttachmentsV1 = defineTable("workbench_thread_sta
   constraints: [primaryKey([table.draft_id, table.attachment_index])],
 }));
 const workbenchThreadStateDraftAttachmentsHistory = initialHistory(workbenchThreadStateDraftAttachmentsV1);
-export const workbenchThreadStateDraftAttachments = workbenchThreadStateDraftAttachmentsHistory.current;
 
 const workbenchThreadStateLayoutsV1 = defineTable("workbench_thread_state_layouts", {
   id: text().primaryKey(),
@@ -686,7 +635,6 @@ const workbenchThreadStateLayoutsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateLayoutsV2,
 });
-export const workbenchThreadStateLayouts = workbenchThreadStateLayoutsHistory.current;
 
 const workbenchThreadStateProjectLayoutsV1 = defineTable("workbench_thread_state_project_layouts", {
   layout_id: text().primaryKey(),
@@ -700,7 +648,6 @@ const workbenchThreadStateProjectLayoutsV1 = defineTable("workbench_thread_state
   })],
 }));
 const workbenchThreadStateProjectLayoutsHistory = initialHistory(workbenchThreadStateProjectLayoutsV1);
-export const workbenchThreadStateProjectLayouts = workbenchThreadStateProjectLayoutsHistory.current;
 
 const workbenchThreadStateGlobalLayoutsV1 = defineTable("workbench_thread_state_global_layouts", {
   layout_id: text().primaryKey(),
@@ -713,7 +660,6 @@ const workbenchThreadStateGlobalLayoutsV1 = defineTable("workbench_thread_state_
   })],
 }));
 const workbenchThreadStateGlobalLayoutsHistory = initialHistory(workbenchThreadStateGlobalLayoutsV1);
-export const workbenchThreadStateGlobalLayouts = workbenchThreadStateGlobalLayoutsHistory.current;
 
 const workbenchThreadStateLayoutFoldersV1 = defineTable("workbench_thread_state_layout_folders", {
   folder_id: text().primaryKey(),
@@ -732,7 +678,6 @@ const workbenchThreadStateLayoutFoldersV1 = defineTable("workbench_thread_state_
   ],
 }));
 const workbenchThreadStateLayoutFoldersHistory = initialHistory(workbenchThreadStateLayoutFoldersV1);
-export const workbenchThreadStateLayoutFolders = workbenchThreadStateLayoutFoldersHistory.current;
 
 const workbenchThreadStateLayoutItemsV1 = defineTable("workbench_thread_state_layout_items", {
   id: text().primaryKey(),
@@ -759,7 +704,6 @@ const workbenchThreadStateLayoutItemsHistory = defineTableHistory({
   ],
   current: workbenchThreadStateLayoutItemsV2,
 });
-export const workbenchThreadStateLayoutItems = workbenchThreadStateLayoutItemsHistory.current;
 
 const workbenchThreadStateLayoutThreadItemsV1 = defineTable("workbench_thread_state_layout_thread_items", {
   item_id: text().primaryKey(),
@@ -773,7 +717,6 @@ const workbenchThreadStateLayoutThreadItemsV1 = defineTable("workbench_thread_st
   })],
 }));
 const workbenchThreadStateLayoutThreadItemsHistory = initialHistory(workbenchThreadStateLayoutThreadItemsV1);
-export const workbenchThreadStateLayoutThreadItems = workbenchThreadStateLayoutThreadItemsHistory.current;
 
 const workbenchThreadStateLayoutDraftItemsV1 = defineTable("workbench_thread_state_layout_draft_items", {
   item_id: text().primaryKey(),
@@ -787,7 +730,6 @@ const workbenchThreadStateLayoutDraftItemsV1 = defineTable("workbench_thread_sta
   })],
 }));
 const workbenchThreadStateLayoutDraftItemsHistory = initialHistory(workbenchThreadStateLayoutDraftItemsV1);
-export const workbenchThreadStateLayoutDraftItems = workbenchThreadStateLayoutDraftItemsHistory.current;
 
 const workbenchThreadStateLayoutFolderItemsV1 = defineTable("workbench_thread_state_layout_folder_items", {
   item_id: text().primaryKey(),
@@ -801,7 +743,6 @@ const workbenchThreadStateLayoutFolderItemsV1 = defineTable("workbench_thread_st
   })],
 }));
 const workbenchThreadStateLayoutFolderItemsHistory = initialHistory(workbenchThreadStateLayoutFolderItemsV1);
-export const workbenchThreadStateLayoutFolderItems = workbenchThreadStateLayoutFolderItemsHistory.current;
 
 const workbenchThreadStateLayoutRelationsV1 = defineTable("workbench_thread_state_layout_relations", {
   item_id: text().notNull(),
@@ -827,7 +768,6 @@ const workbenchThreadStateLayoutRelationsV1 = defineTable("workbench_thread_stat
   ],
 }));
 const workbenchThreadStateLayoutRelationsHistory = initialHistory(workbenchThreadStateLayoutRelationsV1);
-export const workbenchThreadStateLayoutRelations = workbenchThreadStateLayoutRelationsHistory.current;
 
 const workbenchThreadStateFolderMembersV1 = defineTable("workbench_thread_state_folder_members", {
   folder_item_id: text().notNull(),
@@ -855,14 +795,12 @@ const workbenchThreadStateFolderMembersV1 = defineTable("workbench_thread_state_
   ],
 }));
 const workbenchThreadStateFolderMembersHistory = initialHistory(workbenchThreadStateFolderMembersV1);
-export const workbenchThreadStateFolderMembers = workbenchThreadStateFolderMembersHistory.current;
 
 const workbenchThreadStatePinnedImportsV1 = defineTable("workbench_thread_state_pinned_imports", {
   project_id: text().primaryKey(),
   layout_id: text().notNull().references("workbench_thread_state_layouts", "id", { onDelete: "CASCADE" }),
 });
 const workbenchThreadStatePinnedImportsHistory = initialHistory(workbenchThreadStatePinnedImportsV1);
-export const workbenchThreadStatePinnedImports = workbenchThreadStatePinnedImportsHistory.current;
 
 const workbenchThreadStateQuestionnairesV1 = defineTable("workbench_thread_state_questionnaires", {
   id: text().primaryKey(),
@@ -910,7 +848,6 @@ const workbenchThreadStateQuestionnairesHistory = defineTableHistory({
   ],
   current: workbenchThreadStateQuestionnairesV2,
 });
-export const workbenchThreadStateQuestionnaires = workbenchThreadStateQuestionnairesHistory.current;
 
 const workbenchThreadStateQuestionnaireQuestionsV1 = defineTable("workbench_thread_state_questionnaire_questions", {
   questionnaire_id: text().notNull().references("workbench_thread_state_questionnaires", "id", { onDelete: "CASCADE" }),
@@ -927,7 +864,6 @@ const workbenchThreadStateQuestionnaireQuestionsV1 = defineTable("workbench_thre
   ],
 }));
 const workbenchThreadStateQuestionnaireQuestionsHistory = initialHistory(workbenchThreadStateQuestionnaireQuestionsV1);
-export const workbenchThreadStateQuestionnaireQuestions = workbenchThreadStateQuestionnaireQuestionsHistory.current;
 
 const workbenchThreadStateQuestionnaireOptionsV1 = defineTable("workbench_thread_state_questionnaire_options", {
   questionnaire_id: text().notNull(),
@@ -946,7 +882,6 @@ const workbenchThreadStateQuestionnaireOptionsV1 = defineTable("workbench_thread
   ],
 }));
 const workbenchThreadStateQuestionnaireOptionsHistory = initialHistory(workbenchThreadStateQuestionnaireOptionsV1);
-export const workbenchThreadStateQuestionnaireOptions = workbenchThreadStateQuestionnaireOptionsHistory.current;
 
 const workbenchThreadStateQuestionnaireAnswersV1 = defineTable("workbench_thread_state_questionnaire_answers", {
   questionnaire_id: text().notNull(),
@@ -970,52 +905,10 @@ const workbenchThreadStateQuestionnaireAnswersV1 = defineTable("workbench_thread
   ],
 }));
 const workbenchThreadStateQuestionnaireAnswersHistory = initialHistory(workbenchThreadStateQuestionnaireAnswersV1);
-export const workbenchThreadStateQuestionnaireAnswers = workbenchThreadStateQuestionnaireAnswersHistory.current;
-
-export const threadStateRelationalTables = Object.freeze({
-  workbenchThreadStateProjectionStatus,
-  workbenchThreadStateThreads,
-  workbenchThreadStateProviderIdentities,
-  workbenchThreadStateLifecycles,
-  workbenchThreadStateSubagents,
-  workbenchThreadStateSubagentParents,
-  workbenchThreadStateSubagentRelationships,
-  workbenchThreadStatePendingSubagentRelationships,
-  workbenchThreadStateActiveSubagentRelationships,
-  workbenchThreadStateRetention,
-  workbenchThreadStateProfiles,
-  workbenchThreadStateProjectProfiles,
-  workbenchThreadStateSnoozeDependencies,
-  workbenchThreadStateDrafts,
-  workbenchThreadStateDraftAttachments,
-  workbenchThreadStateLayouts,
-  workbenchThreadStateProjectLayouts,
-  workbenchThreadStateGlobalLayouts,
-  workbenchThreadStateLayoutFolders,
-  workbenchThreadStateLayoutItems,
-  workbenchThreadStateLayoutThreadItems,
-  workbenchThreadStateLayoutDraftItems,
-  workbenchThreadStateLayoutFolderItems,
-  workbenchThreadStateLayoutRelations,
-  workbenchThreadStateFolderMembers,
-  workbenchThreadStatePinnedImports,
-  workbenchThreadStateQuestionnaires,
-  workbenchThreadStateQuestionnaireQuestions,
-  workbenchThreadStateQuestionnaireOptions,
-  workbenchThreadStateQuestionnaireAnswers,
-});
-
-export const threadStateTables = Object.freeze({
-  workbenchThreadStateGlobals,
-  ...threadStateRelationalTables,
-});
-
-export type ThreadStateSchemaRows = {
-  [Name in keyof typeof threadStateTables]: SelectRow<(typeof threadStateTables)[Name]>;
-};
 
 export const threadStateSchemaHistory = defineSubsystemHistory([
   retireTableHistory(admitProjectReferences(workbenchThreadStateProjectsHistory), databaseReleases.projectOwnership.version),
+  ...[
   workbenchThreadStateGlobalsHistory,
   workbenchThreadStateProjectionStatusHistory,
   ownProjectReferences(workbenchThreadStateThreadsHistory),
@@ -1047,4 +940,5 @@ export const threadStateSchemaHistory = defineSubsystemHistory([
   workbenchThreadStateQuestionnaireQuestionsHistory,
   workbenchThreadStateQuestionnaireOptionsHistory,
   workbenchThreadStateQuestionnaireAnswersHistory,
+  ].map(history => retireTableHistory(history, databaseReleases.retireThreadProjections.version)),
 ]);

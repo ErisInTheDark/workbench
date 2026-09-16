@@ -60,7 +60,6 @@ import type WorkbenchThreadActionController from "./WorkbenchThreadActionControl
 import type WorkbenchBrowseController from "./WorkbenchBrowseController";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
-import type WorkbenchLegacyMigrationSourceController from "./WorkbenchLegacyMigrationSourceController";
 import type WorkbenchDaemonHttpRouter from "./WorkbenchDaemonHttpRouter";
 import type WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -129,6 +128,10 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
   readGitArcProposalDiff(identity: import("./lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheIdentity): Promise<import("workbench-shared/workbench/git/checkpoint-contracts").GitCheckpointFileChange[] | null>;
   writeGitArcProposalDiff(value: import("./lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheValue, maxBytes: number): Promise<void>;
+  writeTranscriptAsset: import("./database/WorkbenchDatabaseController").default["writeTranscriptAsset"];
+  readTranscriptAsset: import("./database/WorkbenchDatabaseController").default["readTranscriptAsset"];
+  readLegacyDiffArtifact: import("./database/WorkbenchDatabaseController").default["readLegacyDiffArtifact"];
+  executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
   readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
   readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
   readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;
@@ -152,13 +155,11 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
 export interface DaemonTranscriptRegistration {
   acceptLiveUpdate?(update: TranscriptLiveUpdate): void;
   registerLiveBoundary?(boundary: (operation: () => Promise<void>) => Promise<void>): () => void;
-  assertCutoverReady(): void;
   assertReady(): void;
   captureProviderGap(threadId: string, error: unknown): Promise<Error>;
-  readonly cutoverFailure: Error | null;
   dispose(): void;
   readonly failure: Error | null;
-  readonly pendingRecoveryThreadIds: readonly string[];
+  readonly pendingRecoveryThreadIds: Promise<readonly string[]>;
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
   record(
@@ -198,7 +199,6 @@ export interface DaemonRuntimeObjects {
   threadActions: WorkbenchThreadActionController;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
-  legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
   mcp: WorkbenchAgentMcpController;
   modules: DaemonReloadableModules;
   daemonHttp: WorkbenchDaemonHttpRouter;

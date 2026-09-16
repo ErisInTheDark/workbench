@@ -741,11 +741,6 @@ async function startDaemon() {
   const startupBridge = featureHost.get("codexBridge");
   const codexReadiness = ensureCodexReady(startupBridge);
   void codexReadiness
-    .then(() => {
-      void featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("codex"), "Codex persisted turn recovery").catch((error) => {
-        logError("turn-recovery", `startup manual-resume recovery failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    })
     .catch((error) => {
       startupBridge.beginStopping();
       codexRecoverySupervisor.requestRecovery(

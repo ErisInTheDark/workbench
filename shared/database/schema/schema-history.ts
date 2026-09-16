@@ -580,20 +580,20 @@ export function applyWorkbenchDatabaseSchema(
   const versions = databaseSchemaVersionData.get(schema)!;
   for (let schemaVersion = installedVersion + 1; schemaVersion <= targetVersion; schemaVersion += 1) {
     const operations = versions.get(schemaVersion)!;
-    const needsRebuild = operations.some((operation) => operation.kind === "rebuildTable");
+    const changesTableStructure = operations.some((operation) => operation.kind === "rebuildTable" || operation.kind === "dropTable");
     const foreignKeysEnabled = database.pragma("foreign_keys", { simple: true }) === 1;
-    if (needsRebuild && foreignKeysEnabled) database.pragma("foreign_keys = OFF");
+    if (changesTableStructure && foreignKeysEnabled) database.pragma("foreign_keys = OFF");
     try {
       database.transaction(() => {
         for (const operation of operations) executeMigration(database, operation, schemaVersion);
-        if (needsRebuild) {
+        if (changesTableStructure) {
           const failures = database.pragma("foreign_key_check") as unknown[];
           if (failures.length > 0) throw new Error(`Foreign-key check failed after schema version ${schemaVersion}`);
         }
         database.pragma(`user_version = ${schemaVersion}`);
       })();
     } finally {
-      if (needsRebuild && foreignKeysEnabled) database.pragma("foreign_keys = ON");
+      if (changesTableStructure && foreignKeysEnabled) database.pragma("foreign_keys = ON");
     }
   }
 }

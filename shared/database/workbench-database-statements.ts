@@ -12,7 +12,7 @@ import type {
   TableDefinition,
 } from "./schema/schema-definition.ts";
 
-export type WorkbenchDatabaseValue = string | number | null;
+export type WorkbenchDatabaseValue = string | number | Uint8Array | null;
 export type WorkbenchDatabaseRow = Record<string, WorkbenchDatabaseValue>;
 
 type ColumnName<Table extends TableDefinition> = Extract<keyof Table["columns"], string>;

@@ -2,11 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
 import { listWorkbenchInstructionMechanics } from "./WorkbenchPromptFiles.ts";
 
-test("installed managed capabilities do not depend on a native identity or caller origin", async (context) => {
-  context.mock.method(WorkbenchServerSettings.prototype, "readLocalCapabilities", async () => ({ browseRawCommandsEnabled: false }));
+test("installed managed capabilities do not depend on a native identity or caller origin", async () => {
   for (const subagentName of [null, "Akari"]) {
     const promptContext = { managedThread: true, threadId: null, subagentName };
     const available = await listWorkbenchInstructionMechanics(promptContext);
@@ -19,12 +17,7 @@ test("installed managed capabilities do not depend on a native identity or calle
   assert.equal((await listWorkbenchInstructionMechanics({})).has("task-title"), false);
 });
 
-test("managed top-level threads expose current-thread mechanics before and after materialization", async (context) => {
-  context.mock.method(
-    WorkbenchServerSettings.prototype,
-    "readLocalCapabilities",
-    async () => ({ browseRawCommandsEnabled: false }),
-  );
+test("managed top-level threads expose current-thread mechanics before and after materialization", async () => {
   for (const threadId of ["new", "draft:123", "thread-1"]) {
     const promptContext = { harness: "codex" as const, threadId, workbenchOrigin: "http://localhost" };
     const available = await listWorkbenchInstructionMechanics(promptContext);
@@ -43,35 +36,24 @@ test("managed top-level threads expose current-thread mechanics before and after
   assert.equal(subagent.has("thread-refresh"), true);
 });
 
-test("enabled raw Browse commands expose the browse-raw mechanic", async (context) => {
-  context.mock.method(
-    WorkbenchServerSettings.prototype,
-    "readLocalCapabilities",
-    async () => ({ browseRawCommandsEnabled: true }),
-  );
-
+test("enabled raw Browse commands expose the browse-raw mechanic", async () => {
   const available = await listWorkbenchInstructionMechanics({
     harness: "codex",
     threadId: "thread-1",
     workbenchOrigin: "http://localhost",
-  });
+  }, async () => ({ browseRawCommandsEnabled: true }));
 
   assert.equal(available.has("browse-raw"), true);
 });
 
 test("failed local capability reads keep raw Browse commands unavailable and report the failure", async (context) => {
-  context.mock.method(
-    WorkbenchServerSettings.prototype,
-    "readLocalCapabilities",
-    async () => { throw new Error("settings unavailable"); },
-  );
   const reported = context.mock.method(console, "error", () => undefined);
 
   const available = await listWorkbenchInstructionMechanics({
     harness: "codex",
     threadId: "thread-1",
     workbenchOrigin: "http://localhost",
-  });
+  }, async () => { throw new Error("settings unavailable"); });
 
   assert.equal(available.has("browse-raw"), false);
   assert.equal(reported.mock.callCount(), 1);

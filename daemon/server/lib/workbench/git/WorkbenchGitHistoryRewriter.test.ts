@@ -5,6 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
+import Database from "better-sqlite3";
+import WorkbenchThreadGitSelectionStore from "../../../database/git/WorkbenchThreadGitSelectionStore";
+import WorkbenchThreadIdentityRepository from "../../../database/thread-identity/WorkbenchThreadIdentityRepository";
+import { installWorkbenchDatabaseSchema } from "../../../database/workbench-database-schema";
+import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
@@ -43,7 +48,21 @@ async function repository(context: TestContext) {
   context.after(dispose);
   const repositoryOwner = await WorkbenchGitRepository.open(root);
   const target = (await repositoryOwner.readCommitAt("HEAD^"))!.commit;
-  return { repositoryOwner, root, storage: storageRootPath, target };
+  return { repositoryOwner, root, selectionStore: selectionStore(context, root, storageRootPath), target };
+}
+
+function selectionStore(context: TestContext, root: string, storage: string) {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  context.after(() => database.close());
+  new WorkbenchThreadIdentityRepository(database).observe({
+    native: { harness: "codex", nativeLocation: root, nativeThreadId: NativeThreadIdSchema.parse("thread-one") },
+    projectId: ProjectIdSchema.parse("local:///fixture"), projectRoot: root,
+    title: "thread-one", createdAt: 1, updatedAt: 1, activityAt: 1,
+  });
+  const store = new WorkbenchThreadGitSelectionStore(database, storage);
+  return { executeThreadGitSelection: async (command: Parameters<typeof store.execute>[0]) => store.execute(command) };
 }
 
 async function arcRepository(context: TestContext) {
@@ -53,14 +72,14 @@ async function arcRepository(context: TestContext) {
   return { repository, root, state };
 }
 
-async function checkContentAmend({ repositoryOwner, root, storage, target }: Awaited<ReturnType<typeof repository>>) {
+async function checkContentAmend({ repositoryOwner, root, selectionStore, target }: Awaited<ReturnType<typeof repository>>) {
   const oldHead = (await git(root, ["rev-parse", "HEAD"])).trim();
   await write(root, "selected.txt", "amended\n");
   await write(root, "later.txt", "staged but unrelated\n");
   await git(root, ["add", "later.txt"]);
   const beforeSelected = await fs.readFile(path.join(root, "selected.txt"));
   const beforeLater = await fs.readFile(path.join(root, "later.txt"));
-  const owner = await WorkbenchThreadGit.create({ cwd: root, storageRootPath: storage, threadId: "thread-one" });
+  const owner = await WorkbenchThreadGit.create({ cwd: root, selectionStore, threadId: "thread-one" });
   await owner.add(["selected.txt"]);
 
   const result = await owner.commit("amended target", target);
@@ -121,7 +140,7 @@ historyTest("a descendant conflict leaves branch, worktree, index, refs, and sel
   const worktreeBefore = await fs.readFile(path.join(root, "selected.txt"));
   const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
   const refsBefore = await git(root, ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/worktree"]);
-  const owner = await WorkbenchThreadGit.create({ cwd: root, storageRootPath: storage, threadId: "thread-one" });
+  const owner = await WorkbenchThreadGit.create({ cwd: root, selectionStore: selectionStore(context, root, storage), threadId: "thread-one" });
   await owner.add(["selected.txt"]);
   await assert.rejects(owner.commit("conflict", target), /conflicts/u);
   assert.equal((await git(root, ["rev-parse", "HEAD"])).trim(), head);

@@ -91,8 +91,8 @@ export default class WorkbenchClaimStatsRepository {
         SELECT c.identity_id, c.harness_id, c.managed_id,
           COALESCE(NULLIF(s.title, ''), NULLIF(w.title, '')) title
         FROM selected c
-        LEFT JOIN workbench_thread_state_threads s ON s.id = c.managed_id AND s.project_id = c.project_id
         LEFT JOIN workbench_threads w ON w.id = c.managed_id AND w.project_id = c.project_id
+        LEFT JOIN workbench_thread_states s ON s.thread_id = w.id
         ORDER BY c.last_day DESC, c.identity_id, c.harness_id
         LIMIT @limit OFFSET @offset
       `).all({ ...scoped, limit: pageSize, offset: (page - 1) * pageSize }) as Array<{

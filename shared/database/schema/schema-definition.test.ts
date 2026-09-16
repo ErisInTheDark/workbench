@@ -7,6 +7,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 
 import {
+  blob,
   booleanInteger,
   check,
   defineTable,
@@ -29,6 +30,36 @@ import {
   type SelectRow,
 } from "./schema-definition.ts";
 import { createTable, defineTableHistory, tableVersion } from "./schema-history.ts";
+import { compileWorkbenchDatabaseStatement, insertRow, selectRows } from "../workbench-database-statements.ts";
+
+test("binary columns preserve arbitrary bytes through typed statements and strict storage", () => {
+  const definition = defineTable("schema_test_binary", {
+    id: integer().primaryKey(),
+    bytes: blob().notNull(),
+    optional_bytes: blob(),
+  });
+  const current = defineTableHistory({
+    versions: [tableVersion({ schemaVersion: 1, table: definition, migration: createTable(definition) })],
+    current: definition,
+  }).current;
+  const database = new Database(":memory:");
+  try {
+    database.exec(renderCreateTable(definition));
+    const bytes = new Uint8Array([0, 255, 128, 10, 39]);
+    const row: InsertRow<typeof current> = { id: 1, bytes };
+    const insert = compileWorkbenchDatabaseStatement({ [current.name]: current }, insertRow(current, row));
+    database.prepare(insert.sql).run(...insert.parameters);
+    const select = compileWorkbenchDatabaseStatement({ [current.name]: current }, selectRows(current));
+    const stored = database.prepare(select.sql).get(...select.parameters) as SelectRow<typeof current>;
+    assert.deepEqual(new Uint8Array(stored.bytes), bytes);
+    assert.equal(stored.optional_bytes, null);
+    assert.throws(() => database.prepare("INSERT INTO schema_test_binary(id,bytes) VALUES (?,?)").run(2, "not bytes"), /BLOB/);
+    assert.throws(() => blob().nonNegative(), /INTEGER/);
+    assert.throws(() => blob().primaryKey({ autoincrement: true }), /INTEGER/);
+  } finally {
+    database.close();
+  }
+});
 
 const parentsV1 = defineTable("schema_test_parents", {
   id: text().primaryKey(),

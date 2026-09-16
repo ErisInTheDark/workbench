@@ -1,345 +1,97 @@
 /*
  * Exports:
- * - WorkbenchTranscriptCaptureGapEntry: retained reference for one thread affected by failed recording.
- * - WorkbenchTranscriptCaptureGapMarker: durable set of threads excluded from cutover evidence.
- * - WorkbenchTranscriptCaptureGapControllerOptions: filesystem, identity and clock inputs.
- * - default WorkbenchTranscriptCaptureGapController: record gaps, expose provider recovery and guard cutover.
+ * - WorkbenchTranscriptCaptureGapEntry: one durable recording failure.
+ * - WorkbenchTranscriptCaptureGapControllerOptions: database, identity and clock ports.
+ * - default WorkbenchTranscriptCaptureGapController: persist failures and select provider reconciliation.
  */
 import { randomUUID } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
-
+import { selectRows } from "workbench-shared/database/workbench-database-statements";
+import { evidenceTables } from "workbench-shared/workbench/database/schema/evidence-schema";
+import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import type { WorkbenchTranscriptCaptureGapObservation } from "./workbench-transcript-types.ts";
 
 export interface WorkbenchTranscriptCaptureGapEntry {
   errorText: string;
   id: string;
   openedAt: number;
-  recoverability: "provider" | "unrecoverable";
-  threadId: string;
-  turnId: string | null;
-}
-
-export interface WorkbenchTranscriptCaptureGapMarker {
-  entries: WorkbenchTranscriptCaptureGapEntry[];
-  version: 1;
+  threadId: WorkbenchThreadId;
+  turnId: WorkbenchTurnId | null;
 }
 
 export interface WorkbenchTranscriptCaptureGapControllerOptions {
-  markerPath: string;
+  database: Pick<WorkbenchDatabaseController, "query" | "settleTranscript">;
   now?: () => number;
   randomId?: () => string;
   resolveReference?: (
-    reference: Pick<WorkbenchTranscriptCaptureGapEntry, "threadId" | "turnId">,
-  ) => Promise<Pick<WorkbenchTranscriptCaptureGapEntry, "threadId" | "turnId">>;
-}
-
-const MAX_ERROR_TEXT_LENGTH = 500;
-
-function boundedErrorText(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, MAX_ERROR_TEXT_LENGTH);
-}
-
-function entriesEqual(
-  left: WorkbenchTranscriptCaptureGapEntry,
-  right: WorkbenchTranscriptCaptureGapEntry,
-) {
-  return left.errorText === right.errorText
-    && left.id === right.id
-    && left.openedAt === right.openedAt
-    && left.recoverability === right.recoverability
-    && left.threadId === right.threadId
-    && left.turnId === right.turnId;
-}
-
-function isEntry(value: unknown): value is WorkbenchTranscriptCaptureGapEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Partial<WorkbenchTranscriptCaptureGapEntry>;
-  return typeof entry.id === "string"
-    && entry.id.length > 0
-    && typeof entry.threadId === "string"
-    && entry.threadId.length > 0
-    && (entry.turnId === null || typeof entry.turnId === "string")
-    && typeof entry.openedAt === "number"
-    && Number.isFinite(entry.openedAt)
-    && (entry.recoverability === "provider" || entry.recoverability === "unrecoverable")
-    && typeof entry.errorText === "string";
-}
-
-function isMarker(value: unknown): value is WorkbenchTranscriptCaptureGapMarker {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const marker = value as Partial<WorkbenchTranscriptCaptureGapMarker>;
-  return marker.version === 1
-    && Array.isArray(marker.entries)
-    && marker.entries.length > 0
-    && marker.entries.every(isEntry)
-    && new Set(marker.entries.map(({ threadId }) => threadId)).size === marker.entries.length
-    && new Set(marker.entries.map(({ id }) => id)).size === marker.entries.length;
-}
-
-async function readMarker(markerPath: string) {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(markerPath, "utf8"));
-    if (!isMarker(parsed)) throw new Error("Capture-gap marker has an invalid shape.");
-    return parsed;
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  }
+    reference: { threadId: string; turnId: string | null },
+  ) => Promise<{ threadId: string; turnId: string | null }>;
 }
 
 export default class WorkbenchTranscriptCaptureGapController {
-  readonly #markerPath: string;
-  readonly #now: NonNullable<WorkbenchTranscriptCaptureGapControllerOptions["now"]>;
-  readonly #randomId: NonNullable<WorkbenchTranscriptCaptureGapControllerOptions["randomId"]>;
-  readonly #resolveReference: WorkbenchTranscriptCaptureGapControllerOptions["resolveReference"];
-  #pendingWrite = Promise.resolve();
-  #marker: WorkbenchTranscriptCaptureGapMarker | null = null;
-  #markerFailure: Error | null = null;
-  #started = false;
+  constructor(private readonly options: WorkbenchTranscriptCaptureGapControllerOptions) {}
 
-  constructor({
-    markerPath,
-    now = Date.now,
-    randomId = randomUUID,
-    resolveReference,
-  }: WorkbenchTranscriptCaptureGapControllerOptions) {
-    this.#markerPath = markerPath;
-    this.#now = now;
-    this.#randomId = randomId;
-    this.#resolveReference = resolveReference;
+  get pendingRecoveryThreadIds(): Promise<WorkbenchThreadId[]> {
+    return this.#pendingRecoveryThreadIds();
   }
 
-  get cutoverFailure() {
-    if (this.#markerFailure) return this.#markerFailure;
-    return this.#marker
-      ? new Error(`SQLite transcript shadow has capture gaps for ${this.#marker.entries.length} thread(s).`)
-      : null;
-  }
-
-  get pendingRecoveryThreadIds() {
-    return this.#marker?.entries
-      .filter(({ recoverability }) => recoverability === "provider")
-      .map(({ threadId }) => threadId)
-      .sort((left, right) => left.localeCompare(right)) ?? [];
-  }
-
-  async start() {
-    if (this.#started) return;
-    try {
-      this.#marker = await readMarker(this.#markerPath);
-      await this.#resolveMarker();
-    } catch (error) {
-      this.#markerFailure = new Error(
-        `SQLite transcript capture-gap marker is unreadable: ${boundedErrorText(error)}`,
-        { cause: error },
-      );
-    }
-    this.#started = true;
-  }
-
-  async prepareReferences() {
-    this.#assertStarted();
-    if (!this.#marker || !this.#resolveReference || this.#markerFailure) return;
-    await this.#mutate(async () => {
-      try {
-        await this.#resolveMarker();
-      } catch (error) {
-        this.#markerFailure = new Error(
-          `SQLite transcript capture-gap identity conversion failed: ${boundedErrorText(error)}`,
-          { cause: error },
-        );
-        throw this.#markerFailure;
-      }
-    });
-  }
-
-  assertCutoverReady() {
-    this.#assertStarted();
-    const failure = this.cutoverFailure;
-    if (failure) throw failure;
-  }
-
-  hasGap(threadId: string) {
-    this.#assertStarted();
-    if (this.#markerFailure) return true;
-    return this.#marker?.entries.some((entry) => entry.threadId === threadId) ?? false;
+  async #pendingRecoveryThreadIds() {
+    const [pending, failed] = await Promise.all([
+      this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "open" } })),
+      this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "unrecoverable" } })),
+    ]);
+    const unrecoverable = new Set(failed.map(row => row.thread_id));
+    return [...new Set(pending.filter(row => !unrecoverable.has(row.thread_id))
+      .map(row => WorkbenchThreadIdSchema.parse(row.thread_id)))].sort();
   }
 
   async captureFailure(input: {
     error: unknown;
-    recoverability: WorkbenchTranscriptCaptureGapEntry["recoverability"];
+    recoverability: "provider" | "unrecoverable";
     threadId: string;
     turnId: string | null;
-  }) {
-    return await this.#mutate(async () => {
-      if (this.#markerFailure) return await this.#captureFailure(input);
-      try {
-        await this.#resolveMarker();
-        const reference = await this.#resolveReference?.(input) ?? input;
-        return await this.#captureFailure({ ...input, ...reference });
-      } catch (error) {
-        this.#markerFailure = new Error(
-          `SQLite transcript capture-gap identity conversion failed: ${boundedErrorText(error)}`,
-          { cause: error },
-        );
-        return this.#markerFailure;
-      }
-    });
+  }): Promise<Error> {
+    try {
+      const reference = await this.options.resolveReference?.(input) ?? input;
+      const now = (this.options.now ?? Date.now)();
+      await this.options.database.settleTranscript([{
+        kind: "captureGap",
+        gapId: (this.options.randomId ?? randomUUID)(),
+        threadId: WorkbenchThreadIdSchema.parse(reference.threadId),
+        turnId: reference.turnId === null ? null : WorkbenchTurnIdSchema.parse(reference.turnId),
+        ...(input.recoverability === "provider"
+          ? { state: "open" as const, closedAt: null }
+          : { state: "unrecoverable" as const, closedAt: now }),
+        openedAt: now,
+        reason: "sqlite transcript settlement failed",
+        errorText: (input.error instanceof Error ? input.error.message : String(input.error)).slice(0, 500),
+      }]);
+      return new Error(`SQLite transcript settlement failed for thread ${input.threadId}.`, { cause: input.error });
+    } catch (captureError) {
+      return new AggregateError([input.error, captureError], "SQLite transcript settlement and capture-gap recording failed.");
+    }
   }
 
-  async #captureFailure({
-    error,
-    recoverability,
-    threadId,
-    turnId,
-  }: {
-    error: unknown;
-    recoverability: WorkbenchTranscriptCaptureGapEntry["recoverability"];
-    threadId: string;
-    turnId: string | null;
-  }) {
-    this.#assertStarted();
-    if (this.#markerFailure) {
-      return new Error(
-        `SQLite transcript settlement failed and its capture-gap marker is unavailable: ${boundedErrorText(error)}`,
-        { cause: error },
-      );
-    }
-    const existingMarker = this.#marker;
-    const existingEntry = existingMarker?.entries.find((entry) => entry.threadId === threadId);
-    const entry: WorkbenchTranscriptCaptureGapEntry = existingEntry
-      ? {
-        ...existingEntry,
-        recoverability: existingEntry.recoverability === "unrecoverable" || recoverability === "unrecoverable"
-          ? "unrecoverable"
-          : "provider",
-        turnId: existingEntry.turnId === turnId ? turnId : null,
-      }
-      : {
-        errorText: boundedErrorText(error),
-        id: this.#randomId(),
-        openedAt: this.#now(),
-        recoverability,
-        threadId,
-        turnId,
-      };
-    const marker: WorkbenchTranscriptCaptureGapMarker = {
-      entries: [
-        ...(existingMarker?.entries.filter((candidate) => candidate.threadId !== threadId) ?? []),
-        entry,
-      ].sort((left, right) => left.threadId.localeCompare(right.threadId)),
-      version: 1,
-    };
-    if (!existingEntry || !entriesEqual(entry, existingEntry)) {
-      try {
-        await this.#writeMarker(marker);
-      } catch (markerError) {
-        this.#markerFailure = new Error(
-          `SQLite transcript settlement and capture-gap marker write failed: ${boundedErrorText(markerError)}`,
-          { cause: markerError },
-        );
-        return this.#markerFailure;
-      }
-    }
-    this.#marker = marker;
-    return new Error(`SQLite transcript shadow settlement failed for thread ${threadId}.`, { cause: error });
-  }
-
-  requireRecovery(threadId: WorkbenchThreadId) {
-    this.#assertStarted();
-    const entry = this.#marker?.entries.find((candidate) => candidate.threadId === threadId);
-    if (!entry) throw new Error(`SQLite transcript capture recovery has no entry for thread ${threadId}.`);
-    if (entry.recoverability !== "provider") {
+  async requireRecovery(threadId: WorkbenchThreadId): Promise<WorkbenchTranscriptCaptureGapEntry[]> {
+    const rows = await this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, {
+      where: { thread_id: threadId },
+    }));
+    if (rows.some(row => row.state === "unrecoverable")) {
       throw new Error(`SQLite transcript capture gap for thread ${threadId} is not provider-recoverable.`);
     }
-    return { ...entry, threadId };
+    const pending = rows.filter(row => row.state === "open");
+    if (!pending.length) throw new Error(`SQLite transcript capture recovery has no entry for thread ${threadId}.`);
+    return pending.map(row => ({
+      id: row.id, threadId, turnId: row.turn_id === null ? null : WorkbenchTurnIdSchema.parse(row.turn_id),
+      openedAt: row.opened_at, errorText: row.error_text ?? "",
+    }));
   }
 
-  createRecoveryObservation(
-    entry: WorkbenchTranscriptCaptureGapEntry & { threadId: WorkbenchThreadId },
-    turnId: WorkbenchTurnId | null,
-  ): WorkbenchTranscriptCaptureGapObservation {
-    this.#assertStarted();
-    if (!this.#marker?.entries.some((candidate) => candidate.id === entry.id)) {
-      throw new Error("SQLite transcript capture recovery marker changed before settlement.");
-    }
-    if (entry.recoverability !== "provider") {
-      throw new Error(`SQLite transcript capture gap for thread ${entry.threadId} is not provider-recoverable.`);
-    }
+  createRecoveryObservation(entry: WorkbenchTranscriptCaptureGapEntry, turnId: WorkbenchTurnId | null): WorkbenchTranscriptCaptureGapObservation {
     return {
-      closedAt: this.#now(),
-      errorText: entry.errorText,
-      gapId: entry.id,
-      kind: "captureGap",
-      openedAt: entry.openedAt,
-      reason: "sqlite transcript settlement failed",
-      state: "reconciled",
-      threadId: entry.threadId,
-      turnId,
+      kind: "captureGap", gapId: entry.id, threadId: entry.threadId, turnId,
+      openedAt: entry.openedAt, closedAt: (this.options.now ?? Date.now)(),
+      errorText: entry.errorText, reason: "sqlite transcript settlement failed", state: "reconciled",
     };
-  }
-
-  async completeRecovery(entry: WorkbenchTranscriptCaptureGapEntry) {
-    return await this.#mutate(() => this.#completeRecovery(entry));
-  }
-
-  async #completeRecovery(entry: WorkbenchTranscriptCaptureGapEntry) {
-    this.#assertStarted();
-    const marker = this.#marker;
-    if (!marker?.entries.some((candidate) => candidate.id === entry.id)) {
-      throw new Error("SQLite transcript capture recovery marker changed before completion.");
-    }
-    if (marker.entries.find((candidate) => candidate.id === entry.id)?.recoverability !== "provider") {
-      throw new Error(`SQLite transcript capture gap for thread ${entry.threadId} is not provider-recoverable.`);
-    }
-    const remaining = marker.entries.filter((candidate) => candidate.id !== entry.id);
-    if (remaining.length) {
-      const nextMarker = { ...marker, entries: remaining };
-      await this.#writeMarker(nextMarker);
-      this.#marker = nextMarker;
-      return;
-    }
-    await rm(this.#markerPath);
-    this.#marker = null;
-  }
-
-  async #resolveMarker() {
-    if (!this.#marker || !this.#resolveReference) return;
-    const entries = new Map<string, WorkbenchTranscriptCaptureGapEntry>();
-    for (const previous of [...this.#marker.entries].sort((left, right) => left.openedAt - right.openedAt)) {
-      const resolved = { ...previous, ...await this.#resolveReference(previous) };
-      const existing = entries.get(resolved.threadId);
-      entries.set(resolved.threadId, existing ? {
-        ...existing,
-        recoverability: existing.recoverability === "unrecoverable" || resolved.recoverability === "unrecoverable"
-          ? "unrecoverable" : "provider",
-        turnId: existing.turnId === resolved.turnId ? existing.turnId : null,
-      } : resolved);
-    }
-    const next = [...entries.values()].sort((left, right) => left.threadId.localeCompare(right.threadId));
-    if (next.length === this.#marker.entries.length
-      && next.every((entry, index) => entriesEqual(entry, this.#marker!.entries[index]!))) return;
-    const marker: WorkbenchTranscriptCaptureGapMarker = { version: 1, entries: next };
-    await this.#writeMarker(marker);
-    this.#marker = marker;
-  }
-
-  #mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#pendingWrite.then(operation);
-    // Each caller receives its failure. The tail only sequences the next marker mutation.
-    this.#pendingWrite = result.then(() => undefined, () => undefined);
-    return result;
-  }
-
-  #assertStarted() {
-    if (!this.#started) throw new Error("SQLite transcript capture-gap controller is not started.");
-  }
-
-  async #writeMarker(marker: WorkbenchTranscriptCaptureGapMarker) {
-    const temporaryPath = `${this.#markerPath}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(marker)}\n`, "utf8");
-    await rename(temporaryPath, this.#markerPath);
   }
 }

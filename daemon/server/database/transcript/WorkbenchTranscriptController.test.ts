@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transcript readiness, direct shadow recording, per-thread gap isolation, recovery, subscriptions, and disposal.
+ * No production exports. Tests protect transcript readiness, durable recording, per-thread gaps, recovery, subscriptions, and disposal.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -78,7 +78,7 @@ test("recording activity retires previews before persistence, but history and de
   const directory = await mkdtemp(join(tmpdir(), "workbench-preview-activity-"));
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   const controller = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({
-    markerPath: join(directory, "capture-gap.json"),
+    database,
   }));
   const events: TranscriptStreamUpdate[] = [];
   const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
@@ -193,7 +193,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
   const controller = new WorkbenchTranscriptController(
     database,
     new WorkbenchTranscriptCaptureGapController({
-      markerPath: join(directory, "capture-gap.json"),
+      database,
     }),
   );
   const projectionStarted = deferred<void>();
@@ -359,7 +359,10 @@ test("durable item facts refresh subscriptions only at complete projection bound
       return { schemaVersion: 1, tableNames: [] };
     },
   }, new WorkbenchTranscriptCaptureGapController({
-    markerPath: join(tmpdir(), "unused-transcript-boundary-gap.json"),
+    database: {
+      async query() { throw new Error("Unexpected gap query"); },
+      async settleTranscript() { throw new Error("Unexpected gap recording"); },
+    },
   }));
   await controller.start();
   const awaitNextPublication = async (
@@ -492,10 +495,9 @@ test("durable item facts refresh subscriptions only at complete projection bound
   }
 });
 
-test("capture gaps retain cutover evidence without blocking historical imports, subscriptions or live recording", async () => {
+test("durable capture gaps do not block historical imports, subscriptions or live recording", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-gap-"));
   const databasePath = join(directory, "workbench.sqlite3");
-  const markerPath = join(directory, "capture-gap.json");
   let database = new WorkbenchDatabaseController({ databasePath });
   let rejectSettlements = true;
   const failed = new WorkbenchTranscriptController({
@@ -508,7 +510,7 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
     ),
     start: () => database.start(),
   }, new WorkbenchTranscriptCaptureGapController({
-    markerPath,
+    database,
     now: () => 10,
     randomId: (() => {
       const ids = ["gap-provider", "gap-workbench"][Symbol.iterator]();
@@ -518,17 +520,17 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
   let recovered: WorkbenchTranscriptController | null = null;
   try {
     await failed.start();
+    await database.settleTranscript([...observationsFor("provider-thread"), ...observationsFor("workbench-thread")]);
     await assert.rejects(
       failed.record(observationsFor("provider-thread"), { source: "provider" }),
-      /shadow settlement failed/u,
+      /transcript settlement failed/u,
     );
     await assert.rejects(
       failed.record(observationsFor("workbench-thread"), { source: "workbench" }),
-      /shadow settlement failed/u,
+      /transcript settlement failed/u,
     );
     failed.assertReady();
-    assert.throws(() => failed.assertCutoverReady(), /capture gaps for 2 thread/u);
-    assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
+    assert.deepEqual(await failed.pendingRecoveryThreadIds, ["provider-thread"]);
 
     rejectSettlements = false;
     await failed.record([{
@@ -543,9 +545,8 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
         model: "observed-model", serviceTier: null, observedAt: 5,
       }],
     }], { source: "compatibility" });
-    assert.equal(await failed.read({ threadId: "provider-thread", turnLimit: 1 }), null);
-    assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
-    assert.throws(() => failed.assertCutoverReady(), /capture gaps for 2 thread/u);
+    assert.ok(await failed.read({ threadId: "provider-thread", turnLimit: 1 }));
+    assert.deepEqual(await failed.pendingRecoveryThreadIds, ["provider-thread"]);
     await failed.record(observationsFor("provider-thread"), { source: "provider" });
     await failed.record(observationsFor("workbench-thread"), { source: "workbench" });
     assert.equal(
@@ -592,8 +593,7 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
     });
     assert.ok(published);
     failed.unsubscribe("gapped");
-    assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
-    assert.throws(() => failed.assertCutoverReady(), /capture gaps for 2 thread/u);
+    assert.deepEqual(await failed.pendingRecoveryThreadIds, ["provider-thread"]);
     await failed.record(observationsFor("clean-thread"), { source: "compatibility" });
 
     failed.dispose();
@@ -601,11 +601,11 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
     database = new WorkbenchDatabaseController({ databasePath });
     recovered = new WorkbenchTranscriptController(
       database,
-      new WorkbenchTranscriptCaptureGapController({ markerPath, now: () => 20 }),
+      new WorkbenchTranscriptCaptureGapController({ database, now: () => 20 }),
     );
     await recovered.start();
     recovered.assertReady();
-    assert.deepEqual(recovered.pendingRecoveryThreadIds, ["provider-thread"]);
+    assert.deepEqual(await recovered.pendingRecoveryThreadIds, ["provider-thread"]);
     await recovered.record(
       [{
         completeTurnIds: [fixtureIdentityValues.WorkbenchTurnId["turn-provider-thread"]],
@@ -615,8 +615,7 @@ test("capture gaps retain cutover evidence without blocking historical imports, 
       }],
       { recoveryBoundary: true, source: "provider" },
     );
-    assert.deepEqual(recovered.pendingRecoveryThreadIds, []);
-    assert.throws(() => recovered!.assertCutoverReady(), /capture gaps for 1 thread/u);
+    assert.deepEqual(await recovered.pendingRecoveryThreadIds, []);
 
     await recovered.record(observationsFor("workbench-thread"), { source: "workbench" });
     assert.equal(

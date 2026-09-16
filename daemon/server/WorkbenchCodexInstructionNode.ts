@@ -7,14 +7,17 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import CodexBridgeNode from "./CodexBridgeNode";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
+import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
   children: [CodexBridgeNode],
-  create: (context) => {
+  create: (context, build) => {
+    const settings = new WorkbenchServerSettings(build.get("database"));
     const codexInstructions = new WorkbenchCodexInstructionAdapter(
       context.codexBridgeUrl,
       context.legacyMigrationProjectRoot,
+      () => settings.readLocalCapabilities(),
     );
     return {
       dispose: () => undefined,
@@ -25,7 +28,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload Codex instruction adaptation and its bridge dependant.",
   lifecycle: "atomic",
   provides: ["codexInstructions"],
-  requires: [],
+  requires: ["database"],
   safeAll: true,
   scope: "server:codex/instructions",
   sources: [

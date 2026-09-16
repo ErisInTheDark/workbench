@@ -10,6 +10,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 
 import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetController.ts";
+import WorkbenchTranscriptAssetStore from "./database/transcript/WorkbenchTranscriptAssetStore.ts";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers.ts";
@@ -57,10 +58,11 @@ test("transcript assets enforce the allowlist and serve immutable typed bytes", 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-asset-"));
   const threadId = "dGhyZWFk";
   const asset = `${"a".repeat(64)}.png`;
-  const assetRoot = path.join(root, ".workbench", "transcripts", "codex", "threads", threadId, "assets");
-  await fs.mkdir(assetRoot, { recursive: true });
-  await fs.writeFile(path.join(assetRoot, asset), Buffer.from([1, 2, 3]));
-  const controller = new WorkbenchTranscriptAssetController(root, { resolve: async () => null });
+  const controller = new WorkbenchTranscriptAssetController({
+    readTranscriptAsset: async input => input.threadId === threadId && input.assetName === asset
+      ? { bytes: new Uint8Array([1, 2, 3]), byteLength: 3, mimeType: "image/png", digest: "a".repeat(64), assetUrl: "" }
+      : null,
+  });
   try {
     const valid = await request(controller, `/daemon/transcript-assets/codex/${threadId}/${asset}`);
     assert.equal(valid.statusCode, 200);
@@ -78,7 +80,7 @@ test("transcript assets enforce the allowlist and serve immutable typed bytes", 
   }
 });
 
-test("canonical asset requests use only their thread's retained native folders", async () => {
+test("canonical asset requests retain native URLs without exposing another thread's bytes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-identity-asset-"));
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
@@ -104,13 +106,12 @@ test("canonical asset requests use only their thread's retained native folders",
     nativeTurnId: fixtureIdentityValues.NativeTurnId["later"], nativeLocation: root, harnessId: "codex", state: "completed",
     createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
   });
-  const asset = `${"c".repeat(64)}.png`;
+  const store = new WorkbenchTranscriptAssetStore(database);
+  const saved = store.write({ threadId: "native-owner", bytes: Buffer.from([4, 5, 6]), mimeType: "image/png" });
+  const asset = `${saved.digest}.png`;
   const encoded = encodeTranscriptPathSegment("native-owner");
-  const folder = path.join(root, ".workbench", "transcripts", "codex", "threads", encoded, "assets");
-  await fs.mkdir(folder, { recursive: true });
-  await fs.writeFile(path.join(folder, asset), Buffer.from([4, 5, 6]));
-  const controller = new WorkbenchTranscriptAssetController(root, {
-    resolve: async (input) => identities.resolve(input),
+  const controller = new WorkbenchTranscriptAssetController({
+    readTranscriptAsset: async (input) => store.read(input),
   });
   try {
     for (const reference of [owner.threadId, "native-owner", encoded]) {
@@ -119,7 +120,6 @@ test("canonical asset requests use only their thread's retained native folders",
       assert.deepEqual([...response.body], [4, 5, 6]);
     }
     assert.equal((await request(controller, `/daemon/transcript-assets/codex/${other.threadId}/${asset}`)).statusCode, 404);
-    assert.deepEqual(await fs.readdir(path.dirname(folder)), ["assets"]);
   } finally {
     database.close();
     await fs.rm(root, { force: true, recursive: true });

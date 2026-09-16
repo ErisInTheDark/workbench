@@ -68,6 +68,9 @@ import type {
   GitArcProposalDiffCacheValue,
 } from "../lib/workbench/git/GitArcProposalDiffController.ts";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { TranscriptAssetContent, TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore.ts";
+import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore.ts";
+import type { ThreadGitSelectionCommand, ThreadGitSelectionResult } from "./git/WorkbenchThreadGitSelectionStore.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
 
@@ -81,6 +84,10 @@ export interface WorkbenchDatabaseMutationResult {
 }
 
 export type WorkbenchDatabaseRequestPayload =
+  | { type: "threadGitSelection"; command: ThreadGitSelectionCommand }
+  | { type: "readLegacyDiffArtifact"; input: LegacyDiffArtifactReference }
+  | { type: "writeTranscriptAsset"; input: TranscriptAssetWrite }
+  | { type: "readTranscriptAsset"; input: TranscriptAssetRead }
   | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean; projects?: WorkbenchProjectPreparation }
   | { type: "reconcileProjectCatalog"; projects: readonly WorkbenchProjectOption[] }
   | { type: "readProjectAliases" }
@@ -150,6 +157,10 @@ export type WorkbenchDatabaseRequestPayload =
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
 
 export type WorkbenchDatabaseResponse =
+  | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }
+  | { id: number; type: "legacyDiffArtifact"; diff: string | null }
+  | { id: number; type: "transcriptAssetWritten"; asset: Omit<TranscriptAssetContent, "bytes"> }
+  | { id: number; type: "transcriptAssetContent"; asset: TranscriptAssetContent | null }
   | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory; projects?: WorkbenchProjectStartup }
   | { id: number; type: "projectCatalog"; records: WorkbenchProjectCacheRecord[] }
   | { id: number; type: "projectAliases"; aliases: WorkbenchProjectAlias[] }

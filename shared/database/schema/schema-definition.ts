@@ -12,6 +12,7 @@
  * InsertRow: inserted SQLite row inferred from one table declaration. Keywords: database, schema, types.
  * SqlFragment: identifier-aware schema SQL fragment. Keywords: database, schema, sql.
  * text: declare a SQLite TEXT column. Keywords: database, schema, column.
+ * blob: declare binary SQLite storage without JSON or text conversion.
  * integer: declare a SQLite INTEGER column. Keywords: database, schema, column.
  * booleanInteger: declare a constrained SQLite boolean integer column. Keywords: database, schema, column.
  * enumText: declare a constrained SQLite text enum column. Keywords: database, schema, column.
@@ -43,14 +44,14 @@ const SQL_FRAGMENT = Symbol("workbench-schema-sql");
 const SQL_LITERAL = Symbol("workbench-schema-literal");
 const SQL_EXPRESSION_VALUE = Symbol("workbench-schema-expression-value");
 
-type StorageValue = string | number;
+type StorageValue = string | number | Uint8Array;
 type OnDeleteAction = "CASCADE" | "RESTRICT" | "SET NULL";
 
 interface ColumnRuntime {
-  storageType: "INTEGER" | "TEXT";
+  storageType: "INTEGER" | "TEXT" | "BLOB";
   notNull: boolean;
   hasDefault: boolean;
-  defaultValue?: StorageValue;
+  defaultValue?: string | number;
   primaryKey: boolean;
   autoincrement: boolean;
   unique: boolean;
@@ -80,7 +81,7 @@ export class ColumnDefinition<Value extends StorageValue, NotNull extends boolea
     return this.#copy<Value, true, HasDefault>({ notNull: true });
   }
 
-  default(value: Value) {
+  default(value: Value & (string | number)) {
     return this.#copy<Value, NotNull, true>({ hasDefault: true, defaultValue: value });
   }
 
@@ -196,10 +197,10 @@ export interface SqlFragment<Value = never> {
 
 interface SchemaLiteral {
   readonly [SQL_LITERAL]: true;
-  readonly value: StorageValue | null;
+  readonly value: string | number | null;
 }
 
-function baseColumn(storageType: "INTEGER" | "TEXT") {
+function baseColumn(storageType: ColumnRuntime["storageType"]) {
   return {
     storageType,
     notNull: false,
@@ -215,6 +216,10 @@ function baseColumn(storageType: "INTEGER" | "TEXT") {
 
 export function text() {
   return new ColumnDefinition<string>(baseColumn("TEXT"));
+}
+
+export function blob() {
+  return new ColumnDefinition<Uint8Array>(baseColumn("BLOB"));
 }
 
 export function integer() {
@@ -407,7 +412,7 @@ export function index(
   });
 }
 
-export function literal(value: StorageValue | null): SchemaLiteral {
+export function literal(value: string | number | null): SchemaLiteral {
   return Object.freeze({ [SQL_LITERAL]: true as const, value });
 }
 
@@ -416,7 +421,7 @@ function quoteIdentifier(identifier: string) {
   return `"${identifier}"`;
 }
 
-function renderLiteral(value: StorageValue | null) {
+function renderLiteral(value: string | number | null) {
   if (value === null) return "NULL";
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) throw new Error(`SQLite schema literal must be a safe integer: ${value}`);

@@ -3,7 +3,7 @@
  * - No production exports; tests cover durable composer-profile mutation semantics.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
@@ -14,19 +14,16 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import { projectTables } from "./database/workbench-database-schema";
 import { insertRow, selectRows } from "workbench-shared/database/workbench-database-statements";
 
-test("project profile import and mutation preserve canonical scope through retained aliases", async context => {
-  const { create, database, root } = await fixture(context);
+test("project profile mutations preserve canonical scope through retained aliases", async context => {
+  const { create, database } = await fixture(context);
   const projectId = "remote://example.test/profiles";
   await database.executeTransaction([
     insertRow(projectTables.projects, { id: projectId }),
     insertRow(projectTables.aliases, { alias: "old-profiles", project_id: projectId }),
   ]);
   const imported = { ...profile("imported", 1), scope: { kind: "project" as const, projectId: "old-profiles" } };
-  await mkdir(path.join(root, ".workbench", "runtime"), { recursive: true });
-  await writeFile(path.join(root, ".workbench", "runtime", "composer-profiles.json"), JSON.stringify({
-    version: 1, profiles: { imported },
-  }));
   const store = create();
+  await store.mutate({ kind: "upsert", profile: imported });
   assert.deepEqual((await store.read()).profiles[0]?.scope, { kind: "project", projectId });
   await store.mutate({ kind: "upsert", profile: { ...imported, name: "edited" } }, async value => {
     assert.deepEqual(value.scope, { kind: "project", projectId });
@@ -47,7 +44,7 @@ async function fixture(context: TestContext) {
     await rm(root, { force: true, recursive: true });
   });
   const create = () => {
-    const store = new WorkbenchComposerProfileStore(root, database);
+    const store = new WorkbenchComposerProfileStore(database);
     stores.push(store);
     return store;
   };
@@ -87,7 +84,7 @@ test("turn usage survives stale edits and reopening without resurrecting deleted
   assert.deepEqual((await create().read()).profiles, []);
 });
 
-test("retired legacy profile reads cannot initiate an import write", async (context) => {
+test("retired profile reads reject results from their old owner", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-retired-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   let enter!: () => void;
@@ -95,7 +92,7 @@ test("retired legacy profile reads cannot initiate an import write", async (cont
   const entered = new Promise<void>((resolve) => { enter = resolve; });
   const pending = new Promise<void>((resolve) => { release = resolve; });
   let writes = 0;
-  const store = new WorkbenchComposerProfileStore(root, {
+  const store = new WorkbenchComposerProfileStore({
     query: async () => { enter(); await pending; return []; },
     executeTransaction: async () => { writes += 1; return { changes: 0 }; },
   });
@@ -188,29 +185,6 @@ test("concurrent field updates merge against durable settings rather than stale 
   assert.deepEqual((await store.read()).profiles, []);
 });
 
-test("rejects malformed legacy catalogue entries rather than importing partial settings", async (context) => {
-  const { create, root } = await fixture(context);
-  const file = path.join(root, ".workbench", "runtime", "composer-profiles.json");
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ profiles: { valid: profile("valid", 1), broken: { id: "broken" } }, version: 1 }));
-  await assert.rejects(create().read(), /invalid.*profile|profile.*invalid/iu);
-  await writeFile(file, JSON.stringify({ profiles: { valid: profile("valid", 1) }, version: 1 }));
-  assert.deepEqual((await create().read()).profiles, [profile("valid", 1)]);
-});
-
-test("imports once and does not resurrect deleted profiles from the retained legacy file", async (context) => {
-  const { create, root } = await fixture(context);
-  const file = path.join(root, ".workbench", "runtime", "composer-profiles.json");
-  await mkdir(path.dirname(file), { recursive: true });
-  const imported = { ...profile("old", 3), harness: "future-provider" };
-  await writeFile(file, JSON.stringify({ version: 1, profiles: { old: imported } }));
-  const first = create();
-  assert.deepEqual((await first.read()).profiles, [imported]);
-  await first.mutate({ kind: "delete", profileId: "old" });
-  await first.dispose();
-  assert.deepEqual((await create().read()).profiles, []);
-});
-
 test("reads wait on the owned mutation and propagate failure without poisoning later reads", async (context) => {
   const { database, root } = await fixture(context);
   let rejectWrite = false;
@@ -218,7 +192,7 @@ test("reads wait on the owned mutation and propagate failure without poisoning l
   let release!: () => void;
   const writing = new Promise<void>((resolve) => { entered = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const store = new WorkbenchComposerProfileStore(root, {
+  const store = new WorkbenchComposerProfileStore({
     query: database.query.bind(database),
     executeTransaction: async (statements) => {
       if (rejectWrite) {
@@ -241,25 +215,6 @@ test("reads wait on the owned mutation and propagate failure without poisoning l
   await assert.rejects(store.read(), /closed/u);
 });
 
-test("failed legacy transactions roll back both imported rows and the completion marker", async (context) => {
-  const { create, database, root } = await fixture(context);
-  const file = path.join(root, ".workbench", "runtime", "composer-profiles.json");
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ version: 1, profiles: { old: profile("old", 3) } }));
-  const failing = new WorkbenchComposerProfileStore(root, {
-    query: database.query.bind(database),
-    executeTransaction: async (statements) => {
-      // Fail inside SQLite after the rows and marker, not before the transaction starts.
-      const marker = statements.find(statement => statement.tableName === "workbench_composer_profile_imports");
-      assert.ok(marker);
-      return await database.executeTransaction([...statements, marker]);
-    },
-  });
-  await assert.rejects(failing.start(), /unique|constraint/iu);
-  await failing.dispose();
-  assert.deepEqual((await create().read()).profiles, [profile("old", 3)]);
-});
-
 test("disposal rejects new work and drains an accepted catalogue write before replacement", async (context) => {
   const { create, database, root } = await fixture(context);
   let blocked = false;
@@ -267,7 +222,7 @@ test("disposal rejects new work and drains an accepted catalogue write before re
   let release!: () => void;
   const writing = new Promise<void>((resolve) => { entered = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const store = new WorkbenchComposerProfileStore(root, {
+  const store = new WorkbenchComposerProfileStore({
     query: database.query.bind(database),
     executeTransaction: async (statements) => {
       if (blocked) { entered(); await gate; }

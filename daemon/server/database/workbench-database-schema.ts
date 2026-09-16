@@ -14,8 +14,6 @@
  * InteractionSchemaRows: current interaction selected-row registry.
  * evidenceTables: current evidence table map.
  * EvidenceSchemaRows: current evidence selected-row registry.
- * threadStateTables: current thread-state table map.
- * ThreadStateSchemaRows: current thread-state selected-row registry.
  * searchTables/SearchSchemaRows: current workspace-search projection registry.
  * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts.
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
@@ -53,6 +51,12 @@ import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/sc
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { codexTranscriptSchemaHistory } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
 import { projectSchemaHistory } from "workbench-shared/workbench/database/schema/project-schema";
+import { localCapabilitySchemaHistory } from "../lib/workbench/database/schema/local-capability-schema.ts";
+import { browsePersistenceSchemaHistory } from "../lib/workbench/database/schema/browse-persistence-schema.ts";
+import { externalStorageImportSchemaHistory } from "../lib/workbench/database/schema/external-storage-import-schema.ts";
+import { transcriptAssetContentSchemaHistory } from "../lib/workbench/database/schema/transcript-asset-content-schema.ts";
+import { legacyDiffArtifactSchemaHistory } from "../lib/workbench/database/schema/legacy-diff-artifact-schema.ts";
+import { threadGitSelectionSchemaHistory } from "../lib/workbench/database/schema/thread-git-selection-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -73,8 +77,6 @@ export { searchTables } from "workbench-shared/workbench/database/schema/search-
 export type { SearchSchemaRows } from "workbench-shared/workbench/database/schema/search-schema";
 export { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
 export type { UsageSchemaRows } from "workbench-shared/workbench/database/schema/usage-schema";
-export { threadStateTables } from "../lib/workbench/database/schema/thread-state-schema.ts";
-export type { ThreadStateSchemaRows } from "../lib/workbench/database/schema/thread-state-schema.ts";
 export { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export { gitArcProposalDiffTables } from "../lib/workbench/database/schema/git-arc-proposal-diff-schema.ts";
@@ -105,6 +107,12 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       defineThreadGitObservationSchema(schemaVersion).history,
       gitArcProposalDiffSchemaHistory,
       instructionTombstoneSchemaHistory,
+      localCapabilitySchemaHistory,
+      browsePersistenceSchemaHistory,
+      externalStorageImportSchemaHistory,
+      transcriptAssetContentSchemaHistory,
+      legacyDiffArtifactSchemaHistory,
+      threadGitSelectionSchemaHistory,
     ],
   });
 }

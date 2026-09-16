@@ -6,7 +6,7 @@
  * - default WorkbenchCodexInstructionAdapter: adapt thread instructions, skills, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
-import type { WorkbenchComposerSettings, WorkbenchProjectRoot } from "workbench-shared/types";
+import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-profile";
 
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
@@ -86,6 +86,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
   constructor(
     private readonly bridgeUrl: string,
     workbenchRoot: string,
+    private readonly readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>,
   ) {
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
@@ -150,7 +151,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const params = asRecord(message.params);
     // This adapter installs Workbench MCP even before native creation returns an id.
     const context = { ...promptContext, harness: "codex" as const, skillCatalogPresentation: "references" as const, managedThread: true };
-    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context);
+    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context, this.readLocalCapabilities);
     const filter = (
       value: string | null,
       field: string,

@@ -148,10 +148,6 @@ export default class WorkbenchTranscriptController {
     return this.#database.failure;
   }
 
-  get cutoverFailure() {
-    return this.#captureGaps.cutoverFailure;
-  }
-
   get pendingRecoveryThreadIds() {
     return this.#captureGaps.pendingRecoveryThreadIds;
   }
@@ -161,15 +157,9 @@ export default class WorkbenchTranscriptController {
     if (this.#database.failure) throw this.#database.failure;
   }
 
-  assertCutoverReady() {
-    this.assertReady();
-    this.#captureGaps.assertCutoverReady();
-  }
-
   async start() {
     this.#assertActive();
     await this.#database.start();
-    await this.#captureGaps.start();
   }
 
   async record(
@@ -195,31 +185,20 @@ export default class WorkbenchTranscriptController {
           return false;
       }
     })) this.#live.acceptActivity(identity.threadId);
-    await this.#captureGaps.prepareReferences();
     if (context.recoveryBoundary) {
       if (context.source !== "provider") {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");
       }
-      const marker = this.#captureGaps.requireRecovery(identity.threadId);
-      const recoveredMarkerTurn = marker.turnId
-        ? observations.map(observation => observedTurnId(observation, marker.turnId!)).find(turnId => turnId !== null) ?? null
-        : null;
+      const gaps = await this.#captureGaps.requireRecovery(identity.threadId);
       const recoveryObservations = [
         ...observations,
-        this.#captureGaps.createRecoveryObservation(marker, recoveredMarkerTurn),
+        ...gaps.map(gap => this.#captureGaps.createRecoveryObservation(gap, gap.turnId
+          ? observations.map(observation => observedTurnId(observation, gap.turnId!)).find(turnId => turnId !== null) ?? null
+          : null)),
       ];
       let settlement: WorkbenchTranscriptSettlement;
       try {
         settlement = await this.#recorder.record(recoveryObservations);
-      } catch (error) {
-        throw await this.#captureGaps.captureFailure({
-          error,
-          recoverability: "provider",
-          ...identity,
-        });
-      }
-      try {
-        await this.#captureGaps.completeRecovery(marker);
       } catch (error) {
         throw await this.#captureGaps.captureFailure({
           error,

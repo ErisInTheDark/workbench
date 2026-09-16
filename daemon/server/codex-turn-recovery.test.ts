@@ -1,21 +1,19 @@
 /*
- * No production exports. Node tests protect Codex recovery deduplication, cold-resume order, and stop-on-failure behavior. Keywords: codex, recovery, resume, test.
+ * No production exports. Protect explicit Codex refresh deduplication, admission order and failure propagation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { recoverCodexTurn } from "./codex-turn-recovery";
-import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
+import type { WorkbenchObservedTurnCandidate } from "./WorkbenchTurnRecoveryController";
 
-function candidate(): WorkbenchTurnRecoveryHandoffCandidate {
+function candidate(): WorkbenchObservedTurnCandidate {
   return {
     harness: "codex",
     key: "codex:thread",
-    lastEventAt: 1,
     recoveryId: "workbench-recovery:test",
     request: { id: "original", method: "turn/start", params: { cwd: "C:/repo", input: [], threadId: "thread" } },
     resumeRequest: { method: "thread/resume", params: { model: "gpt", threadId: "thread" }, workbenchPromptContext: { workflowIds: ["default"] } },
-    startedAt: 1,
     threadId: "thread",
     turnId: "original-turn",
   };

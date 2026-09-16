@@ -1,19 +1,20 @@
 /*
- * Keywords: database, evidence, assets, capture, history.
- * transcriptNativeRecords: current provider-native evidence table. Keywords: database, schema, evidence.
- * transcriptAssets: current content-addressed asset table. Keywords: database, schema, asset.
- * threadBrowseEntries: current durable Browse fact table. Keywords: database, schema, browse.
- * transcriptAssetRefs: current thread or item asset reference table. Keywords: database, schema, asset.
- * transcriptCaptureGaps: current transcript capture gap table. Keywords: database, schema, evidence.
- * evidenceTables: current evidence table inventory. Keywords: database, schema, evidence.
- * EvidenceSchemaRows: selected row types for current evidence tables. Keywords: database, schema, types.
- * evidenceSchemaHistory: private evidence table histories. Keywords: database, schema, history.
+ * Exports:
+ * - transcriptNativeRecords: provider-native evidence.
+ * - transcriptAssets: content-addressed asset metadata.
+ * - threadBrowseEntries: durable Browse facts.
+ * - transcriptAssetRefs: thread/item asset references.
+ * - transcriptCaptureGaps: pending and resolved recording failures.
+ * - evidenceTables: current evidence table inventory.
+ * - EvidenceSchemaRows: selected evidence row types.
+ * - evidenceSchemaHistory: sealed evidence histories.
  */
 import databaseReleases from "./releases.ts";
 import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   index,
   integer,
@@ -25,7 +26,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
+import { createIndexes, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -152,7 +153,31 @@ const transcriptCaptureGapsV1 = defineTable("transcript_capture_gaps", {
     }),
   ],
 }));
-const transcriptCaptureGapsHistory = initialHistory(transcriptCaptureGapsV1);
+const transcriptCaptureGapsV2 = evolveTable(transcriptCaptureGapsV1, {
+  extras: table => ({
+    constraints: [
+      check(sql`
+      (${table.state} = ${literal("open")} AND ${table.closed_at} IS NULL)
+      OR (${table.state} IN (${literal("reconciled")}, ${literal("unrecoverable")}) AND ${table.closed_at} IS NOT NULL)
+    `),
+      foreignKey([table.turn_id, table.thread_id], {
+        table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+    ],
+    indexes: [index("transcript_capture_gaps_state_thread_idx", [table.state, table.thread_id])],
+  }),
+});
+const transcriptCaptureGapsHistory = defineTableHistory({
+  current: transcriptCaptureGapsV2,
+  versions: [
+    ...initialHistory(transcriptCaptureGapsV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.captureGapLookup.version,
+      table: transcriptCaptureGapsV2,
+      migration: createIndexes({ from: transcriptCaptureGapsV1, to: transcriptCaptureGapsV2, names: ["transcript_capture_gaps_state_thread_idx"] }),
+    }),
+  ],
+});
 export const transcriptCaptureGaps = transcriptCaptureGapsHistory.current;
 
 export const evidenceTables = Object.freeze({

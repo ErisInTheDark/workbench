@@ -1,12 +1,15 @@
 /*
  * Exports:
- * - WorkbenchBrowsePersistentSessionRecord: persisted opt-in Browse profile metadata. Keywords: browse, profile, persistent, session.
- * - default WorkbenchBrowseProfileStore: filesystem-backed owner for persistent local Browse browser profiles. Keywords: browse, profile, userDataDir, cookies.
+ * - WorkbenchBrowsePersistentSessionRecord: persisted opt-in Browse profile metadata.
+ * - default WorkbenchBrowseProfileStore: own SQLite profile catalogue and external Chromium directory lifecycle.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { normalizeRelativePath, projectRoot, safeResolveProjectPath } from "../../project";
+import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
+import { deleteRows, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { browseProfiles } from "../database/schema/browse-persistence-schema";
 
 export interface WorkbenchBrowsePersistentSessionRecord {
   createdAt: string;
@@ -19,13 +22,17 @@ interface WorkbenchBrowseProfileStoreState {
   sessions: WorkbenchBrowsePersistentSessionRecord[];
 }
 
-const PERSISTENT_SESSIONS_PATH = path.join(projectRoot, ".workbench", "runtime", "browse-persistent-sessions.json");
 const PROFILE_ROOT_PATH = path.join(projectRoot, ".workbench", "runtime", "browse-profiles");
 const SESSION_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,80}$/u;
 const PROFILE_DELETE_MAX_RETRIES = 20;
 const PROFILE_DELETE_RETRY_DELAY_MS = 250;
 
 export default class WorkbenchBrowseProfileStore {
+  constructor(
+    private readonly database: Pick<WorkbenchDatabaseController, "query" | "executeTransaction">,
+    private readonly profileRoot = PROFILE_ROOT_PATH,
+  ) {}
+
   async forgetPersistentSession(sessionName: string) {
     assertValidSessionName(sessionName);
     const state = await this.readState();
@@ -40,9 +47,7 @@ export default class WorkbenchBrowseProfileStore {
       recursive: true,
       retryDelay: PROFILE_DELETE_RETRY_DELAY_MS,
     });
-    await this.writeState({
-      sessions: state.sessions.filter((session) => session.name !== sessionName),
-    });
+    await this.database.executeTransaction([deleteRows(browseProfiles, { name: sessionName })]);
     return existing;
   }
 
@@ -76,47 +81,22 @@ export default class WorkbenchBrowseProfileStore {
       profilePath,
     };
 
-    const sessions = existing
-      ? state.sessions.map((session) => session.name === sessionName ? nextRecord : session)
-      : [...state.sessions, nextRecord];
-    await this.writeState({ sessions });
+    await this.database.executeTransaction([upsertRow(browseProfiles, {
+      name: nextRecord.name, created_at: nextRecord.createdAt, last_used_at: nextRecord.lastUsedAt, profile_path: nextRecord.profilePath,
+    }, { conflictColumns: ["name"], updateColumns: ["last_used_at"] })]);
     return profilePath;
   }
 
   private createProfilePath(sessionName: string) {
-    return safeResolveProjectPath(PROFILE_ROOT_PATH, sessionName);
+    return safeResolveProjectPath(this.profileRoot, sessionName);
   }
 
   private async readState(): Promise<WorkbenchBrowseProfileStoreState> {
-    try {
-      const rawState = await fs.readFile(PERSISTENT_SESSIONS_PATH, "utf8");
-      const parsedState = JSON.parse(rawState) as Partial<WorkbenchBrowseProfileStoreState>;
-      if (!Array.isArray(parsedState.sessions)) {
-        return { sessions: [] };
-      }
-
-      return {
-        sessions: parsedState.sessions
-          .filter(isPersistentSessionRecord)
-          .map((session) => ({
-            createdAt: session.createdAt,
-            lastUsedAt: session.lastUsedAt,
-            name: session.name,
-            profilePath: normalizeProfilePath(session.profilePath, session.name),
-          })),
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { sessions: [] };
-      }
-      throw error;
-    }
-  }
-
-  private async writeState(state: WorkbenchBrowseProfileStoreState) {
-    await fs.mkdir(path.dirname(PERSISTENT_SESSIONS_PATH), { recursive: true });
-    await fs.writeFile(`${PERSISTENT_SESSIONS_PATH}.tmp`, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await fs.rename(`${PERSISTENT_SESSIONS_PATH}.tmp`, PERSISTENT_SESSIONS_PATH);
+    const rows = await this.database.query(selectRows(browseProfiles));
+    return { sessions: rows.map(row => ({
+      createdAt: row.created_at, lastUsedAt: row.last_used_at, name: row.name,
+      profilePath: normalizeProfilePath(row.profile_path, row.name, this.profileRoot),
+    })) };
   }
 }
 
@@ -126,18 +106,10 @@ function assertValidSessionName(sessionName: string) {
   }
 }
 
-function normalizeProfilePath(profilePath: string, sessionName: string) {
+function normalizeProfilePath(profilePath: string, sessionName: string, profileRoot: string) {
   const normalizedPath = normalizeRelativePath(path.resolve(profilePath));
-  if (normalizedPath === normalizeRelativePath(path.resolve(PROFILE_ROOT_PATH)) || normalizedPath.startsWith(`${normalizeRelativePath(path.resolve(PROFILE_ROOT_PATH))}/`)) {
+  if (normalizedPath.startsWith(`${normalizeRelativePath(path.resolve(profileRoot))}/`)) {
     return path.resolve(profilePath);
   }
-  return safeResolveProjectPath(PROFILE_ROOT_PATH, sessionName);
-}
-
-function isPersistentSessionRecord(value: Partial<WorkbenchBrowsePersistentSessionRecord> | null | undefined) {
-  return typeof value?.name === "string"
-    && SESSION_NAME_PATTERN.test(value.name)
-    && typeof value.createdAt === "string"
-    && typeof value.lastUsedAt === "string"
-    && typeof value.profilePath === "string";
+  return safeResolveProjectPath(profileRoot, sessionName);
 }

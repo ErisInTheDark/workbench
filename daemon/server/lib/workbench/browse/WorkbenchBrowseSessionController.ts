@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchBrowseSessionController: list, stop, forget, and stale-clean Workbench-owned Browse sessions. Keywords: browse, session, lifecycle, cleanup.
+ * - default WorkbenchBrowseSessionController: list, stop, forget and stale-clean Workbench-owned Browse sessions.
  */
 import type {
   WorkbenchBrowseAgentResponse,
@@ -14,9 +14,10 @@ import type {
   WorkbenchBrowseSessionSource,
   WorkbenchBrowseSessionSummary,
 } from "workbench-shared/types";
-import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
-import WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
-import WorkbenchBrowseSessionRegistry, { type WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";
+import type WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
+import type WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
+import type WorkbenchBrowseSessionRegistry from "./WorkbenchBrowseSessionRegistry";
+import type { WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";
 
 const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
 const MAX_SESSION_STATUS_PROBE_MS = 1_000;
@@ -61,14 +62,14 @@ export default class WorkbenchBrowseSessionController {
   private readonly runtime: BrowseRuntimePort;
 
   constructor({
-    runtime = new WorkbenchBrowseRuntime(),
-    profileStore = new WorkbenchBrowseProfileStore(),
-    registry = new WorkbenchBrowseSessionRegistry(),
+    runtime,
+    profileStore,
+    registry,
   }: {
-    runtime?: BrowseRuntimePort;
-    profileStore?: BrowseProfilePort;
-    registry?: BrowseRegistryPort;
-  } = {}) {
+    runtime: BrowseRuntimePort;
+    profileStore: BrowseProfilePort;
+    registry: BrowseRegistryPort;
+  }) {
     this.runtime = runtime;
     this.profileStore = profileStore;
     this.registry = registry;

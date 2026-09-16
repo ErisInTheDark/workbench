@@ -7,7 +7,7 @@ import {
   primaryKey, sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion, retireTableHistory,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
@@ -227,10 +227,11 @@ export function defineThreadDomainSchema(schemaVersion: number) {
       profiles: profiles.current, projectProfiles: projectProfiles.current,
       drafts: drafts.current, attachments: attachments.current, parents: parents.current,
       relationships: relationships.current, relationshipMetadata: relationshipMetadata.current,
-      activeRelationships: activeRelationships.current, importReceipt: importReceipt.current,
+      activeRelationships: activeRelationships.current,
     },
     history: defineSubsystemHistory(Object.values(histories).map(history => (
-      "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history
+      history === importReceipt ? retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)
+        : "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history
     ))),
   };
 }

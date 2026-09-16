@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchDatabaseNode: own SQLite readiness, identity, transcript and sandbox network registrations, replacement and closure.
  */
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 
@@ -25,11 +25,12 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
+import WorkbenchCodexInstructionNode from "./WorkbenchCodexInstructionNode";
 
 type DatabaseControllerConstructor = new (
   options: import("./database/WorkbenchDatabaseController").WorkbenchDatabaseControllerOptions,
 ) => DaemonDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & Pick<
-  import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission"
+  import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission" | "settleTranscript"
 >;
 
 interface DatabaseReloadState {
@@ -101,7 +102,7 @@ export default new ReloadableNode<
     "daemon/server/lib/git.ts",
     "daemon/server/lib/workbench/project/project-identity.ts",
   ].join("\n"),
-  children: [WorkbenchInstructionsNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
+  children: [WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
     const {
       CaptureGapController,
@@ -112,27 +113,14 @@ export default new ReloadableNode<
       TranscriptController,
     } = loadDatabaseControllers();
     const databasePath = join(context.legacyMigrationProjectRoot, ".workbench", "workbench.sqlite3");
-    const captureGapMarkerPath = join(
-      context.legacyMigrationProjectRoot,
-      ".workbench",
-      "workbench-transcript-capture-gap.json",
-    );
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
     const { discoverProjectIdentities } = require("./lib/project") as typeof import("./lib/project");
-    const { WorkbenchProjectRelocationsSchema } = require("./database/project/workbench-project-persistence") as typeof import("./database/project/workbench-project-persistence");
     const database = new DatabaseController({
       databasePath,
       prepareProjects: async signal => {
         const discovery = await discoverProjectIdentities(signal);
         signal.throwIfAborted();
-        let source: string;
-        try {
-          source = await readFile(join(context.legacyMigrationProjectRoot, ".workbench", "project-identity-relocations.json"), { encoding: "utf8", signal });
-        } catch (error) {
-          if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return { discovery, relocations: {} };
-          throw error;
-        }
-        return { discovery, relocations: WorkbenchProjectRelocationsSchema.parse(JSON.parse(source)) };
+        return { discovery };
       },
       beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
     });
@@ -141,14 +129,14 @@ export default new ReloadableNode<
     const transcriptIdentity = new TranscriptIdentityController(database);
     const codexSandboxNetwork = new CodexSandboxNetworkController(database);
     const captureGaps = new CaptureGapController({
-      markerPath: captureGapMarkerPath,
+      database,
       resolveReference: async (reference) => {
         const thread = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference.threadId) });
         if (!thread) return reference;
         const turn = reference.turnId
           ? await threadIdentity.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(reference.turnId) })
           : null;
-        return { threadId: thread.threadId, turnId: turn?.turnId ?? reference.turnId };
+        return { threadId: thread.threadId, turnId: turn?.turnId ?? null };
       },
     });
     const transcript = new TranscriptController(database, captureGaps);

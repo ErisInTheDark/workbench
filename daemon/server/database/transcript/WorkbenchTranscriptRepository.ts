@@ -1225,7 +1225,20 @@ export default class WorkbenchTranscriptRepository {
     }
     if (observation.kind === "captureGap") {
       this.#requiredThread(observation.threadId);
-      this.#run(upsertRow(evidenceTables.transcriptCaptureGaps, {
+      if (observation.state === "reconciled") {
+        if (this.#one(selectRows(evidenceTables.transcriptCaptureGaps, {
+          where: { thread_id: observation.threadId, state: "unrecoverable" },
+        }))) throw new Error("SQLite transcript capture gap is not provider-recoverable.");
+        const gap = this.#one(selectRows(evidenceTables.transcriptCaptureGaps, {
+          where: { id: observation.gapId, thread_id: observation.threadId },
+        }));
+        if (!gap || gap.state !== "open") throw new Error("SQLite transcript capture gap is no longer open.");
+        this.#run(updateRows(evidenceTables.transcriptCaptureGaps, {
+          state: "reconciled", closed_at: observation.closedAt,
+        }, { id: gap.id }));
+        return observation.threadId;
+      }
+      this.#run(insertRow(evidenceTables.transcriptCaptureGaps, {
         id: observation.gapId,
         thread_id: observation.threadId,
         turn_id: observation.turnId,
@@ -1234,9 +1247,6 @@ export default class WorkbenchTranscriptRepository {
         opened_at: observation.openedAt,
         closed_at: observation.closedAt,
         error_text: observation.errorText,
-      }, {
-        conflictColumns: ["id"],
-        updateColumns: ["state", "reason", "closed_at", "error_text"],
       }));
       return observation.threadId;
     }

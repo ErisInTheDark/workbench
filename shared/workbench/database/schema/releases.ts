@@ -41,6 +41,15 @@ const databaseReleases = Object.freeze({
   providerReferences: release(31, "81716764a09af1f52c187c7b4f29c82293e4f26be482b7f61a2216956afebda0"),
   projectIdentity: release(32, "8f5890cc7e61b832e43c7f6fd3db940397eb8c704ca8f5e3b4548cc3b02b3f42"),
   projectOwnership: release(33, "0071d9975b51bb48603819f151baa51f582eac113dac7ef9d476ef7fc0785ce5"),
+  relationalProposalDiffs: release(34, "740b43df33972b1e93368f9275c9ca6bd42506fd510a8b7f10becee73fc376e7"),
+  externalCatalogues: release(35, "ae6c9d27e19c5ecf04e9ca906ab169449e03aea815b79a8be67e00d43e73e5c7"),
+  retireThreadProjections: release(36, "46e3111f95d723e81760ca587df75f652a6983be7703a8c803d699d54d183c54"),
+  captureGapLookup: release(37, "4d952c5e9770cae3329e47c8d1fe444a2aa10db708fe316d9e90ec03f8c1abf5"),
+  transcriptAssetContent: release(38, "d6751757edf4434b848cf036de5b1ea9cf8c81cb7fa4c904d08341223c487489"),
+  legacyDiffArtifacts: release(39, "3e59f9c345e1ef4f289254fd51cbb1f4d31097dac009a256da9304a8fba756e3"),
+  threadGitSelections: release(40, "e9b7b1d65acf1a29a4349d5fb399773413b7c0ab5c0b021a3577b458a92e3334"),
+  retireLegacyImportReceipts: release(41, "611dab097b429ab8dc2e3733f4012bf2ac09d1d7c3c3259236d380d33cb9a391"),
+  browseProjectOwnership: release(42, "1570bc51bcdc9ff050a5cb6d62d848624f552e65f29769179a49109b92ce200d"),
 });
 
 export default databaseReleases;

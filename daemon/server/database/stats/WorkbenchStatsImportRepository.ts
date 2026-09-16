@@ -75,11 +75,15 @@ export default class WorkbenchStatsImportRepository {
           discovered_at, source_activity_at, started_at, settled_at, updated_at, error_text,
           completed_data_version
         )
-        SELECT i.project_id, i.harness_id, i.provider_thread_id, 'pending', NULL, 0,
-          ?, t.activity_at, NULL, NULL, ?, NULL, NULL
-        FROM workbench_thread_state_provider_identities i
-        JOIN workbench_thread_state_threads t ON t.id = i.thread_id
+        SELECT t.project_id, i.harness_id, i.native_thread_id, 'pending', NULL, 0,
+          ?, MAX(t.activity_at), NULL, NULL, ?, NULL, NULL
+        FROM (
+          SELECT thread_id, harness_id, native_thread_id FROM workbench_pending_import_threads
+          UNION SELECT thread_id, harness_id, native_thread_id FROM thread_turns
+        ) i
+        JOIN workbench_threads t ON t.id = i.thread_id
         WHERE i.harness_id IN (${placeholders})
+        GROUP BY t.project_id, i.harness_id, i.native_thread_id
       `).run(now, now, ...harnesses);
       this.database.prepare(`
         UPDATE thread_usage_imports

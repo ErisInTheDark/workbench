@@ -19,7 +19,6 @@ const graph = (() => {
       require("./WorkbenchTurnLifecycleNode").default,
       require("./WorkbenchDatabaseNode").default,
       require("./CodexAppServerNode").default,
-      require("./WorkbenchCodexInstructionNode").default,
       require("./CodexConfigurationNode").default,
     ]);
     const repoRoot = path.resolve(__dirname, "../..");

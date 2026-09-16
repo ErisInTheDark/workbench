@@ -12,7 +12,6 @@ import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
-import WorkbenchThreadStateMigration from "./thread-state/WorkbenchThreadStateMigration";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import {
   coreTables,
@@ -20,7 +19,6 @@ import {
   installWorkbenchDatabaseSchema,
   WORKBENCH_DATABASE_SCHEMA_VERSION,
   WORKBENCH_DATABASE_TABLE_NAMES,
-  workbenchDatabaseSchema,
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -81,15 +79,18 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
   await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
 }
 
-test("prepared project conversion precedes worker readiness and retains its pre-conversion backup", async (context) => {
+test("prepared project reconciliation precedes worker readiness and retains its pre-upgrade backup", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-project-startup-"));
   captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
   const old = new Database(databasePath);
-  new WorkbenchThreadStateMigration(old).run(workbenchDatabaseSchema, [], 1);
+  installWorkbenchDatabaseSchema(old, { targetVersion: 33 });
   old.close();
-  seedProviderCursor(databasePath, fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/prepared");
+  seedProviderCursor(databasePath, projectId);
+  const aliases = new Database(databasePath);
+  aliases.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('project', ?)").run(projectId);
+  aliases.close();
   const project = {
     id: projectId, kind: "git" as const, name: "prepared", relativePath: "prepared",
     rootPath: "C:/prepared", lastCommitTimeMs: null,
@@ -102,7 +103,7 @@ test("prepared project conversion precedes worker readiness and retains its pre-
     beforeMigration: backupPath => { checkpoint = backupPath; },
     prepareProjects: async () => {
       preparations += 1;
-      return { discovery: { data: [project], aliases: [{ alias: "project", projectId }], excludedRootPaths: [], rootPath: "C:/" }, relocations: {} };
+      return { discovery: { data: [project], aliases: [{ alias: "project", projectId }], excludedRootPaths: [], rootPath: "C:/" } };
     },
   });
   try {
@@ -113,8 +114,8 @@ test("prepared project conversion precedes worker readiness and retains its pre-
     assert.ok(checkpoint);
     const backup = new Database(checkpoint, { readonly: true, fileMustExist: true });
     try {
-      assert.equal(backup.pragma("user_version", { simple: true }), 31);
-      assert.equal(backup.prepare("SELECT project_id FROM workbench_threads").pluck().get(), "project");
+      assert.equal(backup.pragma("user_version", { simple: true }), 33);
+      assert.equal(backup.prepare("SELECT project_id FROM workbench_threads").pluck().get(), projectId);
     } finally { backup.close(); }
     assert.deepEqual((await controller.query(selectRows(coreTables.workbenchThreads))).map(row => row.project_id), [projectId]);
     await checkProviderCursor(controller);
@@ -128,7 +129,7 @@ test("worker migration waits for its owner to retain the rollback checkpoint", a
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
   captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
-  const version = databaseReleases.nativeIdentityLookupIndexes.version;
+  const version = databaseReleases.projectOwnership.version;
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: version });
   old.close();
@@ -152,7 +153,7 @@ test("worker startup retains its old-schema backup even when closed during openi
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
   captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
   const databasePath = join(directory, "workbench.sqlite3");
-  const version = databaseReleases.nativeIdentityLookupIndexes.version;
+  const version = databaseReleases.projectOwnership.version;
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: version });
   old.exec("CREATE TABLE preserved_extension(value TEXT); INSERT INTO preserved_extension VALUES ('retained')");
@@ -498,17 +499,21 @@ test("schema constraints reject invalid thread state and mismatched item augment
     installWorkbenchDatabaseSchema(database);
     database.exec(`
       INSERT INTO workbench_projects(id) VALUES ('local:///project');
-      INSERT INTO workbench_thread_state_threads VALUES
-        ('parent', 'local:///project', 'topLevel', 'visible', 'Parent', 0, 0, 0, 1, 1, 2, 2, NULL),
-        ('historical-child', 'local:///project', 'subagent', 'visible', 'Child', 0, 0, 0, 1, 1, 2, 2, NULL);
-      INSERT INTO workbench_thread_state_subagents
-        VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
+      INSERT INTO workbench_harnesses(id) VALUES ('codex');
+      INSERT INTO workbench_threads(id,project_id,project_root,title,transcript_content_version,created_at,updated_at,activity_at) VALUES
+        ('parent', 'local:///project', 'C:/project', 'Parent', 3, 1, 2, 2),
+        ('historical-child', 'local:///project', 'C:/project', 'Child', 3, 1, 2, 2),
+        ('replacement-child', 'local:///project', 'C:/project', 'Replacement', 3, 3, 4, 4);
+      INSERT INTO workbench_thread_states VALUES
+        ('parent', 'topLevel', 'codex', 'Parent', 2, 1),
+        ('historical-child', 'subagent', 'codex', 'Child', 2, 1),
+        ('replacement-child', 'subagent', 'codex', 'Replacement', 4, 1);
+      INSERT INTO workbench_subagent_thread_states
+        VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'profile', 'Profile', 0, 1, 2, 0);
     `);
     assert.doesNotThrow(() => database.exec(`
-      INSERT INTO workbench_thread_state_threads VALUES
-        ('replacement-child', 'local:///project', 'subagent', 'visible', 'Replacement', 0, 0, 0, 1, 3, 4, 4, NULL);
-      INSERT INTO workbench_thread_state_subagents
-        VALUES ('replacement-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
+      INSERT INTO workbench_subagent_thread_states
+        VALUES ('replacement-child', 'subagent', 'parent', 'C:/project', 'child', 'profile', 'Profile', 0, 3, 4, 0);
     `));
     assert.throws(() => database.prepare(`
       INSERT INTO workbench_threads(
@@ -517,7 +522,6 @@ test("schema constraints reject invalid thread state and mismatched item augment
       ) VALUES ('thread','local:///project','C:/project','title',1,1,0,1,0,1,1,1)
     `).run(), /CHECK constraint failed/);
 
-    database.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
     database.prepare(`
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,transcript_content_version,created_at,updated_at,activity_at
@@ -891,8 +895,9 @@ async function checkInvalidThreadState(controller: WorkbenchDatabaseController) 
     assert.equal(controller.state, "ready");
     assert.doesNotThrow(() => controller.assertReady());
 
-    assert.deepEqual(await controller.readThreadStateRecords({ selection: "project", projectId: fixtureIdentityValues.ProjectId["project"] }), []);
-    assert.equal(await controller.readThreadStateActivity(fixtureIdentityValues.ProjectId["project"]), null);
+    assert.deepEqual(await controller.readThreadStateRecords({ selection: "threads", threadIds: [fixtureIdentityValues.WorkbenchThreadId["unadmitted"]] }), []);
+    await assert.rejects(controller.readThreadStateActivity(fixtureIdentityValues.ProjectId["project"]), /ownership has not been admitted/);
+    assert.equal(controller.state, "ready");
 }
 
 async function checkRollbackRetry(controller: WorkbenchDatabaseController, directory: string) {

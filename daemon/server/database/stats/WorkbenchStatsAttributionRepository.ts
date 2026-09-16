@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchStatsAttributionRepository: cache best-known SQLite model attribution for usage rows missing turn context. Keywords: stats, model, attribution, SQLite.
+ * - default WorkbenchStatsAttributionRepository: cache canonical SQLite model attribution for usage missing turn context.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -39,9 +39,9 @@ export default class WorkbenchStatsAttributionRepository {
       FROM thread_turn_usage u
       JOIN thread_turns t ON t.id = u.turn_id
       JOIN workbench_threads wt ON wt.id = t.thread_id
-      LEFT JOIN workbench_thread_state_profiles profile ON profile.thread_id = t.thread_id
+      LEFT JOIN workbench_thread_profiles profile ON profile.thread_id = t.thread_id
         AND profile.harness_id = t.harness_id
-      LEFT JOIN workbench_thread_state_project_profiles project_profile ON project_profile.project_id = wt.project_id
+      LEFT JOIN workbench_project_thread_profiles project_profile ON project_profile.project_id = wt.project_id
         AND project_profile.harness_id = t.harness_id
       WHERE (u.model IS NULL OR u.model = '') AND (? IS NULL OR t.thread_id = ?)
     `).all(threadId, threadId) as MissingUsageRow[];

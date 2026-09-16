@@ -27,9 +27,8 @@ function record(value: unknown) {
 
 export async function recoverCodexSqliteTranscripts(
   bridge: Pick<CodexStdioBridge, "recoverSqliteTranscriptThread">,
-  transcript: Pick<DaemonRuntimeObjects["transcript"], "cutoverFailure" | "pendingRecoveryThreadIds">,
+  transcript: Pick<DaemonRuntimeObjects["transcript"], "pendingRecoveryThreadIds">,
   reportFailure: (threadId: string | null, error: unknown) => void,
-  recoverAvailable: () => Promise<void>,
   activeBaseline?: {
     captureGap(threadId: string, error: unknown): Promise<Error>;
     readThread(threadId: string, signal?: AbortSignal): Promise<void>;
@@ -37,21 +36,18 @@ export async function recoverCodexSqliteTranscripts(
   },
   signal?: AbortSignal,
 ) {
-  await recoverAvailable();
-  let reportedRecoveryFailure = false;
-  const recoveryThreadIds = [...transcript.pendingRecoveryThreadIds];
+  const recoveryThreadIds = await transcript.pendingRecoveryThreadIds;
   const attemptedThreadIds = new Set(recoveryThreadIds);
   for (const threadId of recoveryThreadIds) {
     if (signal?.aborted) return;
     try {
       await bridge.recoverSqliteTranscriptThread(threadId, signal);
       if (signal?.aborted) return;
-      if (transcript.pendingRecoveryThreadIds.includes(threadId)) {
+      if ((await transcript.pendingRecoveryThreadIds).includes(threadId)) {
         throw new Error(`SQLite transcript recovery did not settle thread ${threadId}.`);
       }
     } catch (error) {
       if (signal?.aborted) return;
-      reportedRecoveryFailure = true;
       reportFailure(threadId, error);
     }
   }
@@ -62,7 +58,6 @@ export async function recoverCodexSqliteTranscripts(
       await activeBaseline!.readThread(threadId, signal);
     } catch (error) {
       if (signal?.aborted) return;
-      reportedRecoveryFailure = true;
       try {
         reportFailure(threadId, await activeBaseline!.captureGap(threadId, error));
       } catch (captureError) {
@@ -72,9 +67,6 @@ export async function recoverCodexSqliteTranscripts(
         );
       }
     }
-  }
-  if (!reportedRecoveryFailure && transcript.cutoverFailure) {
-    reportFailure(null, transcript.cutoverFailure);
   }
 }
 
@@ -89,7 +81,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const codexMcpGeneration = build.get("codexMcpGeneration");
     const codexSandboxNetwork = build.get("codexSandboxNetwork");
     const codexInstructions = build.get("codexInstructions");
-    const harnesses = build.get("harnesses");
     const projectCatalog = build.get("projectCatalog");
     const questionnaires = build.get("questionnaires");
     const transcript = build.get("transcript");
@@ -120,8 +111,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       const completion = (async () => {
         await recoverCodexSqliteTranscripts(
           bridge, transcript, reportRecoveryFailure,
-          // Process startup already owns persisted turn recovery. Replacement has no such callback.
-          build.mode === "initial" ? async () => undefined : () => harnesses.recoverAvailable("codex", controller.signal),
           build.isReplacing("server:database") ? {
             captureGap: (threadId, error) => persist(() => transcript.captureProviderGap(threadId, error)),
             readThread: (threadId, signal) => bridge.baselineSqliteTranscriptThread(threadId, signal),
@@ -205,6 +194,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      transcriptAssets: build.get("database"),
       providerObservations: new CodexProviderObservations({ threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") }),
       onAcceptedTurnSteer: nativeThreadId => requestRegistry.interruptThreadWaits(
         threadIdentity.workbenchIdForNative(
@@ -286,7 +276,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       },
       afterCommit: () => {
         if (build.isReplacing("harness:codex")) {
-          turnRecovery.captureForReload(["codex"]);
           context.onCodexBridgeUnavailable(true);
         }
         parent.attachBridge(bridge);
@@ -346,7 +335,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [

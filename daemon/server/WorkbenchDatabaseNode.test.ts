@@ -110,21 +110,17 @@ test("Codex recovery settles every provider gap independently of harness availab
       assert.equal(pendingThreadIds.shift(), threadId);
     },
   }, {
-    get cutoverFailure() { return null; },
-    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
   }, (threadId) => {
     calls.push(`failure:${threadId ?? "cutover"}`);
-  }, async () => {
-    calls.push("available");
   });
   assert.deepEqual(calls, [
-    "available",
     "recover:thread-a",
     "recover:thread-b",
   ]);
 });
 
-test("Codex recovery reports a partial failure and still makes the harness available", async () => {
+test("Codex recovery reports a partial failure and continues repairing other threads", async () => {
   const pendingThreadIds = ["thread-a", "thread-b"];
   const calls: string[] = [];
   await recoverCodexSqliteTranscripts({
@@ -134,39 +130,15 @@ test("Codex recovery reports a partial failure and still makes the harness avail
       pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
     },
   }, {
-    get cutoverFailure() { return new Error("transcript recovery is required"); },
-    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
   }, (threadId, error) => {
     calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
-  }, async () => {
-    calls.push("available");
   });
   assert.deepEqual(pendingThreadIds, ["thread-a"]);
   assert.deepEqual(calls, [
-    "available",
     "recover:thread-a",
     "failure:thread-a:provider read failed",
     "recover:thread-b",
-  ]);
-});
-
-test("an unrecoverable gap reports cutover health without blocking harness availability", async () => {
-  const calls: string[] = [];
-  await recoverCodexSqliteTranscripts({
-    recoverSqliteTranscriptThread: async (threadId) => {
-      calls.push(`unexpected-recovery:${threadId}`);
-    },
-  }, {
-    get cutoverFailure() { return new Error("one unrecoverable gap"); },
-    get pendingRecoveryThreadIds() { return []; },
-  }, (threadId, error) => {
-    calls.push(`failure:${threadId ?? "cutover"}:${error instanceof Error ? error.message : String(error)}`);
-  }, async () => {
-    calls.push("available");
-  });
-  assert.deepEqual(calls, [
-    "available",
-    "failure:cutover:one unrecoverable gap",
   ]);
 });
 
@@ -179,12 +151,9 @@ test("database replacement baselines each exact active Codex thread after marked
       pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
     },
   }, {
-    get cutoverFailure() { return null; },
-    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
   }, (threadId, error) => {
     calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
-  }, async () => {
-    calls.push("available");
   }, {
     captureGap: async (threadId, error) => {
       calls.push(`gap:${threadId}:${error instanceof Error ? error.message : String(error)}`);
@@ -197,7 +166,6 @@ test("database replacement baselines each exact active Codex thread after marked
     threadIds: ["recovery-thread", "active-thread", "active-thread", "failed-thread"],
   });
   assert.deepEqual(calls, [
-    "available",
     "recover:recovery-thread",
     "baseline:active-thread",
     "baseline:failed-thread",

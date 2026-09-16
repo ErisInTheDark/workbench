@@ -33,6 +33,41 @@ interface TableInfoRow {
   name: string;
 }
 
+test("retiring linked tables is atomic and restores foreign-key enforcement", () => {
+  for (const fail of [false, true]) {
+    const parent = defineTable("retiring_parent", { id: integer().primaryKey() });
+    const child = defineTable("retiring_child", {
+      id: integer().primaryKey(),
+      parent_id: integer().notNull().references("retiring_parent", "id"),
+    });
+    const histories = [parent, child].map(table => retireTableHistory(defineTableHistory({
+      current: table,
+      versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    }), 2));
+    const schema = defineWorkbenchDatabaseSchema({ subsystems: [defineSubsystemHistory(histories)] });
+    const database = new Database(":memory:");
+    try {
+      database.pragma("foreign_keys = ON");
+      applyWorkbenchDatabaseSchema(database, schema, { targetVersion: 1 });
+      database.exec("INSERT INTO retiring_parent VALUES (1); INSERT INTO retiring_child VALUES (2, 1)");
+      if (fail) {
+        // A real undeclared dependent must prevent retirement, not lose its owner.
+        database.exec("CREATE TABLE retained_child (parent_id REFERENCES retiring_parent(id)); INSERT INTO retained_child VALUES (1)");
+        assert.throws(() => applyWorkbenchDatabaseSchema(database, schema), /Foreign-key check/);
+        assert.equal(database.pragma("user_version", { simple: true }), 1);
+        assert.deepEqual(database.prepare("SELECT * FROM retiring_parent").all(), [{ id: 1 }]);
+        assert.deepEqual(database.prepare("SELECT * FROM retiring_child").all(), [{ id: 2, parent_id: 1 }]);
+      } else {
+        applyWorkbenchDatabaseSchema(database, schema);
+        assert.equal(database.pragma("user_version", { simple: true }), 2);
+        assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all(), []);
+      }
+      assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    } finally { database.close(); }
+  }
+});
+
 interface IndexListRow {
   name: string;
 }

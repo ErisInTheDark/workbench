@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import IsolatedWorkbench from "./IsolatedWorkbench";
-import { appendLifecycleMigration, installLifecycleProbe, seedLifecycleTranscript, writeLifecycleFault } from "./lifecycle-fixture";
+import { appendLifecycleMigration, installLifecycleProbe, seedLifecycleTranscript, seedLifecycleExternalStorage, writeLifecycleFault } from "./lifecycle-fixture";
 import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, installThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import {
   WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
@@ -107,6 +107,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const captured = await captureThreadStateMigrationSource(path.resolve(process.cwd(), ".."), runtime.root);
     await verifyThreadStateMigrationSource(captured);
     const capturedCounts = await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
+    const imported = await seedLifecycleExternalStorage(runtime.project);
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
@@ -130,6 +131,21 @@ test("real application survives reload expiry, migrated candidate failure, retry
       const response = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/daemon/transcript-assets/"), runtime.origin), { signal: t.signal });
       assert.equal(response.status, 200);
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), transcript.bytes);
+      const importedImage = await fetch(new URL(`/daemon/transcript-assets/codex/${imported.address}/${imported.digest}.png`, runtime.origin), { signal: t.signal });
+      assert.equal(importedImage.status, 200);
+      assert.deepEqual(Buffer.from(await importedImage.arrayBuffer()), imported.bytes);
+      const importedDiff = await fetch(new URL("/daemon/git-arc", runtime.origin), {
+        method: "POST", headers: { "content-type": "application/json" }, signal: t.signal,
+        body: JSON.stringify({ action: "readDiffArtifact", cwd: runtime.project, harness: "codex", threadId: imported.native, diffArtifactId: imported.artifactId }),
+      });
+      assert.equal(importedDiff.status, 200, await importedDiff.clone().text());
+      assert.equal(await importedDiff.text(), imported.diff);
+      for (const [relative, contents] of imported.files) {
+        assert.deepEqual(await fs.readFile(path.join(runtime.project, ".workbench", relative)), Buffer.from(contents), "Legacy rollback inputs must remain untouched");
+      }
+      for (const retired of ["runtime/composer-profiles.json", "runtime/turn-recovery-handoff.json"]) {
+        await assert.rejects(fs.stat(path.join(runtime.project, ".workbench", retired)), { code: "ENOENT" });
+      }
       const updates: TranscriptStreamUpdate[] = [];
       const subscriptionId = `lifecycle-${++subscriptionIndex}`;
       await runtime.transcripts.subscribe({ ...request, subscriptionId }, () => {
@@ -142,8 +158,14 @@ test("real application survives reload expiry, migrated candidate failure, retry
         assert.deepEqual(baseline.snapshot.loadedTurnIds, [transcript.turnId]);
         const database = new Database(serverDatabase, { readonly: true });
         try {
+          for (const gap of imported.orphanedGaps) {
+            assert.equal(database.prepare("SELECT id FROM transcript_capture_gaps WHERE id = ?").get(gap.id), undefined);
+            assert.equal(database.prepare("SELECT id FROM workbench_threads WHERE id = ?").get(gap.threadId), undefined);
+          }
           assert.equal(database.prepare("SELECT previous_cursor FROM codex_transcript_turn_cursors WHERE turn_id = ?").pluck().get(transcript.turnId), null);
           assert.deepEqual(database.pragma("foreign_key_check"), [], "Reload must retain project ownership");
+          assert.equal(database.prepare("SELECT browse_raw_commands_enabled FROM workbench_local_capabilities WHERE id = 'global'").pluck().get(), 1);
+          assert.equal(database.prepare("SELECT name FROM workbench_browse_profiles WHERE name = 'retained'").pluck().get(), "retained");
           assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").pluck().get(transcript.threadId), fixtureProject.id);
           assert.equal(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'workbench_thread_state_projects'").get(), undefined);
           for (const table of workbenchDatabaseSchema.currentTables) {

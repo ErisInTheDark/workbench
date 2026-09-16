@@ -41,6 +41,7 @@ const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 export interface WorkbenchGitArcFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   proposalDiffStore?: GitArcProposalDiffStore;
+  legacyDiffStore?: Pick<import("./database/WorkbenchDatabaseController").default, "readLegacyDiffArtifact">;
   getReloadScopesForPaths?(paths: readonly string[]): string[];
   getThreadCreatedAt(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<number | null>;
   getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null>;
@@ -153,7 +154,7 @@ export default class WorkbenchGitArcFeature {
         repositoryRoot: project.cwd,
         threadId: input.threadId,
       });
-    });
+    }, options.legacyDiffStore);
     const readMany = options.transitions.readMany ?? options.transitions.runMany;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
       readMany: async (paths, operation) => readMany

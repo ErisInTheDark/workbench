@@ -25,6 +25,7 @@ import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse
 import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import WorkbenchTranscriptAssetStore from "./database/transcript/WorkbenchTranscriptAssetStore";
 import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
@@ -41,6 +42,8 @@ import type { ServerNotification } from "workbench-shared/codex/generated/app-se
 import { NativeThreadIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import { recoverCodexTurn } from "./codex-turn-recovery";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -110,6 +113,14 @@ function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
   const promise = new Promise<TValue>((nextResolve) => { resolve = nextResolve; });
   return { promise, resolve };
+}
+
+function assetPorts(database: InstanceType<typeof Database>) {
+  const store = new WorkbenchTranscriptAssetStore(database);
+  return {
+    writeTranscriptAsset: async (input: Parameters<typeof store.write>[0]) => store.write(input),
+    readTranscriptAsset: async (input: Parameters<typeof store.read>[0]) => store.read(input),
+  };
 }
 
 async function rejectWorkbenchRequest(request: JsonRpcRequest) {
@@ -261,7 +272,7 @@ test("bridge admits public identity before structural publication and records th
       pendingResponses: new Map(), pendingUserInputRequests: new Map(),
     },
     bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    ...{ identities },
+    ...{ identities }, transcriptAssets: assetPorts(database),
     onNotification(notification) {
       publicEvents.push(notification as ServerNotification);
     },
@@ -339,16 +350,14 @@ test("bridge admits public identity before structural publication and records th
     const bytes = Buffer.from("canonical browse asset");
     const digest = createHash("sha256").update(bytes).digest("hex");
     const encodedNative = Buffer.from("thread").toString("base64url");
-    const directory = path.join(root, ".workbench", "transcripts", "codex", "threads", encodedNative, "assets");
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, `${digest}.png`), bytes);
+    await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes, mimeType: "image/png" });
     const verify = (bridge as unknown as {
       readSqliteBrowseAsset(threadId: string, url: string): Promise<{ digest: string }>;
     }).readSqliteBrowseAsset.bind(bridge);
     for (const urlThreadId of [encodedNative, start.params.threadId]) {
       assert.equal((await verify("thread", `/api/transcript-assets/codex/${urlThreadId}/${digest}.png`)).digest, digest);
     }
-    await assert.rejects(verify("thread", `/api/transcript-assets/codex/unrelated/${digest}.png`), /another thread/u);
+    await assert.rejects(verify("thread", `/api/transcript-assets/codex/unrelated/${digest}.png`), /not found/u);
   } finally {
     body.resolve();
     await bridge.disposeImmediately();
@@ -2071,7 +2080,7 @@ test("SQLite recovery rejects unknown WB identity before contacting the provider
 test("paged recovery shares one worker across independent thread histories", async parent => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
-  const gaps = new WorkbenchTranscriptCaptureGapController({ markerPath: path.join(root, "gap.json") });
+  const gaps = new WorkbenchTranscriptCaptureGapController({ database });
   const transcript = new WorkbenchTranscriptController(database, gaps);
   const identities = {
     threads: new WorkbenchThreadIdentityController(database),
@@ -2129,7 +2138,7 @@ test("paged recovery shares one worker across independent thread histories", asy
             assert.equal(pages, 2, "no gap closure before both full pages settle");
           } else if (fullPage) {
             pages++;
-            assert.equal(gaps.pendingRecoveryThreadIds.length, 1);
+            assert.equal((await gaps.pendingRecoveryThreadIds).length, 1);
             if (interrupt === "recorder failure") throw new Error("page recording failed");
           }
           await transcript.record(observations, context);
@@ -2147,13 +2156,13 @@ test("paged recovery shares one worker across independent thread histories", asy
         });
         if (interruption !== "none") {
           await assert.rejects(bridge.recoverSqliteTranscriptThread(identity.threadId, cancellation.signal));
-          assert.deepEqual(gaps.pendingRecoveryThreadIds, [identity.threadId]);
+          assert.deepEqual(await gaps.pendingRecoveryThreadIds, [identity.threadId]);
           assert.equal(requests.filter(({ method }) => method === "thread/turns/list").length, 2);
           interrupt = "none";
           pages = 0;
         }
         await bridge.recoverSqliteTranscriptThread(identity.threadId);
-        assert.deepEqual(gaps.pendingRecoveryThreadIds, []);
+        assert.deepEqual(await gaps.pendingRecoveryThreadIds, []);
         const snapshot = await transcript.read({ threadId: identity.threadId, turnLimit: 10 });
         assert.equal(snapshot?.thread.id, identity.threadId);
         assert.ok(snapshot);
@@ -2222,6 +2231,7 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
     repository,
     ports: {
       identities, sqliteReader,
+      transcriptAssets: assetPorts(database),
       resolveProjectFromCwd: async () => ({
         cwd: nativeLocation,
         project: { id: fixtureIdentityValues.ProjectId.project, kind: "git" as const, root: nativeLocation, rootPath: nativeLocation, roots: [] },
@@ -2737,7 +2747,8 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
 });
 
 test("Browse settlement verifies Workbench transcript assets before forwarding their SQLite observation", async () => {
-  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
+  const database = databaseFixture();
+  const fixtureIdentities = await recordingIdentities({ database, existingTurn: true });
   const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
   const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
   const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
@@ -2751,20 +2762,11 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   const digest = createHash("sha256").update(bytes).digest("hex");
   const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
   const assetUrl = `/api/transcript-assets/codex/${encodedThreadId}/${digest}.png`;
-  const assetDirectory = path.join(
-    root,
-    ".workbench",
-    "transcripts",
-    "codex",
-    "threads",
-    encodedThreadId,
-    "assets",
-  );
-  await fs.mkdir(assetDirectory, { recursive: true });
-  await fs.writeFile(path.join(assetDirectory, `${digest}.png`), bytes);
+  await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes, mimeType: "image/png" });
 
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
+    transcriptAssets: assetPorts(database),
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2818,10 +2820,10 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
       params: { threadId, turnId },
     }]);
 
-    await fs.writeFile(path.join(assetDirectory, `${digest}.png`), "tampered");
+    database.prepare("UPDATE transcript_asset_content SET bytes = ? WHERE digest = ?").run(Buffer.from("tampered"), digest);
     await assert.rejects(
       bridge.recordBrowseResultForBrowse({ ...entry, entryKey: "tampered" }),
-      /contents do not match/u,
+      /bytes do not match/u,
     );
     assert.equal(observations.length, 1);
     assert.equal(notifications.length, 1);
@@ -2905,6 +2907,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
     identities: fixtureIdentities,
+    transcriptAssets: assetPorts(database),
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -2945,17 +2948,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
   const assetDigest = createHash("sha256").update(assetBytes).digest("hex");
   const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
   const assetUrl = `/api/transcript-assets/codex/${encodedThreadId}/${assetDigest}.png`;
-  const assetDirectory = path.join(
-    root,
-    ".workbench",
-    "transcripts",
-    "codex",
-    "threads",
-    encodedThreadId,
-    "assets",
-  );
-  await fs.mkdir(assetDirectory, { recursive: true });
-  await fs.writeFile(path.join(assetDirectory, `${assetDigest}.png`), assetBytes);
+  await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes: assetBytes, mimeType: "image/png" });
 
   try {
     bridge = createBridge();
@@ -3201,12 +3194,9 @@ test("live transcript recording and reload use only SQL and preserve image asset
     assert.equal(snapshot.rows.threadItemInteractions.length, 1);
     assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
     assert.deepEqual(snapshot.rows.transcriptAssets.map(({ digest }) => digest), [assetDigest]);
-    const retainedFiles = await fs.readdir(path.dirname(assetDirectory), { recursive: true });
-    assert.deepEqual(
-      retainedFiles.filter(file => /\.(?:json|jsonl|ndjson)$/u.test(file)),
-      [],
-      "live recording and reload must not create legacy transcript files",
-    );
+    assert.deepEqual(Buffer.from((await assetPorts(database).readTranscriptAsset({
+      threadId: encodedThreadId, assetName: `${assetDigest}.png`,
+    }))!.bytes), assetBytes);
     const messageItemId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
     assert.ok(messageItemId);
     assert.deepEqual(
@@ -3975,6 +3965,69 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("explicit refresh rebuilds the current instruction prefix and prepares MCP before replacement admission", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-explicit-refresh-"));
+  const agentPath = path.join(testWorkbenchLibraryRoot, "agents", "refresh.md");
+  await fs.writeFile(agentPath, "---\nname: refresh test\n---\nOLD REFRESH PREFIX", "utf8");
+  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
+  const resumeRequest: JsonRpcRequest = {
+    method: "thread/resume", params: { threadId: "thread", cwd: root },
+    workbenchPromptContext: { agentPath: "library:agents/refresh.md", agentSource: "library", cwd: root, harness: "codex", threadId: "thread", workflowIds: [] },
+  };
+  const oldRequest = await instructions.augment(resumeRequest, "thread/resume");
+  assert.match(JSON.stringify(oldRequest.params), /OLD REFRESH PREFIX/);
+  await fs.writeFile(agentPath, "---\nname: refresh test\n---\nNEW REFRESH PREFIX", "utf8");
+  const requests: JsonRpcRequest[] = [];
+  const order: string[] = [];
+  const thread = { ...bridgeThread(), status: { type: "idle" }, turns: [{ id: "original", items: [], status: "interrupted", error: null }] };
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(request: JsonRpcRequest) {
+      requests.push(request);
+      order.push(request.method);
+      const result = request.method === "thread/read" ? { thread }
+        : request.method === "thread/resume" ? { thread, initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null } }
+          : request.method === "turn/start" ? { turn: { id: "replacement", items: [], status: "inProgress", error: null } }
+            : { status: "unsubscribed" };
+      queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: request.id, result }); });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer, bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions, onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
+    withThreadAdmission: async (_thread, pending, admit) => (await admit(pending)).result,
+    prepareTurnStart: async () => { order.push("prepare:mcp"); },
+  });
+  const failures: unknown[] = [];
+  const controller = new WorkbenchTurnRecoveryController(() => undefined, async (_candidate, error) => { failures.push(error); }, undefined, {
+    codex: async candidate => recoverCodexTurn(candidate, {
+      request: async request => request.method === "thread/read"
+        ? { id: request.id, result: { thread } }
+        : await bridge.handleBridgeRequest(request),
+    }),
+  });
+  try {
+    controller.observeRequest("codex", resumeRequest);
+    controller.observeRequest("codex", { id: "start", method: "turn/start", params: { cwd: root, threadId: "thread", input: [] } });
+    controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "original" } } });
+    await controller.requestResume("codex", "thread");
+    await controller.waitForIdle();
+    assert.deepEqual(failures, []);
+    const resume = requests.find(request => request.method === "thread/resume");
+    assert.ok(resume);
+    assert.match(JSON.stringify(resume.params), /NEW REFRESH PREFIX/);
+    assert.doesNotMatch(JSON.stringify(resume.params), /OLD REFRESH PREFIX/);
+    assert.ok(order.indexOf("thread/resume") < order.indexOf("prepare:mcp"));
+    assert.ok(order.indexOf("prepare:mcp") < order.indexOf("turn/start"));
+    assert.equal(requests.filter(request => request.method === "turn/start").length, 1);
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(agentPath, { force: true });
   }
 });
 

@@ -34,7 +34,6 @@ import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCo
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
-import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
@@ -68,7 +67,6 @@ function createRecoveryCapability(
     kind: "turn",
     observeNotification: (notification) => controller.observeNotification(harness, notification),
     observeRequest: (request) => controller.observeRequest(harness, request),
-    recoverAvailable: async signal => await controller.recoverAvailable(harness, undefined, undefined, signal),
     resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
   };
 }
@@ -138,12 +136,13 @@ function createWorkbenchCoreFeature(
       return { projectId: project.id, projectRoot: project.rootPath };
     },
   });
-  const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot, database);
+  const profileStore = new WorkbenchComposerProfileStore(database);
   const logThreadStateWarning = (message: string) => {
     console.warn("[thread-state-ws]", message.slice(0, 500));
   };
   const gitArc = new WorkbenchGitArcFeature({
     identities: threadIdentity,
+    legacyDiffStore: database,
     proposalDiffStore: {
       read: async identity => await database.readGitArcProposalDiff(identity),
       write: async (value, maxBytes) => await database.writeGitArcProposalDiff(value, maxBytes),
@@ -212,6 +211,7 @@ function createWorkbenchCoreFeature(
     },
   });
   const threadGit = new WorkbenchThreadGitFeature({
+    selectionStore: database,
     identities: threadIdentity,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
@@ -313,16 +313,9 @@ function createWorkbenchCoreFeature(
     projects: projectCatalog,
     questionnaireResponses,
     search,
-    settings: new WorkbenchServerSettings(),
+    settings: new WorkbenchServerSettings(database),
     stats,
     threadIdentity: { resolve: (input, options) => harnesses.resolveThreadIdentity(input, options) },
-  });
-  const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
-  const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({
-    allowedProjectIds,
-    capability,
-    requestHarness: (harness, request) => harnesses.request(harness, request),
-    resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Legacy migration source" }),
   });
   const bridgeRequest = new WorkbenchBridgeRequestController({ harnesses });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
@@ -342,7 +335,7 @@ function createWorkbenchCoreFeature(
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
+    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
   };
   return new WorkbenchCoreFeature({
     captureReloadState: () => projectCatalog.captureReloadState(),
@@ -473,7 +466,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     "daemon/server/*git*.ts",
     "daemon/server/WorkbenchHarnessController.ts",
     "daemon/server/thread-identity-workbench-mapping.ts",
-    "daemon/server/WorkbenchLegacyMigrationSourceController.ts",
     "daemon/server/WorkbenchThreadActionController.ts",
     "daemon/server/WorkbenchProjectCatalogController.ts",
     "daemon/server/WorkbenchProjectSnapshotController.ts",

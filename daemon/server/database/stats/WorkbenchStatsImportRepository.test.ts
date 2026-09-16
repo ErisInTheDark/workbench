@@ -41,11 +41,11 @@ test("usage and claim imports resume safely and isolate failed work", () => {
   database.exec(`
     INSERT INTO workbench_harnesses(id) VALUES ('codex');
     INSERT INTO workbench_projects(id) VALUES ('local:///project');
-    INSERT INTO workbench_thread_state_threads
-      (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed, created_at, updated_at, activity_at, order_at)
-    VALUES ('thread', 'local:///project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 20, NULL);
-    INSERT INTO workbench_thread_state_provider_identities (thread_id, project_id, harness_id, provider_thread_id)
-    VALUES ('thread', 'local:///project', 'codex', 'provider-thread');
+    INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at, next_turn_index)
+    VALUES ('thread', 'local:///project', 'C:/project', 'thread', 0, 1, 1, 20, 0);
+    INSERT INTO workbench_pending_import_threads (thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
+    VALUES ('thread', 'codex', 'C:/project', 'provider-thread', 1, 20);
   `);
   try {
     const repository = new WorkbenchStatsImportRepository(database);
@@ -151,13 +151,6 @@ test("usage import version changes discard stale token facts and requeue complet
        cumulative_reasoning_output_tokens, cumulative_total_tokens, usage_data_version,
        context_observed_at, usage_observed_at)
     VALUES ('turn', 'gpt-5.4', 'standard', 100, 80, 0, 20, 5, 120, 1, 1, 2);
-    INSERT INTO workbench_thread_state_threads
-      (id, project_id, thread_kind, visibility, title, archived, pinned, snoozed, provider_observed,
-       created_at, updated_at, activity_at, order_at)
-    VALUES ('thread', 'local:///project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 2, NULL);
-    INSERT INTO workbench_thread_state_provider_identities
-      (thread_id, project_id, harness_id, provider_thread_id)
-    VALUES ('thread', 'local:///project', 'codex', 'provider-thread');
     INSERT INTO thread_usage_imports
       (project_id, harness_id, provider_thread_id, state, run_id, attempt_count, discovered_at,
        source_activity_at, started_at, settled_at, updated_at, error_text, completed_data_version)

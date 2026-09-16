@@ -23,7 +23,7 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 async function profileFixture(context: TestContext) {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
   const database = new WorkbenchDatabaseController({ databasePath: path.join(storageRoot, "workbench.sqlite3") });
-  const profileStore = new WorkbenchComposerProfileStore(storageRoot, database);
+  const profileStore = new WorkbenchComposerProfileStore(database);
   context.after(async () => {
     await profileStore.dispose();
     await database.close();

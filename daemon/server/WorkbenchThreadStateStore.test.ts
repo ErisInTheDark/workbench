@@ -12,6 +12,8 @@ import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { insertRow } from "workbench-shared/database/workbench-database-statements";
+import { projectTables } from "./database/workbench-database-schema";
 
 const fixtureIdentityValues = {
   DraftId: {
@@ -76,6 +78,10 @@ test("project-qualified draft replacement preserves a moved draft and removes de
   const directory = await mkdtemp(join(tmpdir(), "workbench-draft-facade-"));
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
+    await database.executeTransaction([
+      insertRow(projectTables.projects, { id: fixtureIdentityValues.ProjectId.first }),
+      insertRow(projectTables.projects, { id: fixtureIdentityValues.ProjectId.second }),
+    ]);
     const store = new WorkbenchThreadStateStore(database);
     const draft: WorkbenchThreadDraft = {
       draftId: fixtureIdentityValues.DraftId["00000000-0000-4000-8000-000000000001"], projectId: fixtureIdentityValues.ProjectId["first"],

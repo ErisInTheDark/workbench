@@ -24,7 +24,6 @@ import WorkbenchBrowseDaemonClient, {
   WorkbenchBrowseDaemonTimeoutError,
   type WorkbenchBrowseDaemonRequestWithoutId,
 } from "./WorkbenchBrowseDaemonClient";
-import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 
 export interface WorkbenchBrowseExecutionContext {
   cwd: string;
@@ -111,7 +110,7 @@ async function waitForSessionTurn(previous: Promise<void>, deadline: number, ses
 
 export default class WorkbenchBrowseRuntime {
   private readonly client: WorkbenchBrowseDaemonTransport;
-  private readonly profileStore: WorkbenchBrowseRuntimeProfileStore;
+  private readonly profileStore: WorkbenchBrowseRuntimeProfileStore | undefined;
   private readonly retireProcess: WorkbenchBrowseProcessRetirer;
   private readonly resolveProjectById: WorkbenchBrowseProjectIdResolver;
   private readonly resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
@@ -119,7 +118,7 @@ export default class WorkbenchBrowseRuntime {
 
   constructor({
     client = new WorkbenchBrowseDaemonClient(),
-    profileStore = new WorkbenchBrowseProfileStore(),
+    profileStore,
     retireProcess = killProcessTreeAsync,
     resolveProjectById = resolveProjectRoot,
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
@@ -298,6 +297,7 @@ export default class WorkbenchBrowseRuntime {
     if (signal?.aborted) throw signal.reason;
     const daemonEntrypoint = path.join(appRoot, "server", "lib", "workbench", "browse", "run-browse-daemon.mjs");
     await fs.access(daemonEntrypoint);
+    if (!this.profileStore) throw new Error("Browse launch requires a persistent-profile catalogue.");
     const profilePath = await this.profileStore.resolveProfilePath({ persistent: request.persistent, sessionName: request.session });
     const target = { headless: request.mode === "headless", kind: "managed-local" };
     const child = spawn(process.execPath, [daemonEntrypoint, "--session", request.session, "--target", JSON.stringify(target)], {

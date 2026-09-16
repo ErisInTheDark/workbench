@@ -380,7 +380,7 @@ test("thread Git resolves public and native callers to the same existing selecti
     for (const threadId of [native.nativeThreadId, parent.threadId]) {
       assert.equal((await feature.executeRequest({ action: "add", cwd: "C:/repo", threadId, paths: [] })).status, 200);
     }
-    assert.deepEqual(selected, [native.nativeThreadId, native.nativeThreadId]);
+    assert.deepEqual(selected, [parent.threadId, parent.threadId]);
     assert.equal((await feature.executeRequest({ action: "add", cwd: "C:/repo", threadId: "missing", paths: [] })).status, 400);
     assert.equal(selected.length, 2);
   } finally { database.close(); }

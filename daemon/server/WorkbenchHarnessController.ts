@@ -45,7 +45,6 @@ type WorkbenchHarnessRecoveryCapability =
       kind: "turn";
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
-      recoverAvailable?(signal?: AbortSignal): Promise<void>;
       resumeThread(threadId: NativeThreadId): Promise<void>;
     };
 
@@ -235,11 +234,6 @@ export default class WorkbenchHarnessController {
   observeNotification(harness: WorkbenchHarness, notification: JsonRpcNotification) {
     const recovery = this.getAdapter(harness).recovery;
     if (recovery.kind !== "none") recovery.observeNotification(notification);
-  }
-
-  async recoverAvailable(harness: WorkbenchHarness, signal?: AbortSignal) {
-    const recovery = this.getAdapter(harness).recovery;
-    if (recovery.kind === "turn") await recovery.recoverAvailable?.(signal);
   }
 
   async resumeThread(harness: WorkbenchHarness, threadId: NativeThreadId) {

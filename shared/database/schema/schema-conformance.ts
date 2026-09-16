@@ -26,6 +26,7 @@ function isValidColumnValue(
   value: unknown,
 ) {
   if (value === null) return !runtime.notNull;
+  if (runtime.storageType === "BLOB") return value instanceof Uint8Array;
   if (runtime.storageType === "TEXT") {
     if (typeof value !== "string") return false;
     if (runtime.enumValues && !runtime.enumValues.includes(value)) return false;
@@ -54,7 +55,7 @@ export function conformSelectedRow<Table extends TableDefinition>(
 
   const repairedPaths: DatabaseConformancePath[] = [];
   const issues: DatabaseConformanceIssue[] = [];
-  const row: Record<string, number | string | null> = {};
+  const row: Record<string, number | string | Uint8Array | null> = {};
 
   for (const name of Object.keys(value)) {
     if (!(name in table.columns)) repairedPaths.push([...path, name]);
@@ -79,7 +80,7 @@ export function conformSelectedRow<Table extends TableDefinition>(
       issues.push({ code: "invalidValue", path: columnPath });
       continue;
     }
-    row[name] = candidate as number | string | null;
+    row[name] = candidate as number | string | Uint8Array | null;
   }
 
   if (issues.length) return { issues, repairedPaths, success: false };

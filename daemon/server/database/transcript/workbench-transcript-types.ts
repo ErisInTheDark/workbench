@@ -199,17 +199,15 @@ export type WorkbenchTranscriptAtomicObservation<ThreadId extends string = Workb
     itemId: WorkbenchItemId | NativeItemId | ItemReference | null;
   };
 
-export interface WorkbenchTranscriptCaptureGapObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
-  closedAt: number;
+export type WorkbenchTranscriptCaptureGapObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> = {
   errorText: string;
   gapId: string;
   kind: "captureGap";
   openedAt: number;
   reason: string;
-  state: "reconciled" | "unrecoverable";
   threadId: ThreadId;
   turnId: TurnId | null;
-}
+} & ({ state: "open"; closedAt: null } | { state: "reconciled" | "unrecoverable"; closedAt: number });
 
 export interface WorkbenchTranscriptProviderTurnScopeObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
   completeTurnIds: readonly TurnId[];

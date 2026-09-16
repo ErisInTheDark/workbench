@@ -5,6 +5,10 @@
 import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntime";
 import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchBrowseRequestHandler from "./lib/workbench/browse/WorkbenchBrowseRequestHandler";
+import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
+import WorkbenchBrowseProfileStore from "./lib/workbench/browse/WorkbenchBrowseProfileStore";
+import WorkbenchBrowseSessionRegistry from "./lib/workbench/browse/WorkbenchBrowseSessionRegistry";
+import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonBrowseExecution, DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
@@ -16,14 +20,20 @@ import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } fro
 class BrowseExecution implements DaemonBrowseExecution {
   private controller: WorkbenchBrowseController | null = null;
   private readonly runtime: WorkbenchBrowseRuntime;
+  private readonly profiles: WorkbenchBrowseProfileStore;
+  private readonly sessions: WorkbenchBrowseSessionRegistry;
 
   constructor(
     context: DaemonProcessContext,
     private readonly resultCallbacks: WorkbenchBrowseResultCallbacks,
     private readonly identity: WorkbenchBrowseIdentityPort,
     private readonly publicTurnId: (threadId: string, turnId: string) => Promise<string>,
+    private readonly settings: WorkbenchServerSettings,
+    private readonly database: Pick<WorkbenchDatabaseController, "query" | "executeTransaction" | "writeTranscriptAsset">,
   ) {
-    this.runtime = new WorkbenchBrowseRuntime(context.browseProjectResolvers);
+    this.profiles = new WorkbenchBrowseProfileStore(database);
+    this.sessions = new WorkbenchBrowseSessionRegistry(database);
+    this.runtime = new WorkbenchBrowseRuntime({ ...context.browseProjectResolvers, profileStore: this.profiles });
   }
 
   async cleanupStaleInactiveSessions(options: Parameters<WorkbenchBrowseController["cleanupStaleInactiveSessions"]>[0]) {
@@ -92,7 +102,8 @@ class BrowseExecution implements DaemonBrowseExecution {
         },
       };
       this.controller = new WorkbenchBrowseController(results, this.runtime,
-        new WorkbenchBrowseRequestHandler(results, this.runtime, (threadId) => this.identity.publicThreadId(threadId)),
+        new WorkbenchBrowseRequestHandler(results, this.runtime, { profileStore: this.profiles, registry: this.sessions },
+          (threadId) => this.identity.publicThreadId(threadId), () => this.settings.readLocalCapabilities(), this.database),
         this.identity);
     }
     return this.controller;
@@ -146,7 +157,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return WorkbenchToolContextResponseSchema.parse(response.result);
       },
     };
-    const execution = new BrowseExecution(context, callbacks, identity, publicTurnId);
+    const execution = new BrowseExecution(context, callbacks, identity, publicTurnId, new WorkbenchServerSettings(build.get("database")), build.get("database"));
     let unregisterBrowse: (() => void) | null = null;
     return {
       afterCommit: () => {
@@ -187,7 +198,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload daemon-owned Browse execution without restarting browser sessions.",
   lifecycle: "handoff",
   provides: ["browseExecution"],
-  requires: ["daemonRequests", "harnesses", "projectCatalog", "threadIdentity"],
+  requires: ["database", "daemonRequests", "harnesses", "projectCatalog", "threadIdentity"],
   safeAll: true,
   scope: "server:browse",
   sources: [

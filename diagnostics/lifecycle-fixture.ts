@@ -4,16 +4,56 @@
  * - writeLifecycleFault: select held drain or failed activation for the next transition.
  * - appendLifecycleMigration: append a synthetic release without changing sealed production history.
  * - seedLifecycleTranscript: admit an isolated durable transcript and image without JSON recording.
+ * - seedLifecycleExternalStorage: stage legacy catalogues, orphaned gaps, image and diff for startup conversion.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { NativeThreadIdSchema, NativeTurnIdSchema, type ProjectId } from "../shared/workbench/identity";
+import { localProjectId } from "../daemon/server/lib/workbench/project/project-identity";
 import WorkbenchThreadIdentityRepository from "../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "../daemon/server/database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchTranscriptRepository from "../daemon/server/database/transcript/WorkbenchTranscriptRepository";
 import externalizeCodexTranscriptInlineImages from "../daemon/server/codex-transcript-image-assets";
+import WorkbenchTranscriptAssetStore from "../daemon/server/database/transcript/WorkbenchTranscriptAssetStore";
+
+export async function seedLifecycleExternalStorage(project: string) {
+  const root = path.join(project, ".workbench");
+  const database = new Database(path.join(root, "workbench.sqlite3"), { fileMustExist: true });
+  const native = "lifecycle-import";
+  let threadId: string;
+  try {
+    threadId = new WorkbenchThreadIdentityRepository(database).observe({
+      native: { harness: "codex", nativeLocation: project, nativeThreadId: NativeThreadIdSchema.parse(native) },
+      projectId: localProjectId(project), projectRoot: project,
+      title: "external import", createdAt: 1, updatedAt: 1, activityAt: 1,
+    }).threadId;
+  } finally { database.close(); }
+  const bytes = Buffer.from([0, 128, 255, 13, 10]);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const address = Buffer.from(native).toString("base64url");
+  const diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
+  const artifactId = createHash("sha256").update(diff).digest("hex");
+  const orphanedGaps = [
+    { id: "lifecycle-orphan-provider", threadId: "lifecycle-missing-provider", turnId: null, openedAt: 1, errorText: "legacy failure", recoverability: "provider" },
+    { id: "lifecycle-orphan-unrecoverable", threadId: "lifecycle-missing-unrecoverable", turnId: null, openedAt: 1, errorText: "legacy failure", recoverability: "unrecoverable" },
+  ];
+  const files = new Map<string, string | Buffer>([
+    ["workbench-transcript-capture-gap.json", JSON.stringify({ version: 1, entries: orphanedGaps })],
+    ["settings/local-capabilities.json", '{"browseRawCommandsEnabled":true}'],
+    ["runtime/browse-sessions.json", JSON.stringify({ sessions: [{ name: "retained", lastActionAt: "2026-09-16T00:00:00Z", mode: "headless", threadId: native }] })],
+    ["runtime/browse-persistent-sessions.json", JSON.stringify({ sessions: [{ name: "retained", createdAt: "2026-09-16T00:00:00Z", lastUsedAt: "2026-09-16T00:00:00Z", profilePath: path.join(root, "runtime/browse-profiles/retained") }] })],
+    [`transcripts/codex/threads/${address}/assets/${digest}.png`, bytes],
+    [`git-checkpoint-diffs/threads/${native}/${artifactId}.diff`, diff],
+  ]);
+  for (const [relative, content] of files) {
+    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await fs.writeFile(path.join(root, relative), content);
+  }
+  return { threadId, native, bytes, digest, address, diff, artifactId, files, orphanedGaps };
+}
 
 export async function seedLifecycleTranscript(project: string, projectId: ProjectId) {
   const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });
@@ -38,7 +78,10 @@ export async function seedLifecycleTranscript(project: string, projectId: Projec
     const bytes = Buffer.from("isolated transcript image");
     const image = await externalizeCodexTranscriptInlineImages({
       type: "image" as const, url: `data:image/png;base64,${bytes.toString("base64")}`,
-    }, { storageRoot: project, threadId: nativeThreadId });
+    }, {
+      assets: { writeTranscriptAsset: async input => new WorkbenchTranscriptAssetStore(database).write(input) },
+      threadId: nativeThreadId,
+    });
     new WorkbenchTranscriptRepository(database).settle([{
       kind: "providerTurnScope", threadId: thread.threadId, completeTurnIds: [turn.turnId],
       observations: [{

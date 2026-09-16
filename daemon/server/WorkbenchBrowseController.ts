@@ -122,8 +122,8 @@ export default class WorkbenchBrowseController {
 
   constructor(
     results: WorkbenchBrowseResultSink & { expire?(): void; resume?(): void },
-    runtime: WorkbenchBrowseRuntime = new WorkbenchBrowseRuntime(),
-    requestHandler: WorkbenchBrowseRequestHandlerPort = new WorkbenchBrowseRequestHandler(results, runtime),
+    runtime: WorkbenchBrowseRuntime,
+    requestHandler: WorkbenchBrowseRequestHandlerPort,
     private readonly identity?: WorkbenchBrowseIdentityPort,
   ) {
     this.results = results;

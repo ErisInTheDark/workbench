@@ -1,13 +1,12 @@
 /*
  * Exports:
- * - WorkbenchBrowseSessionRecord: persisted Workbench-owned Browse session metadata. Keywords: browse, session, registry, thread.
- * - WorkbenchBrowseSessionRegistry: filesystem-backed registry of Workbench-owned Browse sessions for cleanup. Keywords: browse, session, registry, cleanup.
+ * - WorkbenchBrowseSessionRecord: persisted session ownership and activity.
+ * - default WorkbenchBrowseSessionRegistry: own SQLite session catalogue mutations.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
-
-import { projectRoot } from "../../project";
+import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import type { WorkbenchBrowseSessionMode } from "workbench-shared/types";
+import { deleteRows, selectRows, updateRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { browseSessions } from "../database/schema/browse-persistence-schema";
 
 export interface WorkbenchBrowseSessionRecord {
   cwd: string | null;
@@ -20,198 +19,85 @@ export interface WorkbenchBrowseSessionRecord {
   threadId: string | null;
 }
 
-interface WorkbenchBrowseSessionRegistryState {
-  sessions: WorkbenchBrowseSessionRecord[];
-}
-
-const REGISTRY_PATH = path.join(projectRoot, ".workbench", "runtime", "browse-sessions.json");
-
 export default class WorkbenchBrowseSessionRegistry {
-  async forget(sessionName: string) {
-    const state = await this.readState();
-    const nextState = {
-      sessions: state.sessions.filter((session) => session.name !== sessionName),
-    };
-    await this.writeState(nextState);
+  private writes = Promise.resolve();
+
+  constructor(
+    private readonly database: Pick<WorkbenchDatabaseController, "query" | "executeTransaction">,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  async forget(name: string) {
+    await this.mutate(async () => { await this.database.executeTransaction([deleteRows(browseSessions, { name })]); });
   }
 
-  async list() {
-    const state = await this.readState();
-    return [...state.sessions].sort((left, right) => left.name.localeCompare(right.name));
+  async list(): Promise<WorkbenchBrowseSessionRecord[]> {
+    const rows = await this.database.query(selectRows(browseSessions));
+    return rows.map(row => ({
+      cwd: row.cwd, inactiveSince: row.inactive_since, lastActionAt: row.last_action_at,
+      mode: row.mode, name: row.name, projectId: row.project_id, projectRootPath: row.project_root_path, threadId: row.thread_id,
+    })).sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async listByProjectId(projectId: string) {
-    const state = await this.readState();
-    return state.sessions
-      .filter((session) => session.projectId === projectId)
-      .sort((left, right) => left.name.localeCompare(right.name));
+    return (await this.list()).filter(session => session.projectId === projectId);
   }
 
   async listByThreadId(threadId: string) {
-    const state = await this.readState();
-    return state.sessions
-      .filter((session) => session.threadId === threadId)
-      .sort((left, right) => left.name.localeCompare(right.name));
+    return (await this.list()).filter(session => session.threadId === threadId);
   }
 
   async listOwnedThreadIds() {
-    const state = await this.readState();
-    return [...new Set(state.sessions.map((session) => session.threadId).filter((threadId): threadId is string => Boolean(threadId)))].sort();
+    return [...new Set((await this.list()).flatMap(session => session.threadId ? [session.threadId] : []))].sort();
   }
 
-  async listStaleInactiveSessions({
-    olderThanMs,
-    now = Date.now(),
-  }: {
-    olderThanMs: number;
-    now?: number;
-  }) {
-    const state = await this.readState();
-    return state.sessions.filter((session) => {
-      if (!session.threadId || !session.inactiveSince) {
-        return false;
-      }
-
+  async listStaleInactiveSessions({ olderThanMs, now = this.now() }: { olderThanMs: number; now?: number }) {
+    return (await this.list()).filter(session => {
+      if (!session.threadId || !session.inactiveSince) return false;
       const inactiveSince = Date.parse(session.inactiveSince);
       return Number.isFinite(inactiveSince) && now - inactiveSince >= olderThanMs;
     });
   }
 
   async markThreadActive(threadId: string) {
-    await this.updateThreadActivity(threadId, { active: true });
+    await this.mutate(async () => {
+      await this.database.executeTransaction([updateRows(browseSessions, { inactive_since: null }, { thread_id: threadId })]);
+    });
   }
 
   async markThreadInactive(threadId: string) {
-    await this.updateThreadActivity(threadId, { active: false });
-  }
-
-  async remember({
-    cwd,
-    mode,
-    name,
-    projectId,
-    projectRootPath,
-    threadId,
-  }: {
-    cwd: string | null;
-    mode: WorkbenchBrowseSessionMode | null;
-    name: string;
-    projectId: string | null;
-    projectRootPath: string | null;
-    threadId: string;
-  }) {
-    const state = await this.readState();
-    const now = new Date().toISOString();
-    const existing = state.sessions.find((session) => session.name === name);
-    const nextRecord = {
-      cwd: cwd ?? existing?.cwd ?? null,
-      inactiveSince: null,
-      lastActionAt: now,
-      mode: mode ?? existing?.mode ?? null,
-      name,
-      projectId: projectId ?? existing?.projectId ?? null,
-      projectRootPath: projectRootPath ?? existing?.projectRootPath ?? null,
-      threadId,
-    };
-    const sessions = existing
-      ? state.sessions.map((session) => session.name === name ? nextRecord : session)
-      : [...state.sessions, nextRecord];
-    await this.writeState({ sessions });
-  }
-
-  async touchSession(sessionName: string) {
-    const state = await this.readState();
-    const now = new Date().toISOString();
-    let changed = false;
-    const sessions = state.sessions.map((session) => {
-      if (session.name !== sessionName) {
-        return session;
-      }
-
-      changed = true;
-      return {
-        ...session,
-        lastActionAt: now,
-      };
+    await this.mutate(async () => {
+      await this.database.executeTransaction([updateRows(browseSessions, {
+        inactive_since: new Date(this.now()).toISOString(),
+      }, { thread_id: threadId, inactive_since: null })]);
     });
-
-    if (changed) {
-      await this.writeState({ sessions });
-    }
   }
 
-  private async updateThreadActivity(threadId: string, { active }: { active: boolean }) {
-    const state = await this.readState();
-    const now = new Date().toISOString();
-    let changed = false;
-    const sessions = state.sessions.map((session) => {
-      if (session.threadId !== threadId) {
-        return session;
-      }
-
-      const inactiveSince = active
-        ? null
-        : session.inactiveSince ?? now;
-      if (inactiveSince === session.inactiveSince) {
-        return session;
-      }
-
-      changed = true;
-      return {
-        ...session,
-        inactiveSince,
-      };
+  async remember(input: Omit<WorkbenchBrowseSessionRecord, "inactiveSince" | "lastActionAt" | "threadId"> & { threadId: string }) {
+    await this.mutate(async () => {
+      const [existing] = await this.database.query(selectRows(browseSessions, { where: { name: input.name } }));
+      await this.database.executeTransaction([upsertRow(browseSessions, {
+        name: input.name, cwd: input.cwd ?? existing?.cwd ?? null,
+        mode: input.mode ?? existing?.mode ?? null,
+        project_id: input.projectId ?? existing?.project_id ?? null,
+        project_root_path: input.projectRootPath ?? existing?.project_root_path ?? null,
+        thread_id: input.threadId, inactive_since: null, last_action_at: new Date(this.now()).toISOString(),
+      }, {
+        conflictColumns: ["name"],
+        updateColumns: ["cwd", "mode", "project_id", "project_root_path", "thread_id", "inactive_since", "last_action_at"],
+      })]);
     });
-
-    if (changed) {
-      await this.writeState({ sessions });
-    }
   }
 
-  private async readState(): Promise<WorkbenchBrowseSessionRegistryState> {
-    try {
-      const rawState = await fs.readFile(REGISTRY_PATH, "utf8");
-      const parsedState = JSON.parse(rawState) as WorkbenchBrowseSessionRegistryState;
-      if (!Array.isArray(parsedState.sessions)) {
-        return { sessions: [] };
-      }
-
-      return {
-        sessions: parsedState.sessions
-          .filter(isSessionRecord)
-          .map((session) => ({
-            cwd: session.cwd ?? null,
-            inactiveSince: session.inactiveSince ?? null,
-            lastActionAt: session.lastActionAt,
-            mode: session.mode,
-            name: session.name,
-            projectId: session.projectId ?? null,
-            projectRootPath: session.projectRootPath ?? null,
-            threadId: session.threadId ?? null,
-          })),
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { sessions: [] };
-      }
-      throw error;
-    }
+  async touchSession(name: string) {
+    await this.mutate(async () => {
+      await this.database.executeTransaction([updateRows(browseSessions, { last_action_at: new Date(this.now()).toISOString() }, { name })]);
+    });
   }
 
-  private async writeState(state: WorkbenchBrowseSessionRegistryState) {
-    await fs.mkdir(path.dirname(REGISTRY_PATH), { recursive: true });
-    await fs.writeFile(`${REGISTRY_PATH}.tmp`, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await fs.rename(`${REGISTRY_PATH}.tmp`, REGISTRY_PATH);
+  private async mutate(operation: () => Promise<void>) {
+    const result = this.writes.then(operation);
+    this.writes = result.then(() => undefined, () => undefined);
+    await result;
   }
-}
-
-function isSessionRecord(value: Partial<WorkbenchBrowseSessionRecord> | null | undefined) {
-  return typeof value?.name === "string"
-    && typeof value.lastActionAt === "string"
-    && (value.mode === null || value.mode === "headed" || value.mode === "headless")
-    && (value.cwd === undefined || value.cwd === null || typeof value.cwd === "string")
-    && (value.projectId === undefined || value.projectId === null || typeof value.projectId === "string")
-    && (value.projectRootPath === undefined || value.projectRootPath === null || typeof value.projectRootPath === "string")
-    && (value.threadId === undefined || value.threadId === null || typeof value.threadId === "string")
-    && (value.inactiveSince === undefined || value.inactiveSince === null || typeof value.inactiveSince === "string");
 }

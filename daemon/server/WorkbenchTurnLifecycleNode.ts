@@ -15,7 +15,6 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchDaemonReloadController, { type WorkbenchDaemonReloadControllerState } from "./WorkbenchDaemonReloadController";
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController, { type WorkbenchTurnRecoveryControllerState } from "./WorkbenchTurnRecoveryController";
-import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
 
 interface WorkbenchTurnLifecycleState {
   reloadController?: WorkbenchDaemonReloadControllerState;
@@ -46,7 +45,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     });
     let turnRecovery!: WorkbenchTurnRecoveryController;
     turnRecovery = new WorkbenchTurnRecoveryController(
-      new WorkbenchTurnRecoveryHandoffStore(context.legacyMigrationProjectRoot),
       context.logTurnRecovery,
       async (candidate) => {
         const cwd = typeof record(candidate.request.params)?.cwd === "string" ? String(record(candidate.request.params)!.cwd).trim() : "";
@@ -117,7 +115,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       registrations: { codexMcpGeneration, reloadController, reloadDirt, turnRecovery },
       start: async () => {
         await reloadDirt.start();
-        if (!state) await turnRecovery.loadPersistedHandoff();
       },
     };
   },
@@ -130,7 +127,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   sources: [
     "daemon/server/WorkbenchTurnLifecycleNode.ts",
     "daemon/server/WorkbenchTurnRecoveryController.ts",
-    "daemon/server/WorkbenchTurnRecoveryHandoffStore.ts",
     "daemon/server/WorkbenchCodexMcpGenerationController.ts",
     "daemon/server/codex-turn-recovery.ts",
     "daemon/server/WorkbenchTurnRecovery*.test.ts",

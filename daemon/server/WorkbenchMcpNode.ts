@@ -15,9 +15,9 @@ const REQUIRED_REGISTRATIONS = [
   "agentCommand",
   "bridgeRequest",
   "codexMcpGeneration",
+  "database",
   "gitArc",
   "harnesses",
-  "legacyMigrationSource",
   "projectCatalog",
   "projectSnapshot",
   "reloadController",
@@ -68,12 +68,11 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       agentCommand,
       bridgeRequest: build.get("bridgeRequest"),
       gitArc: build.get("gitArc"),
-      legacyMigrationSource: build.get("legacyMigrationSource"),
       mcp,
       projectCatalog: build.get("projectCatalog"),
       projectSnapshot: build.get("projectSnapshot"),
       threadGit: build.get("threadGit"),
-      transcriptAssets: new WorkbenchTranscriptAssetController(context.legacyMigrationProjectRoot, build.get("threadIdentity")),
+      transcriptAssets: new WorkbenchTranscriptAssetController(build.get("database")),
     });
     return {
       afterCommit: () => {

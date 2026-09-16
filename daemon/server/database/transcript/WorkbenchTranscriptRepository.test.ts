@@ -2581,24 +2581,30 @@ test("unsupported items remain opaque and a later invalid observation rolls back
   }
 });
 
-test("capture-gap settlement records one closed thread-owned failure interval", () => {
+test("capture-gap settlement closes the existing thread-owned failure interval", () => {
   const { database, repository } = createRepository();
   try {
     repository.settle([
       threadObservation(),
       turnObservation("turn", 0),
       {
-        closedAt: 20,
+        closedAt: null,
         errorText: "settlement failed",
         gapId: "gap",
         kind: "captureGap",
         openedAt: 10,
         reason: "sqlite transcript settlement failed",
-        state: "reconciled",
+        state: "open",
         threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
         turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
       },
     ]);
+    repository.settle([{
+      closedAt: 20, errorText: "settlement failed", gapId: "gap", kind: "captureGap",
+      openedAt: 10, reason: "sqlite transcript settlement failed", state: "reconciled",
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+    }]);
     assert.deepEqual(
       database.prepare("SELECT * FROM transcript_capture_gaps WHERE id = ?").get("gap"),
       {

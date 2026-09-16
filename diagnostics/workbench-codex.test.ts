@@ -8,6 +8,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import WorkbenchComposerProfileStore from "../daemon/server/WorkbenchComposerProfileStore";
+import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../shared/database/workbench-database-statements";
+import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import { captureThreadStateMigrationSource, installThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import type { WorkbenchComposerProfile, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../shared/types";
@@ -35,10 +38,19 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   timeout: 1_200_000,
 }, async (t) => {
   const source = path.resolve(process.cwd(), "..");
-  const profiles = JSON.parse(await fs.readFile(path.join(source, ".workbench/runtime/composer-profiles.json"), "utf8")) as {
-    version: number; profiles: Record<string, WorkbenchComposerProfile>;
-  };
-  const profile = Object.values(profiles.profiles).find((entry) => entry.name === "luna.low");
+  const sourceDatabase = new Database(path.join(source, ".workbench/workbench.sqlite3"), { readonly: true, fileMustExist: true });
+  const profiles = new WorkbenchComposerProfileStore({
+    query: async <Row extends WorkbenchDatabaseRow>(statement: Parameters<typeof compileWorkbenchDatabaseStatement>[1]) => {
+      const compiled = compileWorkbenchDatabaseStatement(
+        Object.fromEntries(workbenchDatabaseSchema.currentTables.map(table => [table.name, table])), statement,
+      );
+      return sourceDatabase.prepare(compiled.sql).all(...compiled.parameters) as Row[];
+    },
+    executeTransaction: async () => { throw new Error("Diagnostic source profiles are read-only."); },
+  });
+  let profile: WorkbenchComposerProfile | undefined;
+  try { profile = (await profiles.read()).profiles.find(entry => entry.name === "luna.low"); }
+  finally { await profiles.dispose(); sourceDatabase.close(); }
   assert.ok(profile?.harness === "codex" && profile.reasoningEffort === "low", "A stored luna.low Codex profile is required");
   const prefixProof = passphrase();
   const runtime = await IsolatedWorkbench.create(source, t.signal);
@@ -69,7 +81,7 @@ await new Promise((resolve, reject) => {
   if (existsSync(release)) { watcher.close(); resolve(); }
 });
 `);
-    await runtime.start({ version: profiles.version, profiles: { [profile.id]: profile } }, prefixProof);
+    await runtime.start([profile], prefixProof);
     console.log("isolated daemon initialised");
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const project = catalog.data.find((entry) => path.resolve(entry.rootPath) === runtime.project);
@@ -228,7 +240,7 @@ await new Promise((resolve, reject) => {
     await controller.dispose();
     controller = null;
     await runtime.stop();
-    await runtime.start({ version: profiles.version, profiles: { [profile.id]: profile } }, prefixProof);
+    await runtime.start([profile], prefixProof);
     const reopened = await runtime.transcripts.read({ threadId, turnLimit: 10 });
     assert.ok(reopened, "Transcript must survive a cold restart");
     assert.deepEqual(reopened.turns, snapshot.turns);
@@ -342,7 +354,7 @@ await new Promise((resolve, reject) => {
     };
     const restart = async () => {
       await runtime.stop();
-      await runtime.start({ version: profiles.version, profiles: { [profile.id]: profile } }, prefixProof);
+      await runtime.start([profile], prefixProof);
       await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
       await watchTranscript();
     };

@@ -58,18 +58,17 @@ test("model attribution falls through thread, project, and provider SQLite evide
   try {
     database.prepare("UPDATE thread_turn_usage SET model = NULL, context_observed_at = NULL").run();
     database.prepare(`
-      INSERT INTO workbench_thread_state_threads (
-        id, project_id, thread_kind, visibility, title, archived, pinned, snoozed,
-        provider_observed, created_at, updated_at, activity_at, order_at
-      ) VALUES ('thread', 'local:///project', 'topLevel', 'visible', 'thread', 0, 0, 0, 1, 1, 1, 1, NULL)
+      INSERT INTO workbench_thread_states (
+        thread_id, harness_id, thread_kind, title, provider_observed, activity_at
+      ) VALUES ('thread', 'codex', 'topLevel', 'thread', 1, 1)
     `).run();
     database.prepare(`
-      INSERT INTO workbench_thread_state_profiles (
+      INSERT INTO workbench_thread_profiles (
         thread_id, selection_kind, profile_id, harness_id, model
       ) VALUES ('thread', 'custom', NULL, 'codex', 'thread-model')
     `).run();
     database.prepare(`
-      INSERT INTO workbench_thread_state_project_profiles (
+      INSERT INTO workbench_project_thread_profiles (
         project_id, selection_kind, profile_id, harness_id, model
       ) VALUES ('local:///project', 'custom', NULL, 'codex', 'project-model')
     `).run();
@@ -80,11 +79,11 @@ test("model attribution falls through thread, project, and provider SQLite evide
     `).get() as { model: string; source: string };
     assert.deepEqual(attribution(), { model: "thread-model", source: "thread" });
 
-    database.prepare("DELETE FROM workbench_thread_state_profiles").run();
+    database.prepare("DELETE FROM workbench_thread_profiles").run();
     repository.repair(11);
     assert.deepEqual(attribution(), { model: "project-model", source: "project" });
 
-    database.prepare("DELETE FROM workbench_thread_state_project_profiles").run();
+    database.prepare("DELETE FROM workbench_project_thread_profiles").run();
     repository.repair(12);
     assert.deepEqual(attribution(), { model: "gpt-5.6-sol", source: "provider" });
 

@@ -21,7 +21,6 @@ export interface WorkbenchDaemonHttpRouterOptions {
   agentCommand: HttpController;
   bridgeRequest: HttpController;
   gitArc: HttpController;
-  legacyMigrationSource: HttpController;
   mcp: HttpController;
   projectCatalog: ProjectCatalogHttpController;
   projectSnapshot: ProjectSnapshotHttpController;
@@ -78,12 +77,6 @@ export default class WorkbenchDaemonHttpRouter {
         handle: (request, response) => options.bridgeRequest.handleHttpRequest(request, response),
         methods: ["POST"],
         path: "/daemon/bridge-request",
-      },
-      {
-        errorMessage: "Legacy migration source failed.",
-        handle: (request, response) => options.legacyMigrationSource.handleHttpRequest(request, response),
-        methods: null,
-        path: "/daemon/legacy-migration-source",
       },
       {
         errorMessage: "Project discovery failed.",

@@ -7,7 +7,7 @@ import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-se
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { createWorkbenchThreadRecoveryInput, isWorkbenchThreadRecoveryUserMessage } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
+import type { WorkbenchObservedTurnCandidate } from "./WorkbenchTurnRecoveryController";
 
 export interface CodexTurnRecoveryPort {
   request(request: JsonRpcRequest): Promise<JsonRpcResponse>;
@@ -17,7 +17,7 @@ function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function readThread(response: JsonRpcResponse, candidate: WorkbenchTurnRecoveryHandoffCandidate) {
+function readThread(response: JsonRpcResponse, candidate: WorkbenchObservedTurnCandidate) {
   if (response.error) throw new Error(response.error.message);
   const thread = record(response.result)?.thread;
   if (!thread || typeof thread !== "object") throw new Error(`Recovery could not read Codex thread ${candidate.threadId}.`);
@@ -32,7 +32,7 @@ function containsRecoveryMarker(thread: ThreadReadResponse["thread"], recoveryId
   )));
 }
 
-async function readRecoveryThread(candidate: WorkbenchTurnRecoveryHandoffCandidate, port: CodexTurnRecoveryPort) {
+async function readRecoveryThread(candidate: WorkbenchObservedTurnCandidate, port: CodexTurnRecoveryPort) {
   return readThread(await port.request({
     id: `recovery-read:${candidate.recoveryId}`,
     method: "thread/read",
@@ -50,7 +50,7 @@ async function requireSuccess(port: CodexTurnRecoveryPort, request: JsonRpcReque
   if (response.error) throw new Error(response.error.message);
 }
 
-export async function recoverCodexTurn(candidate: WorkbenchTurnRecoveryHandoffCandidate, port: CodexTurnRecoveryPort) {
+export async function recoverCodexTurn(candidate: WorkbenchObservedTurnCandidate, port: CodexTurnRecoveryPort) {
   if (candidate.harness !== "codex" || !candidate.resumeRequest) throw new Error("Codex recovery requires a captured thread/resume request.");
   let thread = await readRecoveryThread(candidate, port);
   if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
