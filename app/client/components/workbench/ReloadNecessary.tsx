@@ -72,7 +72,9 @@ export default function ReloadNecessary ({
     }
   };
   const allBusy = Boolean(dirt?.pendingScopes.length || requesting.length);
-  const affectedScopes = getAffectedReloadScopes(hoveredScope, reloadableScopes);
+  const affectedScopes = allBusy
+    ? new Set<string>()
+    : getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
     <section className="sticky bottom-0 z-20 mt-auto ml-3">
@@ -126,7 +128,7 @@ export default function ReloadNecessary ({
                         ? "[&>span:first-of-type]:!ring-2 [&>span:first-of-type]:!ring-accent"
                         : ""
                     }`}
-                    disabled={busy}
+                    disabled={allBusy}
                     holdToConfirmMs={getReloadScopeHoldMs(scope)}
                     onClick={() => void reload([scope])}
                     onPointerEnter={() => setHoveredScope(scope.scope)}
