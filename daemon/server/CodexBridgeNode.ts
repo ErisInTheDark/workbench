@@ -5,6 +5,9 @@
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import CodexProviderObservations from "./CodexProviderObservations";
+import CodexProvider from "./CodexProvider";
+import CodexThreadOperations from "./CodexThreadOperations";
+import CodexConfigurationController from "./CodexConfigurationController";
 import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -12,7 +15,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
-import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
@@ -80,7 +83,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   boundarySources: [
     "daemon/server/codex-transcript-*.ts",
   ].join("\n"),
-  children: [],
+  children: [CodexProvider],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
     const codexMcpGeneration = build.get("codexMcpGeneration");
@@ -143,7 +146,12 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       const reference = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
       if (!reference) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
       const threadId = NativeThreadIdSchema.parse(reference);
-      const state = await threadState.getCodexMcpState(threadId, requestProvider);
+      const response = await requestProvider({ id: 0, method: "thread/read", params: { includeTurns: false, threadId } });
+      if (response.error) throw new Error(response.error.message);
+      const nativeThread = (response.result as ThreadReadResponse | undefined)?.thread;
+      if (!nativeThread || nativeThread.id !== threadId) throw new Error("The managed Codex thread could not be read before turn admission.");
+      const thread = await threadOperations.observeThread(nativeThread);
+      const state = await threadState.getProviderMcpState(thread);
       signal.throwIfAborted();
       const [project, networkAccess] = await Promise.all([
         projectCatalog.resolveProjectById(state.projectId),
@@ -159,7 +167,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         if (response.error) throw new Error(response.error.message);
       });
       signal.throwIfAborted();
-      await persist(() => threadState.setManagedCodexMcpGeneration(state.projectId, threadId, generation));
+      await persist(() => threadState.setProviderMcpGeneration(state.projectId, "codex", threadIdentity.knownThread(ThreadReferenceSchema.parse(thread.id)).threadId, generation));
       signal.throwIfAborted();
       applyServerCodexSandboxPolicy(
         request,
@@ -223,14 +231,14 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         const thread = record(response.result)?.thread as ThreadReadResponse["thread"] | undefined;
         if (!thread) throw new Error("Codex creation returned no thread to store its profile.");
         bridge.traceThreadCreation(request.id, "profile-installation");
-        await threadState.installCreatedProfile("codex", thread, captured.selection);
+        await threadState.installCreatedProfile("codex", await threadOperations.observeThread(thread), captured.selection);
         return response;
       },
       prepareThreadConfiguration: async (thread, requests, signal) => configureProfileRequests(
-        requests, await threadState.readProviderProfile("codex", thread), thread.id, signal,
+        requests, await threadState.readProviderProfile("codex", await threadOperations.observeThread(thread)), thread.id, signal,
       ),
       withThreadAdmission: async (thread, requests, admit, signal, fresh) => {
-        const outcome = await threadState.withProviderProfileAdmission("codex", thread, async (profile) => (
+        const outcome = await threadState.withProviderProfileAdmission("codex", await threadOperations.observeThread(thread), async (profile) => (
           admit(await configureProfileRequests(requests, profile, thread.id, signal))
         ), signal, !fresh);
         return outcome.result;
@@ -255,6 +263,16 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       },
       onTranscriptLiveUpdate: update => transcript.acceptLiveUpdate?.(update),
       restartingAppServer: build.isReplacing("harness:codex"),
+    });
+    const threadOperations = new CodexThreadOperations({
+      questionnaires,
+      bridge,
+      identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
+      resolveProject: async cwd => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Codex provider thread admission" })).project,
+    });
+    const nativeConfiguration = new CodexConfigurationController({
+      request: (method, params, options) => threadOperations.requestNative(method, params, options),
+      warn: message => console.warn(message),
     });
     let releaseLiveBoundary: (() => void) | undefined;
     return {
@@ -321,18 +339,20 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         await waitForPersistence();
         await bridge.retireAfterHandoff();
       },
-      registrations: { codexBridge: bridge },
+      registrations: { codexBridge: bridge, codexThreadOperations: threadOperations, codexNativeConfiguration: nativeConfiguration },
       start: () => undefined,
     };
   },
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
-  provides: ["codexBridge"],
+  provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
   requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
     "daemon/server/CodexBridgeNode.ts",
+    "daemon/server/CodexThreadOperations.ts",
+    "daemon/server/CodexConfigurationController.ts",
     "daemon/server/codex-sandbox-policy.ts",
     "daemon/server/CodexStdioBridge.ts",
     "daemon/server/CodexProviderObservations.ts",

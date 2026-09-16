@@ -40,7 +40,10 @@ import type {
   WorkbenchSkillSummary,
   WorkbenchUserInputResponse,
 } from "../../types.ts";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { WorkbenchUserInput as UserInput } from "../provider/provider-input.ts";
+import type { WorkbenchThreadActionMap } from "../thread/thread-actions.ts";
+import type { WorkbenchModelOption } from "../provider/provider-model.ts";
+import type { WorkbenchAccountLimits } from "../provider/provider-account.ts";
 import type {
   GitCheckpointCompareResult,
   GitCheckpointProposal,
@@ -85,7 +88,7 @@ export interface WorkbenchGitArcSuccess {
 
 export interface WorkbenchQuestionnaireRespondRequest {
   activatedSkillPaths?: string[];
-  harness: WorkbenchHarness;
+  harness?: WorkbenchHarness;
   insertAfterItemId?: string | null;
   insertAfterItemIndex?: number | null;
   projectId: string;
@@ -119,8 +122,10 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
 
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
 
-export interface WorkbenchDaemonRequestMap {
+export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "models/context/read": { params: object; result: { data: WorkbenchModelContextCapability[] } };
+  "models/list": { params: { provider: string }; result: { data: WorkbenchModelOption[] } };
+  "account/limits/read": { params: { provider: string }; result: WorkbenchAccountLimits };
   "agents/list": { params: { projectId: string }; result: { data: WorkbenchAgentOption[] } };
   "agents/read": { params: { agentPath: string; projectId: string }; result: WorkbenchAgentDefinitionResponse };
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };

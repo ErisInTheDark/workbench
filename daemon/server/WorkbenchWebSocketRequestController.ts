@@ -138,6 +138,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
+  threadActions?: Pick<import("./WorkbenchThreadActionController").default, "materialize">;
   harnesses: Pick<WorkbenchHarnessController, "handleNativeBrowserMessage" | "resolvePublicRequest" | "request" | "resolveHarness">
     & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
   identities?: NativeTranscriptIdentityOwners;
@@ -237,6 +238,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
   private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
   private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
+  private readonly threadActions: WorkbenchWebSocketRequestControllerOptions["threadActions"];
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
   private readonly reload: WorkbenchWebSocketRequestControllerOptions["reload"];
@@ -271,6 +273,7 @@ export default class WorkbenchWebSocketRequestController {
     setTimeout: schedule = setTimeout,
     stats,
     threadState,
+    threadActions,
     transcript,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
@@ -278,6 +281,7 @@ export default class WorkbenchWebSocketRequestController {
     this.cancel = cancel;
     this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
+    this.threadActions = threadActions;
     this.harnesses = harnesses;
     this.identities = identities;
     this.threadStateIdentities = identities ? {
@@ -401,7 +405,7 @@ export default class WorkbenchWebSocketRequestController {
     if (workbenchRequest && isRequest) {
       if (daemonRequest) {
         if (method === "stats/import/start") this.statsObservers.set(connectionId, { client, connectionId });
-        await this.sendJsonToClient(client, await this.daemonRequests.handle(message));
+        await this.sendJsonToClient(client, await this.daemonRequests.handle(message, connectionId));
         return;
       }
       if (method === WORKBENCH_RELOAD_DIRT_READ_METHOD) {
@@ -744,40 +748,10 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptSubscriptions.set(key, subscription);
     try {
       if (materialise && subscription.turnIds) {
-        const requests: JsonRpcRequest[] = [];
-        if (this.identities) {
-          const thread = await this.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(subscription.threadId) });
-          signal.throwIfAborted();
-          if (!thread) throw new Error("Transcript thread identity has not been admitted.");
-          const groups = new Map<string, { threadId: string; turnIds: string[] }>();
-          for (const turnId of subscription.turnIds) {
-            const turn = await this.identities.threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId) });
-            signal.throwIfAborted();
-            if (!turn?.native.nativeTurnId || turn.native.harness !== "codex") throw new Error("Transcript turn has no Codex materialisation source.");
-            const native = turn.native;
-            const group = groups.get(native.nativeThreadId) ?? { threadId: native.nativeThreadId, turnIds: [] };
-            group.turnIds.push(native.nativeTurnId);
-            groups.set(native.nativeThreadId, group);
-          }
-          for (const params of groups.values()) requests.push({
-            id: `workbench:transcript:materialize:${key}`,
-            method: "workbench/transcript/materialize", params,
-          });
-        } else requests.push({
-          id: `workbench:transcript:materialize:${key}`,
-          method: "workbench/transcript/materialize",
-          params: {
-            threadId: subscription.threadId,
-            turnIds: subscription.turnIds,
-          },
-        });
-        for (const request of requests) {
-          signal.throwIfAborted();
-          const response = await this.harnesses.request("codex", request);
-          signal.throwIfAborted();
-          if (response.error) throw new Error(response.error.message);
-          if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
-        }
+        if (!this.threadActions) throw new Error("Transcript materialisation is unavailable.");
+        signal.throwIfAborted();
+        await this.threadActions.materialize(subscription.threadId, subscription.turnIds, signal);
+        signal.throwIfAborted();
         if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
       }
       signal.throwIfAborted();

@@ -6,8 +6,8 @@
 
 import type { ReactNode } from "react";
 
-import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { RateLimitWindow } from "workbench-shared/codex/generated/app-server/v2/RateLimitWindow";
+import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
+import type { WorkbenchRateLimitWindow as RateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { formatRateLimitResetTime, formatRateLimitWindowLabel } from "../../../workbench/rate-limit-display";
 import ThreadHarnessControl from "./ThreadHarnessControl";

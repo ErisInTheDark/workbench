@@ -389,19 +389,31 @@ test("thread Git resolves public and native callers to the same existing selecti
 test("cold native thread lookup admits exact metadata before public request routing", async () => {
   const { database, owners } = await setup();
   const requests: JsonRpcRequest[] = [];
+  const { default: CodexThreadOperations } = await import("./CodexThreadOperations");
+  const request = async (request: JsonRpcRequest) => {
+    requests.push(request);
+    return { id: request.id ?? null, result: { thread: {
+      id: "unobserved", cwd: "C:/repo", createdAt: 1, updatedAt: 1,
+      name: "Cold", source: "cli", parentThreadId: null, turns: [], status: { type: "idle" },
+    } as Thread } };
+  };
+  const operations = new CodexThreadOperations({
+    identities: owners,
+    resolveProject: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo" }),
+    bridge: { ensureInitialized: async () => {}, handleServerRequest: request },
+  });
+  const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
   const harnesses = new WorkbenchHarnessController([{
     id: "codex", serverMethods: [], recovery: { kind: "none" },
-    internal: { request: async (request) => {
-      requests.push(request);
-      return { id: request.id ?? null, result: { thread: {
-        id: "unobserved", cwd: "C:/repo", createdAt: 1, updatedAt: 1,
-        name: "Cold", source: "cli", parentThreadId: null, turns: [],
-      } as Thread } };
-    } },
+    internal: { request: async () => { throw new Error("Provider lookup must not re-enter the legacy harness port"); } },
     browser: { handleBrowserMessage: async () => { throw new Error("Lookup must not open a turn"); } },
     browse: { readThread: async () => { throw new Error("Lookup must not materialise history"); }, steerTurn: async () => null },
   }], {
     identities: owners.threads, itemIdentities: owners.items,
+    providers: { get: () => ({
+      threads: operations,
+      configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },
+    }) },
     resolveProject: async () => ({ projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo" }),
   });
   try {

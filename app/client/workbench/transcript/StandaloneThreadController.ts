@@ -3,12 +3,10 @@
  * - StandaloneThreadState: selected SQL transcript, page progress and scoped read failure.
  * - default StandaloneThreadController: own bounded standalone paging and one socket using shared SQL/text controllers.
  */
-import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
-import { isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
-import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
+import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
+import { isWorkbenchRpcFailure } from "workbench-shared/workbench/workbench-rpc";
+import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { ThreadPayload } from "workbench-shared/types";
-import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { workbenchTranscriptOperations } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
 import ThreadTextPresentationController from "../thread/ThreadTextPresentationController";
@@ -22,11 +20,12 @@ export interface StandaloneThreadState {
   nextCursor: string | null;
 }
 
-type Client = Pick<CodexAppServerClient, "connectSocket" | "sendRequest" | "onWorkbenchNotification" | "onConnectionClose" | "onReconnect" | "close">;
+type Client = Pick<WorkbenchSocketClient, "connectSocket" | "sendRequest" | "onWorkbenchNotification" | "onConnectionClose" | "onReconnect" | "close">;
 
 export default class StandaloneThreadController {
   readonly text: ThreadTextPresentationController;
   readonly #client: Client;
+  readonly #daemon: WorkbenchDaemonClient;
   readonly #threadId: string;
   readonly #transcripts: WorkbenchTranscriptClient;
   readonly #projection: ThreadTranscriptProjectionController;
@@ -37,11 +36,12 @@ export default class StandaloneThreadController {
   #disposed = false;
 
   constructor(threadId: string, {
-    client = new CodexAppServerClient(),
+    client = new WorkbenchSocketClient(),
     text = new ThreadTextPresentationController(),
   }: { client?: Client; text?: ThreadTextPresentationController } = {}) {
     this.#threadId = threadId;
     this.#client = client;
+    this.#daemon = new WorkbenchDaemonClient({ request: (method, params) => this.#request(method, params) });
     this.text = text;
     this.#transcripts = new WorkbenchTranscriptClient({
       transport: {
@@ -59,8 +59,10 @@ export default class StandaloneThreadController {
       turnLimit: 1,
       onStateChange: source => this.#publish({ source }),
       onText: (update, canonicalText) => {
+        const thread = this.#state.thread;
+        if (!thread || thread.id !== update.threadId) return;
         const key = {
-          source: { kind: "sqlite" as const, sourceKey: `codex:${update.threadId}` },
+          source: { kind: "sqlite" as const, sourceKey: `${thread.harness}:${update.threadId}` },
           threadId: update.threadId, turnId: update.turnId, itemId: update.itemId, field: update.field, index: update.index,
         };
         this.text.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
@@ -100,8 +102,8 @@ export default class StandaloneThreadController {
   }
 
   async #request<T>(method: string, params: unknown): Promise<T> {
-    const response = await this.#client.sendRequest<T>({ method, params, workbenchHarness: "codex" }, { socketOnly: true });
-    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+    const response = await this.#client.sendRequest<T>({ method, params });
+    if (isWorkbenchRpcFailure(response)) throw new Error(response.error.message);
     return response.result;
   }
 
@@ -113,11 +115,11 @@ export default class StandaloneThreadController {
     try {
       await this.#client.connectSocket();
       if (this.#disposed || generation !== this.#generation) return;
-      const page = await this.#request<WorkbenchThreadPageResponse<WorkbenchThreadId>>(WORKBENCH_THREAD_PAGE_READ_METHOD, {
+      const page = await this.#daemon.threads.page({
         threadId: this.#state.thread?.id ?? this.#threadId, cursor,
       });
       if (this.#disposed || generation !== this.#generation) return;
-      const next = toThreadPayload(page.thread, "codex");
+      const next = page.thread;
       const source = this.#state.source;
       const liveTurns = source.status === "ready" || source.status === "loading" ? source.projection?.turns ?? [] : [];
       const turns = new Map<string, ThreadPayload["turns"][number]>([

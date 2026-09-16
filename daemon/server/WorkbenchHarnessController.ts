@@ -5,11 +5,9 @@
  * - default WorkbenchHarnessController: own browser, server, Browse, and recovery routing.
  * - WorkbenchHarnessControllerOptions: turn admission and public identity boundary.
  */
-import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadTurnsListResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListResponse";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -24,6 +22,8 @@ import { admitProviderNotifications, admitProviderThreads } from "./thread-ident
 import type { WorkbenchThreadIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
 import { NativeThreadIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId, type ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchTurnIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
+import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
@@ -61,6 +61,7 @@ export interface WorkbenchHarnessAdapter {
 }
 
 export interface WorkbenchHarnessControllerOptions {
+  providers?: Pick<WorkbenchProviderDispatcher, "get">;
   admitTurnStart?: () => void;
   identities?: WorkbenchThreadIdentityController;
   itemIdentities?: WorkbenchTranscriptIdentityController;
@@ -82,6 +83,7 @@ export default class WorkbenchHarnessController {
   private readonly identities: WorkbenchHarnessControllerOptions["identities"];
   private readonly itemIdentities: WorkbenchHarnessControllerOptions["itemIdentities"];
   private readonly resolveProject: WorkbenchHarnessControllerOptions["resolveProject"];
+  private readonly providers: WorkbenchHarnessControllerOptions["providers"];
 
   constructor(adapters: readonly WorkbenchHarnessAdapter[], options: WorkbenchHarnessControllerOptions = {}) {
     if (!adapters.length) throw new Error("At least one Workbench harness adapter is required.");
@@ -98,6 +100,7 @@ export default class WorkbenchHarnessController {
     this.identities = options.identities;
     this.itemIdentities = options.itemIdentities;
     this.resolveProject = options.resolveProject;
+    this.providers = options.providers;
   }
 
   async admitThreads(harness: WorkbenchHarness, threads: readonly Thread[]) {
@@ -182,13 +185,7 @@ export default class WorkbenchHarnessController {
     const known = await this.identities.resolve(input);
     if (known) return known;
     const harness = this.resolveHarness(input.harness, { defaultToCodex: true });
-    const response = await this.request(harness, {
-      method: "thread/read", params: { threadId: input.threadId, includeTurns: false },
-    });
-    if (response.error) throw new Error(response.error.message);
-    const thread = (response.result as ThreadReadResponse | undefined)?.thread;
-    if (!thread || thread.id !== input.threadId) throw new Error("Provider metadata returned a different thread.");
-    await this.admitThreads(harness, [thread]);
+    await this.provider(harness).threads.read(input.threadId);
     return await this.identities.resolve(input);
   }
 
@@ -199,31 +196,14 @@ export default class WorkbenchHarnessController {
     const known = await this.identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId });
     if (known) return known;
     const harness = this.resolveHarness(input.harness, { defaultToCodex: true });
-    const native = thread.bindings.find((binding) => binding.harness === harness && binding.nativeThreadId === input.threadId)
-      ?? thread.bindings.find((binding) => binding.harness === harness);
-    if (!native) throw new Error("Turn identity has no admitted native thread.");
-    if (harness !== "codex") throw new Error("Provider turn metadata is unavailable for public projection.");
-    let cursor: string | null = null;
-    do {
-      const response = await this.request(harness, {
-        method: "thread/turns/list",
-        params: {
-          threadId: native.nativeThreadId, cwd: native.nativeLocation,
-          itemsView: "notLoaded", limit: 100, sortDirection: "asc", cursor,
-        },
-      });
-      if (response.error) throw new Error(response.error.message);
-      const result = response.result as ThreadTurnsListResponse | undefined;
-      if (!result || !Array.isArray(result.data)) throw new Error("Provider turn metadata response is invalid.");
-      await admitProviderNotifications({ threads: this.identities, items: this.itemIdentities }, native, result.data.map((turn) => ({
-        method: "turn/started" as const, params: { threadId: native.nativeThreadId, turn },
-      })));
-      const admitted = await this.identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId });
-      if (admitted) return admitted;
-      if (result.nextCursor !== null && result.nextCursor === cursor) throw new Error("Provider turn metadata cursor did not advance.");
-      cursor = result.nextCursor;
-    } while (cursor);
-    throw new Error("Referenced turn is absent from the provider metadata catalog.");
+    await this.provider(harness).threads.admitTurn(input.threadId, input.turnId);
+    return this.identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId });
+  }
+
+  private provider(harness: WorkbenchHarness) {
+    const key = installedProviderKeys.find(candidate => candidate === harness);
+    if (!key || !this.providers) throw new Error("Provider identity operations are unavailable.");
+    return this.providers.get(key);
   }
 
   async requestServer(harnessValue: unknown, request: JsonRpcRequest) {

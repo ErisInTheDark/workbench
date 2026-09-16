@@ -2,7 +2,6 @@
  * Exports:
  * - default WorkbenchAgentSkillCatalogController: own browser-visible agent and skill catalog reads.
  */
-import { containsExactGuidanceText, readCodexGlobalGuidance } from "./lib/codex/CodexGlobalGuidance";
 import {
   listProjectSkillDefinitionsFromRoot,
   listUserInvocableAgentsFromResolvedProject,
@@ -17,29 +16,26 @@ import {
 
 interface WorkbenchAgentSkillCatalogOperations {
   buildBootstrap: typeof buildWorkbenchLibraryBootstrapInstructions;
-  containsExactGuidanceText: typeof containsExactGuidanceText;
   listActiveSkills: typeof listActiveWorkbenchSkillDefinitions;
   listInstructionPacks: typeof listWorkbenchLibraryInstructions;
   listProjectSkills: typeof listProjectSkillDefinitionsFromRoot;
   listUserAgents: typeof listUserInvocableAgentsFromResolvedProject;
   readAgent: typeof readUserInvocableAgentDefinitionFromRoot;
-  readGlobalGuidance: typeof readCodexGlobalGuidance;
 }
 
 const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
   buildBootstrap: buildWorkbenchLibraryBootstrapInstructions,
-  containsExactGuidanceText,
   listActiveSkills: listActiveWorkbenchSkillDefinitions,
   listInstructionPacks: listWorkbenchLibraryInstructions,
   listProjectSkills: listProjectSkillDefinitionsFromRoot,
   listUserAgents: listUserInvocableAgentsFromResolvedProject,
   readAgent: readUserInvocableAgentDefinitionFromRoot,
-  readGlobalGuidance: readCodexGlobalGuidance,
 };
 
 export default class WorkbenchAgentSkillCatalogController {
   constructor(
     private readonly resolveProjectById: (projectId: string) => Promise<ResolvedProject>,
+    private readonly containsGlobalGuidance: (sections: string[]) => Promise<boolean[]>,
     private readonly operations = defaultOperations,
   ) {}
 
@@ -52,11 +48,9 @@ export default class WorkbenchAgentSkillCatalogController {
     const readAgent = agentPath.startsWith("library:")
       ? this.operations.readAgent(agentPath, "")
       : this.resolveProjectById(projectId).then((project) => this.operations.readAgent(agentPath, project.root));
-    const [data, globalGuidance] = await Promise.all([
-      readAgent,
-      this.operations.readGlobalGuidance(),
-    ]);
-    return { codexGlobalDuplicate: this.operations.containsExactGuidanceText(globalGuidance, data.prompt), data };
+    const data = await readAgent;
+    const [codexGlobalDuplicate] = await this.containsGlobalGuidance([data.prompt]);
+    return { codexGlobalDuplicate: codexGlobalDuplicate ?? false, data };
   }
 
   async readSkills(projectId: string | null) {
@@ -65,12 +59,12 @@ export default class WorkbenchAgentSkillCatalogController {
       project && project.kind !== "workbench-library" ? this.operations.listProjectSkills(project.root) : Promise.resolve([]),
       this.operations.listInstructionPacks(),
     ]);
-    const [activeSkills, globalGuidance] = await Promise.all([
+    const [activeSkills, globallyIncluded] = await Promise.all([
       this.operations.listActiveSkills(projectSkills),
-      this.operations.readGlobalGuidance(),
+      this.containsGlobalGuidance(instructionPacks.map(pack => pack.content)),
     ]);
     const globallyPresent = instructionPacks
-      .filter((pack) => this.operations.containsExactGuidanceText(globalGuidance, pack.content))
+      .filter((_pack, index) => globallyIncluded[index])
       .map((pack) => pack.content);
     return {
       data: activeSkills.map(({ description, name, path, relativePath }) => ({ description, name, path, relativePath })),

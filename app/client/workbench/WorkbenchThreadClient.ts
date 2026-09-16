@@ -6,52 +6,30 @@
  * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, questionnaire source reconciliation and answer intent submission, and notifications.
  */
 
-import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
+import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
 import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
-import type { WorkbenchClientNotification as CodexAppServerNotification } from "workbench-shared/codex/app-server-client";
+import type { WorkbenchClientNotification } from "workbench-shared/workbench/WorkbenchSocketClient";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
-import type { Model as CodexModel } from "workbench-shared/codex/generated/app-server/v2/Model";
-import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
-import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type {
+  WorkbenchAccountLimits as GetAccountRateLimitsResponse,
+  WorkbenchRateLimitSnapshot as RateLimitSnapshot,
+} from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchControls } from "workbench-shared/types";
-import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
 import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { ThreadTokenUsageSchema } from "workbench-shared/workbench/thread/thread-context-usage";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import type { ThreadCompactStartResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadCompactStartResponse";
-import type { ThreadGoalClearResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalClearResponse";
-import type { ThreadGoalGetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalGetResponse";
-import type { ThreadGoalSetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type { ThreadReadResponse as ProviderThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
-import type { WorkbenchThreadResponse } from "workbench-shared/workbench/thread/workbench-thread-identity";
 import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
-import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
-import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import type { TurnStartParams } from "workbench-shared/codex/generated/app-server/v2/TurnStartParams";
-import type { TurnStartResponse as ProviderTurnStartResponse } from "workbench-shared/codex/generated/app-server/v2/TurnStartResponse";
-import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
-import {
-    createQuestionnaireCollaborationMode,
-    createTextInput,
-    createThreadStartRequest,
-    isCodexJsonRpcFailure,
-} from "workbench-shared/codex/protocol";
-import {
-    formatThreadStatus,
-    isProjectCodexThread,
-    isProjectCodexThreadAtExpectedCwd,
-    toThreadPayload,
-    toThreadResumePayload,
-    toThreadSummary,
-} from "workbench-shared/codex/thread-adapter";
+import { createWorkbenchTextInput as createTextInput } from "workbench-shared/workbench/provider/provider-input";
+import { isWorkbenchRpcFailure } from "workbench-shared/workbench/workbench-rpc";
+import { formatThreadStatus } from "workbench-shared/workbench/thread/thread-runtime-state";
+import { isProjectThread, isProjectThreadAtExpectedCwd } from "workbench-shared/workbench/thread/thread-location";
 import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "workbench-shared/workbench/thread/thread-command-output";
 import {
   isSupportedWorkbenchTranscriptItem,
@@ -108,10 +86,7 @@ import ThreadTextPresentationController, {
 import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
 import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
-import {
-    WORKBENCH_THREAD_PAGE_READ_METHOD,
-    type WorkbenchThreadPageResponse as ProviderThreadPageResponse,
-} from "workbench-shared/workbench/thread/workbench-thread-page";
+import type { WorkbenchThreadPageResult as WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/thread-actions";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { upsertWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission";
@@ -126,7 +101,6 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
-import { stopWorkbenchThread } from "workbench-shared/workbench/thread/thread-stop";
 import {
     getWorkbenchApprovalSupplementalSteerText,
     hasWorkbenchApprovalDecisionSelection,
@@ -137,13 +111,6 @@ import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptP
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
-const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
-const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
-const CODEX_RESUME_LIFECYCLE_PAGE = {
-  itemsView: "notLoaded",
-  limit: 1,
-  sortDirection: "desc",
-} as const;
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 
@@ -158,25 +125,8 @@ function readLocalWorkbenchOrigin() {
 function isApprovalUserInputRequest(request: WorkbenchUserInputRequest) {
   return request.approval !== undefined || isWorkbenchApprovalRequest(request);
 }
-const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
-const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
-const MISSING_ROLLOUT_ERROR_FRAGMENTS = ["no rollout found by id", "no rollout found for thread id"] as const;
-const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
+const THREAD_HISTORY_PENDING_STATUS_MESSAGE = "Started the thread. Its saved history is still becoming available, so the live view will refresh automatically.";
 
-type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;
-
-function createWorkspaceWriteSandboxPolicy(rootPaths: string[], options: { force?: boolean } = {}): WorkspaceWriteSandboxPolicy | null {
-  const writableRoots = Array.from(new Set(rootPaths.filter(Boolean)));
-  return writableRoots.length > 1 || (options.force && writableRoots.length > 0)
-    ? {
-      type: "workspaceWrite",
-      writableRoots,
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    }
-    : null;
-}
 
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
@@ -285,7 +235,7 @@ type RateLimitSnapshotEntry = {
 
 type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
-type ProviderSteerAcknowledgement = TurnSteerResponse | { ok: true } | { turn: Turn };
+type ProviderSteerAcknowledgement = { turnId: string };
 
 interface ThreadReadFailure {
   harness: WorkbenchHarness;
@@ -357,7 +307,7 @@ interface ReconcileAdmittedThreadMessageContext {
   selectedReasoningEffort: string | null;
   selectedServiceTier: string | null;
   sendOptions: WorkbenchSendThreadMessageOptions;
-  shouldBypassCodexDraftBootstrap: boolean;
+  isFreshCreation: boolean;
   workbenchOrigin: string | null;
 }
 
@@ -377,18 +327,6 @@ interface ThreadStatusRecord {
   status: string | null;
 }
 
-type ThreadReadResponse = WorkbenchThreadResponse<ProviderThreadReadResponse>;
-type WorkbenchThreadPageResponse = ProviderThreadPageResponse<WorkbenchThreadId>;
-type TurnStartResponse = Omit<ProviderTurnStartResponse, "turn"> & { turn: Omit<ProviderTurnStartResponse["turn"], "id"> & { id: WorkbenchTurnId } };
-
-type CodexThreadSessionResponse = {
-  initialTurnsPage?: ThreadResumeResponse["initialTurnsPage"];
-  model?: string | null;
-  modelProvider?: string | null;
-  reasoningEffort?: string | null;
-  serviceTier?: string | null;
-  thread: ThreadReadResponse["thread"];
-};
 
 function createInitialThreadState(): WorkbenchThreadState {
   return {
@@ -440,7 +378,7 @@ function isWorkbenchThreadInCurrentProject(thread: Pick<ThreadSummary, "cwd">, h
     return true;
   }
 
-  return isProjectCodexThread(thread, projectRootPaths);
+  return isProjectThread(thread, projectRootPaths);
 }
 
 function getThreadItemKey(turnId: string, itemId: string) {
@@ -653,13 +591,12 @@ function isRegressiveRateLimitSnapshot(previous: RateLimitSnapshot | null, next:
 
 function selectRateLimitSnapshot(
   response: GetAccountRateLimitsResponse,
-  harness: WorkbenchHarness,
   previousSnapshot: RateLimitSnapshot | null,
 ) {
   const legacySnapshot = response.rateLimits as RateLimitSnapshot | null;
   const snapshotsByLimitId = response.rateLimitsByLimitId ?? {};
-  if (harness === "codex") {
-    return snapshotsByLimitId.codex
+  if (response.preferredLimitId) {
+    return snapshotsByLimitId[response.preferredLimitId]
       ?? (previousSnapshot?.limitId ? snapshotsByLimitId[previousSnapshot.limitId] : undefined)
       ?? (legacySnapshot?.limitId ? snapshotsByLimitId[legacySnapshot.limitId] : undefined)
       ?? Object.values(snapshotsByLimitId)[0]
@@ -705,21 +642,8 @@ function mergeStreamingTextArray(incomingValues: string[], liveValues: string[])
   return nextValues;
 }
 
-function isEmptyRolloutError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalizedMessage = message.toLowerCase();
-  return normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_FRAGMENT)
-    && normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_SUFFIX);
-}
-
-function isMissingRolloutError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalizedMessage = message.toLowerCase();
-  return MISSING_ROLLOUT_ERROR_FRAGMENTS.some((fragment) => normalizedMessage.includes(fragment));
-}
-
-function isTransientRolloutReadError(error: unknown) {
-  return isEmptyRolloutError(error) || isMissingRolloutError(error);
+function isThreadHistoryPending(error: unknown) {
+  return error instanceof WorkbenchDaemonRequestError && error.code === WORKBENCH_THREAD_HISTORY_PENDING;
 }
 
 function normalizeQuestionnaireHistoryEntryState(
@@ -742,11 +666,11 @@ function WorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
-  const codexClient = new CodexAppServerClient();
+  const socket = new WorkbenchSocketClient();
 
   async function requestWorkbench<TResponse>(method: string, params: unknown) {
-    const response = await codexClient.sendRequest<TResponse>({ method, params }, { socketOnly: true });
-    if (isCodexJsonRpcFailure(response)) {
+    const response = await socket.sendRequest<TResponse>({ method, params });
+    if (isWorkbenchRpcFailure(response)) {
       const data = response.error.data && typeof response.error.data === "object" && !Array.isArray(response.error.data)
         ? response.error.data
         : null;
@@ -757,8 +681,8 @@ function WorkbenchThreadClient(
 
   const daemon = new WorkbenchDaemonClient({ request: requestWorkbench });
   const threadObservations = new ThreadObservationController({ request: requestWorkbench });
-  lifecycle.addUnsubscribe(codexClient.onConnectionClose(() => threadObservations.disconnect()));
-  lifecycle.addUnsubscribe(codexClient.onWorkbenchNotification(notification => {
+  lifecycle.addUnsubscribe(socket.onConnectionClose(() => threadObservations.disconnect()));
+  lifecycle.addUnsubscribe(socket.onWorkbenchNotification(notification => {
     if (notification.method === "workbench/thread-state/reset") threadObservations.disconnect();
     else if (notification.method === "workbench/thread-state/updated"
       && notification.params && typeof notification.params === "object"
@@ -772,7 +696,7 @@ function WorkbenchThreadClient(
     method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) {
-    return codexClient.onWorkbenchNotification((notification) => {
+    return socket.onWorkbenchNotification((notification) => {
       if (
         notification.method === "workbench/thread-state/reset"
         || notification.method === "workbench/thread-state/updated"
@@ -785,7 +709,7 @@ function WorkbenchThreadClient(
   }
 
   function onReconnect(listener: () => void) {
-    return codexClient.onReconnect(listener);
+    return socket.onReconnect(listener);
   }
 
   let transcriptConformanceReportFailureLogged = false;
@@ -801,15 +725,15 @@ function WorkbenchThreadClient(
       });
     },
     transport: {
-      onDisconnect: (listener) => codexClient.onConnectionClose(listener),
-      onNotification: (listener) => codexClient.onWorkbenchNotification(listener),
+      onDisconnect: (listener) => socket.onConnectionClose(listener),
+      onNotification: (listener) => socket.onWorkbenchNotification(listener),
       request: async (method, params) => await requestWorkbench<unknown>(method, params),
     },
   });
   const threadGoals = new ThreadGoalController({
-    clear: (params) => sendBridgeRequest<ThreadGoalClearResponse>("codex", { method: "thread/goal/clear", params }),
-    get: (params) => sendBridgeRequest<ThreadGoalGetResponse>("codex", { method: "thread/goal/get", params }),
-    set: (params) => sendBridgeRequest<ThreadGoalSetResponse>("codex", { method: "thread/goal/set", params }),
+    clear: params => daemon.threads.goal.clear(params),
+    get: params => daemon.threads.goal.read(params),
+    set: params => daemon.threads.goal.update(params),
   });
   const listeners = new Set<WorkbenchThreadListener>();
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
@@ -886,12 +810,12 @@ function WorkbenchThreadClient(
             onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
             onStateChange: publish,
             onText: (update, canonicalText) => {
-              const sourceKey = getThreadStateKey("codex", update.threadId);
+              const sourceKey = getThreadStateKey(getThreadHarness(update.threadId), update.threadId);
               const key = presentationKey(sourceKey, update.threadId, update.turnId, update.itemId, update.field, update.index, "sqlite");
               textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
               if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
             },
-            readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey("codex", thread.id)),
+            readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey(thread.harness, thread.id)),
             transcripts: {
               subscribe: (params, listener, streamListener) => transcripts.subscribe(params, listener, streamListener),
               unsubscribe: async params => {
@@ -976,11 +900,11 @@ function WorkbenchThreadClient(
   const steerHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryWarningKeys = new Set<string>();
   const messageAdmissionController = ThreadMessageAdmissionController({
-    client: codexClient,
+    client: { connect: () => socket.connectSocket(), submit: input => daemon.threads.message(input) },
     documents: threadDocuments,
     emitWarning: emitStatusMessage,
     getLifecycleState: (threadId) => {
-      const projectContext = effectiveThreadProjectContext("codex", threadId);
+      const projectContext = effectiveThreadProjectContext(getThreadHarness(threadId), threadId);
       return {
         disposed,
         projectContextGeneration,
@@ -1218,7 +1142,7 @@ function WorkbenchThreadClient(
   }
 
   function applyPersistedSteerHistory(thread: ThreadPayload | null) {
-    if (!thread || thread.harness !== "codex") {
+    if (!thread) {
       return thread;
     }
 
@@ -1229,7 +1153,7 @@ function WorkbenchThreadClient(
   }
 
   function applyPersistedBrowseResultEntries(thread: ThreadPayload | null) {
-    if (!thread || thread.harness !== "codex") {
+    if (!thread) {
       return thread;
     }
 
@@ -1277,7 +1201,7 @@ function WorkbenchThreadClient(
       return [];
     }
 
-    return [getThreadStateKey("codex", threadId)];
+    return [getThreadStateKey(getThreadHarness(threadId), threadId)];
   }
 
   function bumpOverlayRevisionForKey(key: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
@@ -2091,7 +2015,7 @@ function WorkbenchThreadClient(
   ) {
     const key = getThreadStateKey(harness, threadId);
     const source = threadSources.get(key);
-    if (!source || source.harness !== "codex" || source.isDraft || source.turns.length <= 1) return source;
+    if (!source || source.isDraft || source.turns.length <= 1) return source;
 
     const currentTurnId = source.turns.at(-1)?.id;
     const releasedTurnIds = new Set(candidateTurnIds.filter((turnId) => turnId !== currentTurnId
@@ -2463,62 +2387,17 @@ function WorkbenchThreadClient(
     };
   }
 
-  async function sendBridgeRequest<TResponse>(
-    harness: WorkbenchHarness,
-    request: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
-  ) {
-    await codexClient.connect();
-    const response = await codexClient.sendRequest<TResponse>({
-      ...request,
-      workbenchHarness: harness,
-    });
-    if (isCodexJsonRpcFailure(response)) {
-      const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
-      throw new Error(`${response.error.message}${detail}`);
-    }
-
-    return response.result;
-  }
 
   async function requestThreadPage(
     threadId: string,
     harness: WorkbenchHarness,
     options: WorkbenchReadThreadOptions = {},
   ): Promise<WorkbenchThreadPageResponse> {
-    const cwd = options.cwd?.trim();
-    const cursor = options.cursor ?? null;
-    const shouldResumeManagedCodexThread = harness === "codex"
-      && cursor === null
-      && options.readScope !== "subagentBackground";
-    const selectedAgentPath = state.currentThread?.harness === harness && state.currentThread.id === threadId
-      ? state.currentThread.agentPath
-      : null;
-    const page = await sendBridgeRequest<WorkbenchThreadPageResponse>(harness, {
-      method: WORKBENCH_THREAD_PAGE_READ_METHOD,
-      ...(shouldResumeManagedCodexThread
-        ? {
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-            harness,
-            threadId,
-            selectedAgentPath,
-            readLocalWorkbenchOrigin(),
-          ),
-        }
-        : {}),
-      params: {
-        cursor,
-        ...(cwd ? { cwd } : {}),
-        ...(options.readScope ? { readScope: options.readScope } : {}),
-        threadId,
-      },
+    return daemon.threads.page({
+      threadId,
+      cursor: options.cursor ?? null,
+      ...(options.readScope ? { readScope: options.readScope } : {}),
     });
-    const usage = ThreadTokenUsageSchema.nullable().optional().safeParse(page.tokenUsage);
-    if (!usage.success) {
-      reportClientSchemaError("Rejected thread-page context usage", usage.error);
-      const { tokenUsage: _rejectedUsage, ...content } = page;
-      return content;
-    }
-    return { ...page, ...(usage.data !== undefined ? { tokenUsage: usage.data } : {}) };
   }
 
   function upsertPendingUserInputRequest(
@@ -2696,18 +2575,18 @@ function WorkbenchThreadClient(
     const existing = questionnaireListSyncPromisesByHarness.get(harness);
     if (existing) return await existing;
     const generation = projectContextGeneration;
+    const questionnaireGeneration = getPendingUserInputRequestGeneration(harness);
     const promise = (async () => {
       let requests: WorkbenchPendingUserInputRequest[] = [];
       try {
-        const response = await sendBridgeRequest<{ data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">> }>(harness, {
-          method: "questionnaire/list",
-        });
-        requests = response.data.map((request) => ({ ...request, harness }));
+        const response = await daemon.questionnaires.pending();
+        requests = response.data.filter(request => request.harness === harness);
       } catch (error) {
         emitStatusMessage(`Workbench could not reconcile ${harness} questionnaires: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
       if (disposed || generation !== projectContextGeneration) return false;
+      if (questionnaireGeneration !== getPendingUserInputRequestGeneration(harness)) return false;
       questionnaireListSyncedHarnesses.add(harness);
       providerPendingUserInputRequestsByHarness.set(
         harness,
@@ -2807,32 +2686,6 @@ function WorkbenchThreadClient(
     return selectedModel.defaultReasoningEffort ?? selectedModel.supportedReasoningEfforts[0] ?? null;
   }
 
-  function mapCodexModelToWorkbenchOption(model: CodexModel): WorkbenchModelOption {
-    const serviceTierIds = new Set([
-      ...model.additionalSpeedTiers,
-      ...model.serviceTiers.map((tier) => tier.id),
-    ]);
-
-    return {
-      id: model.id,
-      displayName: model.displayName,
-      description: model.description,
-      hidden: model.hidden,
-      isDefault: model.isDefault,
-      supportsPersonality: model.supportsPersonality,
-      supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,
-      supportedReasoningEfforts: model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
-      defaultReasoningEffort: model.defaultReasoningEffort,
-      supportsVision: model.inputModalities.includes("image"),
-      supportsFastMode: serviceTierIds.has("fast"),
-      inputModalities: [...model.inputModalities],
-      maxContextWindowTokens: null,
-      additionalSpeedTiers: [...model.additionalSpeedTiers],
-      policyState: null,
-      billingMultiplier: null,
-    };
-  }
-
   async function listModels(harness: WorkbenchHarness, options: WorkbenchListModelsOptions = {}) {
     if (!installedProviderKeys.some(key => key === harness)) throw new Error(`Provider ${harness} is not installed.`);
     const cachedModels = state.modelsByHarness.get(harness);
@@ -2840,35 +2693,7 @@ function WorkbenchThreadClient(
       return cachedModels;
     }
 
-    const models: WorkbenchModelOption[] = [];
-    let cursor: string | null = null;
-
-    do {
-      const response: ModelListResponse = await sendBridgeRequest<ModelListResponse>(harness, {
-        method: "model/list",
-        params: {
-          cursor,
-          includeHidden: false,
-          limit: 100,
-        },
-      });
-      models.push(...response.data.map(mapCodexModelToWorkbenchOption));
-      cursor = response.nextCursor;
-    } while (cursor);
-
-    try {
-      const capabilities = await daemon.request("models/context/read", {});
-      for (const model of models) {
-        const context = capabilities.data.find(capability => capability.model === model.id);
-        if (context) {
-          model.contextWindow = context.maximumTokens > context.defaultTokens
-            ? { defaultTokens: context.defaultTokens, maximumTokens: context.maximumTokens } : null;
-          model.maxContextWindowTokens = context.maximumTokens;
-        }
-      }
-    } catch {
-      console.warn("Codex context capabilities are unavailable; model choices and saved settings are retained.");
-    }
+    const { data: models } = await daemon.models.list(harness);
     state.modelsByHarness.set(harness, models);
     return models;
   }
@@ -2985,17 +2810,12 @@ function WorkbenchThreadClient(
   }
 
   async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
-    const key = getThreadStateKey("codex", threadId);
+    const key = getThreadStateKey(getThreadHarness(threadId), threadId);
     const generation = (questionnaireHistoryReadGenerationByKey.get(key) ?? 0) + 1;
     const projectGeneration = projectContextGeneration;
     questionnaireHistoryReadGenerationByKey.set(key, generation);
     try {
-      const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
-        method: "questionnaire/history/list",
-        params: {
-          threadId,
-        },
-      });
+      const response = await daemon.threads.history.questionnaires({ threadId });
       const entries = response.data ?? [];
       if (projectGeneration !== projectContextGeneration || questionnaireHistoryReadGenerationByKey.get(key) !== generation) {
         return state.questionnaireHistoryByThreadId.get(threadId) ?? [];
@@ -3023,25 +2843,16 @@ function WorkbenchThreadClient(
   }
 
   async function readCompletedQuestionnaireHistoryForHarness(threadId: string, harness: WorkbenchHarness) {
-    if (harness !== "codex") {
-      return [];
-    }
-
     return await readCompletedQuestionnaireHistory(threadId);
   }
 
   async function readCompletedSteerHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
-    const key = getThreadStateKey("codex", threadId);
+    const key = getThreadStateKey(getThreadHarness(threadId), threadId);
     const generation = (steerHistoryReadGenerationByKey.get(key) ?? 0) + 1;
     const projectGeneration = projectContextGeneration;
     steerHistoryReadGenerationByKey.set(key, generation);
     try {
-      const response = await sendBridgeRequest<{ data?: WorkbenchSteerHistoryEntry[] }>("codex", {
-        method: "steer/history/list",
-        params: {
-          threadId,
-        },
-      });
+      const response = await daemon.threads.history.steers({ threadId });
       const entries = response.data ?? [];
       if (projectGeneration !== projectContextGeneration || steerHistoryReadGenerationByKey.get(key) !== generation) {
         return state.steerHistoryByThreadId.get(threadId) ?? [];
@@ -3065,17 +2876,12 @@ function WorkbenchThreadClient(
   }
 
   async function readBrowseResultEntries(threadId: string, options: { refreshProjection?: boolean } = {}) {
-    const key = getThreadStateKey("codex", threadId);
+    const key = getThreadStateKey(getThreadHarness(threadId), threadId);
     const generation = (browseResultReadGenerationByKey.get(key) ?? 0) + 1;
     const projectGeneration = projectContextGeneration;
     browseResultReadGenerationByKey.set(key, generation);
     try {
-      const response = await sendBridgeRequest<{ data?: WorkbenchBrowseResultEntry[] }>("codex", {
-        method: "browse/result/list",
-        params: {
-          threadId,
-        },
-      });
+      const response = await daemon.threads.history.browse({ threadId });
       const entries = response.data ?? [];
       if (projectGeneration !== projectContextGeneration || browseResultReadGenerationByKey.get(key) !== generation) {
         return state.browseResultEntriesByThreadId.get(threadId) ?? [];
@@ -3121,44 +2927,6 @@ function WorkbenchThreadClient(
       : DEFAULT_WORKFLOW_IDS;
   }
 
-  function shouldSendWorkbenchPromptContext(
-    harness: WorkbenchHarness,
-  ) {
-    return harness === "codex";
-  }
-
-  function buildWorkbenchPromptContext(
-    harness: WorkbenchHarness,
-    threadId: string,
-    agentPath: string | null,
-    workbenchOrigin: string | null,
-    instructionInjections: Record<string, string> | undefined = undefined,
-    workflowIds: readonly string[] | undefined = undefined,
-    instructionScope: "full" | "threadUtilities" = "full",
-    activatedSkillPaths: readonly string[] | undefined = undefined,
-  ) {
-    const sourceCwd = threadSources.get(getThreadStateKey(harness, threadId))?.cwd;
-    const currentCwd = state.currentThread?.harness === harness && state.currentThread.id === threadId
-      ? state.currentThread.cwd
-      : null;
-    const projectContext = effectiveThreadProjectContext(harness, threadId);
-    const selectedSkillPaths = Array.from(new Set(
-      activatedSkillPaths?.map((skillPath) => skillPath.trim()).filter(Boolean) ?? [],
-    ));
-    return {
-      ...(selectedSkillPaths.length ? { activatedSkillPaths: selectedSkillPaths } : {}),
-      agentPath: normalizeWorkbenchAgentPath(agentPath),
-      cwd: sourceCwd ?? currentCwd ?? projectContext.projectRootPath,
-      harness,
-      ...(instructionScope !== "full" ? { instructionScope } : {}),
-      ...(instructionInjections ? { instructionInjections } : {}),
-      projectId: projectContext.projectId,
-      roots: projectContext.projectRoots,
-      threadId,
-      workbenchOrigin,
-      workflowIds: workflowIds ?? getDefaultWorkflowIdsForThread(threadId),
-    };
-  }
 
   async function fetchThreadPayload(
     threadId: string,
@@ -3189,7 +2957,7 @@ function WorkbenchThreadClient(
         ...(requestedCwd ? { cwd: requestedCwd } : {}),
       });
 
-      if (projectRootPaths.length && !isProjectCodexThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, options.cwd)) {
+      if (projectRootPaths.length && !isProjectThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, options.cwd)) {
         const message = `That ${harness} thread doesn't belong to this project.`;
         if (!isThreadOperationIdentityCurrent(operationFence)) {
           return { kind: "superseded" };
@@ -3202,26 +2970,20 @@ function WorkbenchThreadClient(
 
       const nextModel = isCurrentThread
         ? currentModel
-        : pageResponse.model ?? null;
-      const nextServiceTier = harness === "codex"
-        ? isCurrentThread
-          ? getThreadServiceTier(threadId)
-          : pageResponse.serviceTier ?? null
-        : null;
+        : pageResponse.thread.model;
+      const nextServiceTier = isCurrentThread
+        ? getThreadServiceTier(threadId)
+        : pageResponse.thread.serviceTier;
       const result: ThreadReadResult = {
         pageResponse,
-        payload: toThreadPayload(
-          pageResponse.thread,
-          harness,
-          nextModel,
-          isCurrentThread
-            ? currentReasoningEffort
-            : pageResponse.reasoningEffort ?? null,
-          nextServiceTier,
-          selectedAgentPath,
-          pageResponse.tokenUsage ?? null,
-          pageResponse.nextCursor,
-        ),
+        payload: {
+          ...pageResponse.thread,
+          model: nextModel,
+          reasoningEffort: isCurrentThread ? currentReasoningEffort : pageResponse.thread.reasoningEffort,
+          serviceTier: nextServiceTier,
+          agentPath: selectedAgentPath ?? pageResponse.thread.agentPath,
+          nextPageCursor: pageResponse.nextCursor,
+        },
       };
       await beforeCommit?.();
       const payload = commitThreadReadResult(operationFence, cursor, result, commit);
@@ -3232,11 +2994,11 @@ function WorkbenchThreadClient(
       if (!isThreadOperationIdentityCurrent(operationFence)) {
         return { kind: "superseded" };
       }
-      if (harness === "codex" && isTransientRolloutReadError(error)) {
+      if (isThreadHistoryPending(error)) {
         return {
           failure: {
             harness,
-            message: FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE,
+            message: THREAD_HISTORY_PENDING_STATUS_MESSAGE,
             transientRollout: true,
           },
           kind: "failure",
@@ -3260,7 +3022,7 @@ function WorkbenchThreadClient(
     const subagent = state.subagents.find((candidate) => (
       candidate.threadId === threadId && candidate.harness === harness
     ));
-    if (harness !== "codex" || !subagent) {
+    if (!subagent) {
       return null;
     }
 
@@ -3270,7 +3032,7 @@ function WorkbenchThreadClient(
     const expectedCwd = options.cwd?.trim() || subagent.cwd;
     const nextModel = getThreadModel(threadId);
     const nextReasoningEffort = getThreadReasoningEffort(threadId);
-    const nextServiceTier = harness === "codex" ? getThreadServiceTier(threadId) : null;
+    const nextServiceTier = getThreadServiceTier(threadId);
     const selectedAgentPath = state.currentThread?.id === threadId
       ? state.currentThread.agentPath
       : null;
@@ -3283,23 +3045,21 @@ function WorkbenchThreadClient(
       });
       if (
         projectRootPaths.length
-        && !isProjectCodexThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, expectedCwd)
+        && !isProjectThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, expectedCwd)
       ) {
         return null;
       }
 
       const result: ThreadReadResult = {
         pageResponse,
-        payload: toThreadPayload(
-          pageResponse.thread,
-          harness,
-          nextModel,
-          nextReasoningEffort,
-          nextServiceTier,
-          selectedAgentPath,
-          pageResponse.tokenUsage ?? null,
-          pageResponse.nextCursor,
-        ),
+        payload: {
+          ...pageResponse.thread,
+          model: nextModel,
+          reasoningEffort: nextReasoningEffort,
+          serviceTier: nextServiceTier,
+          agentPath: selectedAgentPath ?? pageResponse.thread.agentPath,
+          nextPageCursor: pageResponse.nextCursor,
+        },
       };
       return commitThreadReadResult(operationFence, cursor, result, (payload) => upsertThreadDocument(payload, {
         emitChange: true,
@@ -3316,10 +3076,10 @@ function WorkbenchThreadClient(
       threadId = identity.threadId;
       harness = identity.harness;
     }
-    const isKnownCodexSubagent = harness === "codex" && state.subagents.some((candidate) => (
+    const isKnownSubagent = state.subagents.some((candidate) => (
       candidate.threadId === threadId && candidate.harness === harness
     ));
-    return readOptions?.readScope === "subagentBackground" && harness && isKnownCodexSubagent
+    return readOptions?.readScope === "subagentBackground" && harness && isKnownSubagent
       ? await readSubagentBackgroundThread(threadId, harness, readOptions)
       : await fetchThreadPayloadFromCandidates(threadId, harness, readOptions, (payload) => {
         if (threadDocuments.getSelectedThreadKey() === getThreadSourceKey(payload)) {
@@ -3415,16 +3175,12 @@ function WorkbenchThreadClient(
     let refreshPromise: Promise<void>;
     refreshPromise = (async () => {
       try {
-        const response = await sendBridgeRequest<GetAccountRateLimitsResponse>(harness, {
-          method: "account/rateLimits/read",
-          params: undefined,
-          workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
-        });
+        const response = await daemon.account.limits(harness);
         if (disposed || projectGeneration !== projectContextGeneration) {
           return;
         }
         const previousSnapshot = rateLimitSnapshotEntriesByHarness.get(harness)?.snapshot ?? null;
-        setHarnessRateLimits(harness, selectRateLimitSnapshot(response, harness, previousSnapshot), {
+        setHarnessRateLimits(harness, selectRateLimitSnapshot(response, previousSnapshot), {
           generation: readGeneration,
           source: "read",
         });
@@ -4021,7 +3777,7 @@ function WorkbenchThreadClient(
     return nextValues;
   }
 
-  function getNotificationTargetThreadId(notification: CodexAppServerNotification) {
+  function getNotificationTargetThreadId(notification: WorkbenchClientNotification) {
     return "threadId" in notification.params
       ? notification.params.threadId
       : "thread" in notification.params
@@ -4030,7 +3786,7 @@ function WorkbenchThreadClient(
   }
 
   function doesNotificationTargetSelectedThread(
-    notification: CodexAppServerNotification,
+    notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) {
     const threadId = getNotificationTargetThreadId(notification);
@@ -4040,7 +3796,7 @@ function WorkbenchThreadClient(
   }
 
   function doesNotificationTargetKnownThread(
-    notification: CodexAppServerNotification,
+    notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) {
     const threadId = getNotificationTargetThreadId(notification);
@@ -4053,8 +3809,8 @@ function WorkbenchThreadClient(
       : threadSources.has(getThreadStateKey(harness, threadId));
   }
 
-  function applyCodexUserMessageNotificationToKnownThreadSource(
-    notification: Extract<CodexAppServerNotification, { method: "item/started" | "item/completed" }>,
+  function applyUserMessageNotificationToKnownThreadSource(
+    notification: Extract<WorkbenchClientNotification, { method: "item/started" | "item/completed" }>,
     harness: WorkbenchHarness,
   ) {
     if (notification.params.item.type !== "userMessage") {
@@ -4105,8 +3861,8 @@ function WorkbenchThreadClient(
     return true;
   }
 
-  function applyCodexNotificationToKnownThreadSource(
-    notification: CodexAppServerNotification,
+  function applyNotificationToKnownThreadSource(
+    notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) {
     const threadId = getNotificationTargetThreadId(notification);
@@ -4121,10 +3877,15 @@ function WorkbenchThreadClient(
 
     switch (notification.method) {
       case "thread/started": {
-        const summary = toThreadSummary({ ...notification.params.thread, id: WorkbenchThreadIdSchema.parse(notification.params.thread.id) }, harness);
-        return updateThreadSource(threadKey, source => ({
+        const summary = notification.params.thread;
+        return updateThreadSource(threadKey, source => source.isDraft ? source : ({
           ...source,
-          ...summary,
+          createdAt: summary.createdAt,
+          updatedAt: summary.updatedAt,
+          status: summary.status,
+          cwd: summary.cwd,
+          source: summary.source,
+          path: summary.path,
           isDraft: false,
           agentNickname: summary.agentNickname ?? null,
           agentRole: summary.agentRole ?? null,
@@ -4282,78 +4043,15 @@ function WorkbenchThreadClient(
           threadKey,
           turnId: notification.params.turnId,
         });
-      case "thread/archived":
-      case "thread/reverted":
-      case "thread/queue/changed":
-      case "project/changed":
-      case "thread/project/updated":
-      case "autoApprovalReview/strictReviewRequired":
-      case "mcpServer/event/stream/notification":
-      case "modelProvider/authRecoveryStarted":
-      case "modelProvider/authRecoveryCompleted":
-      case "thread/realtime/item/started":
-      case "thread/realtime/item/transcript/delta":
-      case "thread/realtime/item/completed":
-      case "thread/deleted":
-      case "thread/unarchived":
-      case "thread/closed":
-      case "thread/environment/connected":
-      case "thread/environment/disconnected":
-      case "thread/settings/updated":
       case "thread/goal/updated":
       case "thread/goal/cleared":
-      case "thread/compacted":
-      case "hook/started":
-      case "hook/completed":
-      case "turn/diff/updated":
       case "item/plan/delta":
-      case "turn/plan/updated":
-      case "item/autoApprovalReview/started":
-      case "item/autoApprovalReview/completed":
-      case "rawResponseItem/completed":
-      case "rawResponse/completed":
-      case "command/exec/outputDelta":
-      case "item/commandExecution/terminalInteraction":
       case "item/fileChange/outputDelta":
-      case "item/mcpToolCall/progress":
-      case "serverRequest/resolved":
-      case "process/outputDelta":
-      case "process/exited":
       case "questionnaire/requested":
       case "questionnaire/resolved":
       case "browse/result/recorded":
-      case "model/rerouted":
-      case "model/verification":
-      case "turn/moderationMetadata":
-      case "model/safetyBuffering/updated":
-      case "thread/realtime/started":
-      case "thread/realtime/itemAdded":
-      case "thread/realtime/transcript/delta":
-      case "thread/realtime/transcript/done":
-      case "thread/realtime/outputAudio/delta":
-      case "thread/realtime/sdp":
-      case "thread/realtime/error":
-      case "thread/realtime/closed":
-      case "error":
-      case "skills/changed":
-      case "mcpServer/oauthLogin/completed":
-      case "mcpServer/startupStatus/updated":
       case "account/updated":
       case "account/rateLimits/updated":
-      case "remoteControl/status/changed":
-      case "app/list/updated":
-      case "externalAgentConfig/import/progress":
-      case "externalAgentConfig/import/completed":
-      case "fs/changed":
-      case "warning":
-      case "guardianWarning":
-      case "deprecationNotice":
-      case "configWarning":
-      case "fuzzyFileSearch/sessionUpdated":
-      case "fuzzyFileSearch/sessionCompleted":
-      case "windows/worldWritableWarning":
-      case "windowsSandbox/setupCompleted":
-      case "account/login/completed":
         return false;
     }
 
@@ -4428,13 +4126,12 @@ function WorkbenchThreadClient(
     setCurrentThread(thread);
   }
 
-  function prepareCodexMessageAdmission(
+  function prepareMessageAdmission(
     thread: ThreadPayload,
     sendOptions: WorkbenchSendThreadMessageOptions,
   ) {
     if (
-      thread.harness !== "codex"
-      || thread.isDraft
+      thread.isDraft
       || !thread.id.trim()
     ) {
       return null;
@@ -4468,7 +4165,7 @@ function WorkbenchThreadClient(
       resolvedThreadId,
       resumedThread,
       sendOptions,
-      shouldBypassCodexDraftBootstrap,
+      isFreshCreation,
       workbenchOrigin,
     } = context;
     const targetKey = getThreadStateKey(harness, resolvedThreadId);
@@ -4483,40 +4180,14 @@ function WorkbenchThreadClient(
       selectionBound: shouldSelectTarget,
     });
     try {
-      let refreshedThread: ThreadPayload;
-      if (harness === "codex") {
-        const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
-          method: "thread/read",
-          params: { includeTurns: false, threadId: resolvedThreadId },
-          workbenchThreadHydration: { mode: "latest" },
-        });
-        refreshedThread = toThreadPayload(
-          response.thread,
-          harness,
-          resumedThread.model,
-          resumedThread.reasoningEffort,
-          resumedThread.serviceTier,
-          resumedThread.agentPath,
-        );
-      } else {
-        const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
-          method: "thread/read",
-          params: {
-            includeTurns: true,
-            ...(projectContext.projectRootPath ? { cwd: projectContext.projectRootPath } : {}),
-            threadId: resolvedThreadId,
-          },
-          workbenchThreadHydration: { mode: "latest" },
-        });
-        refreshedThread = toThreadPayload(
-          response.thread,
-          harness,
-          resumedThread.model,
-          resumedThread.reasoningEffort,
-          resumedThread.serviceTier,
-          resumedThread.agentPath,
-        );
-      }
+      let refreshedThread = await daemon.threads.read({ threadId: resolvedThreadId });
+      refreshedThread = {
+        ...refreshedThread,
+        model: resumedThread.model,
+        reasoningEffort: resumedThread.reasoningEffort,
+        serviceTier: resumedThread.serviceTier,
+        agentPath: resumedThread.agentPath,
+      };
 
       if (sendOptions.composerProfileSlot) {
         refreshedThread = await readThreadProfileSnapshot(refreshedThread, sendOptions.composerProfileSlot.projectId);
@@ -4533,9 +4204,7 @@ function WorkbenchThreadClient(
       if (!isThreadOperationFenceCurrent(providerFence)) {
         return null;
       }
-      if (harness === "codex") {
-        await readCompletedThreadWorkbenchHistory(resolvedThreadId);
-      }
+      await readCompletedThreadWorkbenchHistory(resolvedThreadId);
       if (!isThreadOperationOwnerFenceCurrent(providerFence)) {
         return null;
       }
@@ -4576,10 +4245,10 @@ function WorkbenchThreadClient(
       if (!isThreadOperationOwnerFenceCurrent(providerFence)) {
         return null;
       }
-      if (!(shouldBypassCodexDraftBootstrap && harness === "codex" && isTransientRolloutReadError(error))) {
+      if (!(isFreshCreation && isThreadHistoryPending(error))) {
         emitStatusMessage(`The message was admitted, but immediate thread reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
       } else {
-        emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        emitStatusMessage(THREAD_HISTORY_PENDING_STATUS_MESSAGE);
       }
       return null;
     }
@@ -4626,7 +4295,7 @@ function WorkbenchThreadClient(
     );
     const selectedModel = thread.model;
     const selectedReasoningEffort = thread.reasoningEffort;
-    const selectedServiceTier = harness === "codex" ? thread.serviceTier : null;
+    const selectedServiceTier = thread.serviceTier;
     const selectedAgentPath = normalizeWorkbenchAgentPath(thread.agentPath);
     const normalizedInput = normalizeThreadMessageInput(input);
     const firstMessagePreview = normalizedInput.find((entry) => entry.type === "text")?.text ?? "";
@@ -4636,34 +4305,21 @@ function WorkbenchThreadClient(
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
     const materializingDraftId = isDraftThread ? thread.id : undefined;
-    const initialClientUserMessageId = harness === "codex" && isDraftThread && !recoveryClientUserMessageId
+    const initialClientUserMessageId = isDraftThread && !recoveryClientUserMessageId
       ? optimisticInputs.createClientUserMessageId()
       : null;
-    const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
-    const canUseProvidedThread = sendOptions.selectThread === false
-      && !isDraftThread
-      && sendOptions.startNewTurn !== true
-      && Boolean(getCurrentInProgressTurn(thread));
+    const isFreshCreation = isDraftThread;
     let bootstrapThread: ThreadPayload | null = null;
     let connectingTurnId: string | null = null;
     let pendingInitialOptimisticHandle: string | null = null;
-    const additionalWritableRoots = sendOptions.additionalWritableRoots ?? [];
-    const codexWorkspaceSandboxPolicy = harness === "codex"
-      ? createWorkspaceWriteSandboxPolicy([
-        ...getThreadProjectRootPaths(operationProjectContext),
-        ...additionalWritableRoots,
-      ], {
-        force: additionalWritableRoots.length > 0,
-      })
-      : null;
 
     if (!normalizedInput.length) {
       throw new Error("Message input cannot be empty.");
     }
 
-    const codexAdmissionThreadKey = prepareCodexMessageAdmission(thread, sendOptions);
-    if (codexAdmissionThreadKey) {
-      const threadKey = codexAdmissionThreadKey;
+    const admissionThreadKey = prepareMessageAdmission(thread, sendOptions);
+    if (admissionThreadKey) {
+      const threadKey = admissionThreadKey;
       let pendingProjection: { handle: string; turnId: PendingTurnId } | null = null;
       const withoutPendingProjection = (source: ThreadPayload) => {
         if (!pendingProjection) return source;
@@ -4842,52 +4498,12 @@ function WorkbenchThreadClient(
             flushSelectedThreadRendering();
           }
         },
-        resumeRequest: {
-          method: "thread/resume",
-          params: {
-            excludeTurns: true,
-            initialTurnsPage: CODEX_RESUME_LIFECYCLE_PAGE,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            serviceTier: selectedServiceTier,
-            threadId: thread.id,
-          },
-          ...(shouldSendWorkbenchPromptContext("codex")
-            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", thread.id, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-            : {}),
-        },
-        startRequest: {
-          method: "turn/start",
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-            "codex",
-            thread.id,
-            selectedAgentPath,
-            workbenchOrigin,
-            sendOptions.instructionInjections,
-            sendOptions.workflowIds,
-            "full",
-            sendOptions.activatedSkillPaths,
-          ),
-          params: {
-            ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
-            ...(selectedModel ? { model: selectedModel } : {}),
-            serviceTier: selectedServiceTier,
-            ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
-            summary: DEFAULT_TURN_REASONING_SUMMARY,
-          },
-        },
-        steerRequest: {
-          method: "turn/steer",
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-            "codex",
-            thread.id,
-            selectedAgentPath,
-            workbenchOrigin,
-            sendOptions.instructionInjections,
-            sendOptions.workflowIds,
-            "full",
-            sendOptions.activatedSkillPaths,
-          ),
-          params: {},
+        context: {
+          workbenchOrigin,
+          instructionScope: "full",
+          instructionInjections: sendOptions.instructionInjections,
+          workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
+          activatedSkillPaths: sendOptions.activatedSkillPaths ? [...sendOptions.activatedSkillPaths] : undefined,
         },
       }, {
         selectionBound: sendOptions.selectThread !== false,
@@ -4901,7 +4517,7 @@ function WorkbenchThreadClient(
         if (sendOptions.composerProfileSlot) {
           const source = threadSources.get(threadKey);
           if (source) {
-            const fence = captureThreadOperationFence("codex", thread.id, { selectionBound: true });
+            const fence = captureThreadOperationFence(harness, thread.id, { selectionBound: true });
             const configured = await readThreadProfileSnapshot(source, sendOptions.composerProfileSlot.projectId);
             if (isThreadOperationFenceCurrent(fence)) updateThreadSourceFields(source, {
               model: configured.model, reasoningEffort: configured.reasoningEffort, serviceTier: configured.serviceTier,
@@ -4916,7 +4532,7 @@ function WorkbenchThreadClient(
         return null;
       }
       return reconcileAdmittedThreadMessage({
-        harness: "codex",
+        harness,
         isDraftThread,
         normalizedInput,
         optimisticTurnId: admission.kind === "turnStarted"
@@ -4932,51 +4548,31 @@ function WorkbenchThreadClient(
         selectedReasoningEffort,
         selectedServiceTier,
         sendOptions,
-        shouldBypassCodexDraftBootstrap,
+        isFreshCreation,
         workbenchOrigin,
       });
     }
 
     if (isDraftThread || !resolvedThreadId.trim()) {
-      const threadStartRequest = createThreadStartRequest(0, {
-        ...(harness === "codex" && operationProjectContext.projectRootPath ? { cwd: operationProjectContext.projectRootPath } : {}),
-        ...(codexWorkspaceSandboxPolicy
-          ? {
-            config: {
-              sandbox_workspace_write: {
-                writable_roots: codexWorkspaceSandboxPolicy.writableRoots,
-                network_access: codexWorkspaceSandboxPolicy.networkAccess,
-                exclude_tmpdir_env_var: codexWorkspaceSandboxPolicy.excludeTmpdirEnvVar,
-                exclude_slash_tmp: codexWorkspaceSandboxPolicy.excludeSlashTmp,
-              },
-            },
-            sandbox: "workspace-write" as const,
-          }
-          : {}),
-        ...(harness === "codex" ? { ephemeral: false } : {}),
-        ...(selectedModel ? { model: selectedModel } : {}),
-        ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
-      });
-      const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
-        method: threadStartRequest.method,
-        ...(sendOptions.composerProfileSlot ? { workbenchCreationProfile: { kind: "target", slot: sendOptions.composerProfileSlot } } : {}),
-        ...(shouldSendWorkbenchPromptContext(harness)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-          : {}),
-        params: threadStartRequest.params,
+      let startedPayload = await daemon.threads.create({
+        projectId: operationProjectContext.projectId,
+        profile: sendOptions.composerProfileSlot
+          ? { kind: "target", slot: sendOptions.composerProfileSlot }
+          : { kind: "snapshot", selection: { kind: "custom", settings: {
+            harness, model: selectedModel ?? "", reasoningEffort: selectedReasoningEffort,
+            serviceTier: selectedServiceTier === "fast" ? "fast" : null, agentPath: selectedAgentPath, agentSource: null,
+            contextWindowTokens: thread.contextWindowTokens ?? null,
+          } } },
+        context: {
+          workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
+          workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
+        },
+        additionalWritableRoots: sendOptions.additionalWritableRoots,
       });
       if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
         throw new ThreadMessageNotSentError();
       }
 
-      let startedPayload = toThreadPayload(
-        startedThreadResponse.thread,
-        harness,
-        startedThreadResponse.model ?? selectedModel ?? null,
-        selectedReasoningEffort ?? startedThreadResponse.reasoningEffort ?? null,
-        harness === "codex" ? selectedServiceTier : startedThreadResponse.serviceTier ?? null,
-        selectedAgentPath,
-      );
       if (sendOptions.composerProfileSlot) startedPayload = await readThreadProfileSnapshot(startedPayload, sendOptions.composerProfileSlot.projectId);
       if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
         throw new ThreadMessageNotSentError();
@@ -5011,7 +4607,7 @@ function WorkbenchThreadClient(
       } else if (sendOptions.selectThread !== false) {
         setCurrentThread(bootstrapThread);
       }
-      if (!shouldBypassCodexDraftBootstrap) {
+      if (!isFreshCreation) {
         if (
           !isSendProjectCurrent()
         ) {
@@ -5020,80 +4616,7 @@ function WorkbenchThreadClient(
       }
     }
 
-    let resumedThread: ThreadPayload | null = bootstrapThread ?? (canUseProvidedThread ? thread : null);
-    if (!resumedThread || (!shouldBypassCodexDraftBootstrap && !canUseProvidedThread)) {
-      const usesCodexThreadWindows = harness === "codex";
-      const preparationFence = captureThreadOperationFence(harness, resolvedThreadId, {
-        selectionBound: sendOptions.selectThread !== false,
-      });
-      const readableThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: !usesCodexThreadWindows,
-          ...(operationProjectContext.projectRootPath ? { cwd: operationProjectContext.projectRootPath } : {}),
-          threadId: resolvedThreadId,
-        },
-        workbenchThreadHydration: { mode: "latest" },
-      });
-      if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
-        throw new ThreadMessageNotSentError();
-      }
-      const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
-      if (harness === "codex") {
-        resumedThread = toThreadPayload(
-          readableThreadResponse.thread,
-          harness,
-          selectedModel ?? readableThread.model,
-          selectedReasoningEffort ?? readableThread.reasoningEffort,
-          selectedServiceTier,
-          selectedAgentPath,
-        );
-      } else {
-        const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
-          method: "thread/resume",
-          params: {
-            ...(operationProjectContext.projectRootPath ? { cwd: operationProjectContext.projectRootPath } : {}),
-            ...(selectedModel ? { model: selectedModel } : {}),
-            threadId: resolvedThreadId,
-          } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; threadId: string },
-          ...(shouldSendWorkbenchPromptContext(harness)
-            ? {
-              [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-                harness,
-                resolvedThreadId,
-                selectedAgentPath,
-                workbenchOrigin,
-                sendOptions.instructionInjections,
-                sendOptions.workflowIds,
-                "threadUtilities",
-              ),
-            }
-            : {}),
-        });
-        if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
-          throw new ThreadMessageNotSentError();
-        }
-        resumedThread = toThreadResumePayload(
-          { ...resumedThreadResponse, model: resumedThreadResponse.model ?? undefined },
-          harness,
-          resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
-          selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
-          resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
-          selectedAgentPath,
-        );
-      }
-
-      const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
-      const visibleCurrentTurn = getCurrentTurn(readableThread);
-
-      if (
-        visibleCurrentTurn?.status === "completed"
-        && currentInProgressTurn
-        && currentInProgressTurn.id !== visibleCurrentTurn.id
-      ) {
-        throw new Error("This thread is out of sync with the app-server. New messages are disabled here for now.");
-      }
-    }
+    let resumedThread = bootstrapThread;
 
     if (!resumedThread) {
       throw new Error(`Unable to prepare the new ${harness} thread for its first turn.`);
@@ -5126,32 +4649,18 @@ function WorkbenchThreadClient(
 
       let steerResponse: ProviderSteerAcknowledgement;
       try {
-        steerResponse = await sendBridgeRequest<ProviderSteerAcknowledgement>(harness, {
-          method: "turn/steer",
-          ...(harness === "codex"
-            ? {
-              [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-                harness,
-                resolvedThreadId,
-                selectedAgentPath,
-                workbenchOrigin,
-                sendOptions.instructionInjections,
-                sendOptions.workflowIds,
-                "full",
-                sendOptions.activatedSkillPaths,
-              ),
-            }
-            : {}),
-          params: {
-            ...(operationProjectContext.projectRootPath && harness !== "codex" ? { cwd: operationProjectContext.projectRootPath } : {}),
-            ...(harness === "codex" && pendingSteerItem.clientId
-              ? { clientUserMessageId: pendingSteerItem.clientId }
-              : {}),
-            expectedTurnId: currentInProgressTurn.id,
-            input: normalizedInput,
-            threadId: resolvedThreadId,
-          } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; threadId: string },
+        const result = await daemon.threads.message({
+          threadId: resolvedThreadId, input: normalizedInput, intent: "steer",
+          expectedTurnId: currentInProgressTurn.id,
+          clientMessageId: pendingSteerItem.clientId ?? pendingSteerItem.id,
+          context: {
+            workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
+            workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
+            activatedSkillPaths: sendOptions.activatedSkillPaths ? [...sendOptions.activatedSkillPaths] : undefined,
+          },
         });
+        if (result.warning) emitStatusMessage(result.warning);
+        steerResponse = { turnId: result.kind === "steered" ? result.turnId : result.turn.id };
       } catch (error) {
         if (!isSendProjectCurrent()) {
           throw error;
@@ -5170,10 +4679,10 @@ function WorkbenchThreadClient(
         return null;
       }
 
-      const acknowledgedTurnId = harness === "codex" && "turnId" in steerResponse
+      const acknowledgedTurnId = "turnId" in steerResponse
         ? steerResponse.turnId.trim()
         : currentInProgressTurn.id;
-      if (harness === "codex" && !acknowledgedTurnId) {
+      if (!acknowledgedTurnId) {
         const admissionStatus = optimisticInputs.transition(pendingSteerItem.id, "failed");
         bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
         if (sendOptions.selectThread !== false) {
@@ -5209,54 +4718,19 @@ function WorkbenchThreadClient(
       const turnStartFence = captureThreadOperationFence(harness, resolvedThreadId, {
         selectionBound: sendOptions.selectThread !== false,
       });
-      const codexCollaborationMode = harness === "codex"
-        ? (() => {
-          const collaborationModel = selectedModel ?? resumedThread.model;
-          return collaborationModel
-            ? createQuestionnaireCollaborationMode(
-              collaborationModel,
-              selectedReasoningEffort ?? null,
-            )
-            : null;
-        })()
-        : null;
-      let turnStartResponse: TurnStartResponse;
+      let turnStartResponse: { turn: Turn };
       try {
-        turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
-          method: "turn/start",
-          ...(harness === "codex"
-            ? {
-              [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-                "codex",
-                resolvedThreadId,
-                resumedThread.agentPath,
-                workbenchOrigin,
-                sendOptions.instructionInjections,
-                sendOptions.workflowIds,
-                "full",
-                sendOptions.activatedSkillPaths,
-              ),
-            }
-            : {}),
-          params: {
-            ...(operationProjectContext.projectRootPath && harness !== "codex" ? { cwd: operationProjectContext.projectRootPath } : {}),
-            ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
-            input: normalizedInput,
-            ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
-            ...(selectedModel ? { model: selectedModel } : {}),
-            ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
-            ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
-            ...(recoveryClientUserMessageId || initialClientUserMessageId
-              ? { clientUserMessageId: recoveryClientUserMessageId ?? initialClientUserMessageId }
-              : {}),
-            summary: DEFAULT_TURN_REASONING_SUMMARY,
-            threadId: resolvedThreadId,
-          } as TurnStartParams & {
-            agentPath?: string;
-            collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
-            cwd?: string;
+        const result = await daemon.threads.message({
+          threadId: resolvedThreadId, input: normalizedInput, intent: "newTurn",
+          clientMessageId: recoveryClientUserMessageId ?? initialClientUserMessageId ?? optimisticInputs.createClientUserMessageId(),
+          context: {
+            workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
+            workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
+            activatedSkillPaths: sendOptions.activatedSkillPaths ? [...sendOptions.activatedSkillPaths] : undefined,
           },
         });
+        if (result.warning) emitStatusMessage(result.warning);
+        turnStartResponse = { turn: result.kind === "started" ? result.turn : createStreamingTurn(result.turnId) };
       } catch (error) {
         if (pendingInitialOptimisticHandle) {
           const threadKey = getThreadStateKey(harness, resolvedThreadId);
@@ -5322,7 +4796,7 @@ function WorkbenchThreadClient(
         projectId: operationProjectContext.projectId,
         threadId: admittedThreadId,
         title: firstMessagePreview || "New thread",
-        turnId: turnStartResponse.turn.id,
+        turnId: WorkbenchTurnIdSchema.parse(turnStartResponse.turn.id),
       });
       if (
         !isSendProjectCurrent()
@@ -5381,7 +4855,7 @@ function WorkbenchThreadClient(
       selectedReasoningEffort,
       selectedServiceTier,
       sendOptions,
-      shouldBypassCodexDraftBootstrap,
+      isFreshCreation,
       workbenchOrigin,
     });
   }
@@ -5399,34 +4873,17 @@ function WorkbenchThreadClient(
 
     messageAdmissionIntentRevision += 1;
     const projectIdentity = captureProjectOperationIdentity();
-    const threadProjectContext = effectiveThreadProjectContext(thread.harness, thread.id);
-
-    if (activeTurn) {
-      await stopWorkbenchThread({
-        harness: thread.harness,
-        sendRequest: async (harness, request) => {
-          await sendBridgeRequest(harness, request);
-        },
-        threadId: thread.id,
-        turnId: activeTurn.id,
-      });
-    }
+    await daemon.threads.stop({
+      threadId: thread.id,
+      intent: "stop",
+      ...(activeTurn ? { turnId: activeTurn.id } : {}),
+      ...(pendingRequest ? { requestKey: pendingRequest.requestKey } : {}),
+    });
     if (!isProjectOperationIdentityCurrent(projectIdentity)) {
       return thread;
     }
 
     if (pendingRequest) {
-      const dismissal = await requestWorkbench<{ accepted: boolean }>("workbench/thread-state/questionnaire/dismiss", {
-        identity: { harness: pendingRequest.harness, threadId: pendingRequest.threadId },
-        projectId: threadProjectContext.projectId,
-        requestKey: pendingRequest.requestKey,
-      });
-      if (!dismissal.accepted) {
-        throw new Error("The pending questionnaire could not be dismissed.");
-      }
-      if (!isProjectOperationIdentityCurrent(projectIdentity)) {
-        return thread;
-      }
       resolvedDurableQuestionnaireKeysByThreadId.set(thread.id, pendingRequest.requestKey);
       const clearedPendingRequest = clearPendingUserInputRequest(thread.id, pendingRequest.requestKey);
       const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(thread.id);
@@ -5460,12 +4917,11 @@ function WorkbenchThreadClient(
       ...(supplementalApprovalSteerText ? [createTextInput(supplementalApprovalSteerText)] : []),
       ...(options.supplementalInput ?? []),
     ];
-    const hasActivatedSkills = pendingRequest.harness === "codex" && Boolean(options.activatedSkillPaths?.length);
+    const hasActivatedSkills = Boolean(options.activatedSkillPaths?.length);
     const projectId = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId).projectId;
     if (!projectId) throw new Error("The questionnaire thread has no selected project.");
-    const submitResult = await requestWorkbench<{ ok: true; route: "admitted" | "live" | "provider"; warning?: string }>("questionnaire/respond", {
+    const submitResult = await daemon.request("questionnaire/respond", {
       ...(options.activatedSkillPaths?.length ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
-      harness: pendingRequest.harness,
       insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,
       insertAfterItemIndex: options.insertAfterItemIndex ?? null,
       projectId,
@@ -5491,18 +4947,18 @@ function WorkbenchThreadClient(
     if (clearedPendingRequest || clearedWaitingFlag) {
       emit();
     }
-    if ((supplementalInput.length || hasActivatedSkills) && pendingRequest.harness === "codex") {
+    if (supplementalInput.length || hasActivatedSkills) {
       await readCompletedThreadWorkbenchHistory(threadId);
     } else {
       await readCompletedQuestionnaireHistoryForHarness(threadId, pendingRequest.harness);
     }
   }
 
-  function handleCodexNotification(
-    notification: CodexAppServerNotification,
+  function handleProviderNotification(
+    notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) {
-    if (harness === "codex" && (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared")) {
+    if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
       threadGoals.observeNotification(notification);
     }
 
@@ -5584,15 +5040,14 @@ function WorkbenchThreadClient(
       return;
     }
 
-    const appliedKnownUserMessage = harness === "codex" && (
+    const appliedKnownUserMessage = (
       notification.method === "item/started" || notification.method === "item/completed"
-    ) && applyCodexUserMessageNotificationToKnownThreadSource(notification, harness);
+    ) && applyUserMessageNotificationToKnownThreadSource(notification, harness);
     if (!appliedKnownUserMessage) {
-      applyCodexNotificationToKnownThreadSource(notification, harness);
+      applyNotificationToKnownThreadSource(notification, harness);
     }
     if (
-      harness === "codex"
-      && (
+      (
       notification.method === "turn/completed"
         || (notification.method === "item/completed" && notification.params.item.type === "userMessage")
       )
@@ -5601,20 +5056,19 @@ function WorkbenchThreadClient(
       void readCompletedSteerHistory(notification.params.threadId);
     }
     if (
-      harness === "codex"
-      && notification.method === "turn/completed"
+      notification.method === "turn/completed"
       && doesNotificationTargetKnownThread(notification, harness)
     ) {
       void readCompletedQuestionnaireHistoryForHarness(notification.params.threadId, harness);
     }
   }
 
-  const unsubscribeCodexNotifications = codexClient.onNotification((notification, harness) => {
-    handleCodexNotification(notification, harness);
+  const unsubscribeNotifications = socket.onNotification((notification, harness) => {
+    handleProviderNotification(notification, harness);
   });
-  lifecycle.addUnsubscribe(unsubscribeCodexNotifications);
+  lifecycle.addUnsubscribe(unsubscribeNotifications);
   lifecycle.addUnsubscribe(() => {
-    codexClient.dispose();
+    socket.dispose();
   });
 
   function clearThreadSelection() {
@@ -5678,23 +5132,18 @@ function WorkbenchThreadClient(
   }
 
   async function compactThread(thread: ThreadPayload) {
-    if (thread.isDraft || thread.harness !== "codex") {
+    if (thread.isDraft) {
       return thread;
     }
 
     messageAdmissionIntentRevision += 1;
-    await sendBridgeRequest<ThreadCompactStartResponse>(thread.harness, {
-      method: "thread/compact/start",
-      params: {
-        threadId: thread.id,
-      },
-    });
+    await daemon.threads.compact({ threadId: thread.id });
     return thread;
   }
 
   function setCurrentThreadServiceTier(threadId: string, serviceTier: string | null) {
     const thread = threadDocuments.getDocumentByThreadId(threadId);
-    if (!thread || thread.harness !== "codex") return;
+    if (!thread) return;
 
     const nextServiceTier = serviceTier === "fast" ? "fast" : null;
     updateStablePreferenceSource(thread, (record) => {

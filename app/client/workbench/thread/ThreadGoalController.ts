@@ -1,25 +1,20 @@
 /*
  * Exports:
- * - default ThreadGoalController: own typed Codex goal reads, objective updates, clears, notifications, and React-facing snapshots. Keywords: thread, goal, controller, codex.
+ * - default ThreadGoalController: own WB goal reads, mutations, notifications and display snapshots.
  */
 
-import type { CodexAppServerNotification } from "workbench-shared/codex/app-server-notifications";
-import type { ThreadGoalClearParams } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalClearParams";
-import type { ThreadGoalClearResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalClearResponse";
-import type { ThreadGoalGetParams } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalGetParams";
-import type { ThreadGoalGetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalGetResponse";
-import type { ThreadGoalSetParams } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalSetParams";
-import type { ThreadGoalSetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalSetResponse";
+import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
+import type { WorkbenchProviderGoal, WorkbenchProviderGoalUpdate } from "workbench-shared/workbench/provider/provider-goal";
 import type { WorkbenchThreadGoalControls, WorkbenchThreadGoalSnapshot } from "workbench-shared/types";
 
-type ThreadGoalNotification = Extract<CodexAppServerNotification, {
+type ThreadGoalNotification = Extract<WorkbenchTranscriptNotification, {
   method: "thread/goal/cleared" | "thread/goal/updated";
 }>;
 
 interface ThreadGoalTransport {
-  clear: (params: ThreadGoalClearParams) => Promise<ThreadGoalClearResponse>;
-  get: (params: ThreadGoalGetParams) => Promise<ThreadGoalGetResponse>;
-  set: (params: ThreadGoalSetParams) => Promise<ThreadGoalSetResponse>;
+  clear: (params: { threadId: string }) => Promise<object>;
+  get: (params: { threadId: string }) => Promise<{ goal: WorkbenchProviderGoal | null }>;
+  set: (params: WorkbenchProviderGoalUpdate) => Promise<{ goal: WorkbenchProviderGoal | null }>;
 }
 
 interface ThreadGoalEntry {

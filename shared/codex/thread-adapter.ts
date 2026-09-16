@@ -16,28 +16,21 @@ import type { ThreadPayloadData, ThreadSummary, WorkbenchHarness, WorkbenchThrea
 import type { SessionSource } from "./generated/app-server/v2/SessionSource.ts";
 import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse.ts";
-import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus.ts";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage.ts";
 import type { Turn } from "../workbench/thread/workbench-thread-turn.ts";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline.ts";
 import { withCodexItemMetadata } from "./thread-item-source.ts";
+import { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
+import { normalizeThreadLocation as normalizeAbsolutePathForComparison } from "../workbench/thread/thread-location.ts";
+export { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
+export {
+  isThreadWithinRoot as isCodexThreadWithinRoot, isThreadAtRoot as isCodexThreadAtRoot,
+  isProjectThread as isProjectCodexThread, isProjectThreadAtExpectedCwd as isProjectCodexThreadAtExpectedCwd,
+} from "../workbench/thread/thread-location.ts";
 
 type CompatibleThread = Omit<Thread, "turns"> & { turns: Turn[] };
 type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
   & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
-
-function normalizeAbsolutePathForComparison(filePath: string) {
-  const normalized = String(filePath ?? "")
-    .trim()
-    .replace(/^\\\\\?\\UNC\\/iu, "//")
-    .replace(/^\\\\\?\\/iu, "")
-    .replace(/\\/g, "/")
-    .replace(/\/+$/, "");
-
-  return /^[a-z]:/iu.test(normalized)
-    ? normalized.toLowerCase()
-    : normalized;
-}
 
 function upperCaseWindowsDrive(filePath: string) {
   return filePath.replace(/^[a-z]:/iu, (drive) => drive.toUpperCase());
@@ -94,62 +87,6 @@ export function formatSessionSource(source: SessionSource) {
   }
 
   return "subAgent";
-}
-
-export function formatThreadStatus(status: ThreadStatus) {
-  switch (status.type) {
-    case "notLoaded":
-      return "notLoaded";
-    case "idle":
-      return "idle";
-    case "systemError":
-      return "systemError";
-    case "active":
-      return status.activeFlags.length
-        ? `active:${status.activeFlags.join(",")}`
-        : "active";
-  }
-
-  const unhandledStatus: never = status;
-  return unhandledStatus;
-}
-
-export function isCodexThreadWithinRoot(candidatePath: string, rootPath: string) {
-  if (!candidatePath.trim() || !rootPath.trim()) {
-    return false;
-  }
-
-  const normalizedCandidatePath = normalizeAbsolutePathForComparison(candidatePath);
-  const normalizedRootPath = normalizeAbsolutePathForComparison(rootPath);
-  return normalizedCandidatePath === normalizedRootPath
-    || normalizedCandidatePath.startsWith(`${normalizedRootPath}/`);
-}
-
-export function isCodexThreadAtRoot(candidatePath: string, rootPath: string) {
-  if (!candidatePath.trim() || !rootPath.trim()) {
-    return false;
-  }
-
-  return normalizeAbsolutePathForComparison(candidatePath) === normalizeAbsolutePathForComparison(rootPath);
-}
-
-export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: string | string[]) {
-  const rootPaths = Array.isArray(rootPath) ? rootPath : [rootPath];
-  return rootPaths.some((candidateRootPath) => isCodexThreadAtRoot(thread.cwd, candidateRootPath));
-}
-
-export function isProjectCodexThreadAtExpectedCwd(
-  thread: Pick<Thread, "cwd">,
-  rootPath: string | string[],
-  expectedCwd: string | null | undefined,
-) {
-  if (!expectedCwd?.trim()) {
-    return isProjectCodexThread(thread, rootPath);
-  }
-
-  const rootPaths = Array.isArray(rootPath) ? rootPath : [rootPath];
-  return rootPaths.some((candidateRootPath) => isCodexThreadWithinRoot(expectedCwd, candidateRootPath))
-    && isCodexThreadAtRoot(thread.cwd, expectedCwd);
 }
 
 export function toThreadSummary<Id extends string>(thread: Omit<CompatibleThread, "id"> & { id: Id }, harness: WorkbenchHarness = "codex"): ThreadSummary<Id> {

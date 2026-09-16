@@ -7,9 +7,9 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
-import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "workbench-shared/codex/thread-state";
+import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
+import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
+import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
   ThreadPayload,
   WorkbenchComposerProfileSlot,
@@ -225,7 +225,7 @@ export default function ThreadComposer ({
   const currentReasoningEffort = thread.reasoningEffort;
   const showsThreadControls = !isCommentMode;
   const showsReasoningEffortControl = showsThreadControls && Boolean(modelOptionForControls?.supportsReasoningEffort);
-  const showsFastModeControl = showsThreadControls && thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
+  const showsFastModeControl = showsThreadControls && Boolean(modelOptionForControls?.supportsFastMode);
   const isFastModeEnabled = thread.serviceTier === "fast";
   const isProfilePickerOpen = showsThreadControls && editorState.open;
   const composerPlaceholder = isCommentMode
@@ -661,7 +661,7 @@ export default function ThreadComposer ({
                       onModelOpen={(trigger, ribbon) => openProfileEditor("model", trigger, ribbon)}
                       onReasoningEffortChange={changeReasoningEffort}
                       supportedReasoningEfforts={supportedReasoningEfforts}
-                      context={thread.harness === "codex" && modelOptionForControls?.contextWindow ? {
+                      context={modelOptionForControls?.contextWindow ? {
                         ...modelOptionForControls.contextWindow,
                         value: currentComposerSettings.contextWindowTokens ?? modelOptionForControls.contextWindow.defaultTokens,
                       } : null}

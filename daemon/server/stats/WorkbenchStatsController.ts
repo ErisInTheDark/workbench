@@ -3,7 +3,10 @@
  * - WorkbenchStatsControllerOptions: database, harness, rename, and warning ports.
  * - default WorkbenchStatsController: own imports, capture, rename-aware reads, refresh, failures, and disposal.
  */
-import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "../bridge-types.ts";
+import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
+import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
+import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchRateLimitObservation } from "../database/stats/WorkbenchStatsRepository.ts";
@@ -33,20 +36,14 @@ export interface WorkbenchStatsControllerOptions {
   };
   harnesses: {
     hydrateUsage: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["harnesses"]["hydrateUsage"];
-    listHarnesses(): WorkbenchHarness[];
     listUsageHydrationHarnesses: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["harnesses"]["listUsageHydrationHarnesses"];
-    request(harness: WorkbenchHarness, request: JsonRpcRequest): Promise<JsonRpcResponse>;
   };
+  providers: Pick<WorkbenchProviderDispatcher, "get">;
   log?(message: string): void;
 }
 
-function record(value: object | null | undefined) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, object | string | number | boolean | null | undefined> : null;
-}
-
-function rateWindow(value: object | string | number | boolean | null | undefined) {
-  const candidate = record(typeof value === "object" ? value : null);
-  if (!candidate || typeof candidate.usedPercent !== "number" || !Number.isFinite(candidate.usedPercent)) return null;
+function rateWindow(candidate: WorkbenchRateLimitWindow | null) {
+  if (!candidate || !Number.isFinite(candidate.usedPercent)) return null;
   return {
     durationMinutes: typeof candidate.windowDurationMins === "number" && Number.isFinite(candidate.windowDurationMins)
       ? Math.max(0, candidate.windowDurationMins)
@@ -58,9 +55,7 @@ function rateWindow(value: object | string | number | boolean | null | undefined
   };
 }
 
-function rateSnapshot(value: object | string | number | boolean | null | undefined, fallbackId = "default") {
-  const candidate = record(typeof value === "object" ? value : null);
-  if (!candidate) return null;
+function rateSnapshot(candidate: WorkbenchRateLimitSnapshot, fallbackId = "default") {
   return {
     limitId: typeof candidate.limitId === "string" && candidate.limitId.trim() ? candidate.limitId : fallbackId,
     limitName: typeof candidate.limitName === "string" && candidate.limitName.trim() ? candidate.limitName : null,
@@ -69,14 +64,11 @@ function rateSnapshot(value: object | string | number | boolean | null | undefin
   };
 }
 
-function responseRateSnapshots(result: object | null | undefined) {
-  const candidate = record(result);
-  if (!candidate) return [];
-  const byId = record(typeof candidate.rateLimitsByLimitId === "object" ? candidate.rateLimitsByLimitId : null);
+function responseRateSnapshots(candidate: WorkbenchAccountLimits) {
+  const byId = candidate.rateLimitsByLimitId;
   const snapshots = byId
     ? Object.entries(byId).flatMap(([id, value]) => {
-      const parsed = rateSnapshot(value, id);
-      return parsed ? [parsed] : [];
+      return [rateSnapshot(value, id)];
     })
     : [];
   const primary = rateSnapshot(candidate.rateLimits);
@@ -120,23 +112,18 @@ export default class WorkbenchStatsController {
     this.enqueue(snapshot.harness, "claim snapshot", () => this.options.database.recordStatsClaimSnapshot(snapshot));
   }
 
-  observeProviderNotification(harness: WorkbenchHarness, notification: JsonRpcNotification) {
-    if (notification.method !== "account/rateLimits/updated") return;
-    const params = record(notification.params as object | null);
-    const snapshot = rateSnapshot(params?.rateLimits);
-    if (snapshot) this.recordRateLimits({ harness, observedAt: Date.now(), snapshots: [snapshot] });
+  observeProviderNotification(harness: WorkbenchHarness, observation: WorkbenchProviderObservation) {
+    if (observation.accountLimits) this.recordRateLimits({
+      harness, observedAt: Date.now(), snapshots: [rateSnapshot(observation.accountLimits)],
+    });
   }
 
   async refreshRateLimits() {
-    const harnesses = this.options.harnesses.listHarnesses();
+    const harnesses = installedProviderKeys;
     const results = await Promise.allSettled(harnesses.map(async (harness) => {
-      const response = await this.options.harnesses.request(harness, {
-        id: `workbench-stats:${harness}:${Date.now()}`,
-        method: "account/rateLimits/read",
-        params: undefined,
-      });
-      if (response.error) throw new Error(response.error.message);
-      const snapshots = responseRateSnapshots(response.result as object | null);
+      const account = this.options.providers.get(harness).account;
+      if (!account) return;
+      const snapshots = responseRateSnapshots(await account.limits.read());
       if (snapshots.length) this.recordRateLimits({ harness, observedAt: Date.now(), snapshots });
     }));
     results.forEach((result, index) => {

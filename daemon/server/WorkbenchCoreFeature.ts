@@ -22,6 +22,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "stats",
   "threadGit",
   "threadState",
+  "threadActions",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {

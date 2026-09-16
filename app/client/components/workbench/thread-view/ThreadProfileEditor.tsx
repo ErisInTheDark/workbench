@@ -80,9 +80,9 @@ export default function ThreadProfileEditor ({
   };
   const model = state.models.find((entry) => entry.id === settings.model);
   const efforts = model?.supportedReasoningEfforts ?? [];
-  const capability = settings.harness === "codex" ? model?.contextWindow : null;
+  const capability = model?.contextWindow;
   const showsEffort = Boolean(model?.supportsReasoningEffort && efforts.length);
-  const showsFastMode = Boolean(settings.harness === "codex" && model?.supportsFastMode);
+  const showsFastMode = Boolean(model?.supportsFastMode);
   const update = (changes: Partial<WorkbenchComposerSettings>) => {
     if (profile) void profiles.controller.updateProfile(profile.id, changes);
     else onCustomChange({ ...settings, ...changes });
@@ -166,7 +166,7 @@ export default function ThreadProfileEditor ({
             model: selected.id,
             reasoningEffort: selected.supportsReasoningEffort ? selected.defaultReasoningEffort ?? selected.supportedReasoningEfforts[0] ?? null : null,
             serviceTier: selected.supportsFastMode ? settings.serviceTier : null,
-            contextWindowTokens: settings.harness === "codex" ? selected.contextWindow?.defaultTokens ?? null : null,
+            contextWindowTokens: selected.contextWindow?.defaultTokens ?? null,
           })}
         />
       </>)}

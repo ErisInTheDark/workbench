@@ -3,7 +3,7 @@
  * - buildPendingUserInputRequestSubmissionOptions: derive durable questionnaire placement from loaded thread state.
  */
 
-import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
+import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
   ThreadPayload,
   WorkbenchPendingUserInputRequest,

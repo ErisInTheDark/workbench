@@ -10,6 +10,8 @@
  * - DaemonRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
 import * as project from "./lib/project";
+import type CodexThreadOperations from "./CodexThreadOperations";
+import type CodexConfigurationController from "./CodexConfigurationController";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -54,6 +56,7 @@ import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestContr
 import type WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
+import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import type WorkbenchBrowseController from "./WorkbenchBrowseController";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -174,7 +177,11 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
-  codexConfiguration: WorkbenchProvider["configuration"]["modelContext"];
+  codexConfiguration: WorkbenchProvider["configuration"]["modelContext"] & {
+    containsGlobalGuidance(sections: string[]): Promise<boolean[]>;
+  };
+  codexThreadOperations: CodexThreadOperations;
+  codexNativeConfiguration: CodexConfigurationController;
   codexProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
@@ -188,6 +195,7 @@ export interface DaemonRuntimeObjects {
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: DaemonDatabaseRegistration;
   daemonRequests: WorkbenchDaemonRequestController;
+  threadActions: WorkbenchThreadActionController;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;

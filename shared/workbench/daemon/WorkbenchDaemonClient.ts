@@ -27,6 +27,9 @@ import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
 import { WorkbenchModelContextCapabilitySchema } from "../thread/thread-profile.ts";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity.ts";
+import { workbenchThreadActions } from "../thread/thread-actions.ts";
+import { WorkbenchModelOptionSchema } from "../provider/provider-model.ts";
+import { WorkbenchAccountLimitsSchema } from "../provider/provider-account.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
 import { WorkbenchStatsDetailedResponseSchema } from "../stats/workbench-stats-detail-contract.ts";
 import {
@@ -56,7 +59,12 @@ const fileWriteSchema = z.union([
 ]);
 
 function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
+  if (method in workbenchThreadActions) {
+    return workbenchThreadActions[method as keyof typeof workbenchThreadActions].result;
+  }
   switch (method) {
+    case "models/list": return z.object({ data: z.array(WorkbenchModelOptionSchema) });
+    case "account/limits/read": return WorkbenchAccountLimitsSchema;
     case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
     case "codex-sandbox-network/read":
     case "codex-sandbox-network/update": return z.object({
@@ -115,11 +123,44 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "git/arc/release":
     case "git/arc/remove":
     case "git/arc/restore": return z.object({ ok: z.literal(true) }).strict();
+    default: throw new Error(`No response schema is registered for ${method}.`);
   }
 }
 
 export class WorkbenchDaemonClient {
   constructor(private readonly transport: WorkbenchDaemonTransport) {}
+
+  readonly models = {
+    list: (provider: string) => this.request("models/list", { provider }),
+  };
+
+  readonly account = {
+    limits: (provider: string) => this.request("account/limits/read", { provider }),
+  };
+
+  readonly threads = {
+    history: {
+      questionnaires: (params: WorkbenchDaemonParams<"thread/questionnaires/read">) => this.request("thread/questionnaires/read", params),
+      steers: (params: WorkbenchDaemonParams<"thread/steers/read">) => this.request("thread/steers/read", params),
+      browse: (params: WorkbenchDaemonParams<"thread/browse/read">) => this.request("thread/browse/read", params),
+    },
+    create: (params: WorkbenchDaemonParams<"thread/create">) => this.request("thread/create", params),
+    read: (params: WorkbenchDaemonParams<"thread/metadata/read">) => this.request("thread/metadata/read", params),
+    page: (params: WorkbenchDaemonParams<"thread/page/read">) => this.request("thread/page/read", params),
+    message: (params: WorkbenchDaemonParams<"thread/message/submit">) => this.request("thread/message/submit", params),
+    title: (params: WorkbenchDaemonParams<"thread/title/set">) => this.request("thread/title/set", params),
+    compact: (params: WorkbenchDaemonParams<"thread/compact">) => this.request("thread/compact", params),
+    stop: (params: WorkbenchDaemonParams<"thread/stop">) => this.request("thread/stop", params),
+    goal: {
+      read: (params: WorkbenchDaemonParams<"thread/goal/read">) => this.request("thread/goal/read", params),
+      update: (params: WorkbenchDaemonParams<"thread/goal/update">) => this.request("thread/goal/update", params),
+      clear: (params: WorkbenchDaemonParams<"thread/goal/remove">) => this.request("thread/goal/remove", params),
+    },
+  };
+
+  readonly questionnaires = {
+    pending: () => this.request("questionnaires/pending/read", {}),
+  };
 
   onReconnect(listener: () => void) {
     return this.transport.onReconnect?.(listener) ?? (() => undefined);

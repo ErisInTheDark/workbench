@@ -11,6 +11,7 @@ export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
   readonly cwd?: string | null;
   readonly harness?: WorkbenchHarness | null;
+  readonly skillCatalogPresentation?: "references" | "bodies";
   readonly managedThread?: boolean;
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;

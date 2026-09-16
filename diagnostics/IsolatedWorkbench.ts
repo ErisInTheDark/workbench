@@ -12,8 +12,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createSpawnOptions } from "../daemon/server/process-helpers";
-import { CodexAppServerClient } from "../shared/codex/app-server-client";
-import { isCodexJsonRpcFailure } from "../shared/codex/protocol";
+import WorkbenchSocketClient from "../shared/workbench/WorkbenchSocketClient";
+import { isWorkbenchRpcFailure } from "../shared/workbench/workbench-rpc";
+import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
@@ -25,7 +26,8 @@ export default class IsolatedWorkbench {
   private appChild: ChildProcess | null = null;
   private appLog = "";
   private appAddress: string | null = null;
-  private client: CodexAppServerClient | null = null;
+  private client: WorkbenchSocketClient | null = null;
+  readonly daemon = new WorkbenchDaemonClient({ request: (method, params) => this.request(method, params) });
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
   private closed = false;
@@ -124,7 +126,7 @@ export default class IsolatedWorkbench {
     await fs.mkdir(path.join(this.root, "user"), { recursive: true });
     await fs.mkdir(path.join(this.project, ".workbench", "runtime"), { recursive: true });
     await fs.writeFile(path.join(this.project, ".workbench", "runtime", "composer-profiles.json"), JSON.stringify(profileDocument));
-    await fs.writeFile(path.join(this.project, "AGENTS.md"), `For the live startup diagnostic, include ${prefixProof} in your final reply. Do not edit files or start other agents.\n`);
+    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The diagnostic passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
     if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
     await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
@@ -148,7 +150,7 @@ export default class IsolatedWorkbench {
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Isolated daemon exited ${child.exitCode}\n${this.log.slice(-12000)}`);
       return this.log.slice(logOffset).includes("[codex-bridge] listening on");
     });
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     this.client = client;
     this.transcriptClient = new WorkbenchTranscriptClient({
       transport: {
@@ -166,7 +168,18 @@ export default class IsolatedWorkbench {
       this.events.push(message as Message);
       for (const observer of this.observers) observer();
     });
-    await this.withSignal(client.connect(this.origin.replace("http:", "ws:")), this.signal);
+    let stopAvailability = () => {};
+    const ready = new Promise<void>(resolve => {
+      stopAvailability = this.transcripts.onAvailabilityChange(available => { if (available) resolve(); });
+    });
+    try {
+      await this.withSignal(client.connect(this.origin.replace("http:", "ws:")), this.signal);
+      // The daemon announces capabilities on the first WB request, not socket open.
+      await this.daemon.request("project/catalog/read", {});
+      await this.withSignal(ready, this.signal);
+    } finally {
+      stopAvailability();
+    }
   }
 
   private environment(): NodeJS.ProcessEnv {
@@ -220,7 +233,7 @@ export default class IsolatedWorkbench {
     if (this.closed || !this.client) throw new Error("Isolated runtime is not connected");
     signal.throwIfAborted();
     const response = await this.withSignal(this.client.sendRequest<T>({ method, params, ...fields }), signal);
-    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+    if (isWorkbenchRpcFailure(response)) throw new WorkbenchDaemonRequestError(response.error.message, response.error.code);
     return response.result;
   }
 

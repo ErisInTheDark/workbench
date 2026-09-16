@@ -34,18 +34,16 @@ test("catalog delegates source reads and excludes globally installed instruction
   const controller = new WorkbenchAgentSkillCatalogController(async (projectId) => {
     resolvedProjectIds.push(projectId);
     return project;
-  }, {
+  }, async sections => sections.map(text => ["LILY PREFIX", "GLOBAL PACK"].includes(text)), {
     buildBootstrap: async (_skills, options) => {
       bootstrapOptions = options;
       return "assembled";
     },
-    containsExactGuidanceText: (guidance, text) => Boolean(text && guidance.content.includes(text)),
     listActiveSkills: async (skills) => [...skills],
     listInstructionPacks: async () => instructionPacks,
     listProjectSkills: async (root) => { projectRoots.push(root); return [projectSkill]; },
     listUserAgents: async (resolvedProject) => { projectRoots.push(resolvedProject.root); return [agent]; },
     readAgent: async (_agentPath, root) => { projectRoots.push(root); return agent; },
-    readGlobalGuidance: async () => ({ content: "LILY PREFIX\nGLOBAL PACK", path: "AGENTS.md" }),
   });
 
   assert.deepEqual(await controller.listAgents("project"), { data: [agent] });

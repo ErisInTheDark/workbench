@@ -4,9 +4,7 @@
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes.
  * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links.
  * - buildThreadTitleBootstrapInstructions: create managed-task CLI instructions for setting and reading its title through wb.
- * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content with shared title bootstrap instructions.
  */
-import type { WorkbenchAgentDefinition, WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
@@ -56,30 +54,6 @@ function truncateText(value: string, maxLength: number) {
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-function buildAgentDefinitionInstructions(agentDefinition: WorkbenchAgentDefinition) {
-  return [
-    "For this thread, you are the agent defined below. Treat the contents of `<agent_definition>` as CRITICAL rules to follow, only overridden by later user instructions.",
-    "<agent_definition>",
-    `<name>${agentDefinition.name}</name>`,
-    `<path>${agentDefinition.path}</path>`,
-    agentDefinition.description ? `<description>${agentDefinition.description}</description>` : "",
-    "<prompt>",
-    agentDefinition.prompt.trim(),
-    "</prompt>",
-    "</agent_definition>",
-  ].filter(Boolean).join("\n");
-}
-
-function buildDedupedAgentActivationInstructions(agentDefinition: WorkbenchAgentDefinition) {
-  return [
-    "For this thread, use the already-loaded Workbench agent named below as the active visible identity. Its full prompt body is already present in Codex global guidance and is intentionally not repeated here.",
-    "<agent_activation>",
-    `<name>${agentDefinition.name}</name>`,
-    agentDefinition.description ? `<description>${agentDefinition.description}</description>` : "",
-    "</agent_activation>",
-  ].filter(Boolean).join("\n");
-}
-
 export function normalizeThreadTitle(value: string | null | undefined) {
   if (typeof value !== "string") {
     return null;
@@ -107,39 +81,3 @@ export function buildThreadTitleBootstrapInstructions() {
 `.trimStart();
 }
 
-export function buildCodexThreadBootstrapInstructions({
-  agentDefinition,
-  dedupedAgentDefinition,
-  harness,
-  routeUrl,
-  threadId,
-  workbenchLibraryInstructions,
-}: {
-  agentDefinition?: WorkbenchAgentDefinition | null;
-  dedupedAgentDefinition?: WorkbenchAgentDefinition | null;
-  harness: WorkbenchHarness;
-  routeUrl?: string | null;
-  threadId: string;
-  workbenchLibraryInstructions?: string | null;
-}) {
-  const sections: string[] = [];
-
-  if (workbenchLibraryInstructions?.trim()) {
-    sections.push(workbenchLibraryInstructions);
-  }
-
-  if (agentDefinition?.prompt.trim()) {
-    sections.push(buildAgentDefinitionInstructions(agentDefinition));
-  } else if (dedupedAgentDefinition?.prompt.trim()) {
-    sections.push(buildDedupedAgentActivationInstructions(dedupedAgentDefinition));
-  }
-
-  sections.push(MODE_STATE_TAG_INSTRUCTIONS);
-  sections.push(WORKBENCH_FILE_LINK_INSTRUCTIONS);
-
-  void harness;
-  void routeUrl;
-  void threadId;
-
-  return sections.length ? sections.join("\n\n") : null;
-}

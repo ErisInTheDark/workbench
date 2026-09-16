@@ -111,6 +111,8 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
     const verifyTranscript = async () => {
+      const pending = await runtime.daemon.questionnaires.pending();
+      assert.ok(Array.isArray(pending.data), "WB actions must reach the current provider definition after startup or replacement");
       assert.equal(await fs.readFile(retainedFile, "utf8"), retainedContents, "Reload must preserve legacy evidence");
       assert.deepEqual((await fs.readdir(legacyRoot, { recursive: true })).filter(file => /\.(?:json|jsonl|ndjson)$/u.test(file)),
         [path.basename(retainedFile)], "SQL reads and reload must not create legacy transcript files");
@@ -158,6 +160,10 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await installLifecycleProbe(runtime.project);
     const daemonStart = performance.now();
     await runtime.start();
+    let transcriptReady = false;
+    const stopAvailability = runtime.transcripts.onAvailabilityChange(available => { transcriptReady = available; });
+    stopAvailability();
+    assert.ok(transcriptReady, "Diagnostic startup must include transcript protocol readiness, not just an open socket");
     const daemonStartupMs = Math.round(performance.now() - daemonStart);
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const fixtureProject = catalog.data.find(project => path.resolve(project.rootPath) === runtime.project);
@@ -226,6 +232,8 @@ test("real application survives reload expiry, migrated candidate failure, retry
     }
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 }, "Owners must complete shutdown successfully before reopen");
     await runtime.start();
+    assert.deepEqual((await runtime.transcripts.read({ threadId: transcript.threadId, turnLimit: 1 }))?.loadedTurnIds,
+      [transcript.turnId], "Cold startup must permit an immediate durable read");
     await runtime.startApp();
     await assets();
     await verifyTranscript();

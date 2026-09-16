@@ -160,11 +160,12 @@
  * - ResolveExternalFileLinkRootsResponse: external-link root response.
  */
 
-import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot.ts";
+import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "./workbench/provider/provider-account.ts";
+import type { WorkbenchModelOption } from "./workbench/provider/provider-model.ts";
 import type { DraftId, FolderId, ProjectId, WorkbenchThreadId } from "./workbench/identity.ts";
 import type { CommandAction } from "./workbench/thread/workbench-thread-items.ts";
-import type { Thread } from "./codex/generated/app-server/v2/Thread.ts";
-import type { ThreadGoal } from "./codex/generated/app-server/v2/ThreadGoal.ts";
+export type { CodexThreadContextReadResponse as WorkbenchThreadContextReadResponse } from "./codex/thread-context.ts";
+import type { WorkbenchProviderGoal as ThreadGoal } from "./workbench/provider/provider-goal.ts";
 import type { ThreadTokenUsage } from "./workbench/thread/thread-context-usage.ts";
 import type { Turn } from "./workbench/thread/workbench-thread-turn.ts";
 import type { UserInput } from "./workbench/thread/workbench-thread-items.ts";
@@ -747,25 +748,7 @@ export interface WorkbenchProjectsPayload {
   rootPath: string;
 }
 
-export interface WorkbenchModelOption {
-  id: string;
-  displayName: string;
-  description: string;
-  hidden: boolean;
-  isDefault: boolean;
-  supportsPersonality: boolean;
-  supportsReasoningEffort: boolean;
-  supportedReasoningEfforts: string[];
-  defaultReasoningEffort: string | null;
-  supportsVision: boolean;
-  supportsFastMode: boolean;
-  inputModalities: string[];
-  maxContextWindowTokens: number | null;
-  contextWindow?: { defaultTokens: number; maximumTokens: number } | null;
-  additionalSpeedTiers: string[];
-  policyState: string | null;
-  billingMultiplier: number | null;
-}
+export type { WorkbenchModelOption } from "./workbench/provider/provider-model.ts";
 
 export interface WorkbenchComposerSettings {
   contextWindowTokens?: number | null;
@@ -880,6 +863,7 @@ export type ThreadPayload<Id extends string = WorkbenchThreadId | DraftId> =
   | (ThreadPayloadData<Extract<Id, DraftId>> & { isDraft: true });
 
 export interface ThreadPayloadData<Id extends string> extends ThreadSummary<Id> {
+  recencyAt?: number | null;
   browseResultEntries?: WorkbenchBrowseResultEntry[];
   contextWindowTokens?: number | null;
   model: string | null;
@@ -1042,14 +1026,6 @@ export interface WorkbenchSteerHistoryEntry {
   clientUserMessageId?: string | null;
   dispatchSequence?: number | null;
   error: string | null;
-}
-
-export interface WorkbenchThreadContextReadResponse {
-  browseResultEntries: WorkbenchBrowseResultEntry[];
-  entryScope?: WorkbenchThreadContextEntryScope;
-  questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
-  steerEntries: WorkbenchSteerHistoryEntry[];
-  thread: Omit<Thread, "turns"> & { turns: Turn[] };
 }
 
 export interface WorkbenchThreadContextEntryScope {

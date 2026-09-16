@@ -15,6 +15,7 @@ function deferred() {
 }
 
 function fixture() {
+  const unused = async (): Promise<never> => { throw new Error("This fixture exercises only model context."); };
   type Objects = { codexProvider: WorkbenchProvider; providers: WorkbenchProviderDispatcher };
   let generation = 0;
   let failStart = false;
@@ -32,7 +33,9 @@ function fixture() {
         const current = ++generation;
         const currentRead = read;
         return {
-          registrations: { codexProvider: { configuration: { modelContext: {
+          registrations: { codexProvider: {
+            threads: { history: { questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+            configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
             read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
           } } } },
           start: async () => {

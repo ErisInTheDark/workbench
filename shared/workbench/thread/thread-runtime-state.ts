@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - formatThreadStatus: flatten structured statuses for state comparisons.
  * - hasThreadActiveFlag: detect structured or flattened active-thread flags.
  * - isThreadStatusActive: detect active thread status without requiring turns.
  * - getCurrentTurn: return the newest turn.
@@ -13,6 +14,10 @@ import type { ThreadActiveFlag, ThreadStatus, Turn } from "./workbench-thread-tu
 import type { ThreadItem } from "./workbench-thread-items.ts";
 
 type ThreadLikeStatus = string | ThreadStatus;
+export function formatThreadStatus(status: ThreadStatus) {
+  return status.type === "active" && status.activeFlags.length
+    ? `active:${status.activeFlags.join(",")}` : status.type;
+}
 type ThreadLikeTurn = { status: string };
 type ThreadLike<TTurn extends ThreadLikeTurn> = {
   status: ThreadLikeStatus;

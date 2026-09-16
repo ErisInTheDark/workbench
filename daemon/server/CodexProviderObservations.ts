@@ -8,6 +8,7 @@
  */
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
+import { WorkbenchRateLimitSnapshotSchema } from "workbench-shared/workbench/provider/provider-account";
 import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs } from "workbench-shared/workbench/thread/thread-state";
 import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import type { JsonRpcNotification } from "./bridge-types";
@@ -17,6 +18,9 @@ import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-sou
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { mapProviderNotification, mapProviderThreadItem } from "./CodexProviderIdentity";
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
+import { toThreadPayload, toThreadTurn } from "workbench-shared/codex/thread-adapter";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 export function admitCodexTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
@@ -112,8 +116,18 @@ export default class CodexProviderObservations {
     const sourceId = typeof params?.threadId === "string" ? params.threadId : record(params?.thread)?.id;
     const native = typeof sourceId === "string"
       ? this.owners.threads.knownNativeBinding("codex", NativeThreadIdSchema.parse(sourceId)) : null;
-    const publicNotification = native
+    let publicNotification = native
       ? mapProviderNotification(this.owners, native, notification as ServerNotification) : notification;
+    const publicParams = record(publicNotification.params);
+    if (publicNotification.method === "thread/started" && publicParams?.thread) {
+      publicNotification = { ...publicNotification, params: {
+        ...publicParams, thread: { ...toThreadPayload(publicParams.thread as Thread, "codex"), isDraft: false },
+      } };
+    } else if ((publicNotification.method === "turn/started" || publicNotification.method === "turn/completed") && publicParams?.turn) {
+      publicNotification = { ...publicNotification, params: {
+        ...publicParams, turn: toThreadTurn(publicParams.turn as Turn, "codex"),
+      } };
+    }
     return { notification: publicNotification, nativeNotification: notification, observation: this.workbench(publicNotification) };
   }
 
@@ -125,6 +139,8 @@ export default class CodexProviderObservations {
     const title = notification.method === "thread/name/updated" && typeof titleValue === "string"
       ? normalizeThreadTitle(titleValue) : null;
     return {
+      ...(notification.method === "account/rateLimits/updated"
+        ? { accountLimits: WorkbenchRateLimitSnapshotSchema.parse(params?.rateLimits) } : {}),
       ...(identity ? { projectId: identity.projectId } : {}),
       lifecycle: mapProviderLifecycleNotification(notification, this.owners.threads),
       activity: mapProviderActivityNotification(notification, this.owners.threads),

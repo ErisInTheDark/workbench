@@ -8,7 +8,7 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import type {
   ThreadPayload,
   WorkbenchBrowseResultEntry,
@@ -494,7 +494,7 @@ export default memo(function ThreadViewContent ({
     [activeThread],
   );
   const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
-  const usesSqlTranscript = activeThread?.harness === "codex" && !activeThread.isDraft;
+  const usesSqlTranscript = Boolean(activeThread && !activeThread.isDraft);
   const activeTranscriptSource = usesSqlTranscript
     && renderActiveThread
     && "threadId" in transcriptSource
@@ -1187,7 +1187,7 @@ export default memo(function ThreadViewContent ({
                     projectRootPath={projectRootPath}
                     presentationSource={{
                       kind: "sqlite",
-                      sourceKey: `codex:${activeTranscriptProjection.thread.id}`,
+                      sourceKey: `${activeThread.harness}:${activeTranscriptProjection.thread.id}`,
                     }}
                     projection={activeTranscriptProjection}
                     relatedThreadsById={relatedThreadsById}
@@ -1284,7 +1284,7 @@ export default memo(function ThreadViewContent ({
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard thread={activeThread} /> : null}
-        {activeThread?.harness === "codex" && threadGoalControls ? (
+        {activeThread && threadGoalControls ? (
           <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
             {agentTabs}
           </ThreadGoalControl>

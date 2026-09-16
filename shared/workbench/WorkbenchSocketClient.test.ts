@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CodexAppServerClient } from "./app-server-client.ts";
+import WorkbenchSocketClient from "./WorkbenchSocketClient.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD } from "../workbench/websocket-stream.ts";
@@ -49,7 +49,6 @@ class FakeWebSocket {
   readyState = FakeWebSocket.OPEN;
   throwNext = false;
   closeCalls = 0;
-  initializeResult: unknown = { userAgent: "test" };
   readonly sent: Array<Record<string, unknown>> = [];
   private readonly listeners = new Map<string, Listener[]>();
 
@@ -74,9 +73,6 @@ class FakeWebSocket {
     }
     const request = JSON.parse(payload) as { id?: number; method?: string };
     this.sent.push(request as Record<string, unknown>);
-    if (request.method === "initialize") {
-      queueMicrotask(() => this.respond(request.id ?? 0, this.initializeResult));
-    }
   }
 
   respond(id: number, result: unknown) {
@@ -106,7 +102,7 @@ test("a socket that errors before opening is closed before replacement", async (
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     await assert.rejects(client.connectSocket("ws://test"), /Failed to connect/u);
     assert.equal(sockets[0]?.closeCalls, 1);
     await client.connectSocket("ws://test");
@@ -127,7 +123,7 @@ test("sendRequest removes a pending handler when socket send throws", async () =
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     await client.connect("ws://test");
     assert.ok(socket);
     socket.throwNext = true;
@@ -149,7 +145,7 @@ test("a normal request resolves once by response id", async () => {
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     await client.connect("ws://test");
     const response = client.sendRequest<{ ok: true }>({ id: 42, method: "test" });
     socket?.respond(42, { ok: true });
@@ -170,7 +166,7 @@ test("shared transcript notifications and connection closure reach their Workben
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     await client.connect("ws://test");
     const notifications: unknown[] = [];
     let closes = 0;
@@ -228,7 +224,7 @@ test("a closed socket is fenced before fresh continuity is announced", async () 
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     const notifications: string[] = [];
     let closes = 0;
     let reconnects = 0;
@@ -291,7 +287,7 @@ test("default receipt timers preserve the browser global receiver", async () => 
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient();
+    const client = new WorkbenchSocketClient();
     await client.connect("ws://test");
     assert.ok(socket);
     socket.notify({
@@ -321,7 +317,7 @@ test("batches cumulative receipts after notification listeners consume events", 
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient({
+    const client = new WorkbenchSocketClient({
       clearEventStreamAckTimeout: clock.clearTimeout,
       setEventStreamAckTimeout: clock.setTimeout,
     });
@@ -365,7 +361,7 @@ test("does not acknowledge failed dispatch or cancelled receipt work", async () 
     }
   } as unknown as typeof WebSocket;
   try {
-    const client = new CodexAppServerClient({
+    const client = new WorkbenchSocketClient({
       clearEventStreamAckTimeout: clock.clearTimeout,
       setEventStreamAckTimeout: clock.setTimeout,
     });

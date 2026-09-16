@@ -19,8 +19,11 @@ import WorkbenchThreadStateRelationalRepository from "./database/thread-state/Wo
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("context capability bounds reject invalid target mutations without writing", async () => {
+  const unused = async (): Promise<never> => { throw new Error("Profile validation must only read model context."); };
   const { controller, targetWrites } = createController({
-    providers: { get: () => ({ configuration: { modelContext: {
+    providers: { get: () => ({
+      threads: { history: { questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
       read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
     } } }) },
   });

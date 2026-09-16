@@ -274,7 +274,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     listProjectSkillDefinitionsForPrompt(context),
     listWorkbenchLibraryInstructions(),
   ]);
-  const skillManifest = context.harness === "codex"
+  const skillManifest = context.skillCatalogPresentation === "references"
     ? await buildWorkbenchSkillCatalog(projectSkills)
     : await buildWorkbenchSkillBodyCatalog(projectSkills);
   const slots: Record<string, string> = {

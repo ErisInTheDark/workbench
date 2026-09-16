@@ -10,6 +10,44 @@ import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
+test("questionnaire history retains an answer before the first provider item", async () => {
+  const entry = {
+    threadId: "thread", turnId: "turn", itemId: "question", requestKey: "request",
+    insertAfterItemId: null, insertAfterItemIndex: -1, resolvedAt: 1,
+    request: {
+      id: "request", title: "Continue?", summary: "", submitLabel: "Submit",
+      questions: [{ id: "continue", header: "", question: "Continue?", allowOther: true, isSecret: false, options: [] }],
+    },
+    response: { answers: { continue: { answers: ["yes"] } } },
+  };
+  const client = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ data: [entry] }) as TResponse });
+  assert.deepEqual((await client.threads.history.questionnaires({ threadId: "thread" })).data, [entry]);
+});
+
+test("message admission never resends an ambiguous response or transport failure", async (context) => {
+  const logged: string[] = [];
+  context.mock.method(console, "error", (message: string) => { logged.push(message); });
+  for (const outcome of ["invalid", "disconnected"] as const) {
+    let sent = 0;
+    const client = new WorkbenchDaemonClient({
+      request: async <TResponse>() => {
+        sent += 1;
+        if (outcome === "disconnected") throw new Error("connection closed after sending");
+        return { kind: "steered", turnId: { privateMarker: "private-admission-value" } } as TResponse;
+      },
+    });
+    await assert.rejects(client.threads.message({
+      threadId: "4fdfc1fa-b939-48ec-a1d8-ff27befa708e",
+      clientMessageId: "message",
+      input: [{ type: "text", text: "hello", text_elements: [] }],
+      intent: "continue",
+    }), outcome === "invalid" ? /response was invalid/ : /connection closed/);
+    assert.equal(sent, 1);
+  }
+  assert.equal(logged.length, 1);
+  assert.ok(logged.every(message => !message.includes("private-admission-value")));
+});
+
 test("profile recency defaults for old servers and rejects malformed values", async (context) => {
   const logged: string[] = [];
   context.mock.method(console, "error", (message: string) => { logged.push(message); });

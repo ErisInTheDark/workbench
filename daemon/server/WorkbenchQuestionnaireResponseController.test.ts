@@ -8,7 +8,8 @@ import { installWorkbenchDatabaseSchema } from "./database/workbench-database-sc
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadStateQuestionnaireRepository from "./database/thread-state/WorkbenchThreadStateQuestionnaireRepository";
 
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { JsonRpcRequest } from "./bridge-types";
+import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchQuestionnaireResponseController, {
   type WorkbenchQuestionnaireResponseStatePort,
 } from "./WorkbenchQuestionnaireResponseController";
@@ -22,7 +23,6 @@ import {
 import type {
   WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchHarness } from "workbench-shared/types";
 
 const projectId = ProjectIdSchema.parse("local:///project");
 const threadId = WorkbenchThreadIdSchema.parse("thread");
@@ -54,6 +54,7 @@ const questionnaire = {
 
 function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   admissionError?: string;
+  admissionWarning?: string;
   admissionKind?: "started" | "steered";
   missingTurnIdentity?: boolean;
   approval?: boolean;
@@ -122,34 +123,43 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       }
     },
   };
-  const controller = new WorkbenchQuestionnaireResponseController({
-    harnesses: {
-      request: async (_harness, request): Promise<JsonRpcResponse> => {
-        requests.push(request);
-        events.push(request.method);
-        if (request.method === "workbench/codex/message/admit" && options.admissionError) {
-          return { id: request.id ?? null, error: { code: -32000, message: options.admissionError } };
-        }
-        if (request.method === "workbench/codex/message/admit") {
-          return options.admissionKind === "steered"
-            ? { id: request.id ?? null, result: { kind: "steered", turnId: nativeAdmittedTurnId } }
-            : { id: request.id ?? null, result: { kind: "started", turn: { id: nativeAdmittedTurnId } } };
-        }
-        if (request.method === "turn/start") {
-          return { id: request.id ?? null, result: { turn: { id: nativeAdmittedTurnId } } };
-        }
-        return { id: request.id ?? null, result: { ok: true } };
+  const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation."); };
+  const observe = (method: string, params: object) => {
+    requests.push({ method, params });
+    events.push(method);
+  };
+  const provider: WorkbenchProvider = {
+    configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+    threads: {
+      latestTurn: unused, admitTurn: unused,
+      history: { questionnaires: unused, steers: unused, browse: unused },
+      create: unused, list: unused, read: unused, page: unused, rename: unused,
+      compact: unused, interrupt: unused, materialize: unused,
+      submit: async input => {
+        observe("submit", input);
+        if (options.admissionError) throw new Error(options.admissionError);
+        if (options.missingTurnIdentity) throw new Error("The accepted turn has no canonical identity.");
+        return options.admissionKind === "steered"
+          ? { kind: "steered", turnId: admittedTurnId, warning: options.admissionWarning }
+          : { kind: "started", warning: options.admissionWarning, turn: {
+            id: admittedTurnId, status: "inProgress", items: [], itemsView: "full",
+            error: null, startedAt: null, completedAt: null, durationMs: null,
+          } };
       },
-      resolvePublicRequest: async (harness: WorkbenchHarness, request) => ({
-        harness,
-        request: {
-          ...request,
-          params: {
-            ...(request.params as Record<string, unknown>),
-            threadId: nativeThreadId,
-          },
-        },
-      }),
+    },
+    interactions: {
+      interruptRetaining: unused,
+      pending: unused,
+      canDeliver: async () => options.deliverable ?? true,
+      deliver: async () => { events.push("waiter"); return true; },
+      respond: async input => { observe("respond", input); return {}; },
+      supplement: async input => { observe("supplement", input); },
+      record: async entry => { observe("record", entry); return {}; },
+    },
+  };
+  const controller = new WorkbenchQuestionnaireResponseController({
+    providers: { get: () => provider },
+    harnesses: {
       resolveThreadIdentity: async () => ({
         bindings: [{
           harness: options.harness ?? "codex",
@@ -162,26 +172,6 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         projectRoot: "C:/project",
         threadId,
       }),
-      resolveTurnIdentity: async (input) => {
-        assert.equal(input.threadId, threadId);
-        assert.equal(input.projectId, projectId);
-        assert.equal(input.turnId, nativeAdmittedTurnId);
-        if (options.missingTurnIdentity) return null;
-        return {
-          threadId, turnId: admittedTurnId, turnIndex: 1,
-          native: {
-            harness: options.harness ?? "codex", nativeLocation: "C:/project",
-            nativeThreadId, nativeTurnId: nativeAdmittedTurnId,
-          },
-        };
-      },
-    },
-    questionnaires: {
-      canDeliver: () => options.deliverable ?? true,
-      deliver: async () => {
-        events.push("waiter");
-        return { ...questionnaire, response, threadId: nativeThreadId, turnId: NativeTurnIdSchema.parse("native-turn") };
-      },
     },
     resolveLatestTurn: async () => options.latestTurnId === undefined ? latestTurnId : options.latestTurnId,
     state,
@@ -223,14 +213,27 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
     const repository = new WorkbenchThreadStateQuestionnaireRepository(database);
     const pending = { ...questionnaire, turnId: null, itemId: null };
     repository.replace(thread.threadId, { pending, history: [] });
+    const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
     const controller = new WorkbenchQuestionnaireResponseController({
+      providers: { get: () => ({
+        configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+        threads: {
+          latestTurn: unused, admitTurn: unused,
+          history: { questionnaires: unused, steers: unused, browse: unused },
+          create: unused, list: unused, read: unused, page: unused, rename: unused,
+          compact: unused, interrupt: unused, materialize: unused,
+          submit: async () => ({ kind: "steered", turnId: turn.turnId }),
+        },
+        interactions: {
+          interruptRetaining: unused,
+          pending: unused,
+          canDeliver: async () => false, deliver: async () => false,
+          respond: unused, supplement: unused, record: async () => ({}),
+        },
+      }) },
       harnesses: {
-        request: async (_harness, input) => ({ id: input.id ?? null, result: { turn: { id: nativeAdmittedTurnId } } }),
-        resolvePublicRequest: async (_harness, input) => ({ harness: "codex", request: { ...input, params: { threadId: nativeThreadId } } }),
         resolveThreadIdentity: async () => thread,
-        resolveTurnIdentity: async (input) => identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId }),
       },
-      questionnaires: { canDeliver: () => false, deliver: async () => null },
       resolveLatestTurn: async () => null,
       state: {
         resolvePendingQuestionnaire: async (input, deliver) => {
@@ -268,16 +271,15 @@ test("terminal lifecycle admits even when the daemon still exposes an orphan wai
 
   assert.equal(result.route, "admitted");
   assert.equal(harness.events.includes("waiter"), false);
-  assert.deepEqual(harness.events.slice(0, 2), ["workbench/codex/message/admit", "settled"]);
-  const admission = harness.requests.find(({ method }) => method === "workbench/codex/message/admit");
-  const startRequest = (admission?.params as { startRequest?: JsonRpcRequest } | undefined)?.startRequest;
-  assert.deepEqual((startRequest?.params as { input?: unknown[] } | undefined)?.input?.slice(1), request().supplementalInput);
+  assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
+  const admission = harness.requests.find(({ method }) => method === "submit");
+  assert.deepEqual((admission?.params as { input?: unknown[] } | undefined)?.input?.slice(1), request().supplementalInput);
   assert.deepEqual(
-    (startRequest as { workbenchPromptContext?: { activatedSkillPaths?: string[] } } | undefined)?.workbenchPromptContext?.activatedSkillPaths,
+    (admission?.params as { context?: { activatedSkillPaths?: string[] } } | undefined)?.context?.activatedSkillPaths,
     request().activatedSkillPaths,
   );
   assert.equal(harness.settled(), true);
-  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
   assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, null);
 });
@@ -294,9 +296,9 @@ test("matching pending-input lifecycle resolves its live waiter before settlemen
   const result = await harness.controller.respond({ ...request(), activatedSkillPaths: undefined, supplementalInput: undefined });
 
   assert.equal(result.route, "live");
-  assert.deepEqual(harness.events, ["waiter", "settled", "questionnaire/history/record"]);
-  assert.equal(harness.requests.some(({ method }) => method === "workbench/codex/message/admit"), false);
-  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  assert.deepEqual(harness.events, ["waiter", "settled", "record"]);
+  assert.equal(harness.requests.some(({ method }) => method === "submit"), false);
+  const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, latestTurnId);
   assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, null);
 });
@@ -330,7 +332,7 @@ test("detached admission stamps a steered response onto the accepted active turn
   const result = await harness.controller.respond(request());
 
   assert.equal(result.route, "admitted");
-  const recorded = harness.requests.find(({ method }) => method === "questionnaire/history/record");
+  const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
 });
 
@@ -341,17 +343,16 @@ test("detached provider admission stamps its response onto the started turn", as
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
-  }, { harness: "opencode", requestKey });
+  }, { requestKey });
 
   const result = await harness.controller.respond({
     ...request(),
-    harness: "opencode",
     requestKey,
   });
 
   assert.equal(result.route, "admitted");
   assert.equal(harness.historyTurnId(), admittedTurnId);
-  assert.equal(harness.requests.some(({ method }) => method === "turn/start"), true);
+  assert.equal(harness.requests.some(({ method }) => method === "submit"), true);
 });
 
 test("approval responses retain their active owner and detached approvals remain pending", async () => {
@@ -365,9 +366,9 @@ test("approval responses retain their active owner and detached approvals remain
 
   const result = await live.controller.respond(request());
   assert.equal(result.route, "live");
-  const steer = live.requests.find(({ method }) => method === "turn/steer");
-  assert.equal((steer?.params as { expectedTurnId?: string } | undefined)?.expectedTurnId, turnId);
-  const recorded = live.requests.find(({ method }) => method === "questionnaire/history/record");
+  const steer = live.requests.find(({ method }) => method === "supplement");
+  assert.equal((steer?.params as { turnId?: string } | undefined)?.turnId, turnId);
+  const recorded = live.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, turnId);
   assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, questionnaire.itemId);
 
@@ -379,7 +380,7 @@ test("approval responses retain their active owner and detached approvals remain
   }, { approval: true });
   await assert.rejects(detached.controller.respond(request()), /Approval requests cannot be submitted/u);
   assert.equal(detached.settled(), false);
-  assert.equal(detached.requests.some(({ method }) => method === "workbench/codex/message/admit"), false);
+  assert.equal(detached.requests.some(({ method }) => method === "submit"), false);
 });
 
 test("failed detached admission leaves durable settlement untouched", async () => {
@@ -393,7 +394,7 @@ test("failed detached admission leaves durable settlement untouched", async () =
   await assert.rejects(harness.controller.respond(request()), /admission failed/u);
 
   assert.equal(harness.settled(), false);
-  assert.deepEqual(harness.events, ["workbench/codex/message/admit"]);
+  assert.deepEqual(harness.events, ["submit"]);
 });
 
 test("missing accepted turn identity cannot settle history with a native id", async () => {
@@ -402,7 +403,7 @@ test("missing accepted turn identity cannot settle history with a native id", as
   }, { missingTurnIdentity: true });
   await assert.rejects(harness.controller.respond(request()), /no canonical identity/u);
   assert.equal(harness.settled(), false);
-  assert.equal(harness.requests.some(({ method }) => method === "questionnaire/history/record"), false);
+  assert.equal(harness.requests.some(({ method }) => method === "record"), false);
 });
 
 test("a replaced request key cannot deliver or settle the old answer", async () => {
@@ -435,7 +436,17 @@ test("concurrent duplicate answers admit and settle exactly once", async () => {
 
   assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
   assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
-  assert.equal(harness.requests.filter(({ method }) => method === "workbench/codex/message/admit").length, 1);
-  assert.equal(harness.requests.filter(({ method }) => method === "questionnaire/history/record").length, 1);
-  assert.deepEqual(harness.events.slice(0, 2), ["workbench/codex/message/admit", "settled"]);
+  assert.equal(harness.requests.filter(({ method }) => method === "submit").length, 1);
+  assert.equal(harness.requests.filter(({ method }) => method === "record").length, 1);
+  assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
+});
+
+test("accepted continuation warnings survive successful history recording without resending", async () => {
+  const harness = createHarness({
+    kind: "stopped", reason: "userMarkedStopped", settled: false,
+  }, { admissionWarning: "Accepted, but provider metadata settlement failed." });
+  const result = await harness.controller.respond(request());
+  assert.equal(result.warning, "Accepted, but provider metadata settlement failed.");
+  assert.equal(harness.requests.filter(({ method }) => method === "submit").length, 1);
+  assert.equal(harness.settled(), true);
 });

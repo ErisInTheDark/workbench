@@ -249,6 +249,11 @@ export function mapProviderNotification(
   const turnId = "turnId" in params && params.turnId !== null
     ? owners.threads.workbenchTurnIdForNative({ ...identity, nativeTurnId: NativeTurnIdSchema.parse(params.turnId) })
     : null;
+  if (notification.method === "thread/goal/updated") {
+    return { ...notification, params: {
+      ...notification.params, threadId, turnId, goal: { ...notification.params.goal, threadId },
+    } };
+  }
   const itemId = turnId !== null && "itemId" in params && typeof params.itemId === "string"
     ? providerReferenceId(owners, native.harness, threadId, turnId, params.itemId)
     : null;

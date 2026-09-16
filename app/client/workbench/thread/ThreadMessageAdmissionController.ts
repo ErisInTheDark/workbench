@@ -1,23 +1,18 @@
 /*
  * Exports:
- * - CodexMessageRequestClient: minimal transport used by existing Codex message admission.
+ * - WorkbenchMessageRequestClient: validated WB message action transport.
  * - ThreadMessageAdmissionLifecycleState: client lifecycle values that fence message preparation.
- * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one existing Codex admission.
+ * - ThreadMessageAdmissionRequest: instruction intent and optimistic projection callbacks.
  * - ThreadMessageAdmissionResult: admitted steer or started-turn result.
  * - ThreadMessageAdmissionTarget: exact source and selection ownership for one Codex admission.
  * - ThreadMessageAdmissionController: existing Codex message admission owner.
  * - default ThreadMessageAdmissionController: create the message admission owner.
  */
 
-import type { ThreadResumeParams } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeParams";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import type { TurnStartParams } from "workbench-shared/codex/generated/app-server/v2/TurnStartParams";
-import type { TurnSteerParams } from "workbench-shared/codex/generated/app-server/v2/TurnSteerParams";
-import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
-import { isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
-import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/codex/thread-state";
+import type { WorkbenchUserInput as UserInput, WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
+import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
+import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { ThreadPayload } from "workbench-shared/types";
 import { isPendingWorkbenchTurn } from "workbench-shared/workbench/thread/thread-admission";
 import type { ThreadDocumentStore as ThreadDocumentStoreApi } from "../state/ThreadDocumentStore";
@@ -26,14 +21,9 @@ import type { ThreadOptimisticInputStore } from "./ThreadOptimisticInputStore";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 
-type CodexRequest = { method: string; params?: unknown } & Record<string, unknown>;
-type ManagedMessageAdmissionResponse =
-  | { kind: "started"; turn: Omit<Turn, "id"> & { id: WorkbenchTurnId } }
-  | { kind: "steered"; turnId: WorkbenchTurnId };
-
-export interface CodexMessageRequestClient {
+export interface WorkbenchMessageRequestClient {
   connect: () => Promise<void>;
-  sendRequest: <TResponse = unknown>(message: CodexRequest) => Promise<CodexJsonRpcResponse<TResponse>>;
+  submit: (input: WorkbenchThreadMessage) => Promise<WorkbenchThreadMessageResult>;
 }
 
 export interface ThreadMessageAdmissionLifecycleState {
@@ -67,15 +57,7 @@ export interface ThreadMessageAdmissionRequest {
   projectSteeredTurn: (context: ThreadMessageProjectionContext & {
     turnId: WorkbenchTurnId;
   }) => void;
-  resumeRequest: CodexRequest & { method: "thread/resume"; params: ThreadResumeParams };
-  startRequest: CodexRequest & {
-    method: "turn/start";
-    params: Omit<TurnStartParams, "clientUserMessageId" | "input" | "threadId">;
-  };
-  steerRequest: CodexRequest & {
-    method: "turn/steer";
-    params: Omit<TurnSteerParams, "clientUserMessageId" | "expectedTurnId" | "input" | "threadId">;
-  };
+  context?: WorkbenchMessageContext;
 }
 
 export type ThreadMessageAdmissionResult =
@@ -84,7 +66,7 @@ export type ThreadMessageAdmissionResult =
   | { clientUserMessageId: string; kind: "turnStarted"; turn: Turn };
 
 interface ThreadMessageAdmissionControllerOptions {
-  client: CodexMessageRequestClient;
+  client: WorkbenchMessageRequestClient;
   documents: ThreadDocumentStoreApi;
   emitWarning: (message: string) => void;
   getLifecycleState: (threadId: string) => ThreadMessageAdmissionLifecycleState;
@@ -123,7 +105,6 @@ function ThreadMessageAdmissionController({
       || !lifecycle.projectId
       || !threadKey
       || !thread
-      || thread.harness !== "codex"
       || thread.isDraft
       || thread.id !== threadId
       || (selectionBound && selectedThreadKey !== threadKey)
@@ -189,18 +170,15 @@ function ThreadMessageAdmissionController({
     const entry = optimisticInputs.enqueueSteer(thread, activeTurn.id, input);
     render(capture.threadKey);
 
-    let response: CodexJsonRpcResponse<TurnSteerResponse>;
+    let response: WorkbenchThreadMessageResult;
     try {
-      response = await client.sendRequest<TurnSteerResponse>({
-        ...request.steerRequest,
-        params: {
-          ...request.steerRequest.params,
-          clientUserMessageId: entry.handle,
+      response = await client.submit({
+          intent: "steer",
+          clientMessageId: entry.handle,
           expectedTurnId: activeTurn.id,
           input,
           threadId: capture.threadId,
-        },
-        workbenchHarness: "codex",
+          ...(request.context ? { context: request.context } : {}),
       });
     } catch (error) {
       const status = optimisticInputs.transition(entry.handle, "failed");
@@ -213,20 +191,8 @@ function ThreadMessageAdmissionController({
       throw error;
     }
 
-    if (isCodexJsonRpcFailure(response)) {
-      const status = optimisticInputs.transition(entry.handle, "failed");
-      if (sources.has(capture.threadKey)) {
-        render(capture.threadKey);
-      }
-      if (status === "sent") {
-        return { handle: entry.handle, kind: "admitted" };
-      }
-      throw new Error(response.error.message);
-    }
-
-    const acknowledgedTurnId = typeof response.result?.turnId === "string"
-      ? response.result.turnId.trim()
-      : "";
+    if (response.warning) emitWarning(response.warning);
+    const acknowledgedTurnId = response.kind === "steered" ? response.turnId.trim() : response.turn.id.trim();
     if (!acknowledgedTurnId) {
       const status = optimisticInputs.transition(entry.handle, "failed");
       if (sources.has(capture.threadKey)) {
@@ -276,16 +242,6 @@ function ThreadMessageAdmissionController({
       projectContextGeneration: capture.projectContextGeneration,
       threadKey: capture.threadKey,
     };
-    const startRequest = {
-      ...request.startRequest,
-      params: {
-        ...request.startRequest.params,
-        clientUserMessageId,
-        input,
-        threadId: capture.threadId,
-      },
-      workbenchHarness: "codex",
-    };
     request.projectPendingTurn(projectionContext);
     const sourceRevision = sources.getRevision(capture.threadKey);
     const settleFailedProjection = () => {
@@ -295,17 +251,14 @@ function ThreadMessageAdmissionController({
       }
       return { handle: clientUserMessageId, kind: "admitted" } as const;
     };
-    let response: CodexJsonRpcResponse<ManagedMessageAdmissionResponse>;
+    let response: WorkbenchThreadMessageResult;
     try {
-      response = await client.sendRequest<ManagedMessageAdmissionResponse>({
-        method: "workbench/codex/message/admit",
-        params: {
-          resumeRequest: request.resumeRequest,
-          startRequest,
-          ...(!capture.startNewTurn ? { steerRequest: request.steerRequest } : {}),
+      response = await client.submit({
+          intent: capture.startNewTurn ? "newTurn" : "continue",
+          clientMessageId: clientUserMessageId,
+          input,
           threadId: capture.threadId,
-        },
-        workbenchHarness: "codex",
+          ...(request.context ? { context: request.context } : {}),
       });
     } catch (error) {
       const admitted = settleFailedProjection();
@@ -313,14 +266,9 @@ function ThreadMessageAdmissionController({
       if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw error;
     }
-    if (isCodexJsonRpcFailure(response)) {
-      const admitted = settleFailedProjection();
-      if (admitted) return admitted;
-      if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
-      throw new Error(response.error.message);
-    }
-    if (response.result?.kind === "steered") {
-      const turnId = response.result.turnId.trim();
+    if (response.warning) emitWarning(response.warning);
+    if (response.kind === "steered") {
+      const turnId = response.turnId.trim();
       if (!turnId) {
         const admitted = settleFailedProjection();
         if (admitted) return admitted;
@@ -331,7 +279,7 @@ function ThreadMessageAdmissionController({
       request.projectSteeredTurn({ ...projectionContext, turnId: admittedTurnId });
       return { handle: clientUserMessageId, kind: "admitted" };
     }
-    const turn = response.result?.kind === "started" ? response.result.turn : null;
+    const turn = response.kind === "started" ? response.turn : null;
     if (!turn || typeof turn.id !== "string" || !turn.id.trim()) {
       const admitted = settleFailedProjection();
       if (admitted) return admitted;

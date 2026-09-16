@@ -16,6 +16,8 @@ import { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNot
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import CodexThreadOperations from "./CodexThreadOperations";
+import type WorkbenchProvider from "./WorkbenchProvider";
 
 const canonicalFixtureLookup = {
   knownThread: (reference: fixtureIdentitySchemas.ThreadReference) => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(reference) }),
@@ -92,11 +94,34 @@ function providerThread(cwd: string, threadId: string, fields: Partial<ThreadRea
   };
 }
 
-function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThreadStateFeature>[0], "identities" | "database"> & {
+function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThreadStateFeature>[0], "identities" | "database" | "providers" | "harnesses"> & {
   database: ReturnType<typeof createThreadStateDatabase>;
+  harnesses: ReturnType<typeof createHarnesses>;
+  interruptRetainingQuestionnaire?: (threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => Promise<boolean>;
 }) {
-  return new WorkbenchThreadStateFeature({
+  const operations = new CodexThreadOperations({
+    bridge: {
+      ensureInitialized: async () => {},
+      handleServerRequest: request => options.harnesses.request("codex", request),
+    },
+    identities: options.database.identities,
+    resolveProject: async cwd => (await options.resolveProjectFromCwd(cwd)).project,
+    questionnaires: {
+      canDeliver: () => false,
+      deliver: async () => { throw new Error("Unexpected questionnaire delivery"); },
+      interruptRetainingQuestionnaire: options.interruptRetainingQuestionnaire ?? (async () => {
+        throw new Error("Unexpected questionnaire interruption");
+      }),
+    },
+  });
+  const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
+  const provider: WorkbenchProvider = {
+    threads: operations, interactions: operations.interactions,
+    configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+  };
+  const feature = new WorkbenchThreadStateFeature({
     ...options, identities: options.database.identities,
+    providers: { get: () => provider },
     getProjectCatalog: () => {
       const catalog = options.getProjectCatalog();
       const admitted = options.database.sqlite.prepare("SELECT id FROM workbench_projects ORDER BY id").all() as { id: string }[];
@@ -105,6 +130,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
       }))] };
     },
   });
+  return Object.assign(feature, { observeThread: (thread: ThreadReadResponse["thread"]) => operations.observeThread(thread) });
 }
 
 test("browser project admission rejects unknown owners before loading or replacing observations", async () => {
@@ -279,7 +305,7 @@ test("failed interruption cannot mark the thread complete or discard its questio
 });
 
 test("composer snooze preserves provider questionnaires and fences failures or raced answers", async () => {
-  for (const harness of ["codex", "copilot", "opencode"] as const) {
+  for (const harness of ["codex"] as const) {
     for (const outcome of ["snooze", "fail", "answer"] as const) {
       const h = await questionnaireHarness(harness);
       try {
@@ -327,18 +353,6 @@ test("a retained questionnaire can be snoozed after its thread was marked comple
     assert.equal(entry.lifecycle.kind, "needsAttention");
     assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
   } finally { await h.feature.dispose(); }
-});
-
-test("other provider questionnaires complete through their existing interrupt without Codex goal or waiter operations", async () => {
-  for (const harness of ["copilot", "opencode"] as const) {
-    const h = await questionnaireHarness(harness);
-    try {
-      const response = await h.complete();
-      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
-      assert.deepEqual(h.requests.map(request => request.method), ["thread/read", "turn/interrupt"]);
-      assert.deepEqual(h.releases, []);
-    } finally { await h.feature.dispose(); }
-  }
 });
 
 test("questionnaire completion interrupts current work rather than its historical turn", async () => {
@@ -394,6 +408,14 @@ test("provider sidebar normalization converts seconds at the reloadable feature 
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 1_720_000_000_000);
   const fallback = normalizeProviderSidebarEntry("codex", { id: "fallback", recencyAt: 1_700_000_000, status: { type: "idle" }, turns: [], updatedAt: 1_723_456_789 });
   assert.equal(fallback?.entryKind === "thread" ? fallback.orderAt : null, 1_700_000_000_000);
+});
+
+test("WB active flags retain working sidebar state", () => {
+  const entry = normalizeProviderSidebarEntry("codex", {
+    id: "thread", status: "active:waitingOnUserInput", updatedAt: 1, turns: [],
+  });
+  assert.ok(entry?.entryKind === "thread");
+  assert.equal(entry.lifecycle.kind, "working");
 });
 
 test("provider sidebar normalization replaces identifier titles with first-message previews", () => {
@@ -537,7 +559,7 @@ test("creation installs captured settings before first admission and refreshes o
       const captured = await feature.captureCreationProfile(harness, "C:/workspace", {
         kind: "snapshot", selection: { kind: "profile", profileId: "profile", settings },
       });
-      const native = providerThread("C:/workspace", "created");
+      const native = { ...await feature.observeThread(providerThread("C:/workspace", "created")), harness };
       await feature.installCreatedProfile(harness, native, captured.selection);
       assert.equal(catalogueReads, 0);
       assert.deepEqual((await feature.readProviderProfile(harness, native)).selection, captured.selection);
@@ -607,7 +629,7 @@ test("agent status is a canonical thread mutation without provider reads", async
   } finally { await h.feature.dispose(); }
 });
 
-test("Codex MCP admission reads thread metadata without hydrating transcript turns", async () => {
+test("MCP admission consumes translated metadata without additional provider reads", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
   const requests: JsonRpcRequest[] = [];
   const resolvedCwds: string[] = [];
@@ -647,15 +669,12 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  assert.deepEqual(await feature.getCodexMcpState(fixtureIdentityValues.NativeThreadId["thread"]), {
+  const observed = await feature.observeThread(providerThread(storageRoot, "thread", { id: "thread" }));
+  assert.deepEqual(await feature.getProviderMcpState(observed), {
     generation: null,
     projectId: fixtureIdentityValues.ProjectId.project,
   });
-  assert.deepEqual(requests, [{
-    id: 0,
-    method: "thread/read",
-    params: { includeTurns: false, threadId: "thread" },
-  }]);
+  assert.deepEqual(requests, []);
   const selection = {
     kind: "custom" as const,
     settings: {
@@ -674,11 +693,11 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,
     sessionId: "thread", source: "cli", threadSource: null,
   };
-  assert.deepEqual(await feature.prepareCodexProfile(provider), {
+  assert.deepEqual(await feature.prepareProviderProfile(await feature.observeThread(provider)), {
     cwd: storageRoot, projectId: fixtureIdentityValues.ProjectId.project, selection, subagentName: null,
   });
   assert.equal(resolvedCwds.at(-1), storageRoot);
-  await assert.rejects(feature.prepareCodexProfile({ ...provider, cwd: "/unowned" }), /Unowned cwd/u);
+  await assert.rejects(async () => feature.prepareProviderProfile(await feature.observeThread({ ...provider, cwd: "/unowned" })), /Unowned cwd/u);
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
@@ -710,7 +729,7 @@ for (const foreignPage of ["first", "last"] as const) {
       harnesses: createHarnesses(async (harness, request) => {
         if (request.method === "thread/read") return { id: request.id ?? null, result: { thread: local } };
         await releaseListing.promise;
-        if (harness !== "copilot") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+        if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
         const last = Boolean((request.params as { cursor?: string }).cursor);
         return { id: request.id ?? null, result: {
           data: [...(!last ? [neighbour] : []), ...(last === (foreignPage === "last") ? [foreign] : [])],
@@ -733,14 +752,15 @@ for (const foreignPage of ["first", "last"] as const) {
       await feature.controller.open("observer", projectId);
       releaseListing.resolve();
       await reconciled.promise;
-      await feature.getCodexMcpState(fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id));
+      const observed = await feature.observeThread(local);
+      await feature.getProviderMcpState(observed);
       const localIdentity = await database.identities.threads.resolve({
         threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id), harness: "codex",
       });
       assert.ok(localIdentity);
       await feature.controller.setComposerProfileTarget({ kind: "thread", projectId, harness: "codex", threadId: localIdentity.threadId }, selection);
       const neighbourIdentity = await database.identities.threads.resolve({
-        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(neighbour.id), harness: "copilot",
+        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(neighbour.id), harness: "codex",
       });
       assert.ok(neighbourIdentity);
       const neighbourBefore = database.repository.readRecords({ selection: "threads", threadIds: [neighbourIdentity.threadId] });
@@ -749,18 +769,17 @@ for (const foreignPage of ["first", "last"] as const) {
         assert.ok(changes.records?.every(record => record.identity.threadId !== neighbourIdentity.threadId) ?? true);
         await commit(changes);
       };
-      assert.deepEqual(await feature.prepareCodexProfile(local), {
+      assert.deepEqual(await feature.prepareProviderProfile(observed), {
         cwd: local.cwd, projectId, selection, subagentName: null,
       });
-      const nativeId = fixtureIdentitySchemas.NativeThreadIdSchema.parse(local.id);
-      assert.deepEqual(await feature.getCodexMcpState(nativeId), { generation: null, projectId });
-      await feature.setManagedCodexMcpGeneration(projectId, nativeId, "generation");
-      assert.deepEqual(await feature.getCodexMcpState(nativeId), { generation: "generation", projectId });
+      assert.deepEqual(await feature.getProviderMcpState(observed), { generation: null, projectId });
+      await feature.setProviderMcpGeneration(projectId, "codex", localIdentity.threadId, "generation");
+      assert.deepEqual(await feature.getProviderMcpState(observed), { generation: "generation", projectId });
       const snapshot = await feature.controller.getSnapshot(projectId);
       assert.equal(snapshot.error, null);
       assert.equal(snapshot.entries.length, 2);
       const foreignIdentity = await database.identities.threads.resolve({
-        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(foreign.id), harness: "copilot",
+        threadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(foreign.id), harness: "codex",
       });
       assert.equal(foreignIdentity?.projectId, otherProjectId);
       assert.equal(database.repository.readProject(projectId).records.length, 2);
@@ -831,7 +850,7 @@ test("a relationship committed during provider pagination remains a subagent aft
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
-test("provider reconciliation starts concurrently and publishes each successful harness without waiting for failures", async () => {
+test("provider reconciliation publishes its first page before deeper history and retains relationship and git state", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-feature-"));
   const publications: WorkbenchThreadStateSnapshot[] = [];
   const starts: string[] = [];
@@ -839,8 +858,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
   const codexRequests: Array<Record<string, unknown>> = [];
   let releaseCodexNext = () => undefined;
   const codexNextGate = new Promise<void>((resolve) => { releaseCodexNext = resolve; });
-  let releaseCopilot = () => undefined;
-  const copilotGate = new Promise<void>((resolve) => { releaseCopilot = resolve; });
   const activeClaim = {
     checkpointCommit: "a".repeat(40),
     claimedPaths: ["one.txt"],
@@ -888,7 +905,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     listPlanStates: async () => [planState],
   };
   const feature = createFeature({
-    database: createThreadStateDatabase(storageRoot, [["parent", "codex"], ["child", "codex"], ["copilot-thread", "copilot"]]),
+    database: createThreadStateDatabase(storageRoot, [["parent", "codex"], ["child", "codex"]]),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs,
     listSubagents: async () => ({
@@ -925,11 +942,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
         }
         return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "child", { name: "Child provider", updatedAt: 2 })], nextCursor: "codex-next" } };
       }
-      if (harness === "copilot") {
-        await copilotGate;
-        return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "copilot-thread", { name: "Copilot", updatedAt: 4 })], nextCursor: null } };
-      }
-      return { error: { code: -32000, message: "OpenCode unavailable" }, id: request.id ?? null };
+      throw new Error("Unexpected provider");
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
@@ -937,9 +950,8 @@ test("provider reconciliation starts concurrently and publishes each successful 
   });
 
   await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
-  await waitFor(() => starts.length === 3, "Provider reconciliations did not start concurrently.");
-  await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "Codex snapshot did not publish while Copilot remained pending.");
-  assert.deepEqual(new Set(starts), new Set(["codex", "copilot", "opencode"]));
+  await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "First page did not publish while deeper history remained pending.");
+  assert.deepEqual(starts, ["codex"]);
   assert.deepEqual(codexCursors, [null, "codex-next"]);
   assert.equal(codexRequests[0]?.workbenchRequestSource, "autoRefresh");
   assert.deepEqual(codexRequests[0]?.params, {
@@ -955,14 +967,11 @@ test("provider reconciliation starts concurrently and publishes each successful 
   assert.equal(progressive && "entries" in progressive ? progressive.freshness : null, "partial");
 
   releaseCodexNext();
-  releaseCopilot();
-  await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.error?.includes("opencode")), "Final partial provider result did not publish.");
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent")), "Deep Codex page did not publish its claimed parent.");
   const final = [...publications].reverse().find((snapshot) => "entries" in snapshot);
   assert.ok(final && "entries" in final);
-  assert.equal(final.freshness, "partial");
-  assert.match(final.error ?? "", /opencode: OpenCode unavailable/u);
-  assert.equal(final.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "copilot-thread"), true);
+  assert.equal(final.freshness, "fresh");
+  assert.equal(final.error, null);
   assert.equal(final.entries.some((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child"), true);
   const parent = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent");
   assert.ok(parent && parent.entryKind !== "draft");
@@ -1115,13 +1124,11 @@ test("managed title commands use the validated provider title as the mutation pr
   assert.deepEqual(requests[0], {
     harness: "codex",
     method: "thread/read",
-    params: { cwd: "C:/workspace", includeTurns: false, threadId: "native:thread-one" },
+    params: { includeTurns: false, threadId: "native:thread-one" },
   });
-  await waitFor(() => requests.length === 4, "Provider reconciliation did not run after the managed title read.");
+  await waitFor(() => requests.length === 2, "Provider reconciliation did not run after the managed title read.");
   assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
     { harness: "codex", method: "thread/list" },
-    { harness: "copilot", method: "thread/list" },
-    { harness: "opencode", method: "thread/list" },
   ]);
 
   requests.length = 0;
@@ -1426,7 +1433,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/turns/list") {
         assert.deepEqual(request.params, {
-          cwd: storageRoot, threadId: "native:thread-one", itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+          threadId: "native:thread-one", itemsView: "notLoaded", limit: 1, sortDirection: "desc",
         });
         return { id: request.id ?? null, result: { data: [{ id: "native:turn-one", status: "inProgress", items: [] }], nextCursor: null } };
       }
@@ -1524,7 +1531,7 @@ test("observed title mutations update the provider and published sidebar togethe
   });
   assert.deepEqual(titleRequests, [{
     harness: "codex",
-    params: { cwd: storageRoot, name: "Renamed thread", threadId: "native:thread-one" },
+    params: { name: "Renamed thread", threadId: "native:thread-one" },
   }]);
   const renamedEntry = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
   assert.equal(renamedEntry?.title, "Renamed thread");

@@ -137,19 +137,25 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
           case "workbench/thread-state/observe":
             result = { observation: { ...params, entries: entries.filter(entry => entry.identity.threadId === (params.target as { threadId: string }).threadId), revision: 1, freshness: "fresh", error: null, updateKind: "threadObservation" } };
             break;
-          case "workbench/thread/page/read":
+          case "thread/page/read":
             pageReads++;
             if (pages.length >= 2) {
               this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: request.id, error: { code: -32000, message: "Unexpected repeated page read" } }) }));
               return;
             }
             pages.push({ threadId, complete: () => respond({
-              thread: { ...thread(threadId, 1), cwd: rootPath, status: { type: "idle" }, turns: [] },
+              thread: {
+                ...thread(threadId, 1), cwd: rootPath, status: "idle", turns: [], turnHistory: [],
+                isDraft: false, model: null, reasoningEffort: null, serviceTier: null, agentPath: null, tokenUsage: null,
+              },
               nextCursor: null, browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
             }) });
             (pages.length === 1 ? firstPage : secondPage).resolve();
             return;
-          case "account/rateLimits/read": result = { rateLimits: null }; break;
+          case "account/limits/read": result = {
+            rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null },
+            rateLimitsByLimitId: null,
+          }; break;
           default:
             result = { accepted: true, data: [] };
         }

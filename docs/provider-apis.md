@@ -1,5 +1,14 @@
 # daemon provider APIs
 
+Browser code uses WB actions on its existing `WorkbenchSocketClient`. No native handshake, provider packets or provider selection for existing threads:
+
+````ts
+await daemon.threads.message({ threadId, input, clientMessageId, intent: "continue" });
+await daemon.threads.page({ threadId, cursor: null });
+````
+
+`WorkbenchThreadActionController` resolves WB identity and creation profiles. `continue` preserves start-versus-steer admission; explicit `steer` requires its expected turn and never starts another. Fresh creation precedes first submission. Stop/snooze and questionnaire settlement remain shared policy.
+
 Get an installed provider handle. Saved handles remain valid across scoped reloads.
 
 ````ts
@@ -32,7 +41,13 @@ Both daemon and app-server graphs expose this generic port. Construction `get` r
 
 Stored keys use `provider-key.ts`, independently of installed definitions. Daemon `workbench_harnesses` and its app-local equivalent retain provider identity through foreign keys. Uninstalling an implementation never deletes its rows, profiles or favourites. Dependent writes admit provider keys in their own transaction. A stored row grants no execution capability; unavailable-provider operations fail locally without dispatching or replacing their identity with Codex.
 
-Codex configuration owns the local model catalog. Its definition depends directly on configuration, not harness readiness. Native runtime APIs may instead need a `harness:<provider>` parent.
+Codex's definition has direct configuration and bridge parents. Configuration owns local model context and global guidance. The bridge supplies native model/account operations and `CodexThreadOperations`. Native operations share the bridge's initialisation gate; local reads do not initialise Codex.
+
+Thread operations translate WB identities, inputs and results. Existing admission retains unsubscribe/resume, instruction/profile/MCP preparation, then start. SQL paging/recording and subscriptions keep their owners. Historical materialisation groups native executions at the edge, not in WebSocket ingress.
+
+Provider callbacks already inside admitted work use that owner's translated WB descriptors. Do not reacquire a provider handle from profile/MCP callbacks while the admitted owner is draining.
+
+The app and daemon adopt these actions together. This boundary move changes no database schema or durable format. Internal tools, recovery and legacy raw server ports remain separate migration work; their compatibility socket adapter retains its native handshake.
 
 ## stateful operations
 

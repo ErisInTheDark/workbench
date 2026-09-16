@@ -65,6 +65,7 @@ function createController(options: {
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
+  materialize?: (threadId: string, turnIds: string[]) => Promise<void>;
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
@@ -96,6 +97,7 @@ function createController(options: {
     },
     setTimeout: options.clock.setTimeout,
     stats: options.stats,
+    threadActions: { materialize: options.materialize ?? (async () => { throw new Error("Unexpected materialisation"); }) },
     threadState: {
       acceptIntent: async () => ({ accepted: true, revision: 1 }),
       disconnect: async (connectionId) => { options.onDisconnect?.(connectionId); },
@@ -790,10 +792,9 @@ test("controller materialises the exact transcript window before subscribing and
   };
   const first = createController({
     clock,
-    onHarnessRequest: (request) => {
+    materialize: async (threadId, turnIds) => {
       events.push("materialise");
-      harnessRequests.push(request);
-      return { id: request.id ?? null, result: { materializedTurnIds: ["turn-2", "turn-4"], threadId: "thread" } };
+      harnessRequests.push({ params: { threadId, turnIds } });
     },
     transcript,
   });
@@ -819,12 +820,9 @@ test("controller materialises the exact transcript window before subscribing and
     },
   }]);
   assert.deepEqual(events, ["materialise", "subscribe"]);
-  assert.deepEqual(harnessRequests.map(({ method, params }) => ({ method, params })), [{
-    method: "workbench/transcript/materialize",
-    params: {
+  assert.deepEqual(harnessRequests.map(({ params }) => params), [{
       threadId: "thread",
       turnIds: ["turn-2", "turn-4"],
-    },
   }]);
 
   const state = first.controller.detachForReload();
@@ -847,10 +845,9 @@ test("controller orders an empty exact transcript window before subscribing", as
   const client = createClient((_data, callback) => { callback?.(); });
   const { controller } = createController({
     clock,
-    onHarnessRequest: (request) => {
+    materialize: async (threadId, turnIds) => {
       events.push("materialise");
-      harnessRequests.push(request);
-      return { id: request.id ?? null, result: { materializedTurnIds: [], threadId: "thread" } };
+      harnessRequests.push({ params: { threadId, turnIds } });
     },
     transcript: {
       read: async () => { throw new Error("Unexpected transcript read."); },
@@ -869,10 +866,7 @@ test("controller orders an empty exact transcript window before subscribing", as
   }), false);
 
   assert.deepEqual(events, ["materialise", "subscribe"]);
-  assert.deepEqual(harnessRequests.map(({ method, params }) => ({ method, params })), [{
-    method: "workbench/transcript/materialize",
-    params: { threadId: "thread", turnIds: [] },
-  }]);
+  assert.deepEqual(harnessRequests.map(({ params }) => params), [{ threadId: "thread", turnIds: [] }]);
   controller.dispose();
 });
 
@@ -882,10 +876,7 @@ test("transcript materialisation failure rejects subscription without disturbing
   let subscriptions = 0;
   const { controller } = createController({
     clock,
-    onHarnessRequest: (request) => ({
-      error: { code: -32000, message: "historical window is missing" },
-      id: request.id ?? null,
-    }),
+    materialize: async () => { throw new Error("historical window is missing"); },
     transcript: {
       read: async () => { throw new Error("Unexpected transcript read."); },
       subscribe: async () => { subscriptions += 1; },
@@ -920,9 +911,9 @@ test("a superseded transcript materialisation cannot install its stale subscript
   const subscribedTurnIds: Array<readonly string[] | undefined> = [];
   const { controller } = createController({
     clock,
-    onHarnessRequest: async () => await new Promise<JsonRpcResponse>((resolve) => {
+    materialize: async () => { await new Promise<JsonRpcResponse>((resolve) => {
       releases.push(resolve);
-    }),
+    }); },
     transcript: {
       read: async () => { throw new Error("Unexpected transcript read."); },
       subscribe: async ({ request }) => { subscribedTurnIds.push(request.turnIds); },

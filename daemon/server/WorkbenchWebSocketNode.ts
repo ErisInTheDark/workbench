@@ -24,6 +24,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       harnesses: build.get("harnesses"),
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
+      threadActions: build.get("threadActions"),
       initialState: build.handoffState as WorkbenchWebSocketRequestControllerState | undefined,
       reload: build.get("reloadController"),
       reportDelivery: context.reportWebSocketDelivery,
@@ -52,7 +53,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadIdentity", "transcriptIdentity", "transcript"],
+  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript"],
   safeAll: true,
   scope: "server:websocket",
   sources: [

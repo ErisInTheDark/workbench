@@ -16,7 +16,7 @@ import {
     type WorkbenchDaemonGitArcMethod,
     type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
     GitCheckpointCompareResultSchema,
     GitCheckpointProposalSchema,
@@ -48,6 +48,10 @@ import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityCon
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
+import { workbenchThreadActions } from "workbench-shared/workbench/thread/thread-actions";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WorkbenchThreadHistoryPendingError, WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
@@ -55,7 +59,9 @@ export interface WorkbenchBrowseSessionPort {
 }
 
 const METHODS = new Set([
+  ...Object.keys(workbenchThreadActions),
   "models/context/read",
+  "models/list", "account/limits/read",
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "codex-sandbox-network/read", "codex-sandbox-network/update",
@@ -120,20 +126,9 @@ function optionalStringArray(params: Record<string, unknown>, name: string) {
 function optionalUserInput(params: Record<string, unknown>, name: string) {
   const value = params[name];
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some(entry => {
-    const input = entry && typeof entry === "object" && !Array.isArray(entry)
-      ? entry as Record<string, unknown>
-      : null;
-    if (!input || typeof input.type !== "string") return true;
-    if (input.type === "text") return typeof input.text !== "string" || !Array.isArray(input.text_elements);
-    if (input.type === "image" || input.type === "audio") return typeof input.url !== "string";
-    if (input.type === "localImage" || input.type === "localAudio") return typeof input.path !== "string";
-    if (input.type === "skill" || input.type === "mention") return typeof input.name !== "string" || typeof input.path !== "string";
-    return true;
-  })) {
-    throw new InvalidParamsError(`${name} must contain valid user input.`);
-  }
-  return value as UserInput[];
+  const parsed = WorkbenchUserInputSchema.array().safeParse(value);
+  if (!parsed.success) throw new InvalidParamsError(`${name} must contain valid user input.`);
+  return parsed.data;
 }
 
 function questionnaireResponse(value: unknown): WorkbenchUserInputResponse {
@@ -156,11 +151,8 @@ function questionnaireRespondRequest(params: Record<string, unknown>): Workbench
   if (insertAfterItemIndex !== null && (!Number.isInteger(insertAfterItemIndex) || insertAfterItemIndex < 0)) {
     throw new InvalidParamsError("insertAfterItemIndex must be a non-negative integer.");
   }
-  const harness = WorkbenchHarnessSchema.safeParse(params.harness);
-  if (!harness.success) throw new InvalidParamsError("harness must identify a supported provider.");
   return {
     activatedSkillPaths: optionalStringArray(params, "activatedSkillPaths"),
-    harness: harness.data,
     insertAfterItemId: params.insertAfterItemId == null ? null : requiredString(params, "insertAfterItemId"),
     insertAfterItemIndex,
     projectId: requiredString(params, "projectId"),
@@ -204,6 +196,7 @@ export default class WorkbenchDaemonRequestController {
 
   constructor(private readonly owners: {
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
+    threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     codexSandboxNetwork: Pick<WorkbenchCodexSandboxNetworkController, "read" | "setGlobal" | "setProjectOverride">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
@@ -229,15 +222,32 @@ export default class WorkbenchDaemonRequestController {
     return { ...slot, projectId: thread.projectId, threadId: thread.threadId };
   }
 
-  async handle(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  async handle(request: JsonRpcRequest, connectionId?: string): Promise<JsonRpcResponse> {
     const id = request.id ?? null;
     try {
       const params = record(request.params ?? {});
+      if (request.method in workbenchThreadActions) {
+        if (!this.owners.threadActions) throw new Error("Workbench thread actions are unavailable.");
+        return { id, result: await this.owners.threadActions.handle(request.method as keyof typeof workbenchThreadActions, params, connectionId) };
+      }
       if (isGitArcMethod(request.method ?? "")) {
         return { id, result: await this.executeGitArc(request.method as WorkbenchDaemonGitArcMethod, params) };
       }
       let result: object;
       switch (request.method) {
+        case "models/list":
+        case "account/limits/read": {
+          const key = installedProviderKeys.find(candidate => candidate === params.provider);
+          if (!key || !this.owners.providers) throw new InvalidParamsError("The requested provider is unavailable.");
+          const provider = this.owners.providers.get(key);
+          if (request.method === "models/list") {
+            result = { data: await provider.configuration.models.read() };
+          } else {
+            if (!provider.account) throw new InvalidParamsError("The provider does not report account limits.");
+            result = await provider.account.limits.read();
+          }
+          break;
+        }
         case "models/context/read": {
           if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
           result = { data: await this.owners.providers.get("codex").configuration.modelContext.read() };
@@ -417,7 +427,8 @@ export default class WorkbenchDaemonRequestController {
       return {
         id,
         error: {
-          code: error instanceof InvalidParamsError ? -32602 : -32000,
+          code: error instanceof InvalidParamsError ? -32602
+            : error instanceof WorkbenchThreadHistoryPendingError ? WORKBENCH_THREAD_HISTORY_PENDING : -32000,
           ...(error instanceof GitArcFailureException ? { data: { gitArcFailure: error.failure } } : {}),
           message: error instanceof Error ? error.message : "Daemon request failed.",
         },

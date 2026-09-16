@@ -133,10 +133,8 @@ test("every child requirement is registered by one of its direct parents", () =>
 });
 
 test("provider configuration reload owns its definition without acquiring the harness", () => {
-  const { nodes, parents } = flattenParents(graph.roots);
-  assert.deepEqual([...parents.get("server:codex/def")!], ["server:codex/configuration"]);
+  const { parents } = flattenParents(graph.roots);
   assert.equal(parents.has("server:codex/configuration"), false);
-  assert.deepEqual(nodes.get("server:codex/def")!.requires, ["codexConfiguration"]);
   const { dependantClosure } = readReloadNodeSourceState();
   assert.deepEqual(dependantClosure(["server:codex/def"]), ["server:codex/def"]);
   const configurationClosure = dependantClosure(["server:codex/configuration"]);

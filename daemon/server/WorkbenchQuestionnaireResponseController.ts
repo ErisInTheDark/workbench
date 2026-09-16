@@ -4,15 +4,13 @@
  * - WorkbenchQuestionnaireResponseControllerOptions: questionnaire waiter, harness, and durable-state ports.
  * - default WorkbenchQuestionnaireResponseController: route one answer through live delivery or managed continuation.
  */
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type {
   WorkbenchQuestionnaireRespondRequest,
   WorkbenchQuestionnaireRespondResult,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import {
-  NativeThreadIdSchema,
   ProjectIdSchema,
-  TurnReferenceSchema,
+  WorkbenchTurnIdSchema,
   WorkbenchThreadIdSchema,
   type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
@@ -31,8 +29,8 @@ import {
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import type { WorkbenchHarness, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
-import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
-import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
+import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 export interface WorkbenchQuestionnaireResponseStatePort {
   resolvePendingQuestionnaire<TDelivery>(
@@ -59,8 +57,8 @@ export interface WorkbenchQuestionnaireResponseStatePort {
 }
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
-  harnesses: Pick<WorkbenchHarnessController, "request" | "resolvePublicRequest" | "resolveThreadIdentity" | "resolveTurnIdentity">;
-  questionnaires: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
+  harnesses: Pick<WorkbenchHarnessController, "resolveThreadIdentity">;
+  providers: Pick<WorkbenchProviderDispatcher, "get">;
   resolveLatestTurn(input: {
     projectId: ReturnType<typeof ProjectIdSchema.parse>;
     threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>;
@@ -68,33 +66,39 @@ export interface WorkbenchQuestionnaireResponseControllerOptions {
   state: WorkbenchQuestionnaireResponseStatePort;
 }
 
-function record(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function warningFrom(response: JsonRpcResponse) {
-  const warning = record(response.result)?.warning;
-  return typeof warning === "string" && warning.trim() ? warning.slice(0, 500) : undefined;
-}
-
 type QuestionnaireDelivery =
-  | { route: "admitted" }
+  | { route: "admitted"; warning?: string }
   | { route: "live"; warning?: string };
+type ResolvedQuestionnaireRequest = WorkbenchQuestionnaireRespondRequest & { harness: WorkbenchHarness };
 
 export default class WorkbenchQuestionnaireResponseController {
   constructor(private readonly options: WorkbenchQuestionnaireResponseControllerOptions) {}
 
-  async respond(input: WorkbenchQuestionnaireRespondRequest): Promise<WorkbenchQuestionnaireRespondResult> {
+  private provider(harness: WorkbenchHarness) {
+    const key = installedProviderKeys.find(candidate => candidate === harness);
+    if (!key) throw new Error("The questionnaire provider is unavailable.");
+    return this.options.providers.get(key);
+  }
+
+  private interactions(harness: WorkbenchHarness) {
+    const interactions = this.provider(harness).interactions;
+    if (!interactions) throw new Error("This provider does not support interactive requests.");
+    return interactions;
+  }
+
+  async respond(request: WorkbenchQuestionnaireRespondRequest): Promise<WorkbenchQuestionnaireRespondResult> {
+    const identity = await this.options.harnesses.resolveThreadIdentity({
+      threadId: WorkbenchThreadIdSchema.parse(request.threadId),
+      projectId: ProjectIdSchema.parse(request.projectId),
+    });
+    const binding = identity?.bindings[0];
+    if (!identity || !binding) throw new Error("The questionnaire thread has no provider binding.");
+    const input = { ...request, harness: binding.harness, threadId: identity.threadId, projectId: identity.projectId };
     const workbenchMcp = isWorkbenchMcpQuestionnaireRequestKey(input.requestKey);
-    if (workbenchMcp && input.harness !== "codex") {
-      throw new Error("Workbench MCP questionnaires require the Codex harness.");
-    }
 
     const projectId = ProjectIdSchema.parse(input.projectId);
     const threadId = WorkbenchThreadIdSchema.parse(input.threadId);
-    const nativeThreadId = workbenchMcp ? await this.resolveNativeThreadId(input) : null;
+    const interactions = this.interactions(input.harness);
     const resolved = await this.options.state.resolvePendingQuestionnaire<QuestionnaireDelivery>({
       harness: input.harness,
       projectId,
@@ -109,7 +113,7 @@ export default class WorkbenchQuestionnaireResponseController {
         && lifecycle.requestKey === input.requestKey;
       const live = pendingInput && (
         !workbenchMcp
-        || (nativeThreadId !== null && this.options.questionnaires.canDeliver(nativeThreadId, input.requestKey))
+        || await interactions.canDeliver(threadId, input.requestKey)
       );
       const settle = <TDelivery>(delivery: TDelivery, acceptedTurnId: WorkbenchTurnId) => ({
         delivery,
@@ -117,13 +121,13 @@ export default class WorkbenchQuestionnaireResponseController {
         insertAfterItemIndex: approval ? input.insertAfterItemIndex ?? null : null,
         turnId: acceptedTurnId,
       });
-      if (live && workbenchMcp && nativeThreadId) {
+      if (live && workbenchMcp) {
         const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
         await this.sendSupplementalInput(input, acceptedTurnId);
-        const delivered = await this.options.questionnaires.deliver({
+        const delivered = await interactions.deliver({
           requestKey: input.requestKey,
           response: input.response,
-          threadId: nativeThreadId,
+          threadId,
         });
         if (!delivered) throw new Error("The questionnaire waiter detached before delivery.");
         return settle({ route: "live" as const }, acceptedTurnId);
@@ -132,14 +136,14 @@ export default class WorkbenchQuestionnaireResponseController {
         const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
         await this.sendSupplementalInput(input, acceptedTurnId);
         const response = await this.sendProviderResponse(input, acceptedTurnId);
-        const warning = warningFrom(response);
+        const warning = response.warning;
         return settle({ route: "live" as const, ...(warning ? { warning } : {}) }, acceptedTurnId);
       }
       if (approval) {
         throw new Error("Approval requests cannot be submitted after their owning turn ends.");
       }
-      const acceptedTurnId = await this.admitContinuation(input);
-      return settle({ route: "admitted" as const }, acceptedTurnId);
+      const accepted = await this.admitContinuation(input);
+      return settle({ route: "admitted" as const, ...(accepted.warning ? { warning: accepted.warning } : {}) }, accepted.turnId);
     });
     if (!resolved) {
       if (workbenchMcp) throw new Error("That questionnaire is no longer pending.");
@@ -149,11 +153,8 @@ export default class WorkbenchQuestionnaireResponseController {
     let warning = "warning" in resolved.delivery ? resolved.delivery.warning : undefined;
     if (workbenchMcp) {
       try {
-        const historyResponse = await this.sendMapped(input.harness, {
-          method: "questionnaire/history/record",
-          params: resolved.historyEntry,
-        });
-        warning = warningFrom(historyResponse);
+        const historyResponse = await interactions.record(resolved.historyEntry);
+        warning = historyResponse.warning ?? warning;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         warning = `Your response was delivered, but transcript history recording failed: ${message.slice(0, 400)}`;
@@ -166,53 +167,34 @@ export default class WorkbenchQuestionnaireResponseController {
     };
   }
 
-  private async respondToProvider(input: WorkbenchQuestionnaireRespondRequest): Promise<WorkbenchQuestionnaireRespondResult> {
+  private async respondToProvider(input: ResolvedQuestionnaireRequest): Promise<WorkbenchQuestionnaireRespondResult> {
     await this.sendSupplementalInput(input, input.turnId ?? null);
     const response = await this.sendProviderResponse(input, input.turnId ?? null);
-    const warning = warningFrom(response);
+    const warning = response.warning;
     return { ok: true, route: "provider", ...(warning ? { warning } : {}) };
   }
 
-  private async sendProviderResponse(input: WorkbenchQuestionnaireRespondRequest, turnId: string | null) {
-    return await this.sendMapped(input.harness, {
-      method: "questionnaire/respond",
-      params: {
+  private async sendProviderResponse(input: ResolvedQuestionnaireRequest, turnId: string | null) {
+    return await this.interactions(input.harness).respond({
         insertAfterItemId: input.insertAfterItemId ?? null,
         insertAfterItemIndex: input.insertAfterItemIndex ?? null,
         requestKey: input.requestKey,
         response: input.response,
         threadId: input.threadId,
         turnId,
-      },
     });
   }
 
-  private async resolveNativeThreadId(input: WorkbenchQuestionnaireRespondRequest) {
-    const mapped = await this.options.harnesses.resolvePublicRequest(input.harness, {
-      method: "thread/read",
-      params: { projectId: input.projectId, threadId: input.threadId },
-    });
-    const threadId = record(mapped.request.params)?.threadId;
-    return NativeThreadIdSchema.parse(threadId);
-  }
-
-  private async sendSupplementalInput(input: WorkbenchQuestionnaireRespondRequest, turnId: string | null) {
-    const activatedSkillPaths = input.harness === "codex"
-      ? Array.from(new Set(input.activatedSkillPaths?.map(path => path.trim()).filter(Boolean) ?? []))
-      : [];
+  private async sendSupplementalInput(input: ResolvedQuestionnaireRequest, turnId: string | null) {
+    const activatedSkillPaths = Array.from(new Set(input.activatedSkillPaths?.map(path => path.trim()).filter(Boolean) ?? []));
     const supplementalInput = input.supplementalInput ?? [];
     if (!supplementalInput.length && !activatedSkillPaths.length) return;
     if (!turnId) throw new Error("Questionnaire supplemental input requires an owning turn.");
-    await this.sendMapped(input.harness, {
-      method: "turn/steer",
-      ...(activatedSkillPaths.length ? {
-        [WORKBENCH_PROMPT_CONTEXT_FIELD]: { activatedSkillPaths },
-      } : {}),
-      params: {
-        expectedTurnId: turnId,
+    await this.interactions(input.harness).supplement({
+        turnId,
         input: supplementalInput,
         threadId: input.threadId,
-      },
+        activatedSkillPaths,
     });
   }
 
@@ -233,85 +215,24 @@ export default class WorkbenchQuestionnaireResponseController {
     return turnId;
   }
 
-  private async readAcceptedTurnId(input: WorkbenchQuestionnaireRespondRequest, response: JsonRpcResponse) {
-    const result = record(response.result);
-    const turn = record(result?.turn);
-    const turnId = typeof result?.turnId === "string"
-      ? result.turnId
-      : typeof turn?.id === "string"
-        ? turn.id
-        : null;
-    if (!turnId) throw new Error("Questionnaire continuation admission returned no accepted turn.");
-    const identity = await this.options.harnesses.resolveTurnIdentity({
-      harness: input.harness,
-      projectId: ProjectIdSchema.parse(input.projectId),
-      threadId: WorkbenchThreadIdSchema.parse(input.threadId),
-      turnId: TurnReferenceSchema.parse(turnId),
-    });
-    if (!identity) throw new Error("The accepted questionnaire turn has no canonical identity.");
-    return identity.turnId;
-  }
-
-  private async admitContinuation(input: WorkbenchQuestionnaireRespondRequest) {
+  private async admitContinuation(input: ResolvedQuestionnaireRequest) {
     const activatedSkillPaths = Array.from(new Set(
       input.activatedSkillPaths?.map(path => path.trim()).filter(Boolean) ?? [],
     ));
-    const promptContext = activatedSkillPaths.length ? {
-      [WORKBENCH_PROMPT_CONTEXT_FIELD]: { activatedSkillPaths },
-    } : {};
     const turnInput = [
       ...createWorkbenchQuestionnaireResponseInput(input.response),
       ...(input.supplementalInput ?? []),
     ];
-    if (input.harness !== "codex") {
-      const identity = await this.options.harnesses.resolveThreadIdentity({
-        harness: input.harness,
-        projectId: ProjectIdSchema.parse(input.projectId),
-        threadId: WorkbenchThreadIdSchema.parse(input.threadId),
-      });
-      const binding = identity?.bindings.find(binding => binding.harness === input.harness);
-      if (!binding) throw new Error("The questionnaire thread has no native provider binding.");
-      const response = await this.sendMapped(input.harness, {
-        method: "turn/start",
-        params: {
-          cwd: binding.nativeLocation,
-          input: turnInput,
-          threadId: input.threadId,
-        },
-      });
-      return this.readAcceptedTurnId(input, response);
-    }
-    const response = await this.sendMapped("codex", {
-      method: "workbench/codex/message/admit",
-      params: {
-        resumeRequest: {
-          method: "thread/resume",
-          params: { excludeTurns: true, threadId: input.threadId },
-        },
-        startRequest: {
-          method: "turn/start",
-          ...promptContext,
-          params: {
-            clientUserMessageId: input.requestKey,
-            input: turnInput,
-            threadId: input.threadId,
-          },
-        },
-        steerRequest: {
-          method: "turn/steer",
-          ...promptContext,
-          params: { input: turnInput },
-        },
-        threadId: input.threadId,
-      },
+    const result = await this.provider(input.harness).threads.submit({
+      intent: "continue",
+      clientMessageId: input.requestKey,
+      threadId: input.threadId,
+      input: turnInput,
+      ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
     });
-    return this.readAcceptedTurnId(input, response);
-  }
-
-  private async sendMapped(harness: WorkbenchHarness, request: JsonRpcRequest) {
-    const mapped = await this.options.harnesses.resolvePublicRequest(harness, request);
-    const response = await this.options.harnesses.request(mapped.harness, mapped.request);
-    if (response.error) throw new Error(response.error.message);
-    return response;
+    return {
+      turnId: WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId),
+      ...(result.warning ? { warning: result.warning } : {}),
+    };
   }
 }

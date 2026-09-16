@@ -11,6 +11,22 @@ import type {
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
 import type { WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import type WorkbenchProvider from "../WorkbenchProvider";
+import { WorkbenchAccountLimitsSchema } from "workbench-shared/workbench/provider/provider-account";
+
+const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation"); };
+function providers(read: () => Promise<import("workbench-shared/workbench/provider/provider-account").WorkbenchAccountLimits> = unused) {
+  const provider: WorkbenchProvider = {
+    threads: {
+      create: unused, list: unused, read: unused, page: unused, submit: unused,
+      rename: unused, compact: unused, interrupt: unused, materialize: unused, latestTurn: unused, admitTurn: unused,
+      history: { questionnaires: unused, steers: unused, browse: unused },
+    },
+    configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },
+    account: { limits: { read } },
+  };
+  return { get: () => provider };
+}
 
 const importProgress: WorkbenchStatsImportProgress = {
   claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
@@ -84,6 +100,7 @@ test("all stats routes receive rename projections and only UI reads can recover 
   const seen: Array<readonly object[] | undefined> = [];
   const controller = new WorkbenchStatsController({
     claims,
+    providers: providers(),
     renames: {
       read: async () => fail
         ? { renames: [], failures: [{ projectId, rootId: "root", message: "History unavailable." }] }
@@ -102,8 +119,8 @@ test("all stats routes receive rename projections and only UI reads can recover 
       recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
     },
     harnesses: {
-      hydrateUsage: async () => ({ state: "unavailable" }), listHarnesses: () => [],
-      listUsageHydrationHarnesses: () => [], request: async () => ({ id: "unused", result: null }),
+      hydrateUsage: async () => ({ state: "unavailable" }),
+      listUsageHydrationHarnesses: () => [],
     },
   });
   const request = { projectId, range: "7d" as const };
@@ -129,6 +146,7 @@ test("controller startup begins the resumable import in the background", async (
   let starts = 0;
   const controller = new WorkbenchStatsController({
     claims,
+    providers: providers(),
     database: {
       ...importPorts(),
       beginStatsImport: async () => {
@@ -142,9 +160,7 @@ test("controller startup begins the resumable import in the background", async (
     },
     harnesses: {
       hydrateUsage: async () => ({ state: "unavailable" }),
-      listHarnesses: () => [],
       listUsageHydrationHarnesses: () => [],
-      request: async () => ({ id: "unused", result: null }),
     },
   });
   controller.start();
@@ -160,6 +176,7 @@ test("detailed reads preserve category costs and include durable import status",
   const progress = { ...importProgress, revision: 42 };
   const controller = new WorkbenchStatsController({
     claims,
+    providers: providers(),
     database: {
       ...importPorts(), readStatsImportProgress: async () => progress,
       readStats: async () => base,
@@ -170,8 +187,8 @@ test("detailed reads preserve category costs and include durable import status",
       recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
     },
     harnesses: {
-      hydrateUsage: async () => ({ state: "unavailable" }), listHarnesses: () => [],
-      listUsageHydrationHarnesses: () => [], request: async () => ({ id: "unused", result: null }),
+      hydrateUsage: async () => ({ state: "unavailable" }),
+      listUsageHydrationHarnesses: () => [],
     },
   });
   try {
@@ -187,6 +204,7 @@ test("claim writes stay ordered and disposal flushes the queue", async () => {
   const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const controller = new WorkbenchStatsController({
     claims,
+    providers: providers(),
     database: {
       ...importPorts(),
       readStats: async () => emptyStats(),
@@ -199,9 +217,7 @@ test("claim writes stay ordered and disposal flushes the queue", async () => {
     },
     harnesses: {
       hydrateUsage: async () => ({ state: "unavailable" }),
-      listHarnesses: () => [],
       listUsageHydrationHarnesses: () => [],
-      request: async () => ({ id: "unused", result: null }),
     },
   });
   const snapshot = (path: string) => controller.observeClaimSnapshot({
@@ -220,10 +236,22 @@ test("claim writes stay ordered and disposal flushes the queue", async () => {
   assert.deepEqual(writes, ["one", "two"]);
 });
 
-test("rate refresh records actual windows and preserves partial harness failures", async () => {
+test("rate refresh records actual windows and retains earlier capture when refresh fails", async () => {
   const observations: Array<{ harness: string; secondary: object | null }> = [];
+  let offline = false;
   const controller = new WorkbenchStatsController({
     claims,
+    providers: providers(async () => {
+      if (offline) throw new Error("offline");
+      return WorkbenchAccountLimitsSchema.parse({
+        rateLimits: {
+          limitId: "codex", limitName: null, credits: null, planType: null,
+          primary: { resetsAt: 1_800_000_000, usedPercent: 25, windowDurationMins: 10_080 },
+          secondary: null,
+        },
+        rateLimitsByLimitId: null,
+      });
+    }),
     database: {
       ...importPorts(),
       readStats: async () => emptyStats(),
@@ -238,23 +266,12 @@ test("rate refresh records actual windows and preserves partial harness failures
     },
     harnesses: {
       hydrateUsage: async () => ({ state: "unavailable" }),
-      listHarnesses: () => ["codex", "copilot"],
       listUsageHydrationHarnesses: () => [],
-      request: async (harness) => {
-        if (harness === "copilot") throw new Error("offline");
-        return {
-          id: harness,
-          result: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { resetsAt: 1_800_000_000, usedPercent: 25, windowDurationMins: 10_080 },
-              secondary: null,
-            },
-          },
-        };
-      },
     },
   });
+  await controller.refreshRateLimits();
+  assert.deepEqual(observations, [{ harness: "codex", secondary: null }]);
+  offline = true;
   await controller.refreshRateLimits();
   assert.deepEqual(observations, [{ harness: "codex", secondary: null }]);
   const result = await controller.read({ projectId: null, range: "7d" });

@@ -149,7 +149,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     if (!promptContext) return message;
     const params = asRecord(message.params);
     // This adapter installs Workbench MCP even before native creation returns an id.
-    const context = { ...promptContext, harness: "codex" as const, managedThread: true };
+    const context = { ...promptContext, harness: "codex" as const, skillCatalogPresentation: "references" as const, managedThread: true };
     const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context);
     const filter = (
       value: string | null,

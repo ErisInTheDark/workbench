@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { captureTestOutput } from "../../../../test/capture-test-output.mts";
-import type { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
-import { WORKBENCH_THREAD_PAGE_READ_METHOD, type WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
+import type WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import {
   transcriptSnapshotTables, workbenchTranscriptNotifications, workbenchTranscriptOperations,
   type WorkbenchTranscriptSnapshot, type WorkbenchTranscriptSnapshotRows,
@@ -18,30 +19,31 @@ import StandaloneThreadController from "./StandaloneThreadController";
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
 function fixture() {
-  const threadId = randomUUID();
+  const threadId = WorkbenchThreadIdSchema.parse(randomUUID());
   const notifications = new Set<(notification: { method: string; params: unknown }) => void>();
   const disconnects = new Set<() => void>();
   let reconnect = () => {};
   let closed = false;
   let subscriptionId = "";
   let failSubscription = false;
-  let readPage: (cursor: string | null) => Promise<WorkbenchThreadPageResponse> = async cursor => page(cursor ? "older" : "latest", cursor ? null : "latest");
+  let readPage: (cursor: string | null) => Promise<WorkbenchThreadPageResult> = async cursor => page(cursor ? "older" : "latest", cursor ? null : "latest");
   const requests: Array<{ method: string; params: { cursor?: string | null; turnIds?: string[]; subscriptionId?: string } }> = [];
   const notify = (method: string, params: unknown) => { for (const listener of notifications) listener({ method, params }); };
-  const page = (id: string, nextCursor: string | null): WorkbenchThreadPageResponse => ({
+  const page = (id: string, nextCursor: string | null): WorkbenchThreadPageResult => ({
     thread: {
-      id: threadId, cwd: "C:/project", createdAt: 1, updatedAt: 2, status: { type: "active", activeFlags: [] },
+      id: threadId, harness: "codex", isDraft: false, cwd: "C:/project", createdAt: 1, updatedAt: 2, status: "active",
       agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", ephemeral: false,
       extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", modelProvider: "openai",
       model: null, projectId: null, reasoningEffort: null, name: null, parentThreadId: null, path: null,
+      serviceTier: null, agentPath: null, tokenUsage: null,
       preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: "session",
       source: "appServer", threadSource: null,
       turns: [{ id, status: "inProgress", items: [], itemsView: "full", startedAt: 1, completedAt: null, durationMs: null, error: null }],
-      workbenchTurnHistory: ["older", "latest"].map(turnId => ({
+      turnHistory: ["older", "latest"].map(turnId => ({
         turnId, status: "inProgress", loadState: "loaded", itemIds: [], itemTimeline: [], itemCount: 0,
         startedAt: 1, completedAt: null, durationMs: null,
       })),
-    } as WorkbenchThreadPageResponse["thread"],
+    } as WorkbenchThreadPageResult["thread"],
     nextCursor, questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
   });
   const client = {
@@ -54,12 +56,12 @@ function fixture() {
     close: () => { closed = true; },
     sendRequest: async (request: (typeof requests)[number]) => {
       requests.push(request);
-      if (request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) return { id: 1, result: await readPage(request.params.cursor ?? null) };
+      if (request.method === "thread/page/read") return { id: 1, result: await readPage(request.params.cursor ?? null) };
       if (request.method === workbenchTranscriptOperations.subscribe.method && failSubscription) throw new Error("subscription unavailable");
       if (request.method === workbenchTranscriptOperations.subscribe.method) subscriptionId = request.params.subscriptionId!;
       return { id: 1, result: { subscribed: true, unsubscribed: true, reported: true } };
     },
-  } as unknown as CodexAppServerClient;
+  } as unknown as WorkbenchSocketClient;
   const owner = new StandaloneThreadController(threadId, { client });
   return {
     owner, threadId, requests, page,
@@ -106,8 +108,7 @@ test("standalone uses bounded pages and shared SQL text projection without provi
     await f.owner.loadPrevious();
     await flush();
     assert.deepEqual(f.owner.getSnapshot().thread?.turns.map(turn => turn.id), ["older", "latest"]);
-    assert.deepEqual(f.requests.filter(request => request.method === WORKBENCH_THREAD_PAGE_READ_METHOD).map(request => request.params.cursor), [null, "latest"]);
-    assert.ok(f.requests.every(request => request.method.startsWith("workbench/")));
+    assert.deepEqual(f.requests.filter(request => request.method === "thread/page/read").map(request => request.params.cursor), [null, "latest"]);
   } finally {
     f.owner.dispose();
     assert.equal(f.closed, true);
@@ -116,7 +117,7 @@ test("standalone uses bounded pages and shared SQL text projection without provi
 
 test("standalone discards disconnected pages and allows scoped failure retry", async () => {
   const f = fixture();
-  let release!: (page: WorkbenchThreadPageResponse) => void;
+  let release!: (page: WorkbenchThreadPageResult) => void;
   f.read = () => new Promise(resolve => { release = resolve; });
   try {
     const initial = f.owner.refresh();

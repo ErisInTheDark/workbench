@@ -67,6 +67,17 @@ test("one provider ingress publishes admitted references without rewriting conte
     assert.equal(delta.observation.lifecycle, null);
     const title = edge.native({ method: "thread/name/updated", params: { threadId: native.nativeThreadId, threadName: "Renamed" } });
     assert.deepEqual(title.observation.title, { threadId: thread.threadId, title: "Renamed" });
+    const nativeGoal = {
+      threadId: native.nativeThreadId, objective: "retain native-thread as ordinary text",
+      status: "active", tokenBudget: null, tokensUsed: 3, timeUsedSeconds: 1, createdAt: 1, updatedAt: 2,
+    };
+    const goal = edge.native({
+      method: "thread/goal/updated",
+      params: { threadId: native.nativeThreadId, turnId: nativeTurnId, goal: nativeGoal },
+    });
+    assert.deepEqual(goal.notification.params, {
+      threadId: thread.threadId, turnId, goal: { ...nativeGoal, threadId: thread.threadId },
+    });
     const pending = edge.workbench({
       method: "turn/started", params: { threadId: thread.threadId, turn: {
         id: "not-admitted", workbenchAdmission: "connecting", items: [{ type: "userMessage" }],

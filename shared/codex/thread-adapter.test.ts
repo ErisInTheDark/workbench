@@ -1,7 +1,6 @@
 /*
- * Keywords: thread, native metadata, steer, cwd, tests.
  * Exports:
- * - No production exports; Node tests protect exact-root thread isolation and relationship-owned linked-worktree reads. Keywords: thread, cwd, subagent, worktree, test.
+ * - No production exports; tests protect native adaptation and compatibility location exports.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";

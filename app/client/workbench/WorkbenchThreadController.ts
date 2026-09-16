@@ -7,13 +7,13 @@
  * - default WorkbenchThreadController: own shared thread admission, reads, proposal demand, and source lifecycle.
  */
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchReadThreadOptions, WorkbenchSubagentSummary, WorkbenchControls } from "workbench-shared/types";
-import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcFailureException, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
+import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { getNextSubagentHydrationBatch } from "./thread/thread-subagents";
 import type ThreadObservationController from "./thread/ThreadObservationController";
 import { getThreadObservationKey } from "./thread/ThreadObservationController";
@@ -350,7 +350,7 @@ export default class WorkbenchThreadController {
       this.historyRetention.select(native.document);
       return;
     }
-    if (native.document?.harness === "codex" && !native.document.isDraft) {
+    if (native.document && !native.document.isDraft) {
       this.transcript ??= this.ports.createTranscript(transcript => this.publish({ ...this.snapshot, transcript }));
       this.transcript.controller.select({ thread: native.document });
     }

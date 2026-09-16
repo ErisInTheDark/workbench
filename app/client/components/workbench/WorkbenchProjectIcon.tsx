@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getWorkbenchProjectIconUrl } from "workbench-shared/codex/config";
+import { getWorkbenchProjectIconUrl } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
 
