@@ -44,7 +44,7 @@
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: thread-owned status, provider-event fencing, and direct-child status projection.
  * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent or approval authority.
- * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules.
+ * - hasWorkbenchThreadDraftContent/countDraftPromptTokens/createDraftTitle: durable draft content, materialization, and title rules.
  */
 
 import { z } from "zod";
@@ -187,6 +187,14 @@ export const WorkbenchThreadDraftSchema = WorkbenchThreadDraftInputSchema.transf
   };
 });
 export type WorkbenchThreadDraft = z.infer<typeof WorkbenchThreadDraftSchema>;
+
+export function hasWorkbenchThreadDraftContent(draft: { attachments: readonly unknown[]; prompt: string }) {
+  return Boolean(draft.prompt.trim() || draft.attachments.length);
+}
+
+const WorkbenchThreadDraftWriteSchema = WorkbenchThreadDraftSchema.refine(hasWorkbenchThreadDraftContent, {
+  message: "Draft requires prompt or attachment content.",
+});
 
 export function serializeLegacyThreadDraft(draft: WorkbenchThreadDraft) {
   return {
@@ -700,7 +708,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.brand<"DraftId">().optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/dismiss"), title: z.string().trim().min(1) }),
-  ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, folderId: CanonicalUuidSchema.optional(), method: z.literal("workbench/thread-state/draft/upsert") }),
+  ProjectRequestBase.extend({ draft: WorkbenchThreadDraftWriteSchema, folderId: CanonicalUuidSchema.optional(), method: z.literal("workbench/thread-state/draft/upsert") }),
   z.object({
     destinationProjectId: ProjectIdSchema,
     draftId: CanonicalUuidSchema.brand<"DraftId">(),

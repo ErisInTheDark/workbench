@@ -249,6 +249,31 @@ test("draft threshold and title follow prompt text only", () => {
   assert.equal(createDraftTitle("\n  First   line \nsecond"), "First line");
 });
 
+test("durable draft writes require prompt or attachment content while stored drafts remain readable", () => {
+  const draft = {
+    attachments: [],
+    clientUpdatedAt: 2,
+    composerSettings: EMPTY_CODEX_SETTINGS,
+    createdAt: 1,
+    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000022"),
+    profileId: null,
+    projectId: fixtureIdentityValues.ProjectId.project,
+    prompt: " ",
+    updatedAt: 2,
+  };
+  assert.equal(WorkbenchThreadDraftSchema.safeParse(draft).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    draft,
+    method: "workbench/thread-state/draft/upsert",
+    projectId: draft.projectId,
+  }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    draft: { ...draft, attachments: [{ id: "shot", url: "image:shot" }] },
+    method: "workbench/thread-state/draft/upsert",
+    projectId: draft.projectId,
+  }).success, true);
+});
+
 test("thread titles ignore identifier-shaped provider names and prefer the first user preview", () => {
   const id = "123e4567-e89b-42d3-a456-426614174000";
   assert.equal(resolveWorkbenchThreadTitle({ id, name: id, preview: "  First user message\nsecond line" }), "First user message");

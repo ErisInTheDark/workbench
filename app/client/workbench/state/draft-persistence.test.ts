@@ -54,6 +54,22 @@ test("new drafts reuse their reserved identity and preserve existing metadata th
   assert.deepEqual(store.navigations, [store.target.draftId]);
 });
 
+test("existing sidebar drafts disappear only after their last content is cleared", async () => {
+  const state = new WorkbenchClientStateController();
+  const store = sidebarFixture();
+  await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "materialised draft content" }), autosave);
+  await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: " " }), autosave);
+  assert.equal(store.records.size, 0);
+
+  await saveComposerDraft(state, store.target, (draft) => ({
+    ...draft,
+    attachments: [{ id: "shot", url: "image:shot" }],
+    text: "materialised yet again",
+  }), autosave);
+  await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "" }), autosave);
+  assert.deepEqual(store.owner.read(store.target.projectId, store.target.draftId)?.attachments, [{ id: "shot", url: "image:shot" }]);
+});
+
 test("detached creation never navigates and clearing uses the original project identity", async () => {
   const state = new WorkbenchClientStateController();
   const store = sidebarFixture();

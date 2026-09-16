@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import type Database from "better-sqlite3";
 import type { DraftId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
+  hasWorkbenchThreadDraftContent,
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchThreadDraftSchema,
   WorkbenchHarnessSchema,
@@ -384,6 +385,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     this.database.transaction(() => {
       for (const stored of drafts) {
         const draft = WorkbenchThreadDraftSchema.parse(stored.draft);
+        if (!hasWorkbenchThreadDraftContent(draft)) throw new Error("Draft requires prompt or attachment content.");
         draft.projectId = this.projects.requireStoredReference(draft.projectId);
         this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(draft.composerSettings.harness);
         const previous = this.database.prepare("SELECT id FROM workbench_thread_drafts WHERE draft_id = ?")

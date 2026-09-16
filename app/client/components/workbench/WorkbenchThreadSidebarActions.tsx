@@ -37,6 +37,7 @@ import {
   ArchiveIcon,
   CompletedThreadIcon,
   CopyIcon,
+  DiscardDraftIcon,
   FolderInputIcon,
   NeedsAttentionThreadIcon,
   OpenThreadIcon,
@@ -56,7 +57,7 @@ function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Extract<Wor
   return entry.entryKind === "draft" && "draftId" in entry;
 }
 
-function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
+function targetForEntry(entry: ThreadListEntry): Extract<WorkbenchThreadTarget, { kind: "draft" | "provider" }> {
   return entry.entryKind === "draft"
     ? { draftId: isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
@@ -177,7 +178,9 @@ function WorkbenchThreadSidebarActionsProvider({
 
   const getThreadContextMenu = useCallback((entry: ThreadListEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project"): WorkbenchContextMenuDefinition => {
     const thread = entry.entryKind === "thread" && ownerProjectId === projectId ? threadSummariesById.get(entry.identity.threadId) ?? null : null;
-    const identifier = entry.entryKind === "draft" ? isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId : entry.identity.threadId;
+    const target = targetForEntry(entry);
+    const draftId = target.kind === "draft" ? target.draftId : null;
+    const identifier = target.kind === "draft" ? target.draftId : target.threadId;
     const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
     const group = isPinnedDraftSummaryEntry(entry) ? "pinned" : getThreadSidebarGroup(entry);
     const terminal = entry.entryKind !== "draft" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
@@ -185,7 +188,7 @@ function WorkbenchThreadSidebarActionsProvider({
       icon: <OpenThreadIcon size={16} />,
       id: "open",
       label: "Open",
-      onSelect: () => onOpenThread(targetForEntry(entry), ownerProjectId),
+      onSelect: () => onOpenThread(target, ownerProjectId),
     }];
 
     if (terminal && group !== "archived" && entry.lifecycle.settled) {
@@ -330,6 +333,16 @@ function WorkbenchThreadSidebarActionsProvider({
         kind: "control-group",
         label: "Conclude",
         presentation: "actions",
+      });
+    }
+    if (draftId) {
+      items.push({ id: "discard-separator", kind: "separator" }, {
+        disabled: !controls,
+        icon: <DiscardDraftIcon size={16} />,
+        id: "discard",
+        label: "Discard draft",
+        onSelect: () => { void controls?.deleteThreadDraft(draftId, ownerProjectId); },
+        tone: "danger",
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };

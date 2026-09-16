@@ -90,6 +90,33 @@ test("draft-only writes require admitted parents and retained addresses share pr
   } finally { database.close(); }
 });
 
+test("draft writes reject empty content without rejecting attachment-only drafts", () => {
+  const database = openDatabase();
+  const repository = new WorkbenchThreadStateRelationalRepository(database);
+  const projectId = fixtureIdentityValues.ProjectId.project;
+  const draft: WorkbenchThreadDraft = {
+    attachments: [],
+    clientUpdatedAt: 1,
+    composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
+    createdAt: 1,
+    draftId: fixtureIdentityValues.DraftId["f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"],
+    profileId: null,
+    projectId,
+    prompt: " ",
+    updatedAt: 1,
+  };
+  try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
+    assert.throws(() => repository.writeDrafts([{ draft, pinned: false, snoozed: false }]), /content/i);
+    repository.writeDrafts([{
+      draft: { ...draft, attachments: [{ id: "shot", url: "image:shot" }] },
+      pinned: false,
+      snoozed: false,
+    }]);
+    assert.equal(repository.readDrafts(projectId).length, 1);
+  } finally { database.close(); }
+});
+
 test("lifecycle upgrade preserves existing facts and permits thread-owned turnless states", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");

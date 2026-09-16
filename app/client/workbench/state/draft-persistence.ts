@@ -10,7 +10,7 @@
  * - clearQuestionnaireDraft: remove only the captured questionnaire record.
  */
 import type { WorkbenchComposerInputDraft, WorkbenchQuestionnaireDraft } from "workbench-shared/types";
-import { countDraftPromptTokens, type WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import { countDraftPromptTokens, hasWorkbenchThreadDraftContent, type WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchClientStateController from "./WorkbenchClientStateController";
 import type { DraftId, FolderId, ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
@@ -59,6 +59,10 @@ export async function saveComposerDraft(
   }
   const existing = target.owner.read(target.projectId, target.draftId);
   const input = { ...update(sidebarDraftToInput(existing)), updatedAt: Date.now() };
+  if (!hasWorkbenchThreadDraftContent({ attachments: input.attachments, prompt: input.text })) {
+    if (existing) await target.owner.remove(target.projectId, target.draftId);
+    return existing || options.reason === "submission" ? input : null;
+  }
   if (target.isNew && !existing && options.reason === "autosave" && countDraftPromptTokens(input.text) < 3) return null;
   const draftId = target.draftId;
   const baseline = existing ?? target.owner.create(target.projectId, draftId);
