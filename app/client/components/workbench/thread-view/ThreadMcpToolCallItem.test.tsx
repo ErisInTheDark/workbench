@@ -4,15 +4,20 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement, isValidElement } from "react";
+import { cloneElement, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadTurnDetails } from "./thread-view-items";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
+import { getThreadTerminalEntries } from "./thread-live-activity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+
+function renderOpenedMcp(props: Parameters<typeof ThreadMcpToolCallItem>[0]) {
+  return renderToStaticMarkup(cloneElement(ThreadMcpToolCallItem(props), { open: true }));
+}
 
 function makeItem(overrides: Partial<McpItem> = {}): McpItem {
   return {
@@ -37,7 +42,7 @@ function makeItem(overrides: Partial<McpItem> = {}): McpItem {
 }
 
 test("unknown MCP calls keep the generic summary with the shared detail surface", () => {
-  const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, {
+  const html = renderOpenedMcp({
     item: makeItem({
       error: { message: "Unknown tool failed." },
       result: null,
@@ -46,7 +51,7 @@ test("unknown MCP calls keep the generic summary with the shared detail surface"
       tool: "future_tool",
     }),
     route: null,
-  }));
+  });
 
   assert.match(html, /external/u);
   assert.match(html, /future_tool/u);
@@ -60,10 +65,10 @@ test("failed simple wb MCP calls expose their invocation and error", () => {
     server: "wbex",
     status: "failed",
   });
-  const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, {
+  const html = renderOpenedMcp({
     item,
     route: getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }),
-  }));
+  });
 
   assert.match(html, /await tools\.mcp__wbex__git_add\(/u);
   assert.match(html, /File selection failed\./u);
@@ -176,17 +181,13 @@ test("ripgrep alternation punctuation stays dim across escaped character boundar
   assert.match(html, /\[font-variant-ligatures:none\]/u);
 });
 
-test("completed MCP calls leave disclosure toggles user-owned", () => {
-  const item = makeItem({ tool: "rg" });
-  const disclosure = ThreadMcpToolCallItem({
-    item,
-    route: getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }),
-  });
-
-  assert.equal(isValidElement<{ defaultOpen?: boolean; open?: boolean }>(disclosure), true);
-  if (!isValidElement<{ defaultOpen?: boolean; open?: boolean }>(disclosure)) return;
-  assert.equal(disclosure.props.defaultOpen, false);
-  assert.equal(disclosure.props.open, undefined);
+test("running, failed and completed MCP calls start closed without suppressing their summaries", () => {
+  for (const status of ["inProgress", "failed", "completed"] as const) {
+    const item = makeItem({ status, tool: "future_tool" });
+    const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, { item, route: null }));
+    assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
+    assert.match(html, /future_tool/u);
+  }
 });
 
 test("wb shell calls render through the ordinary command execution surface", () => {
@@ -224,12 +225,13 @@ test("wb shell calls render through the ordinary command execution surface", () 
 
   assert.match(html, /Failed/u);
   assert.match(html, /title="src"/u);
-  assert.match(html, /Get-ChildItem src/u);
-  assert.match(html, /partial\s*denied/u);
+  const terminal = getThreadTerminalEntries([item], { cwd: "C:/workspace" });
+  assert.equal(terminal[0]?.command, "Get-ChildItem src");
+  assert.match(terminal[0]?.output ?? "", /partial\s*denied/u);
   assert.doesNotMatch(html, /mcp__wb__shell/u);
 });
 
-test("adjacent wb rg and shell calls share one derived command block", () => {
+test("adjacent wb rg and shell calls share a command summary while retaining separate terminal entries", () => {
   const rgItem = makeItem({
     arguments: { args: ["needle", "webapp"] },
     id: "rg-one",
@@ -274,7 +276,5 @@ test("adjacent wb rg and shell calls share one derived command block", () => {
   const visibleText = html.replace(/<[^>]+>/gu, "");
 
   assert.match(visibleText, /Searched 1 file, listed files/u);
-  assert.match(visibleText, /Search for needle in webapp/u);
-  assert.match(html, /Get-ChildItem src/u);
-  assert.match(html, /file\.ts/u);
+  assert.equal(getThreadTerminalEntries([rgItem, shellItem], { cwd: "C:/workspace" }).length, 2);
 });

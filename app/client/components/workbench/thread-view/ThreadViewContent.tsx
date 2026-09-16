@@ -35,10 +35,6 @@ import {
 import type { ProjectTreeFileCandidate } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import CooperativeRebuildQueue from "../../../workbench/state/CooperativeRebuildQueue";
 import {
-  useWorkbenchClientStateController,
-  useWorkbenchClientStateSnapshot,
-} from "../workbench-client-state-context";
-import {
   buildInlineMentionCandidates,
   buildInlineMentionCandidatesCooperatively,
   readCachedInlineMentionCandidates,
@@ -58,7 +54,6 @@ import {
   getThreadAgentTabLabel,
   sortWorkbenchSubagents,
 } from "../../../workbench/thread/thread-subagents";
-import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThreads } from "../use-workbench-client";
@@ -71,10 +66,6 @@ import projectThreadRenderTurns from "./thread-render-turns";
 import getThreadGitArcProposalPresentation, { getHoistedThreadGitArc } from "./thread-git-arc-presentation";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
-import {
-  getThreadWebSearchLiveLabel,
-  isThreadWebSearchPlaceholder,
-} from "./thread-web-search-state";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import type { DraftUpdate } from "./DraftSessionController";
@@ -85,16 +76,14 @@ import ThreadCheckpointCommitPortalLayer from "./ThreadCheckpointCommitPortalLay
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
-import ThreadLiveActivity, { type LiveThreadActivity } from "./ThreadLiveActivity";
+import ThreadLiveActivity from "./ThreadLiveActivity";
+import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { isThreadScrollAtEnd } from "./thread-scroll-snap";
 import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
-import {
-  getCurrentThreadReasoningActivity,
-} from "./thread-reasoning-display";
 
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
@@ -132,84 +121,6 @@ function setCodeBlockCopyButtonState (button: HTMLButtonElement, state: CodeBloc
 function setCodeBlockToggleButtonState (button: HTMLButtonElement, isActive: boolean) {
   button.setAttribute("aria-pressed", isActive ? "true" : "false");
   button.setAttribute("data-thread-codeblock-toggle-state", isActive ? "active" : "idle");
-}
-
-function getLiveThreadActivity ({
-  pendingUserInputRequest,
-  turn,
-}: {
-  pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
-  turn: ThreadPayload["turns"][number] | null;
-}): LiveThreadActivity | null {
-  if (!turn || turn.status !== "inProgress" || pendingUserInputRequest) {
-    return null;
-  }
-
-  if (turn.items.some(isPendingInitialOptimisticInputItem)) {
-    return {
-      body: null,
-      hiddenStep: null,
-      kind: "reasoning",
-      markdown: null,
-      title: "Connecting",
-    };
-  }
-
-  const reasoningStep = getCurrentThreadReasoningActivity(turn);
-  if (reasoningStep) {
-    return {
-      body: reasoningStep.body,
-      hiddenStep: reasoningStep.hiddenStep,
-      kind: "reasoning",
-      markdown: reasoningStep.markdown,
-      title: reasoningStep.title,
-    };
-  }
-
-  const latestItem = turn.items.at(-1);
-  if (latestItem?.type === "contextCompaction") {
-    return null;
-  }
-
-  if (latestItem?.type === "webSearch" && isThreadWebSearchPlaceholder(latestItem)) {
-    const contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[] = [];
-    for (let index = turn.items.length - 2; index >= 0; index -= 1) {
-      const item = turn.items[index];
-      if (item.type === "reasoning" && !item.summary.some((section) => section.trim()) && !item.content.some((section) => section.trim())) {
-        continue;
-      }
-
-      if (item.type === "agentMessage" && !item.text.trim()) {
-        continue;
-      }
-
-      if (item.type !== "webSearch") {
-        break;
-      }
-
-      if (!isThreadWebSearchPlaceholder(item)) {
-        contextItems.unshift(item);
-      }
-    }
-
-    return {
-      contextItems,
-      hiddenItemIds: [
-        latestItem.id,
-        ...contextItems.map((item) => item.id),
-      ],
-      kind: "webSearch",
-      title: getThreadWebSearchLiveLabel(latestItem),
-    };
-  }
-
-  return {
-    body: null,
-    hiddenStep: null,
-    kind: "reasoning",
-    markdown: null,
-    title: "Thinking",
-  };
 }
 
 function useBackgroundInlineMentionSources ({
@@ -398,9 +309,7 @@ export default memo(function ThreadViewContent ({
   // ThreadView admits this subtree only while this owner's document is available.
   const thread = rootThreadController.state.document!;
   const daemon = useWorkbenchDaemonClient();
-  const clientStateController = useWorkbenchClientStateController();
   const projectHref = useWorkbenchProjectNavigation();
-  const clientState = useWorkbenchClientStateSnapshot();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const activeThreadId = selectedThreadId ?? thread.id;
   const threads = useWorkbenchThreads();
@@ -417,20 +326,6 @@ export default memo(function ThreadViewContent ({
   const rateLimits = activeThreadController.state.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
-  const liveActivityPreference = clientState.records.find((record) => (
-    record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
-  ));
-  const isLiveActivityOpen = liveActivityPreference?.kind === "globalPreference"
-    && typeof liveActivityPreference.preference.value === "boolean"
-    ? liveActivityPreference.preference.value
-    : true;
-  const persistLiveActivityOpen = useCallback((open: boolean) => {
-    if (open === isLiveActivityOpen) return;
-    void clientStateController.put({
-      kind: "globalPreference",
-      preference: { key: "threadLiveActivityOpen", value: open },
-    });
-  }, [clientStateController, isLiveActivityOpen]);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
@@ -545,16 +440,19 @@ export default memo(function ThreadViewContent ({
   const canLoadPreviousTurn = Boolean(
     activeThread?.nextPageCursor,
   );
-  const liveActivity = useMemo(() => getLiveThreadActivity({
-    pendingUserInputRequest: activePendingUserInputRequest,
-    turn: activityTurn,
-  }), [activePendingUserInputRequest, activityTurn]);
   const hiddenDynamicToolCallItemIds = EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
       : [])
   ), [projectFileLinkRoots, projectRoots]);
+  const terminalCommands = useMemo(() => getThreadTerminalEntries(activityTurn?.items ?? [], {
+    cwd: activeThread?.cwd ?? projectRootPath ?? ".",
+    knownSkills: workbenchSkills, projectRootPath, workspaceRoots: workspaceFileLinkRoots,
+  }), [activityTurn, activeThread?.cwd, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
+  const liveActivity = useMemo(() => getLiveThreadActivity({
+    pendingUserInputRequest: activePendingUserInputRequest, turn: activityTurn, commands: terminalCommands,
+  }), [activePendingUserInputRequest, activityTurn, terminalCommands]);
   const inlineMentionSources = useBackgroundInlineMentionSources({
     files: projectFileCandidates,
     filesIdentity: projectFileIndexId,
@@ -1177,7 +1075,7 @@ export default memo(function ThreadViewContent ({
               activeTranscriptProjection ? (
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
-                    hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
+                    hiddenReasoningStep={null}
                     historySentinelRef={setHistorySentinel}
                     hoistedGitArcProposalIds={terminalGitArcProposalIds}
                     inlineMentionSources={inlineMentionSources}
@@ -1209,7 +1107,7 @@ export default memo(function ThreadViewContent ({
                 canLoadPreviousTurn={canLoadPreviousTurn}
                 currentTurnId={currentTurn?.id ?? null}
                 hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
-                hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
+                hiddenReasoningStep={null}
                 hiddenWebSearchItemIds={liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
                 hideFinalAgentMessage={hideFinalAgentMessage}
                 hideTerminalReasoning={activeGitArcSelection?.lifecycle.kind === "completed"}
@@ -1242,12 +1140,12 @@ export default memo(function ThreadViewContent ({
             </div>
           )}
         </div>
-        {liveActivity && activeThread && activityTurn ? (
+        {activeThread && activityTurn?.status === "inProgress" ? (
           <ThreadLiveActivity
+            key={`${activeThread.id}:${activityTurn.id}`}
             activity={liveActivity}
+            commands={terminalCommands}
             inlineMentionSources={inlineMentionSources}
-            isOpen={isLiveActivityOpen}
-            onOpenChange={persistLiveActivityOpen}
             presentationSource={{
               kind: usesSqlTranscript ? "sqlite" : "json",
               sourceKey: `${activeThread.harness}:${activeThread.id}`,

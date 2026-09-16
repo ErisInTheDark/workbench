@@ -172,7 +172,7 @@ test("native incoming messages and screenshots render once per identity after pr
   }
 });
 
-test("SQLite projection renders canonical segments and turn-owned Browse details without JSON", () => {
+test("SQLite projection preserves canonical order with initially closed Browse details", () => {
   const first: ThreadItem = {
     id: "first",
     memoryCitation: null,
@@ -268,7 +268,7 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
 
   const firstIndex = html.indexOf("First SQLite item");
   const lastIndex = html.indexOf("Last SQLite item");
-  const browseIndex = html.indexOf("SQLite Browse detail");
+  const browseIndex = html.indexOf("Check page");
   assert.notEqual(firstIndex, -1);
   assert.notEqual(browseIndex, -1);
   assert.notEqual(lastIndex, -1);
@@ -277,12 +277,14 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
   assert.equal((html.match(/data-thread-history-turn-id="turn-two"/gu) ?? []).length, 1);
 });
 
-test("SQLite normal projection shares command grouping and compact reasoning display", () => {
+test("SQLite normal projection groups commands immediately and keeps reasoning closed", () => {
   const commandHtml = renderItems([
     command("one", "alpha --one"),
     command("two", "beta --two"),
   ], null, 1);
-  assert.match(commandHtml.replace(/<[^>]+>/gu, ""), /Ran 2 commands/u);
+  const commandText = commandHtml.replace(/<[^>]+>/gu, "");
+  assert.match(commandText, /Ran 2 commands/u);
+  assert.doesNotMatch(commandHtml, /<details[^>]*\bopen=/u);
 
   const detailedHtml = renderItems([{
     content: [],
@@ -291,7 +293,7 @@ test("SQLite normal projection shares command grouping and compact reasoning dis
     type: "reasoning",
   }]);
   assert.equal((detailedHtml.match(/Careful title/gu) ?? []).length, 1);
-  assert.match(detailedHtml, /Useful description\./u);
+  assert.doesNotMatch(detailedHtml, /<details[^>]*\bopen=/u);
   assert.match(detailedHtml, /<details/u);
 
   const staticHtml = renderItems([{
@@ -317,6 +319,6 @@ test("SQLite normal projection removes only the newest live reasoning section", 
   });
 
   assert.match(html, /Earlier title/u);
-  assert.match(html, /Earlier detail\./u);
+  assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
   assert.doesNotMatch(html, /Latest title|Latest detail/u);
 });

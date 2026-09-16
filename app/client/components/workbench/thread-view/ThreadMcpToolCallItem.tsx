@@ -1,7 +1,6 @@
 /*
  * Exports:
- * - default ThreadMcpToolCallItem: render MCP tool calls with summary metadata plus arguments, results, and errors. Keywords: workbench, thread, MCP, tool call.
- * - Local helpers: format MCP labels, metadata, and captured output for thread rendering. Keywords: MCP, error, result.
+ * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, results, and errors.
  */
 "use client";
 
@@ -93,7 +92,7 @@ export default function ThreadMcpToolCallItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      defaultOpen={item.status !== "completed" || Boolean(item.error)}
+      defaultOpen={false}
       summary={(
         <>
           {outcomeDisplay ? (

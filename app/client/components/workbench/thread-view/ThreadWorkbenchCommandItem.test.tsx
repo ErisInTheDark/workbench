@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement } from "react";
+import { Children, cloneElement, createElement, isValidElement, type ComponentProps, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -18,9 +18,23 @@ import type { WorkbenchClientController } from "../workbench-client-context";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
+import ThreadGitArcItem from "./ThreadGitArcItem";
+import ThreadDisclosure from "./ThreadDisclosure";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+
+// Detail assertions explicitly open only the outer disclosure; nested inventories remain closed.
+function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandItem>) {
+  const rendered = ThreadWorkbenchCommandItem(props);
+  if (!isValidElement<ComponentProps<typeof ThreadGitArcItem>>(rendered) || rendered.type !== ThreadGitArcItem) return rendered;
+  const card = ThreadGitArcItem(rendered.props);
+  return cloneElement(card, {}, Children.map(card.props.children, child => (
+    isValidElement(child) && child.type === ThreadDisclosure
+      ? cloneElement(child as ReactElement<ComponentProps<typeof ThreadDisclosure>>, { open: true })
+      : child
+  )));
+}
 
 test("status uses the dedicated card without inventing paths for count-only groups", () => {
   const html = renderSpecialized(makeItem("git_arc_status", {}, "Dirty claims: changed-evidence.ts\nClean claims: 8"));
@@ -146,7 +160,7 @@ function renderSpecialized(
         createElement(
           ThreadGitArcPresentationContext.Provider,
           { value: presentation },
-          createElement(ThreadWorkbenchCommandItem, {
+          createElement(OpenedSpecialized, {
             item,
             relatedThreadsById: {},
             renderRecallRecord: () => null,

@@ -7,20 +7,27 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { FoldWorkedRunIcon, UnfoldWorkedRunIcon } from "../workbench-icons";
 import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { reconcileWorkedRun, revealWorkedRun, workedRunReadyAt, type WorkedRunState } from "./thread-worked-run";
 
-export default function ThreadWorkedRun({ children, count, durationMs, initialInactive, newestActivityAt }: {
+export default function ThreadWorkedRun({ children, count, durationMs, initialInactive, newestActivityAt, fileTotals = { additions: 0, deletions: 0 } }: {
   children: ReactNode;
   count: number;
   durationMs: number | null;
   initialInactive: boolean;
   newestActivityAt: number | null;
+  fileTotals?: { additions: number; deletions: number };
 }) {
   const [state, setState] = useState<WorkedRunState>("expanded");
   const element = useRef<HTMLDivElement>(null);
   const restoreLayout = useRef<(() => void) | null>(null);
   const viewportContext = useThreadScrollViewportContext();
+  useEffect(() => viewportContext.onBottomReattached(() => {
+    setState(current => reconcileWorkedRun(current, {
+      count, newestActivityAt, initialInactive, above: false, now: Date.now(),
+    }, "bottomReattached"));
+  }), [count, initialInactive, newestActivityAt, viewportContext]);
   useLayoutEffect(() => {
     restoreLayout.current?.();
     restoreLayout.current = null;
@@ -30,7 +37,7 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
     const viewport = viewportContext.getViewport();
     if (!node || !viewport) return;
     if (state === "collapsed") {
-      const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, false);
+      const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
       if (next !== state) {
         if (node.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().top) {
           restoreLayout.current = viewportContext.preserveOffscreenLayout();
@@ -39,7 +46,7 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       }
       return;
     }
-    if (count < 5) return;
+    if (count < 3 || state === "awaitingAttachment") return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let retired = false;
     const measure = () => {
@@ -50,17 +57,16 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       const view = viewport.getBoundingClientRect();
       if (!viewport.clientHeight || !bounds.height) return;
       const above = bounds.bottom <= view.top;
-      const visible = bounds.bottom > view.top && bounds.top < view.bottom;
       const now = Date.now();
       const gate = { count, newestActivityAt, initialInactive, above, now };
-      const next = reconcileWorkedRun(state, gate, visible);
+      const next = reconcileWorkedRun(state, gate, "geometry");
       if (next !== state) {
         if (next === "collapsed") restoreLayout.current = viewportContext.preserveOffscreenLayout();
         setState(next);
         return;
       }
       const readyAt = workedRunReadyAt(gate);
-      if (state === "expanded" && above && count >= 5 && readyAt !== null && readyAt > now) {
+      if (state === "expanded" && above && count >= 3 && readyAt !== null && readyAt > now) {
         // User-owned age policy, not a timeout or retry of external work.
         timer = setTimeout(measure, Math.min(readyAt - now, 2_147_483_647));
       }
@@ -85,7 +91,10 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       {state === "collapsed" ? (
         <ThreadDisclosureStaticRow
           onClick={() => setState(revealWorkedRun())}
-          summary={durationMs === null ? "Worked" : <>Worked for <ThreadDurationText durationMs={durationMs} /></>}
+          summary={<span className="inline-flex flex-wrap items-baseline gap-2">
+            {durationMs === null ? "Worked" : <>Worked for <ThreadDurationText durationMs={durationMs} /></>}
+            <ThreadFileChangeTotals {...fileTotals} />
+          </span>}
           summaryClassName="text-[0.92em] leading-[1.6]"
           marker={<>
             <FoldWorkedRunIcon className="group-hover/worked:hidden group-focus-visible/worked:hidden" size={18} />

@@ -232,7 +232,6 @@ export default function ThreadGitArcItem ({
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
-        defaultOpen={commandIntent.action !== "compare" && commandIntent.action !== "diff"}
         leading={<GitArcIcon action={commandIntent.action} size={16} />}
         leadingLabel={`${commandIntent.action} git arc`}
         summary={(

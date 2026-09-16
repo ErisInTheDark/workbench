@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - ThreadWebSearchSequence: render grouped adjacent Codex web search actions. Keywords: workbench, thread, web search, grouped.
- * - ThreadWebSearchOutput: optional enriched display data for future web search result rendering. Keywords: workbench, thread, web search, output.
- * - default ThreadWebSearchItem: render Codex web search actions inside thread history. Keywords: workbench, thread, web search.
- * - Local helpers: format web search summaries, queries, URLs, and optional output sections. Keywords: search query, external URL, result.
+ * - ThreadWebSearchSequence: render grouped adjacent web search actions.
+ * - ThreadWebSearchOutput: optional enriched search result data.
+ * - ThreadWebSearchActionRow: render one search action summary.
+ * - default ThreadWebSearchItem: render user-controlled web search history details.
  */
 "use client";
 
@@ -501,13 +501,11 @@ export default function ThreadWebSearchItem ({
     return null;
   }
 
-  const shouldOpen = !item.action || item.action.type === "other";
-
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      defaultOpen={shouldOpen}
+      defaultOpen={false}
       summary={getWebSearchSummary(item)}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >

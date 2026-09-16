@@ -3,6 +3,7 @@
  */
 
 import assert from "node:assert/strict";
+import { didThreadScrollReattach } from "./thread-scroll-snap";
 import test from "node:test";
 
 import {
@@ -74,4 +75,10 @@ test("snapped layout changes stay owned by native re-snapping", () => {
     { clientHeight: 600, scrollHeight: 1_800, scrollTop: 1_200 },
     { clientHeight: 600, scrollHeight: 2_200, scrollTop: 1_200 },
   ), null);
+});
+test("bottom reattachment requires reaching the end after leaving it", () => {
+  const end = { scrollTop: 900, scrollHeight: 1000, clientHeight: 100 };
+  assert.equal(didThreadScrollReattach(false, end), true);
+  assert.equal(didThreadScrollReattach(true, end), false);
+  assert.equal(didThreadScrollReattach(false, { ...end, scrollTop: 800 }), false);
 });

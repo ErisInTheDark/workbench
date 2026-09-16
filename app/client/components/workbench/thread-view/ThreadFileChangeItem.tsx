@@ -4,6 +4,7 @@
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
+ * - getThreadFileChangeTotals: cumulative counts using the same precedence as file rows.
  */
 "use client";
 
@@ -25,6 +26,27 @@ import ThreadSummaryText from "./ThreadSummaryText";
 
 type FileChangeItem = WorkbenchFileChangeItem;
 type FileUpdateChange = FileChangeItem["changes"][number];
+
+export function getThreadFileChangeTotals(items: readonly FileChangeItem[]) {
+  return items.reduce((total, item) => {
+    for (const change of item.changes) {
+      const counts = getFileChangeCounts(item, change);
+      total.additions += counts.additions;
+      total.deletions += counts.deletions;
+    }
+    return total;
+  }, { additions: 0, deletions: 0 });
+}
+
+function getFileChangeCounts(item: FileChangeItem, change: FileUpdateChange) {
+  const analysis = item.status !== "completed" && item.workbenchFailureKind !== "unclaimed" ? change.workbenchAnalysis : undefined;
+  if (analysis) return { additions: analysis.additions, deletions: analysis.deletions };
+  if (change.workbenchAdditions !== undefined || change.workbenchDeletions !== undefined) {
+    return { additions: change.workbenchAdditions ?? 0, deletions: change.workbenchDeletions ?? 0 };
+  }
+  const diff = parseFileChangeDiff(change);
+  return { additions: diff.additions, deletions: diff.deletions };
+}
 
 interface ParsedFileChange {
   change: FileUpdateChange;
@@ -432,11 +454,7 @@ export default function ThreadFileChangeItem ({
                 sourceChangeIndex,
                 sourceItemId: item.id,
                 staticMarker: true,
-                summaryTotals: analysis
-                  ? { additions: analysis.additions, deletions: analysis.deletions }
-                  : change.workbenchAdditions !== undefined || change.workbenchDeletions !== undefined
-                    ? { additions: change.workbenchAdditions ?? 0, deletions: change.workbenchDeletions ?? 0 }
-                    : undefined,
+                summaryTotals: getFileChangeCounts(item, change),
               };
             })}
             projectFilePaths={projectFilePaths}

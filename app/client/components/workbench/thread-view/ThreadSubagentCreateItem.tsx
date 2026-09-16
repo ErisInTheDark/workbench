@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentCreateItem: render active or successful subagent creation with durable identity metadata and the initial user prompt. Keywords: workbench, thread, subagent, create, profile, title, prompt.
+ * - default ThreadSubagentCreateItem: render subagent creation identity and a user-controlled initial prompt disclosure.
  */
 "use client";
 
@@ -39,7 +39,6 @@ export default function ThreadSubagentCreateItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      defaultOpen={active}
       summary={(
         <span>
           {active ? "Creating " : "Created "}

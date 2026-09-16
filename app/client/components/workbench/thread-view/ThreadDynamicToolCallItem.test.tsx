@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect shell-style generic dynamic-tool details without changing special tool ownership. Keywords: dynamic tool, TypeScript, output, rendering.
+ * - No production exports; tests protect user-owned dynamic-tool disclosure state.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -12,7 +12,7 @@ import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 
 type DynamicItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
-test("generic dynamic tools render TypeScript-shaped input and ordinary output", () => {
+test("a failed dynamic tool keeps its summary visible without opening its details", () => {
   const item: DynamicItem = {
     arguments: { retryCount: 3 },
     contentItems: [{ type: "inputText", text: "completed" }],
@@ -26,8 +26,6 @@ test("generic dynamic tools render TypeScript-shaped input and ordinary output",
   };
   const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
 
-  assert.match(html, /await functions\.custom_tool\(/u);
-  assert.match(html, /retryCount: 3/u);
-  assert.match(html, /completed/u);
-  assert.doesNotMatch(html, />Arguments<|>Content items<|>Success:</u);
+  assert.match(html, /custom_tool/u);
+  assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
 });

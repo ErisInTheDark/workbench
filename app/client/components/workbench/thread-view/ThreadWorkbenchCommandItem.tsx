@@ -96,7 +96,6 @@ export default function ThreadWorkbenchCommandItem({
   if (operation.kind === "threadRecall" && threadCwdPath) {
     return (
       <ThreadContextCommandItem
-        defaultOpen={item.status !== "completed"}
         operation={operation.operation}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

@@ -365,14 +365,12 @@ function ThreadQuestionnaireToolCallItem ({
   const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
   const { response } = parseQuestionnaireResponse(item);
   const statusLabel = response ? "Answered" : "Unanswered";
-  const initialIsOpen = item.status !== "completed" || !response;
-  const [isOpen, setIsOpen] = useState(initialIsOpen);
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      defaultOpen={initialIsOpen}
       onToggle={(event) => {
         setIsOpen(event.currentTarget.open);
       }}
@@ -435,7 +433,6 @@ function ThreadGenericDynamicToolCallItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      open={item.status !== "completed" || item.success === false}
       summary={(
         <>
           <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">

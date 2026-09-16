@@ -5,9 +5,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
-import ThreadFileChangeItem, { ThreadFileChangeList } from "./ThreadFileChangeItem";
+import ThreadFileChangeItem, { ThreadFileChangeList, getThreadFileChangeTotals } from "./ThreadFileChangeItem";
 
 type FileChangeItem = WorkbenchFileChangeItem;
+
+test("worked counts accumulate the same captured and supplied counts as file rows", () => {
+  assert.deepEqual(getThreadFileChangeTotals([
+    { id: "first", type: "fileChange", status: "completed", changes: changes() },
+    { id: "second", type: "fileChange", status: "completed", changes: [
+      { ...update("src/edit.ts"), workbenchAdditions: 7, workbenchDeletions: 4 },
+    ] },
+  ]), { additions: 12, deletions: 7 });
+});
 
 function update(path: string, streaming = false): FileChangeItem["changes"][number] {
   return {

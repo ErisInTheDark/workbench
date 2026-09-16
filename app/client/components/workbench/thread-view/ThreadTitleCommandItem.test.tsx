@@ -55,7 +55,7 @@ test("title sets render the standalone task marker", () => {
 test("task title reads remain ordinary collapsible command summaries", () => {
   const html = renderCommand("wb task get", "Task title: Trace cache invalidation\n");
 
-  assert.match(html, /Trace cache invalidation/u);
+  assert.match(html, /task title/u);
   assert.doesNotMatch(html, /data-role="thread-title-command"/u);
 });
 

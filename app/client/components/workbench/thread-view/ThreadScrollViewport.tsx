@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default ThreadScrollViewport: own normal-flow end snapping and off-screen layout preservation.
+ * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
 
@@ -17,6 +18,8 @@ import {
 
 import {
   getInitialThreadScrollTop,
+  didThreadScrollReattach,
+  isThreadScrollAtEnd,
   getPreservedThreadScrollTop,
   resolveThreadEndFollowing,
   resolveThreadScrollDirection,
@@ -28,6 +31,7 @@ import {
 } from "./thread-scroll-snap";
 import {
   ThreadScrollViewportContext,
+  useThreadScrollViewportContext,
   type ThreadScrollViewportContextValue,
 } from "./thread-scroll-viewport-context";
 
@@ -93,13 +97,19 @@ function ActiveThreadScrollViewport ({
   const previousScrollTopRef = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const wasAtEndRef = useRef(true);
+  const bottomListeners = useRef(new Set<() => void>());
 
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
+    const metrics = readScrollMetrics(viewport);
+    const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
+    wasAtEndRef.current = isThreadScrollAtEnd(metrics);
     const proximity = resolveThreadScrollProximity(
-      readScrollMetrics(viewport),
+      metrics,
       nearEndDistancePxRef.current,
     );
     viewport.dataset.threadScrollProximity = proximity;
+    if (reattached) bottomListeners.current.forEach(listener => listener());
     return proximity;
   }, []);
 
@@ -135,6 +145,10 @@ function ActiveThreadScrollViewport ({
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     getViewport: () => viewportRef.current,
+    onBottomReattached: (listener) => {
+      bottomListeners.current.add(listener);
+      return () => { bottomListeners.current.delete(listener); };
+    },
     preserveOffscreenLayout: () => {
       const viewport = viewportRef.current;
       if (!viewport) return () => {};
@@ -184,10 +198,12 @@ function ActiveThreadScrollViewport ({
       }
     };
     const handleWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       if (event.deltaY > 0) setScrollDirection("down");
       if (event.deltaY < 0) setScrollDirection("up");
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       if (isInteractiveScrollKeyTarget(event.target)) return;
       if (THREAD_SCROLL_DOWN_KEYS.has(event.key) || (event.key === " " && !event.shiftKey)) {
         setScrollDirection("down");
@@ -196,7 +212,8 @@ function ActiveThreadScrollViewport ({
         setScrollDirection("up");
       }
     };
-    const handlePointerDown = () => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       pointerScrollActiveRef.current = true;
       pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = viewport.scrollTop;
@@ -258,6 +275,11 @@ function ActiveThreadScrollViewport ({
       </ThreadScrollViewportContext.Provider>
     </div>
   );
+}
+
+export function ThreadScrollViewportEnd() {
+  const viewport = useThreadScrollViewportContext();
+  return <div ref={viewport.setEndTarget} data-thread-scroll-end="true" className="h-px shrink-0" aria-hidden="true" />;
 }
 
 const ThreadScrollViewport = forwardRef<HTMLDivElement, ThreadScrollViewportProps>(function ThreadScrollViewport ({

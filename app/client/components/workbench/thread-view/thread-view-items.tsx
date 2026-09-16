@@ -141,6 +141,7 @@ import {
   type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 import ThreadWorkedRun from "./ThreadWorkedRun";
+import { getThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import { partitionWorkedRows } from "./thread-worked-run";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
@@ -760,7 +761,6 @@ function ThreadReasoningSequence ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
-      defaultOpen={isMostRecent}
       summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
@@ -988,12 +988,6 @@ function ThreadCommandDetailRows ({
   }
   const contexts = Array.from(new Set(rows.map((row) => row.contextText?.trim()).filter(Boolean)));
   const hideSharedContext = contexts.length === 1 && rows.length > 1;
-  const expandableRowIndexes = rows
-    .map((row, index) => hasCommandDetailResultBlock(row) || hasCommandDetailImageBlock(row) ? index : -1)
-    .filter((index) => index >= 0);
-  const defaultOpenRowIndex = expandableRowIndexes.find((index) => rows[index]?.state === "inProgress")
-    ?? expandableRowIndexes.at(-1)
-    ?? -1;
 
   return (
     <div className="space-y-0.5">
@@ -1006,7 +1000,6 @@ function ThreadCommandDetailRows ({
               <ThreadDisclosure
                 className="py-1"
                 contentClassName="space-y-1"
-                defaultOpen={index === defaultOpenRowIndex}
                 leading={renderCommandDetailStateIcon(row)}
                 leadingClassName={getCommandDetailStateMarkerClassName(row)}
                 leadingLabel={getCommandDetailStateLabel(row)}
@@ -1582,7 +1575,6 @@ function ThreadCommandExecutionDetails ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-2 pl-6"
-      defaultOpen={isMostRecent}
       summary={(
         <>
           <ThreadCommandSummary display={outcomeCommandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
@@ -1833,9 +1825,8 @@ function ThreadRegularCommandSequence ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
-      defaultOpen={isMostRecent}
-      summary={<ThreadCommandSummary display={commandBlockDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      summary={<ThreadCommandSummary display={commandBlockDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />}
     >
       <>
         {items.map((item, index) => (
@@ -1945,7 +1936,6 @@ function ThreadCommandSequence ({
       {renderSegments.map((segment, index) => (
         segment.kind === "threadContext" ? (
           <ThreadContextCommandItem
-            defaultOpen={isMostRecent && index === renderSegments.length - 1}
             key={`thread-context:${segment.item.id}`}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -2470,6 +2460,9 @@ export function ThreadTranscriptItemsDetails ({
       key={ids[0]}
       count={group.length}
       durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
+      fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"
+        ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" }> => item.type === "fileChange")
+        : []))}
       initialInactive={ids.every(id => initialInactiveItemIds.has(id))}
       newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
     >{children}</ThreadWorkedRun>;

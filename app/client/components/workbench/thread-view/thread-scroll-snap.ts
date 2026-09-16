@@ -9,6 +9,7 @@
  * - resolveThreadEndFollowing: retain managed following until explicit upward movement.
  * - resolveThreadScrollProximity: classify remaining distance from the normal-flow bottom.
  * - isThreadScrollAtEnd: identify the normal-flow bottom boundary.
+ * - didThreadScrollReattach: distinguish a bottom return from remaining attached.
  * - getPreservedThreadScrollTop: preserve reading position without competing with end re-snapping.
  */
 
@@ -73,6 +74,10 @@ export function isThreadScrollAtEnd(
   tolerancePx = THREAD_SCROLL_END_TOLERANCE_PX,
 ) {
   return getMaximumScrollTop(metrics) - metrics.scrollTop <= tolerancePx;
+}
+
+export function didThreadScrollReattach(wasAtEnd: boolean, metrics: ThreadScrollMetrics) {
+  return !wasAtEnd && isThreadScrollAtEnd(metrics);
 }
 
 export function getPreservedThreadScrollTop(

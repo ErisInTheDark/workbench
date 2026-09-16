@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - No production exports; Node tests lock user-owned disclosure toggles for completed web searches. Keywords: thread, web search, disclosure, toggle.
+ * - No production exports; tests protect user-owned web search disclosure state.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isValidElement } from "react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import ThreadWebSearchItem from "./ThreadWebSearchItem";
@@ -20,10 +21,8 @@ test("completed web searches leave disclosure toggles user-owned", () => {
     results: null,
     type: "webSearch",
   };
-  const disclosure = ThreadWebSearchItem({ item });
-
-  assert.equal(isValidElement<{ defaultOpen?: boolean; open?: boolean }>(disclosure), true);
-  if (!isValidElement<{ defaultOpen?: boolean; open?: boolean }>(disclosure)) return;
-  assert.equal(disclosure.props.defaultOpen, false);
-  assert.equal(disclosure.props.open, undefined);
+  const html = renderToStaticMarkup(createElement(ThreadWebSearchItem, { item }));
+  assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
+  const other = renderToStaticMarkup(createElement(ThreadWebSearchItem, { item: { ...item, action: { type: "other" } } }));
+  assert.doesNotMatch(other, /<details[^>]*\bopen=/u);
 });

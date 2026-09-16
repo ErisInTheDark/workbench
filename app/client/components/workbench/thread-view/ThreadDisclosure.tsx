@@ -2,7 +2,6 @@
  * Exports:
  * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state.
  * - ThreadDisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
- * - Local helpers: joinClasses for compact className composition.
  */
 "use client";
 
@@ -16,6 +15,7 @@ function joinClasses (...values: Array<string | undefined>) {
 
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
+  hideChevron?: boolean;
   children?: ReactNode;
   compactSummary?: boolean;
   contentClassName?: string;
@@ -27,6 +27,7 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
   renderContent?: () => ReactNode;
   summary: ReactNode;
   summaryClassName?: string;
+  summaryContentClassName?: string;
 };
 
 function isSummaryActionTarget(target: EventTarget | null) {
@@ -43,6 +44,7 @@ function shouldPreventSummaryActionDefault(target: EventTarget | null) {
 
 export default function ThreadDisclosure ({
   chevronClassName,
+  hideChevron = false,
   children,
   className,
   compactSummary = false,
@@ -57,6 +59,7 @@ export default function ThreadDisclosure ({
   renderContent,
   summary,
   summaryClassName,
+  summaryContentClassName,
   ...props
 }: ThreadDisclosureProps) {
   const isControlled = typeof open === "boolean";
@@ -139,14 +142,14 @@ export default function ThreadDisclosure ({
         onClick={handleSummaryClick}
         onKeyDown={handleSummaryKeyDown}
       >
-        <ChevronIcon
+        {!hideChevron ? <ChevronIcon
           data-thread-chevron
           className={joinClasses(
             "transition-transform",
             chevronClassName,
           )}
           size={18}
-        />
+        /> : null}
         {leading ? (
           <span
             className={joinClasses("flex size-[1.1rem] shrink-0 items-center justify-center", leadingClassName)}
@@ -157,7 +160,7 @@ export default function ThreadDisclosure ({
             {leading}
           </span>
         ) : null}
-        <div className="min-w-0 flex-1">{summary}</div>
+        <div className={joinClasses("min-w-0 flex-1", summaryContentClassName)}>{summary}</div>
       </summary>
       {hasMountedContent ? (
         <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{renderContent ? renderContent() : children}</div>

@@ -1,7 +1,6 @@
 /*
- * Keywords: thread, subagent, cumulative duration, live clock.
  * Exports:
- * - default ThreadSubagentWaitItem: render named subagent wait outcomes with cumulative live timing, tabs, completed Markdown, or failure details. Keywords: workbench, thread, subagent, wait, duration, tabs, preview, timeout.
+ * - default ThreadSubagentWaitItem: render user-controlled wait details with cumulative timing, tabs, outcomes, and failures.
  */
 "use client";
 
@@ -92,7 +91,6 @@ export default function ThreadSubagentWaitItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      defaultOpen={active}
       summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >

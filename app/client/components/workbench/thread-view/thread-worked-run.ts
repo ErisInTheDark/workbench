@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkedRunGate: measured geometry and recorded age of a rendered work run.
- * - WorkedRunState: local collapsed, expanded or awaiting-visible intent.
+ * - WorkedRunState: local collapse and bottom-reattachment reveal intent.
  * - canCollapseWorkedRun: decide collapse eligibility without timers or DOM access.
  * - workedRunReadyAt: resolve the next age eligibility time, or unknown.
  * - revealWorkedRun/reconcileWorkedRun: pure reveal and off-screen transition state.
@@ -21,18 +21,18 @@ export function workedRunReadyAt(gate: Pick<WorkedRunGate, "newestActivityAt" | 
 
 export function canCollapseWorkedRun(gate: WorkedRunGate) {
   const readyAt = workedRunReadyAt(gate);
-  return gate.count >= 5 && gate.above && readyAt !== null && gate.now >= readyAt;
+  return gate.count >= 3 && gate.above && readyAt !== null && gate.now >= readyAt;
 }
 
-export type WorkedRunState = "expanded" | "collapsed" | "awaitingVisible";
+export type WorkedRunState = "expanded" | "collapsed" | "awaitingAttachment";
 
 export function revealWorkedRun(): WorkedRunState {
-  return "awaitingVisible";
+  return "awaitingAttachment";
 }
 
-export function reconcileWorkedRun(state: WorkedRunState, gate: WorkedRunGate, visible: boolean): WorkedRunState {
+export function reconcileWorkedRun(state: WorkedRunState, gate: WorkedRunGate, event: "geometry" | "bottomReattached"): WorkedRunState {
   if (state === "collapsed") return canCollapseWorkedRun({ ...gate, above: true }) ? state : "expanded";
-  if (state === "awaitingVisible") return visible ? "expanded" : state;
+  if (state === "awaitingAttachment") return event === "bottomReattached" ? "expanded" : state;
   return state === "expanded" && canCollapseWorkedRun(gate) ? "collapsed" : state;
 }
 

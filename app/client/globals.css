@@ -1201,6 +1201,69 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     display: none;
   }
 
+  .thread-live-disclosure {
+    --thread-live-height: min(100vh, 24rem);
+    --thread-live-border: color-mix(in srgb, var(--text) 16%, transparent);
+    border: 1px solid transparent;
+    border-radius: 0.8rem;
+    overflow: hidden;
+  }
+
+  .thread-live-disclosure[open] {
+    border-color: var(--thread-live-border);
+    background: color-mix(in srgb, var(--text) 3%, transparent);
+  }
+
+  .thread-live-summary {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .thread-live-disclosure[open] > .thread-live-summary {
+    border-bottom: 1px solid var(--thread-live-border);
+  }
+
+  .thread-live-content {
+    display: flex;
+    flex-direction: column;
+    height: var(--thread-live-height);
+  }
+
+  .thread-live-reasoning {
+    flex: 0 1 auto;
+    max-height: 30%;
+    border-bottom: 1px solid var(--thread-live-border);
+    overscroll-behavior: contain;
+  }
+
+  .thread-live-terminal {
+    flex: 1 1 70%;
+    max-height: 70%;
+    overscroll-behavior: contain;
+  }
+
+  .thread-live-content:not(:has(> .thread-live-reasoning)) > .thread-live-terminal {
+    flex-basis: 100%;
+    max-height: 100%;
+  }
+
+  /* The thread's near-end snap area exceeds these nested viewports and prevents growth following. */
+  :is(.thread-live-reasoning, .thread-live-terminal) [data-thread-scroll-end="true"] {
+    scroll-margin-block-start: 0;
+  }
+
+  .thread-terminal-row {
+    flex-shrink: 0;
+  }
+
+  .thread-terminal-running {
+    margin-top: auto;
+    border-top: 1px solid var(--thread-live-border);
+  }
+
+  .thread-terminal-expand:hover {
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+
   [data-thread-scroll-target="true"] {
     --thread-scroll-inline-padding: 1.25rem;
     --thread-scroll-snap-distance: var(--thread-scroll-near-end-distance);

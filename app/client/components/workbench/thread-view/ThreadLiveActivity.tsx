@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - LiveThreadActivity: current reasoning or web-search presentation input.
- * - default ThreadLiveActivity: render live activity with a loader and exact reasoning-field subscription.
+ * - default ThreadLiveActivity: render user-owned live reasoning and terminal disclosure.
  */
 "use client";
 
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { useState } from "react";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
@@ -14,31 +13,17 @@ import { LoaderIcon } from "../workbench-icons";
 import ThreadMarkdown from "./ThreadMarkdown";
 import {
   projectThreadReasoningMarkdown,
-  type ThreadReasoningStepReference,
 } from "./thread-reasoning-display";
 import { ThreadWebSearchActionRow } from "./ThreadWebSearchItem";
 import useThreadPresentedText from "./use-thread-presented-text";
-
-export type LiveThreadActivity =
-  | {
-    body: string | null;
-    hiddenStep: ThreadReasoningStepReference | null;
-    kind: "reasoning";
-    markdown: string | null;
-    title: string;
-  }
-  | {
-    contextItems: Array<Extract<ThreadItem, { type: "webSearch" }>>;
-    hiddenItemIds: string[];
-    kind: "webSearch";
-    title: string;
-  };
+import type { LiveThreadActivity, ThreadTerminalEntry } from "./thread-live-activity";
+import ThreadCommandTerminal from "./ThreadCommandTerminal";
+import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 
 export default function ThreadLiveActivity({
   activity,
+  commands,
   inlineMentionSources,
-  isOpen,
-  onOpenChange,
   presentationSource,
   projectFilePaths,
   projectId,
@@ -48,10 +33,9 @@ export default function ThreadLiveActivity({
   turnId,
   workspaceRoots,
 }: {
-  activity: LiveThreadActivity;
+  activity: LiveThreadActivity | null;
+  commands: readonly ThreadTerminalEntry[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
-  isOpen: boolean;
-  onOpenChange: (open: boolean) => void;
   presentationSource?: ThreadTextPresentationSource | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -61,9 +45,10 @@ export default function ThreadLiveActivity({
   turnId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const reasoningStep = activity.kind === "reasoning" ? activity.hiddenStep : null;
+  const [isOpen, setIsOpen] = useState(false);
+  const reasoningStep = activity?.kind === "reasoning" ? activity.hiddenStep : null;
   const presentedMarkdown = useThreadPresentedText({
-    canonicalText: activity.kind === "reasoning" ? activity.markdown ?? "" : "",
+    canonicalText: activity?.kind === "reasoning" ? activity.markdown ?? "" : "",
     field: reasoningStep?.source === "content" ? "reasoningContent" : "reasoningSummary",
     index: reasoningStep?.sectionIndex ?? null,
     itemId: reasoningStep?.itemId ?? "",
@@ -71,66 +56,51 @@ export default function ThreadLiveActivity({
     threadId,
     turnId,
   });
-  const reasoningDisplay = activity.kind === "reasoning" && reasoningStep
+  const reasoningDisplay = activity?.kind === "reasoning" && reasoningStep
     ? projectThreadReasoningMarkdown(presentedMarkdown)
-    : activity.kind === "reasoning"
+    : activity?.kind === "reasoning"
       ? { body: activity.body, title: activity.title }
       : null;
 
   const title = (
     <span className="inline-flex items-center gap-2">
       <LoaderIcon className="shrink-0" />
-      <span className="thread-thinking-text -mt-0.5">{reasoningDisplay?.title ?? activity.title}</span>
+      <span className="thread-thinking-text -mt-0.5">{reasoningDisplay?.title ?? activity?.title}</span>
     </span>
   );
 
   return (
-    <div className="py-4" aria-live="polite">
-      {activity.kind === "webSearch" ? (
-        activity.contextItems.length ? (
-          <ThreadDisclosure
-            contentClassName="mt-2 space-y-1 pl-6"
-            open={isOpen}
-            onToggle={(event) => onOpenChange(event.currentTarget.open)}
-            summary={title}
-            summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-          >
-            {activity.contextItems.map((item) => (
-              <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
-                <ThreadWebSearchActionRow item={item} />
-              </p>
-            ))}
-          </ThreadDisclosure>
-        ) : (
-          <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
-            {title}
-          </p>
-        )
-      ) : reasoningDisplay?.body ? (
-        <ThreadDisclosure
-          contentClassName="mt-2"
-          open={isOpen}
-          onToggle={(event) => onOpenChange(event.currentTarget.open)}
-          summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-          summary={title}
-        >
-          <ThreadMarkdown
-            className="text-[0.8em] text-fg/muted"
-            inlineMentionSources={inlineMentionSources}
-            markdown={reasoningDisplay.body}
-            threadCwdPath={threadCwdPath}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            revealAppends={Boolean(presentationSource)}
-            workspaceRoots={workspaceRoots}
-          />
-        </ThreadDisclosure>
-      ) : (
-        <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
-          {title}
-        </p>
-      )}
+    <div className="py-4" hidden={!activity}>
+      <ThreadDisclosure
+        hideChevron
+        className="thread-live-disclosure"
+        contentClassName="thread-live-content"
+        open={isOpen}
+        onToggle={event => setIsOpen(event.currentTarget.open)}
+        summaryClassName="thread-live-summary text-[0.92em] font-medium leading-[1.6]"
+        summaryContentClassName="-mb-1"
+        summary={<span aria-live="polite">{title}</span>}
+      >
+        {reasoningDisplay?.body || (activity?.kind === "webSearch" && activity.contextItems.length) ? (
+          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="thread-live-reasoning" contentClassName="px-3 py-2">
+            {reasoningDisplay?.body ? <ThreadMarkdown
+              className="text-[0.8em] text-fg/muted"
+              inlineMentionSources={inlineMentionSources}
+              markdown={reasoningDisplay.body}
+              threadCwdPath={threadCwdPath}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              revealAppends={Boolean(presentationSource)}
+              workspaceRoots={workspaceRoots}
+            /> : activity?.kind === "webSearch" ? activity.contextItems.map(item => (
+              <p key={item.id} className="m-0 text-[0.8em] text-fg/muted"><ThreadWebSearchActionRow item={item} /></p>
+            )) : null}
+            <ThreadScrollViewportEnd />
+          </ThreadScrollViewport>
+        ) : null}
+        <ThreadCommandTerminal entries={commands} open={isOpen && Boolean(activity)} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
+      </ThreadDisclosure>
     </div>
   );
 }
