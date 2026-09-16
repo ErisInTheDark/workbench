@@ -150,7 +150,7 @@ function createCommandExecutionItem(value: string | JsonObject, index: number): 
     type: "commandExecution",
     id,
     command,
-    cwd: record ? readString(record, "cwd") ?? "c:/git/web/workbench" : "c:/git/web/workbench",
+    cwd: record ? readString(record, "cwd") ?? "." : ".",
     processId: record ? readString(record, "processId") : null,
     source: source === "userShell" || source === "unifiedExecStartup" || source === "unifiedExecInteraction" ? source : "agent",
     status,
@@ -256,7 +256,7 @@ function createLabTurn(items: ThreadItem[]): Turn {
   };
 }
 
-function createLabThreadPayload(turns: Turn[], cwd = "c:/git/web/workbench"): ThreadPayload<WorkbenchThreadId> {
+function createLabThreadPayload(turns: Turn[], cwd = "."): ThreadPayload<WorkbenchThreadId> {
   return {
     id: LabThreadIdSchema.parse("thread-render-lab"),
     harness: "codex",
@@ -300,16 +300,15 @@ function normalizeTurn(value: JsonValue, index = 0): Turn | null {
     return null;
   }
 
-  const items = value.items
-    .map((item, itemIndex) => normalizeThreadItem(item, itemIndex))
-    .filter((item): item is ThreadItem => Boolean(item));
+  const items = normalizeItems(value.items);
 
   return {
+    ...value as Partial<Turn>,
     id: readString(value, "id") ?? `lab-turn-${index + 1}`,
     items,
-    itemsView: "full",
-    status: readString(value, "status") === "inProgress" ? "inProgress" : readString(value, "status") === "failed" ? "failed" : "completed",
-    error: null,
+    itemsView: value.itemsView === "summary" || value.itemsView === "notLoaded" ? value.itemsView : "full",
+    status: value.status === "inProgress" || value.status === "failed" || value.status === "interrupted" ? value.status : "completed",
+    error: isJsonObject(value.error ?? null) ? value.error as Turn["error"] : null,
     startedAt: readNumber(value, "startedAt"),
     completedAt: readNumber(value, "completedAt"),
     durationMs: readNumber(value, "durationMs"),
@@ -321,13 +320,16 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
     return null;
   }
 
-  const turns = record.turns
-    .map((turn, index) => normalizeTurn(turn, index))
-    .filter((turn): turn is Turn => Boolean(turn));
-  const payload = createLabThreadPayload(turns, readString(record, "cwd") ?? "c:/git/web/workbench");
+  const turns = record.turns.map((value, index) => {
+    const turn = normalizeTurn(value, index);
+    if (!turn) throw new Error(`Turn ${index + 1} must contain an items array.`);
+    return turn;
+  });
+  const payload = createLabThreadPayload(turns, readString(record, "cwd") ?? ".");
 
   return {
     ...payload,
+    ...record as Partial<ThreadPayload>,
     ...(record.isDraft === true
       ? { id: LabDraftIdSchema.parse(readString(record, "id") ?? payload.id), isDraft: true as const }
       : { id: LabThreadIdSchema.parse(readString(record, "id") ?? payload.id), isDraft: false as const }),
@@ -346,17 +348,22 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
     serviceTier: readString(record, "serviceTier"),
     agentPath: readString(record, "agentPath"),
     browseResultEntries: readBrowseResultEntries(record),
+    turns,
+    turnHistory: Array.isArray(record.turnHistory) ? (record as Partial<ThreadPayload>).turnHistory! : payload.turnHistory,
   };
 }
 
 function normalizeItemsArray(values: JsonValue[]): ThreadPayload | null {
-  const items = values
-    .map((item, index) => normalizeThreadItem(item, index))
-    .filter((item): item is ThreadItem => Boolean(item));
-
-  return items.length ? createLabThreadPayload([createLabTurn(items)]) : null;
+  return createLabThreadPayload([createLabTurn(normalizeItems(values))]);
 }
 
+function normalizeItems(values: JsonValue[]): ThreadItem[] {
+  return values.map((value, index) => {
+    const item = normalizeThreadItem(value, index);
+    if (!item) throw new Error(`Item ${index + 1} is not supported. Supply a canonical item with type and id, or a supported shorthand item.`);
+    return item;
+  });
+}
 function normalizeThreadPayload(value: JsonValue): ThreadPayload | null {
   if (!isJsonObject(value) || !Array.isArray(value.turns)) {
     return null;
@@ -370,10 +377,7 @@ function normalizeThreadPayload(value: JsonValue): ThreadPayload | null {
     return toThreadPayload({ ...value as Thread, id: LabThreadIdSchema.parse(value.id) }, "codex");
   }
 
-  const turns = value.turns
-    .map((turn, index) => normalizeTurn(turn, index))
-    .filter((turn): turn is Turn => Boolean(turn));
-  return createLabThreadPayload(turns, readString(value, "cwd") ?? "c:/git/web/workbench");
+  return createThreadPayloadFromRecord(value);
 }
 
 export function parseThreadRenderInput(text: string): { error: string; thread: ThreadPayload | null } {

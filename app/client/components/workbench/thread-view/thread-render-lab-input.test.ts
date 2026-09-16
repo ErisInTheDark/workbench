@@ -70,7 +70,42 @@ test("thread render lab adapts shorthand commands without discarding semantic ac
   assert.equal(item?.type, "commandExecution");
   if (item?.type === "commandExecution") {
     assert.equal(item.id, "lab-command-1");
-    assert.equal(item.cwd, "c:/git/web/workbench");
+    assert.equal(item.cwd, ".");
     assert.deepEqual(item.commandActions, [action]);
   }
+});
+
+test("canonical fixture metadata and interrupted turn failures survive admission", () => {
+  const error = { message: "Interrupted", additionalDetails: "detail", codexErrorInfo: null, misalignment: null };
+  const history = [{ turnId: "older", loadState: "notLoaded", itemCount: 20 }];
+  const result = parseThreadRenderInput(JSON.stringify({
+    id: "fixture", harness: "codex", cwd: "/fixture", turns: [{
+      id: "turn", items: [], status: "interrupted", error, itemsView: "summary",
+    }], turnHistory: history, tokenUsage: { total: 123 },
+  }));
+  assert.equal(result.error, "");
+  assert.equal(result.thread?.turns[0]?.status, "interrupted");
+  assert.deepEqual(result.thread?.turns[0]?.error, error);
+  assert.equal(result.thread?.turns[0]?.itemsView, "summary");
+  assert.deepEqual(result.thread?.turnHistory, history);
+  assert.deepEqual(result.thread?.tokenUsage, { total: 123 });
+});
+
+test("unsupported entries fail visibly instead of silently shrinking the fixture", () => {
+  const result = parseThreadRenderInput(JSON.stringify(["echo keep", { unexpected: true }]));
+  assert.ok(result.error);
+  assert.equal(result.thread, null);
+});
+
+test("empty item arrays are usable empty fixtures", () => {
+  const result = parseThreadRenderInput("[]");
+  assert.equal(result.error, "");
+  assert.deepEqual(result.thread?.turns[0]?.items, []);
+});
+
+test("thread envelopes without a harness keep identity and reject malformed turns", () => {
+  const result = parseThreadRenderInput('{"id":"custom-fixture","name":"custom","turns":[]}');
+  assert.equal(result.thread?.id, "custom-fixture");
+  assert.equal(result.thread?.name, "custom");
+  assert.ok(parseThreadRenderInput('{"turns":[{"unexpected":true}]}').error);
 });

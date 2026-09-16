@@ -36,7 +36,7 @@ function SqlThreadViewer({ threadId }: { threadId: string }) {
           <button type="button" className="rounded px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" onClick={() => void controller?.refresh()}>Retry</button>
         </div>
       ) : null}
-      <ThreadRenderSurface
+      <div className="min-h-0 flex-1"><ThreadRenderSurface
         thread={state?.thread}
         emptyMessage={error ? "" : source?.status === "unavailable"
           ? "Waiting for the transcript connection..."
@@ -47,7 +47,7 @@ function SqlThreadViewer({ threadId }: { threadId: string }) {
           canLoadPrevious: state?.nextCursor != null,
           loadPrevious: () => { void controller?.loadPrevious(); },
         }}
-      />
+      /></div>
     </ThreadTextPresentationContext>
   );
 }
@@ -76,9 +76,13 @@ export default function AgentThreadViewer({
   }, [initialThreadId, locationPathname, locationSearch]);
 
   return (
-    <main className="min-h-dvh bg-bg text-text">
+    <main className="flex h-dvh min-h-0 flex-col bg-bg text-text">
+      <nav className="flex shrink-0 items-center gap-3 px-5 py-2 text-sm text-fg/muted">
+        <span>Captured thread viewer</span>
+        <a href="/agent/thread-lab" className="rounded px-2 py-1 hover:bg-fg-7 hover:text-text">Thread render lab</a>
+      </nav>
       {!locationOptions.threadId ? (
-        <div className="mx-auto flex min-h-dvh max-w-[42rem] items-center px-5 py-8 md:px-6">
+        <div className="mx-auto flex min-h-0 flex-1 max-w-[42rem] items-center px-5 py-8 md:px-6">
           <p className="m-0 text-[0.92rem] leading-6 text-fg/muted">
             Add a thread id to the URL, such as <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread/&lt;threadId&gt;</code> or <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">/agent/thread?threadId=&lt;threadId&gt;</code>.
           </p>

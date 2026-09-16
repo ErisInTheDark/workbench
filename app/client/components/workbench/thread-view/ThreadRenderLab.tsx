@@ -1,140 +1,167 @@
 /*
  * Exports:
- * - default ThreadRenderLab: paste JSON thread data and render it through the Workbench transcript renderer. Keywords: command matcher, render lab, thread item.
- * - Local helpers: build the hydrated Browse command sample shown in the lab editor. Keywords: sample, browser, commandExecution, fixture.
+ * - default ThreadRenderLab: edit arbitrary fixtures and rendering options without source changes.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import ThreadRenderSurface from "./ThreadRenderSurface";
 import { parseThreadRenderInput } from "./thread-render-lab-input";
+import ThreadRenderLabBoundary from "./ThreadRenderLabBoundary";
+import { parseThreadRenderContext, parseThreadRenderProjection, threadRenderFlags, withThreadRenderStatus,
+  type ThreadRenderContext, type ThreadRenderFlags, type ThreadRenderTurnStatus } from "./thread-render-lab-options";
+import type { ThreadPayload } from "workbench-shared/types";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import ThreadTextPresentationController, { type ThreadTextPresentationField } from "../../../workbench/thread/ThreadTextPresentationController";
+import ThreadTextPresentationContext from "../ThreadTextPresentationContext";
 
-function buildSampleThreadItemsText({
-  threadLabUrl = "http://localhost:<workbench-port>/agent/thread-lab",
-}: {
-  threadLabUrl?: string;
-} = {}) {
-  return JSON.stringify([
-  {
-    command: `wb browse run --thread thread-lab-sample --session thread-lab-check --summary "verify hydrated lab renders pasted command items" --command "stop --force" --command "open ${threadLabUrl} --headless" --command "wait timeout 3000" --command "eval document.body.innerText.slice(0, 200)"`,
-    cwd: "c:/git/web/workbench",
-    status: "inProgress",
-    aggregatedOutput: [
-      JSON.stringify({ startedAt: 1760000000000, summary: "verify hydrated lab renders pasted command items", totalActions: 4, type: "browse-sequence-start" }),
-      JSON.stringify({ action: "stop", index: 0, result: { action: "stop", durationMs: 120, exitCode: 0, ok: true, stderr: "", stdout: "" }, type: "browse-action-complete" }),
-      JSON.stringify({ action: "open", index: 1, result: { action: "open", durationMs: 1010, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ title: "Workbench", url: threadLabUrl }, null, 2) }, type: "browse-action-complete" }),
-      JSON.stringify({ action: "wait", index: 2, session: "thread-lab-check", startedAt: 1760000001130, type: "browse-action-start" }),
-    ].join("\n"),
-  },
-  {
-    command: `wb browse run --thread thread-lab-sample --session thread-lab-check --summary "verify hydrated lab renders pasted command items" --command "open ${threadLabUrl} --headless" --command "wait timeout 3000" --command "eval document.body.innerText.slice(0, 200)"`,
-    cwd: "c:/git/web/workbench",
-    durationMs: 8920,
-    aggregatedOutput: [
-      JSON.stringify({ startedAt: 1760000000000, summary: "verify hydrated lab renders pasted command items", totalActions: 3, type: "browse-sequence-start" }),
-      JSON.stringify({ action: "open", index: 0, session: "thread-lab-check", startedAt: 1760000000001, type: "browse-action-start" }),
-      JSON.stringify({ action: "open", index: 0, result: { action: "open", args: ["open", threadLabUrl, "--session", "thread-lab-check", "--local", "--headless"], durationMs: 1810, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ title: "Workbench", url: threadLabUrl }, null, 2) }, type: "browse-action-complete" }),
-      JSON.stringify({ action: "wait", index: 1, session: "thread-lab-check", startedAt: 1760000001812, type: "browse-action-start" }),
-      JSON.stringify({ action: "wait", index: 1, result: { action: "wait", args: ["wait", "timeout", "3000", "--session", "thread-lab-check", "--local"], durationMs: 3005, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ waited: true }, null, 2) }, type: "browse-action-complete" }),
-      JSON.stringify({ action: "eval", index: 2, session: "thread-lab-check", startedAt: 1760000004819, type: "browse-action-start" }),
-      JSON.stringify({ action: "eval", index: 2, result: { action: "eval", args: ["eval", "document.body.innerText.slice(0, 200)", "--session", "thread-lab-check", "--local"], durationMs: 420, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ result: "Thread render lab\\n\\nPaste a full thread payload, a { thread } response..." }, null, 2) }, type: "browse-action-complete" }),
-      JSON.stringify({ durationMs: 8920, ok: true, results: [], stoppedAtIndex: null, type: "browse-sequence-complete" }),
-    ].join("\n"),
-  },
-  ], null, 2);
-}
-
-function buildThreadLabSampleRoutes() {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
-  const threadLabUrl = new URL("/agent/thread-lab", window.location.href);
-  threadLabUrl.hostname = "localhost";
-  return {
-    threadLabUrl: threadLabUrl.toString(),
-  };
-}
+const buttonClass = "rounded px-3 py-1.5 text-sm hover:bg-fg-7 focus-visible:outline-2 focus-visible:outline-accent";
+const inputClass = "min-w-0 rounded border border-fg-15 bg-transparent px-2 py-1 font-mono text-sm";
 
 export default function ThreadRenderLab() {
-  const [inputText, setInputText] = useState(() => buildSampleThreadItemsText());
-  const [hasMounted, setHasMounted] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const sampleText = useMemo(() => buildSampleThreadItemsText(buildThreadLabSampleRoutes()), [hasMounted]);
-  const parsedInput = useMemo(() => parseThreadRenderInput(inputText), [inputText]);
-
+  const [input, setInput] = useState("");
+  const [contextText, setContextText] = useState("{}");
+  const [inputKind, setInputKind] = useState<"thread" | "projection">("thread");
+  const [fixture, setFixture] = useState<{ thread: ThreadPayload | null; projection?: WorkbenchTranscriptProjection; context: ThreadRenderContext }>({ thread: null, context: {} });
+  const [flags, setFlags] = useState<ThreadRenderFlags>({ showLiveActivity: true });
+  const [status, setStatus] = useState<ThreadRenderTurnStatus>("preserve");
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [mount, setMount] = useState(0);
+  const [width, setWidth] = useState(0);
+  const [height, setHeight] = useState(640);
+  const [fontSize, setFontSize] = useState(1);
+  const [theme, setTheme] = useState("default");
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [textOwner] = useState(() => new ThreadTextPresentationController());
+  const [streamTurn, setStreamTurn] = useState("");
+  const [streamItem, setStreamItem] = useState("");
+  const [streamField, setStreamField] = useState<ThreadTextPresentationField>("commandExecutionOutput");
+  const [streamIndex, setStreamIndex] = useState(0);
+  const [streamText, setStreamText] = useState("");
+  const [appendText, setAppendText] = useState(true);
+  useEffect(() => () => textOwner.dispose(), [textOwner]);
   useEffect(() => {
-    setHasMounted(true);
-  }, []);
-
-  useEffect(() => {
-    setInputText((currentText) => currentText === buildSampleThreadItemsText() ? sampleText : currentText);
-  }, [sampleText]);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    const handleInput = () => {
-      setInputText(textarea.value);
-    };
-    textarea.addEventListener("input", handleInput);
+    const root = document.documentElement;
+    const previous = root.dataset.workbenchTheme;
+    root.dataset.workbenchTheme = theme;
     return () => {
-      textarea.removeEventListener("input", handleInput);
+      if (previous === undefined) delete root.dataset.workbenchTheme;
+      else root.dataset.workbenchTheme = previous;
     };
-  }, []);
+  }, [theme]);
+  const thread = withThreadRenderStatus(fixture.thread, status);
+  const source = { kind: fixture.projection ? "sqlite" as const : "json" as const, sourceKey: "render-lab" };
 
-  return (
-    <main className="min-h-dvh bg-bg text-text">
-      <div className="mx-auto grid min-h-dvh w-full max-w-[92rem] grid-rows-[auto_1fr] gap-4 px-4 py-4 md:px-6 md:py-6">
-        <header className="space-y-1">
-          <h1 className="m-0 text-[1.15rem] font-semibold tracking-tight">Thread render lab</h1>
-          <p className="m-0 max-w-[62rem] text-[0.86rem] leading-6 text-fg/muted">
-            Paste a full thread payload, a <code className="rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-text">{"{ thread }"}</code> response, a turn, an array of thread items, command strings, or simplified command objects to test the real transcript renderer and command matcher display.
-          </p>
-        </header>
-        <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(20rem,0.78fr)_minmax(0,1.22fr)]">
-          <section className="flex min-h-[18rem] flex-col rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_3%,var(--app-bg-solid))]">
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <p className="m-0 text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-fg/muted">Input JSON</p>
-              <button
-                type="button"
-                className="rounded-full px-3 py-1.5 text-[0.78rem] font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                onClick={() => {
-                  setInputText(sampleText);
-                }}
-              >
-                Reset sample
-              </button>
-            </div>
-            <textarea
-              ref={textareaRef}
-              className="explorer-scrollbar min-h-0 flex-1 resize-none bg-transparent px-4 pb-4 font-mono text-[0.78rem] leading-6 text-text outline-none placeholder:text-fg/muted"
-              data-thread-render-lab-hydrated={hasMounted ? "true" : "false"}
-              spellCheck={false}
-              value={inputText}
-              onInput={(event) => {
-                setInputText(event.currentTarget.value);
-              }}
-            />
-          </section>
-          <section className="explorer-scrollbar min-h-[24rem] overflow-y-auto rounded-[1.2rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]">
-            {parsedInput.error ? (
-              <p className="m-0 px-5 py-4 text-[0.9rem] leading-6 text-danger">{parsedInput.error}</p>
-            ) : (
-              <ThreadRenderSurface
-                className="px-4 py-4 md:px-5"
-                emptyMessage="Paste thread items to render them here."
-                flattenCompletedWork
-                thread={parsedInput.thread}
-              />
-            )}
-          </section>
+  function apply() {
+    try {
+      const context = parseThreadRenderContext(contextText);
+      if (inputKind === "projection") {
+        setFixture({ thread: null, projection: parseThreadRenderProjection(input), context });
+      } else {
+        const parsed = parseThreadRenderInput(input);
+        if (parsed.error) { setError(parsed.error); return; }
+        setFixture({ thread: parsed.thread, context });
+      }
+      setError("");
+      setRevision(value => value + 1);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Invalid rendering context.");
+    }
+  }
+
+  return <main className="min-h-dvh bg-bg p-4 text-text">
+    <header className="mb-4 flex flex-wrap items-center gap-3">
+      <h1 className="m-0 text-lg font-semibold">Thread render lab</h1>
+      <button className={buttonClass} onClick={() => setControlsVisible(value => !value)}>{controlsVisible ? "Hide controls" : "Show controls"}</button>
+      <a className={buttonClass} href="/agent/thread">Open captured thread</a>
+    </header>
+    <div className={controlsVisible ? "grid items-start gap-4 lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]" : "min-w-0"}>
+      <section hidden={!controlsVisible} aria-label="Lab controls" className="min-w-0 space-y-4">
+        <p className="m-0 text-sm text-fg/muted">Paste any thread, turn, item array or command shorthand. Apply updates keeps identity and interaction state. Remount starts a fresh view. Nothing executes commands.</p>
+        <fieldset className="flex gap-3 text-sm"><legend>Input format</legend>
+          <label><input type="radio" name="input-kind" checked={inputKind === "thread"} onChange={() => setInputKind("thread")} /> Thread / items</label>
+          <label><input type="radio" name="input-kind" checked={inputKind === "projection"} onChange={() => setInputKind("projection")} /> Canonical SQL projection</label>
+        </fieldset>
+        <label className="block text-sm">Thread JSON
+          <textarea aria-label="Thread JSON" spellCheck={false} value={input} onChange={event => setInput(event.target.value)}
+            className={`${inputClass} mt-1 h-64 w-full resize-y`} />
+        </label>
+        <details>
+          <summary className="cursor-pointer text-sm">Rendering context</summary>
+          <p className="text-xs text-fg/muted">Optional renderer props: knownSkills, projectFilePaths, projectId, projectRootPath, workspaceRoots, relatedThreadsById, subagents, inlineMentionSources, hiddenDynamicToolCallItemIds, hiddenWebSearchItemIds, hiddenReasoningStep.</p>
+          <textarea aria-label="Rendering context JSON" spellCheck={false} value={contextText} onChange={event => setContextText(event.target.value)}
+            className={`${inputClass} h-40 w-full resize-y`} />
+        </details>
+        <div className="flex flex-wrap gap-1">
+          <button className={buttonClass} onClick={apply}>Apply updates</button>
+          <button className={buttonClass} onClick={() => { textOwner.clear(); setMount(value => value + 1); setRevision(value => value + 1); }}>Remount preview</button>
+          <button className={buttonClass} onClick={() => { textOwner.clear(); setInput(""); setContextText("{}"); setFixture({ thread: null, context: {} }); setError(""); setMount(value => value + 1); setRevision(value => value + 1); }}>Clear fixture</button>
         </div>
-      </div>
-    </main>
-  );
+        <p role="status" className={error ? "m-0 text-sm text-danger" : "m-0 text-xs text-fg/muted"}>{error || `Applied revision ${revision}. Invalid input leaves the last preview intact.`}</p>
+        <fieldset className="space-y-1" disabled={Boolean(fixture.projection)}>
+          <legend className="mb-1 text-sm font-medium">Latest turn status</legend>
+          {(["preserve", "inProgress", "completed", "interrupted", "failed"] as const).map(value => <label key={value} className="mr-3 inline-flex items-center gap-1 text-sm">
+            <input type="radio" name="turn-status" value={value} checked={status === value} onChange={() => setStatus(value)} />{value}
+          </label>)}
+        </fieldset>
+        <fieldset className="space-y-1">
+          <legend className="mb-1 text-sm font-medium">Rendering</legend>
+          {Object.entries(threadRenderFlags).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(flags[key as keyof ThreadRenderFlags])}
+              disabled={Boolean(fixture.projection) && key !== "showLiveActivity"}
+              onChange={event => setFlags(current => ({ ...current, [key]: event.target.checked }))} />{label}
+          </label>)}
+        </fieldset>
+        <fieldset className="flex flex-wrap gap-3">
+          <legend className="mb-1 text-sm font-medium">Viewport</legend>
+          <label className="text-sm">Width px (0 = available)<input aria-label="Preview width" className={`${inputClass} block w-24`} type="number" min={0} max={3840} value={width} onChange={event => setWidth(Math.max(0, event.target.valueAsNumber || 0))} /></label>
+          <label className="text-sm">Height px<input aria-label="Preview height" className={`${inputClass} block w-24`} type="number" min={120} max={2160} value={height} onChange={event => setHeight(Math.max(120, event.target.valueAsNumber || 120))} /></label>
+          <label className="text-sm">Font rem<input aria-label="Preview font size" className={`${inputClass} block w-24`} type="number" min={0.5} max={3} step={0.1} value={fontSize} onChange={event => setFontSize(Math.max(0.5, event.target.valueAsNumber || 1))} /></label>
+          <label className="text-sm">Palette<select aria-label="Preview palette" className={`${inputClass} block`} value={theme} onChange={event => setTheme(event.target.value)}>
+            <option value="default">Default</option><option value="magical-girl">Magical girl</option><option value="winter">Winter</option>
+          </select></label>
+        </fieldset>
+        <details>
+          <summary className="cursor-pointer text-sm">Streaming text</summary>
+          <p className="text-xs text-fg/muted">Apply an in-progress fixture first. Target an existing item and supply its full new text. This updates the real leaf text owner without rebuilding the transcript. Apply canonical JSON separately for completion.</p>
+          <div className="grid gap-2">
+            <label className="text-sm">Turn id<input aria-label="Stream turn id" className={`${inputClass} block w-full`} value={streamTurn} onChange={event => setStreamTurn(event.target.value)} /></label>
+            <label className="text-sm">Item id<input aria-label="Stream item id" className={`${inputClass} block w-full`} value={streamItem} onChange={event => setStreamItem(event.target.value)} /></label>
+            <label className="text-sm">Field<select aria-label="Stream field" className={`${inputClass} block w-full`} value={streamField} onChange={event => setStreamField(event.target.value as ThreadTextPresentationField)}>
+              {(["agentMessageText", "commandExecutionOutput", "reasoningSummary", "reasoningContent"] as const).map(field => <option key={field}>{field}</option>)}
+            </select></label>
+            <label className="text-sm">Reasoning section index<input aria-label="Stream section index" type="number" min={0} className={inputClass} value={streamIndex} onChange={event => setStreamIndex(Math.max(0, event.target.valueAsNumber || 0))} /></label>
+            <textarea aria-label="Stream text" className={`${inputClass} h-24 w-full`} value={streamText} onChange={event => setStreamText(event.target.value)} />
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={appendText} onChange={event => setAppendText(event.target.checked)} />Pace appended text (supply the full new text)</label>
+            <button className={buttonClass} onClick={() => {
+              const turn = (fixture.projection?.turns ?? thread?.turns)?.find(turn => turn.id === streamTurn);
+              if (!turn?.items.some(item => item.id === streamItem)) { setError("Streaming target must identify an existing fixture item."); return; }
+              const key = { source, threadId: fixture.projection?.thread.id ?? thread!.id, turnId: streamTurn, itemId: streamItem,
+                field: streamField, index: streamField === "reasoningSummary" || streamField === "reasoningContent" ? streamIndex : null };
+              if (!textOwner.hasSubscribers(key)) { setError("This text field is not mounted. Check the field and section, use an in-progress turn, and open its disclosure."); return; }
+              const current = textOwner.getSnapshot(key) ?? "";
+              if (appendText && streamText.startsWith(current) && streamText.length > current.length) {
+                textOwner.acceptDelta({ key, canonicalText: streamText, delta: streamText.slice(current.length) });
+              }
+              else textOwner.complete(key, streamText, { snap: true });
+              setError("");
+            }}>Publish text</button>
+          </div>
+        </details>
+        <p className="text-xs text-fg/muted">Preview uses your browser colour scheme. Browser viewport/device emulation tests real mobile media queries; width only sizes this pane. SQL projections retain their canonical grouping; edit their turn status in JSON. Daemon-backed actions require the normal app.</p>
+      </section>
+      <section aria-label="Thread preview" className="min-w-0 overflow-x-auto">
+        <div className="border border-fg-15" style={{ width: width || "100%", height }} data-thread-render-lab-preview>
+          <ThreadRenderLabBoundary revision={revision}>
+            <ThreadTextPresentationContext value={textOwner}>
+              <ThreadRenderSurface key={mount} thread={thread} context={fixture.context} flags={flags} fontSizeRem={fontSize} emptyMessage="No fixture applied."
+                presentationSource={source} sql={fixture.projection ? { projection: fixture.projection, loading: false, canLoadPrevious: false, loadPrevious: () => {} } : undefined} />
+            </ThreadTextPresentationContext>
+          </ThreadRenderLabBoundary>
+        </div>
+      </section>
+    </div>
+  </main>;
 }
