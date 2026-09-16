@@ -2,15 +2,17 @@
 "use client";
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import ThreadCommandTerminalController, { type TerminalRow } from "./ThreadCommandTerminalController";
-import type { ThreadTerminalEntry } from "./thread-live-activity";
+import { getThreadTerminalEntries, type ThreadTerminalContext, type ThreadTerminalEntry, type ThreadTerminalRetention } from "./thread-live-activity";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 import ThreadTerminalText from "./ThreadTerminalText";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import useThreadPresentedText from "./use-thread-presented-text";
 
 function TerminalOutputSubscription({ entry, controller, presentationSource, threadId, turnId }: {
-  entry: ThreadTerminalEntry;
+  entry: Pick<ThreadTerminalEntry, "id" | "output">;
   controller: ThreadCommandTerminalController;
   presentationSource?: ThreadTextPresentationSource | null;
   threadId: string;
@@ -32,12 +34,21 @@ function selectedTerminalText(root: HTMLElement) {
 }
 
 const TerminalCommandRow = memo(function TerminalCommandRow({
-  id, command, output, status, commandExpanded, outputExpanded, firstRunning, controller,
-}: Pick<TerminalRow, "id" | "command" | "output" | "status" | "commandExpanded" | "outputExpanded"> & {
+  id, command, output, status, streamsOutput, commandExpanded, outputExpanded, firstRunning, controller,
+  open, presentationSource, threadId, turnId,
+}: Pick<TerminalRow, "id" | "command" | "output" | "status" | "streamsOutput" | "commandExpanded" | "outputExpanded"> & {
   firstRunning: boolean;
   controller: ThreadCommandTerminalController;
+  open: boolean;
+  presentationSource?: ThreadTextPresentationSource | null;
+  threadId: string;
+  turnId: string;
 }) {
   return <div data-terminal-row={id} className={`thread-terminal-row ${firstRunning ? "thread-terminal-running" : ""}`}>
+    <ThreadMeasuredContent>
+    {open && streamsOutput && status === "inProgress" ? <TerminalOutputSubscription
+      entry={{ id, output }} controller={controller} presentationSource={presentationSource} threadId={threadId} turnId={turnId}
+    /> : null}
     <div className="min-w-0 max-w-full px-3 py-2">
       <ThreadTerminalText command failed={status === "failed"} text={command} expanded={commandExpanded} onExpand={() => controller.expand(id, "command")} />
       {output ? <div className="mt-1 pl-3">
@@ -46,11 +57,14 @@ const TerminalCommandRow = memo(function TerminalCommandRow({
       {status === "declined" || status === "timedOut"
         ? <p className="m-0 text-[0.78em] text-danger">{status === "declined" ? "Declined" : "Timed out"}</p> : null}
     </div>
+    </ThreadMeasuredContent>
   </div>;
 });
 
-export default function ThreadCommandTerminal({ entries, open, presentationSource, threadId, turnId }: {
-  entries: readonly ThreadTerminalEntry[];
+export default function ThreadCommandTerminal({ items, context, retention, open, presentationSource, threadId, turnId }: {
+  items: readonly ThreadItem[];
+  context: ThreadTerminalContext;
+  retention: Omit<ThreadTerminalRetention, "now">;
   open: boolean;
   presentationSource?: ThreadTextPresentationSource | null;
   threadId: string;
@@ -85,11 +99,23 @@ export default function ThreadCommandTerminal({ entries, open, presentationSourc
         }
       },
     });
-    owner.setEntries(entries);
+    if (open) owner.setEntries(getThreadTerminalEntries(items, { ...context, retention: { ...retention, now: Date.now() } }));
     return owner;
   });
   const rows = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  useEffect(() => { controller.setEntries(entries); }, [controller, entries]);
+  useEffect(() => {
+    if (!open) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      const now = Date.now();
+      const entries = getThreadTerminalEntries(items, { ...context, retention: { ...retention, now } });
+      controller.setEntries(entries);
+      const expiry = entries.reduce((next, entry) => Math.min(next, entry.expiresAt ?? Infinity), Infinity);
+      if (Number.isFinite(expiry)) timer = setTimeout(refresh, Math.max(0, expiry - Date.now()));
+    };
+    refresh();
+    return () => clearTimeout(timer);
+  }, [controller, items, context, retention, open]);
   useLayoutEffect(() => { controller.configure(open, reducedMotion); }, [controller, open, reducedMotion]);
   useLayoutEffect(() => { controller.committed(); }, [controller, rows]);
   useEffect(() => {
@@ -105,10 +131,6 @@ export default function ThreadCommandTerminal({ entries, open, presentationSourc
     if (event.button === 2 && selectedTerminalText(event.currentTarget)) event.preventDefault();
   };
   return <>
-    {rows.filter(entry => entry.streamsOutput && entry.status === "inProgress").map(entry => (
-      <TerminalOutputSubscription key={entry.id} entry={entry} controller={controller}
-        presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
-    ))}
     <ThreadScrollViewport resetKey={turnId} className="thread-live-terminal" contentClassName="flex min-w-0 flex-col">
       <div
         ref={content}
@@ -130,6 +152,7 @@ export default function ThreadCommandTerminal({ entries, open, presentationSourc
       >
         {rows.map((row, index) => <TerminalCommandRow key={row.id}
           id={row.id} command={row.command} output={row.output} status={row.status}
+          streamsOutput={row.streamsOutput} open={open} presentationSource={presentationSource} threadId={threadId} turnId={turnId}
           commandExpanded={row.commandExpanded} outputExpanded={row.outputExpanded}
           firstRunning={row.status === "inProgress" && rows[index - 1]?.status !== "inProgress"}
           controller={controller}

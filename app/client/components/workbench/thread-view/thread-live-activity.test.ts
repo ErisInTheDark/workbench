@@ -62,3 +62,48 @@ test("partial output keeps commands running and terminal turns do not show a liv
   assert.equal(entries[0]!.status, "inProgress");
   assert.equal(getLiveThreadActivity({ commands: entries, turn: { ...turn([item]), status: "completed" }, pendingUserInputRequest: null }), null);
 });
+
+test("terminal history keeps old running calls but intersects completed age and invocation limits", () => {
+  const now = 4_000_000;
+  const items = [command("old-running"), ...Array.from({ length: 25 }, (_, index) => command(`done-${index}`, "completed"))];
+  const itemTimeline = items.map((item, index) => ({
+    itemId: item.id, startedAt: index === 0 || index === 25 ? now - 1_800_000 : now - 100,
+    firstSeenAt: null, completedAt: null, lastSeenAt: null,
+  }));
+  const entries = getThreadTerminalEntries(items, { cwd: "/project", retention: { now, itemTimeline } });
+  assert.deepEqual(entries.map(entry => entry.id), ["old-running", ...items.slice(6, 25).map(item => item.id)]);
+  const completed = getThreadTerminalEntries([{ ...items[0], status: "completed" } as ThreadItem, ...items.slice(1)],
+    { cwd: "/project", retention: { now, itemTimeline } });
+  assert.equal(completed.some(entry => entry.id === "old-running"), false);
+});
+
+test("terminal retention uses first observation or turn time without refreshing unknown ages", () => {
+  const items = [command("observed", "completed"), command("turn", "completed"), command("running")];
+  const entries = getThreadTerminalEntries(items, {
+    cwd: "/project",
+    retention: {
+      now: 4_000_000, turnStartedAt: 1_000,
+      itemTimeline: [{ itemId: "observed", startedAt: null, firstSeenAt: 3_999_000, completedAt: null, lastSeenAt: null }],
+    },
+  });
+  assert.deepEqual(entries.map(entry => entry.id), ["observed", "running"]);
+  const unknown = getThreadTerminalEntries(Array.from({ length: 30 }, (_, index) => command(String(index), "completed")),
+    { cwd: "/project", retention: { now: 4_000_000 } });
+  assert.deepEqual(unknown.map(entry => entry.id), Array.from({ length: 20 }, (_, index) => String(index + 10)));
+});
+
+test("discarded terminal history never formats its output and running summaries need no output", () => {
+  const discarded = { ...command("discarded", "completed"), get aggregatedOutput(): string { throw new Error("discarded output accessed"); } };
+  assert.equal(getThreadTerminalEntries([discarded], {
+    cwd: "/project", retention: { now: 4_000_000, turnStartedAt: 1_000 },
+  }).length, 0);
+  const running = { ...command("running"), get aggregatedOutput(): string { throw new Error("summary output accessed"); } };
+  assert.equal(getThreadTerminalEntries([running], { cwd: "/project", includeOutput: false }).length, 1);
+});
+
+test("terminal expiry follows a reported failure even when the provider status still says running", () => {
+  const failed = { ...command("failed"), exitCode: 1 };
+  assert.deepEqual(getThreadTerminalEntries([failed], {
+    cwd: "/project", retention: { now: 4_000_000, turnStartedAt: 1_000 },
+  }), []);
+});

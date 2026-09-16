@@ -1,5 +1,4 @@
 /*
- * Keywords: generic item, presentation, matcher, fallback.
  * Exports:
  * - default ThreadGenericItem: match provider presentation or retain an expandable raw payload.
  */
@@ -36,10 +35,11 @@ export default function ThreadGenericItem({
       contentClassName="mt-2 pl-6"
       summary={<ThreadSummaryText text="generic thread item" />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
+      renderContent={() => (
       <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
         {JSON.stringify(source.safeValue, null, 2)}
       </pre>
-    </ThreadDisclosure>
+      )}
+    />
   );
 }

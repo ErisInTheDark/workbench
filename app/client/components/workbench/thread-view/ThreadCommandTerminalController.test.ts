@@ -162,6 +162,21 @@ test("a batch remains locked until every moving row finishes", async () => {
   controller.dispose();
 });
 
+test("history expiry waits behind movement and does not interrupt the running-call completion", async () => {
+  const { controller, batches } = fixture();
+  controller.setEntries([entry("expired", "completed"), entry("running")]);
+  controller.configure(true, false);
+  controller.setEntries([entry("expired", "completed"), entry("running"), entry("new")]);
+  controller.committed();
+  controller.setEntries([entry("running", "completed"), entry("new")]);
+  assert.deepEqual(controller.getSnapshot().map(row => row.id), ["expired", "running", "new"]);
+  assert.equal(batches[0]!.cancelled, false);
+  batches[0]!.finish();
+  await settle();
+  assert.deepEqual(controller.getSnapshot().map(row => [row.id, row.status]), [["running", "completed"], ["new", "inProgress"]]);
+  controller.dispose();
+});
+
 test("measurement and animation construction failures cannot strand pending state", () => {
   for (const failure of ["measure", "animate"]) {
     let warnings = 0;

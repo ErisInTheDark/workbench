@@ -371,6 +371,7 @@ function ThreadQuestionnaireToolCallItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
+      onOffscreen={() => setIsOpen(false)}
       onToggle={(event) => {
         setIsOpen(event.currentTarget.open);
       }}
@@ -422,12 +423,6 @@ function ThreadGenericDynamicToolCallItem ({
   item: DynamicToolCallItem;
 }) {
   const metaParts = buildMetaParts(item);
-  const invocation = formatDynamicToolInvocation({
-    argumentsValue: item.arguments,
-    namespace: item.namespace,
-    tool: item.tool,
-  });
-  const output = formatToolCallOutput({ content: item.contentItems });
 
   return (
     <ThreadDisclosure
@@ -453,9 +448,11 @@ function ThreadGenericDynamicToolCallItem ({
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
-      <ThreadToolCallDetails invocation={invocation} output={output} />
-    </ThreadDisclosure>
+      renderContent={() => <ThreadToolCallDetails
+        invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
+        output={formatToolCallOutput({ content: item.contentItems })}
+      />}
+    />
   );
 }
 

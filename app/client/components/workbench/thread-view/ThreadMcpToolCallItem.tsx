@@ -59,16 +59,6 @@ export default function ThreadMcpToolCallItem ({
     ? "inProgress"
     : item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
   const outcomeDisplay = commandDisplay ? getThreadCommandOutcomeDisplay(commandDisplay, outcome) : null;
-  const invocation = formatMcpToolInvocation({
-    argumentsValue: item.arguments,
-    server: item.server,
-    tool: item.tool,
-  });
-  const output = item.error?.message
-    || formatToolCallOutput({
-      content: item.result?.content,
-      fallback: item.result?.structuredContent ?? item.result?._meta,
-    });
 
   if (item.status !== "completed") {
     metaParts.push(
@@ -118,7 +108,7 @@ export default function ThreadMcpToolCallItem ({
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    >
+      renderContent={() => (
       <>
         {item.mcpAppResourceUri ? (
           <ThreadMetaLine
@@ -135,8 +125,12 @@ export default function ThreadMcpToolCallItem ({
           </div>
         ) : null}
         {details}
-        <ThreadToolCallDetails invocation={invocation} output={output} />
+        <ThreadToolCallDetails
+          invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
+          output={item.error?.message || formatToolCallOutput({ content: item.result?.content, fallback: item.result?.structuredContent ?? item.result?._meta })}
+        />
       </>
-    </ThreadDisclosure>
+      )}
+    />
   );
 }

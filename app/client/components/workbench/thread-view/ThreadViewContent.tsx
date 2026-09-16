@@ -446,10 +446,19 @@ export default memo(function ThreadViewContent ({
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
       : [])
   ), [projectFileLinkRoots, projectRoots]);
-  const terminalCommands = useMemo(() => getThreadTerminalEntries(activityTurn?.status === "inProgress" ? activityTurn.items : [], {
+  const terminalContext = useMemo(() => ({
     cwd: activeThread?.cwd ?? projectRootPath ?? ".",
     knownSkills: workbenchSkills, projectRootPath, workspaceRoots: workspaceFileLinkRoots,
-  }), [activityTurn, activeThread?.cwd, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
+  }), [activeThread?.cwd, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
+  const terminalRetention = useMemo(() => ({
+    itemTimeline: usesSqlTranscript ? activeTranscriptProjection?.turns.at(-1)?.itemTimeline
+      : activeThread?.turnHistory.find(entry => entry.turnId === activityTurn?.id)?.itemTimeline,
+    turnStartedAt: activityTurn?.startedAt,
+  }), [usesSqlTranscript, activeTranscriptProjection, activeThread?.turnHistory, activityTurn]);
+  const terminalCommands = useMemo(() => getThreadTerminalEntries(
+    activityTurn?.status === "inProgress" ? activityTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
+    { ...terminalContext, includeOutput: false },
+  ), [activityTurn, terminalContext]);
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest, turn: activityTurn, commands: terminalCommands,
   }), [activePendingUserInputRequest, activityTurn, terminalCommands]);
@@ -1144,7 +1153,9 @@ export default memo(function ThreadViewContent ({
           <ThreadLiveActivity
             key={`${activeThread.id}:${activityTurn.id}`}
             activity={liveActivity}
-            commands={terminalCommands}
+            items={activityTurn.items}
+            terminalContext={terminalContext}
+            terminalRetention={terminalRetention}
             inlineMentionSources={inlineMentionSources}
             presentationSource={{
               kind: usesSqlTranscript ? "sqlite" : "json",

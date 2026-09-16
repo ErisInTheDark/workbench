@@ -1,5 +1,4 @@
 /*
- * Keywords: native tool output, context disclosure, incoming agent, screenshot, patch recovery.
  * Exports:
  * - default ThreadToolOutputItem: render supported output bodies with their existing semantic surfaces.
  */
@@ -45,10 +44,9 @@ export default function ThreadToolOutputItem({
         <span>Context: </span>
         <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{[item.namespace, item.name].filter(Boolean).join(".")}</span>
       </>}
-    >
-      {parts.map((part, index) => part.type === "input_text"
+      renderContent={() => parts.map((part, index) => part.type === "input_text"
         ? <ThreadMarkdown {...markdownProps} key={index} markdown={part.text} />
         : <ThreadUserImage key={index} alt="Tool output image" src={part.image_url} />)}
-    </ThreadDisclosure>
+    />
   );
 }

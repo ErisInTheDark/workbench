@@ -33,6 +33,7 @@ import {
   useThreadScrollViewportContext,
   type ThreadScrollViewportContextValue,
 } from "./thread-scroll-viewport-context";
+import ThreadViewportVisibilityController from "./ThreadViewportVisibilityController";
 
 interface ThreadScrollViewportProps {
   children: ReactNode;
@@ -97,6 +98,11 @@ function ActiveThreadScrollViewport ({
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
+  const visibility = useRef<ThreadViewportVisibilityController | null>(null);
+  useEffect(() => () => {
+    visibility.current?.dispose();
+    visibility.current = null;
+  }, []);
 
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
     const metrics = readScrollMetrics(viewport);
@@ -142,6 +148,15 @@ function ActiveThreadScrollViewport ({
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     getViewport: () => viewportRef.current,
+    observeContent: (element, listener) => {
+      const root = viewportRef.current;
+      if (!root) return () => {};
+      visibility.current ??= new ThreadViewportVisibilityController({
+        intersection: callback => new IntersectionObserver(callback, { root }),
+        resize: callback => new ResizeObserver(callback),
+      });
+      return visibility.current.observe(element, listener);
+    },
     onBottomReattached: (listener) => {
       bottomListeners.current.add(listener);
       return () => { bottomListeners.current.delete(listener); };

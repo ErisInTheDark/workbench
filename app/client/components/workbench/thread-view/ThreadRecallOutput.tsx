@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - default ThreadRecallOutput: segment tagged Thread Recall records, delegate canonical record rendering, and preserve Markdown fallback. Keywords: thread recall, renderer, delegation, fallback.
- * - Local helpers: render semantic questionnaire responses that cannot reconstruct structured interactive requests. Keywords: questionnaire, response, disclosure.
+ * - default ThreadRecallOutput: lazily render measured Recall records and preserve Markdown fallback.
  */
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   parseWorkbenchThreadRecallOutput,
@@ -14,6 +13,15 @@ import {
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
+
+function RecallRecord({ record, index, renderRecord }: {
+  record: WorkbenchThreadRecallOutputRecord;
+  index: number;
+  renderRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
+}) {
+  return renderRecord(record, index);
+}
 
 function ThreadRecallQuestionnaire({
   record,
@@ -72,8 +80,8 @@ export default function ThreadRecallOutput({
       {segments.map((segment, index) => {
         if (segment.type === "markdown") {
           return (
+            <ThreadMeasuredContent key={`markdown:${index}`}>
             <ThreadMarkdown
-              key={`markdown:${index}`}
               markdown={segment.markdown}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
@@ -81,6 +89,7 @@ export default function ThreadRecallOutput({
               threadCwdPath={threadCwdPath}
               workspaceRoots={workspaceRoots}
             />
+            </ThreadMeasuredContent>
           );
         }
         if (segment.record.kind === "questionnaire") {
@@ -97,9 +106,9 @@ export default function ThreadRecallOutput({
           );
         }
         return (
-          <Fragment key={`record:${segment.record.ref}:${index}`}>
-            {renderRecord(segment.record, index)}
-          </Fragment>
+          <ThreadMeasuredContent key={`record:${segment.record.ref}:${index}`}>
+            <RecallRecord record={segment.record} index={index} renderRecord={renderRecord} />
+          </ThreadMeasuredContent>
         );
       })}
     </div>

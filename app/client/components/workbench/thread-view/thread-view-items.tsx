@@ -91,6 +91,7 @@ import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import ThreadGenericItem from "./ThreadGenericItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
@@ -994,7 +995,8 @@ function ThreadCommandDetailRows ({
         const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
         const hasExpandableContent = hasCommandDetailResultBlock(row) || hasCommandDetailImageBlock(row);
         return (
-          <div className="space-y-1" key={row.id}>
+          <ThreadMeasuredContent key={row.id}>
+          <div className="space-y-1">
             {hasExpandableContent ? (
               <ThreadDisclosure
                 className="py-1"
@@ -1018,6 +1020,7 @@ function ThreadCommandDetailRows ({
           />
             )}
           </div>
+          </ThreadMeasuredContent>
         );
       })}
     </div>
@@ -2412,13 +2415,14 @@ export function ThreadTranscriptItemsDetails ({
   ))?.id
     ?? null;
 
-  const renderEntry = (entry: RenderEntry, index: number) => entry.kind === "generic" ? (
-        <ThreadGenericItem key={`generic:${entry.item.id}`} item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
+  const renderEntry = (entry: RenderEntry, index: number) => <ThreadMeasuredContent
+    key={entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
+      ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
+      : `${getRenderableBlockKey(entry.block)}:${index}`}>
+      {entry.kind === "generic" ? (
+        <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
       ) : (
         <ThreadRenderableBlockView
-          key={initialInactiveItemIds
-            ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
-            : `${getRenderableBlockKey(entry.block)}:${index}`}
           block={entry.block}
           browseResultEntries={browseResultEntries}
           finalAgentMessageId={finalAgentMessageId}
@@ -2441,7 +2445,8 @@ export function ThreadTranscriptItemsDetails ({
           turnStatus={turnStatus}
           workspaceRoots={workspaceRoots}
         />
-      );
+      )}
+    </ThreadMeasuredContent>;
   if (!initialInactiveItemIds) return <div className="space-y-2">{entries.map(renderEntry)}</div>;
   let offset = 0;
   return <div className="space-y-2">{partitionWorkedRows(entries).map(group => {
@@ -2627,7 +2632,7 @@ function ThreadTurnDetailsComponent ({
     blockList: ThreadRenderableBlock[],
     primaryUserBlock: ThreadRenderableBlock | null,
   ) => (
-    <ThreadRenderableBlockView
+    <ThreadMeasuredContent
       key={block.kind === "commandSequence"
         ? `commands:${block.items[0]?.id ?? index}`
         : block.kind === "fileChangeSequence"
@@ -2638,7 +2643,8 @@ function ThreadTurnDetailsComponent ({
               ? `userMessages:${block.items[0]?.id ?? index}`
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
-              : `item:${block.item.id}`}
+              : `item:${block.item.id}`}>
+    <ThreadRenderableBlockView
       block={block}
       browseResultEntries={turnBrowseResultEntries}
       finalAgentMessageId={finalAgentMessageId}
@@ -2661,6 +2667,7 @@ function ThreadTurnDetailsComponent ({
       turnStatus={turn.status}
       workspaceRoots={workspaceRoots}
     />
+    </ThreadMeasuredContent>
   );
 
   const buildBlocksForItems = (items: ThreadItem[]) => buildRenderableBlocks(items, hiddenItemIds, threadCwdPath);

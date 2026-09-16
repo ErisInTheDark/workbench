@@ -5,6 +5,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
@@ -16,13 +17,15 @@ import {
 } from "./thread-reasoning-display";
 import { ThreadWebSearchActionRow } from "./ThreadWebSearchItem";
 import useThreadPresentedText from "./use-thread-presented-text";
-import type { LiveThreadActivity, ThreadTerminalEntry } from "./thread-live-activity";
+import type { LiveThreadActivity, ThreadTerminalContext, ThreadTerminalRetention } from "./thread-live-activity";
 import ThreadCommandTerminal from "./ThreadCommandTerminal";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 
 export default function ThreadLiveActivity({
   activity,
-  commands,
+  items,
+  terminalContext,
+  terminalRetention,
   inlineMentionSources,
   presentationSource,
   projectFilePaths,
@@ -34,7 +37,9 @@ export default function ThreadLiveActivity({
   workspaceRoots,
 }: {
   activity: LiveThreadActivity | null;
-  commands: readonly ThreadTerminalEntry[];
+  items: readonly ThreadItem[];
+  terminalContext: ThreadTerminalContext;
+  terminalRetention: Omit<ThreadTerminalRetention, "now">;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   presentationSource?: ThreadTextPresentationSource | null;
   projectFilePaths?: readonly string[];
@@ -69,13 +74,15 @@ export default function ThreadLiveActivity({
     </span>
   );
 
+  if (!activity) return null;
   return (
-    <div className="py-4" hidden={!activity}>
+    <div className="py-4">
       <ThreadDisclosure
         hideChevron
         className="thread-live-disclosure"
         contentClassName="thread-live-content"
         open={isOpen}
+        onOffscreen={() => setIsOpen(false)}
         onToggle={event => setIsOpen(event.currentTarget.open)}
         summaryClassName="thread-live-summary text-[0.92em] font-medium leading-[1.6]"
         summaryContentClassName="-mb-1"
@@ -99,7 +106,7 @@ export default function ThreadLiveActivity({
             <ThreadScrollViewportEnd />
           </ThreadScrollViewport>
         ) : null}
-        <ThreadCommandTerminal entries={commands} open={isOpen && Boolean(activity)} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
+        <ThreadCommandTerminal items={items} context={terminalContext} retention={terminalRetention} open={isOpen} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
       </ThreadDisclosure>
     </div>
   );

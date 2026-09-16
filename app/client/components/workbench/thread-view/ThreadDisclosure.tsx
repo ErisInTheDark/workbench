@@ -8,6 +8,7 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
+import ThreadMeasuredContent, { useThreadContentWasHidden } from "./ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -16,6 +17,7 @@ function joinClasses (...values: Array<string | undefined>) {
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
   hideChevron?: boolean;
+  onOffscreen?: () => void;
   children?: ReactNode;
   compactSummary?: boolean;
   contentClassName?: string;
@@ -42,7 +44,11 @@ function shouldPreventSummaryActionDefault(target: EventTarget | null) {
   return Boolean(target.closest("button, [data-thread-summary-action='true']"));
 }
 
-export default function ThreadDisclosure ({
+export default function ThreadDisclosure({ onOffscreen, ...props }: ThreadDisclosureProps) {
+  return <ThreadMeasuredContent onHidden={onOffscreen}><ThreadDisclosureContent {...props} /></ThreadMeasuredContent>;
+}
+
+function ThreadDisclosureContent ({
   chevronClassName,
   hideChevron = false,
   children,
@@ -63,7 +69,8 @@ export default function ThreadDisclosure ({
   ...props
 }: ThreadDisclosureProps) {
   const isControlled = typeof open === "boolean";
-  const defaultIsOpen = Boolean(defaultOpen ?? initialOpen);
+  const wasHidden = useThreadContentWasHidden();
+  const defaultIsOpen = !wasHidden && Boolean(defaultOpen ?? initialOpen);
   const [hasUserToggled, setHasUserToggled] = useState(false);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;

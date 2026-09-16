@@ -70,7 +70,15 @@ export default function ThreadRenderSurface({
     items: projectedTurn.items.filter((item): item is ThreadPayload["turns"][number]["items"][number] =>
       item.type !== "generic" && !("requestKey" in item)),
   } : null : render?.thread.turns.at(-1) ?? null;
-  const commands = getThreadTerminalEntries(activityTurn?.status === "inProgress" ? activityTurn.items : [], { cwd, knownSkills, workspaceRoots });
+  const terminalContext = useMemo(() => ({ cwd, knownSkills, workspaceRoots }), [cwd, knownSkills, workspaceRoots]);
+  const terminalRetention = useMemo(() => ({
+    itemTimeline: sql ? projectedTurn?.itemTimeline : render?.thread.turnHistory.find(entry => entry.turnId === activityTurn?.id)?.itemTimeline,
+    turnStartedAt: activityTurn?.startedAt,
+  }), [sql, projectedTurn, render, activityTurn]);
+  const commands = getThreadTerminalEntries(
+    activityTurn?.status === "inProgress" ? activityTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
+    { ...terminalContext, includeOutput: false },
+  );
   const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: activityTurn, commands });
   const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? "codex"}:${threadId}` } : null);
   const turnsById = new Map(render?.thread.turns.map(turn => [turn.id, turn]));
@@ -122,7 +130,8 @@ export default function ThreadRenderSurface({
         /> : <ThreadTurnLoadingSkeleton key={entry.turnId} entry={entry} />;
       }) : <p className="text-fg/muted">{emptyMessage}</p>}
       {flags.showLiveActivity !== false && activityTurn?.status === "inProgress" ? <ThreadLiveActivity
-        key={`${threadId}:${activityTurn.id}`} activity={activity} commands={commands}
+        key={`${threadId}:${activityTurn.id}`} activity={activity} items={activityTurn.items}
+        terminalContext={terminalContext} terminalRetention={terminalRetention}
         threadId={threadId} turnId={activityTurn.id} threadCwdPath={thread?.cwd ?? cwd}
         presentationSource={presentationSource} projectRootPath={cwd} projectId={context.projectId}
         inlineMentionSources={context.inlineMentionSources} projectFilePaths={context.projectFilePaths} workspaceRoots={workspaceRoots}
