@@ -2,6 +2,7 @@
  * Exports:
  * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: reserved hidden continuation contracts.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
+ * - stripWorkbenchQuestionnaireResponseInput: remove valid hidden questionnaire parts while preserving visible sibling input.
  * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
@@ -72,6 +73,22 @@ export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUse
   }];
 }
 
+function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
+  if (input.type !== "text") return false;
+  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(input.text);
+  if (!parsed) return false;
+  try {
+    const response = JSON.parse(parsed.body) as { answers?: unknown };
+    return Boolean(response) && typeof response === "object" && response.answers !== null && typeof response.answers === "object";
+  } catch {
+    return false;
+  }
+}
+
+export function stripWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]): UserInput[] {
+  return input.filter((item) => !isWorkbenchQuestionnaireResponsePart(item));
+}
+
 export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
   return input.length === 1
     && input[0]?.type === "text"
@@ -93,15 +110,9 @@ export function isWorkbenchUnfinishedContinuationTurn(turn: Pick<Turn, "items">)
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {
   const visibleInput = stripWorkbenchActivatedSkillsInput(input);
-  if (visibleInput.length !== 1 || visibleInput[0]?.type !== "text") return false;
-  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(visibleInput[0].text);
-  if (!parsed) return false;
-  try {
-    const response = JSON.parse(parsed.body) as { answers?: unknown };
-    return Boolean(response) && typeof response === "object" && response.answers !== null && typeof response.answers === "object";
-  } catch {
-    return false;
-  }
+  return visibleInput.length === 1
+    && visibleInput[0] !== undefined
+    && isWorkbenchQuestionnaireResponsePart(visibleInput[0]);
 }
 
 export function isWorkbenchHiddenSystemSteerInput(input: readonly UserInput[]) {

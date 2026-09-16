@@ -11,6 +11,7 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { createWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import {
@@ -131,6 +132,23 @@ test("activated skill transport stays out of user rendering and copy Markdown", 
 
   assert.doesNotMatch(html, /wb:activated-skills|SECRET SKILL BODY/u);
   assert.equal(getUserMessageCopyMarkdown(displayInput), "/iterate now");
+});
+
+test("questionnaire response transport stays hidden beside a visible attachment", () => {
+  const item: UserMessageItem = {
+    clientId: null,
+    content: [
+      ...createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approve plan"] } } }),
+      { type: "image", url: "data:image/png;base64,attached" },
+    ],
+    id: "questionnaire-response-with-image",
+    type: "userMessage",
+  };
+  const html = renderUserItems([item]);
+
+  assert.doesNotMatch(html, /wb:questionnaire-response|approve plan/u);
+  assert.match(html, /<img\b[^>]*src="data:image\/png;base64,attached"/u);
+  assert.doesNotMatch(html, /data-thread-bubble-copy-button/u);
 });
 
 test("image-only user messages do not render a copy action", () => {

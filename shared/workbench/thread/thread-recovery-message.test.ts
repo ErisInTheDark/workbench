@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
 import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
+import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
 import {
   WORKBENCH_THREAD_RECOVERY_MESSAGE,
   WORKBENCH_UNFINISHED_TURN_MESSAGE,
@@ -117,4 +118,14 @@ test("skill transport does not hide other input alongside questionnaire response
     assert.equal(isWorkbenchQuestionnaireResponseInput(input), false);
     assert.equal(isWorkbenchHiddenSystemSteerInput(input), false);
   }
+});
+
+test("mixed questionnaire response transport preserves only visible siblings for display", () => {
+  const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
+  const ordinary = { text: "visible note", text_elements: [], type: "text" as const };
+  const image = { type: "image" as const, url: "https://example.com/image.png" };
+  const malformed = { text: "<wb:questionnaire-response>\nnot JSON\n</wb:questionnaire-response>", text_elements: [], type: "text" as const };
+
+  assert.deepEqual(unwrapWorkbenchSteerDisplayInput([...response, image, ordinary]), [image, ordinary]);
+  assert.deepEqual(unwrapWorkbenchSteerDisplayInput([malformed, image]), [malformed, image]);
 });
