@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench.
+ * - WorkbenchThreadState: owned cross-thread selection and provider projection state.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
  * - WorkbenchThreadClientOptions: thread-client adapters and coordinator callbacks.
- * - default WorkbenchThreadClient: own provider thread state, observation leases and proposal hydration, questionnaire source reconciliation and answer intent submission, and notifications.
+ * - default WorkbenchThreadClient: coordinate transport, project context, controller registries, cross-thread notifications, and message admission.
  */
 
 import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
@@ -14,10 +14,6 @@ import WorkbenchThreadController, { type ThreadControllerTarget } from "./Workbe
 import type { WorkbenchClientNotification } from "workbench-shared/workbench/WorkbenchSocketClient";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type {
-  WorkbenchAccountLimits as GetAccountRateLimitsResponse,
-  WorkbenchRateLimitSnapshot as RateLimitSnapshot,
-} from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchControls } from "workbench-shared/types";
 import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
@@ -71,20 +67,19 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import LifecycleScope from "./state/LifecycleScope";
 import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
-import ThreadSourceStore from "./state/ThreadSourceStore";
-import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
+import type { ThreadSourceStore } from "./state/ThreadSourceStore";
+import ThreadDocumentController, {
+  type ThreadDocumentOverlayRevision,
+  type ThreadStablePreferences,
+} from "./thread/ThreadDocumentController";
 import ThreadGoalController from "./thread/ThreadGoalController";
 import ThreadMessageAdmissionController from "./thread/ThreadMessageAdmissionController";
 import ThreadOptimisticInputStore from "./thread/ThreadOptimisticInputStore";
 import type { WorkbenchThreadIdentityResolution, WorkbenchThreadIdentityResolveRequest } from "workbench-shared/workbench/thread/workbench-thread-identity";
-import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
-import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
 import ThreadTextPresentationController, {
     type ThreadTextPresentationField,
     type ThreadTextPresentationKey,
 } from "./thread/ThreadTextPresentationController";
-import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
-import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
 import type { WorkbenchThreadPageResult as WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/thread-actions";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
@@ -107,9 +102,10 @@ import {
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
+import WorkbenchAccountClient from "./WorkbenchAccountClient";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
-const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
+const RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
@@ -133,15 +129,12 @@ export interface WorkbenchThreadState {
   currentThreadId: string;
   hasLoadedThreads: boolean;
   isLoading: boolean;
-  modelsByHarness: Map<WorkbenchHarness, WorkbenchModelOption[]>;
   pendingUserInputRequestsByThreadId: Map<string, WorkbenchPendingUserInputRequest>;
   projectId: ProjectId | "";
   projectRoot: string;
   projectRootPath: string;
   projectRoots: WorkbenchProjectRoot[];
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
-  rateLimits: RateLimitSnapshot | null;
-  rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
   browseResultEntriesByThreadId: Map<string, WorkbenchBrowseResultEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   subagents: WorkbenchSubagentSummary[];
@@ -224,15 +217,6 @@ interface WorkbenchThreadClient {
   textPresentation: ThreadTextPresentationController;
 }
 
-type RateLimitSnapshotSource = "cache" | "notification" | "read";
-
-type RateLimitSnapshotEntry = {
-  generation: number;
-  receivedAt: number;
-  snapshot: RateLimitSnapshot | null;
-  source: RateLimitSnapshotSource;
-};
-
 type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
 type ProviderSteerAcknowledgement = { turnId: string };
@@ -252,18 +236,9 @@ type ThreadPayloadFetchOutcome =
   | { kind: "success"; payload: ThreadPayload }
   | { kind: "superseded" };
 
-interface ThreadOverlayRevisionRecord {
-  key: string;
-  optimisticRevision: number;
-  questionnaireForceProjectionEpoch: number;
-  questionnaireRevision: number;
-  browseResultRevision: number;
-  steerRevision: number;
-}
-
 interface ThreadOperationFence {
   ownerIsCurrent?: () => boolean;
-  overlayRevisions: Omit<ThreadOverlayRevisionRecord, "key">;
+  overlayRevisions: ThreadDocumentOverlayRevision;
   projectContextGeneration: number;
   projectId: string;
   projectRootPath: string;
@@ -311,38 +286,18 @@ interface ReconcileAdmittedThreadMessageContext {
   workbenchOrigin: string | null;
 }
 
-interface ThreadStablePreferenceRecord {
-  agentNickname: string | null;
-  agentPath: string | null;
-  agentRole: string | null;
-  model: string | null;
-  reasoningEffort: string | null;
-  revision: number;
-  serviceTier: string | null;
-  tokenUsage: ThreadPayload["tokenUsage"];
-}
-
-interface ThreadStatusRecord {
-  revision: number;
-  status: string | null;
-}
-
-
 function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
     currentThreadId: "",
     hasLoadedThreads: false,
     isLoading: false,
-    modelsByHarness: new Map(),
     pendingUserInputRequestsByThreadId: new Map(),
     projectId: "",
     projectRoot: "Project",
     projectRootPath: "",
     projectRoots: [],
     questionnaireHistoryByThreadId: new Map(),
-    rateLimits: null,
-    rateLimitsByHarness: new Map(),
     browseResultEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
     subagents: [],
@@ -546,66 +501,6 @@ function ensureThreadHistory(thread: ThreadPayload): ThreadPayload {
   };
 }
 
-function getWindowRemainingPercent(window: RateLimitSnapshot["primary"]) {
-  return window ? 100 - window.usedPercent : null;
-}
-
-function hasRateLimitWindowRolledOver(previous: RateLimitSnapshot["primary"], next: RateLimitSnapshot["primary"]) {
-  if (!previous || !next) {
-    return false;
-  }
-
-  const previousResetMs = previous.resetsAt === null ? null : previous.resetsAt * 1000;
-  const nextResetMs = next.resetsAt === null ? null : next.resetsAt * 1000;
-  if (previousResetMs !== null && previousResetMs <= Date.now()) {
-    return true;
-  }
-
-  return previousResetMs !== null
-    && nextResetMs !== null
-    && nextResetMs > previousResetMs
-    && getWindowRemainingPercent(previous) !== null
-    && getWindowRemainingPercent(previous)! <= 1;
-}
-
-function isRegressiveRateLimitWindow(previous: RateLimitSnapshot["primary"], next: RateLimitSnapshot["primary"]) {
-  if (!previous || !next || previous.windowDurationMins !== next.windowDurationMins) {
-    return false;
-  }
-
-  const previousRemaining = getWindowRemainingPercent(previous);
-  const nextRemaining = getWindowRemainingPercent(next);
-  return previousRemaining !== null
-    && nextRemaining !== null
-    && nextRemaining > previousRemaining
-    && !hasRateLimitWindowRolledOver(previous, next);
-}
-
-function isRegressiveRateLimitSnapshot(previous: RateLimitSnapshot | null, next: RateLimitSnapshot | null) {
-  if (!previous || !next) {
-    return false;
-  }
-
-  return isRegressiveRateLimitWindow(previous.primary, next.primary);
-}
-
-function selectRateLimitSnapshot(
-  response: GetAccountRateLimitsResponse,
-  previousSnapshot: RateLimitSnapshot | null,
-) {
-  const legacySnapshot = response.rateLimits as RateLimitSnapshot | null;
-  const snapshotsByLimitId = response.rateLimitsByLimitId ?? {};
-  if (response.preferredLimitId) {
-    return snapshotsByLimitId[response.preferredLimitId]
-      ?? (previousSnapshot?.limitId ? snapshotsByLimitId[previousSnapshot.limitId] : undefined)
-      ?? (legacySnapshot?.limitId ? snapshotsByLimitId[legacySnapshot.limitId] : undefined)
-      ?? Object.values(snapshotsByLimitId)[0]
-      ?? legacySnapshot;
-  }
-
-  return legacySnapshot;
-}
-
 function isTextPrefix(prefix: string, value: string) {
   return value.startsWith(prefix);
 }
@@ -736,23 +631,68 @@ function WorkbenchThreadClient(
     set: params => daemon.threads.goal.update(params),
   });
   const listeners = new Set<WorkbenchThreadListener>();
-  const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
+  const account = new WorkbenchAccountClient({
+    listModels: async (harness) => (await daemon.models.list(harness)).data,
+    readRateLimits: async (harness) => await daemon.account.limits(harness),
+  });
   const state = createInitialThreadState();
   const threadDocuments = ThreadDocumentStore({
     areDocumentsEquivalent: areThreadPayloadsEquivalent,
   });
-  const threadSources = ThreadSourceStore();
+  const documentControllers = new Map<string, ThreadDocumentController>();
   const threadControllers = new Map<string, WorkbenchThreadController>();
-  const overlayRevisionsByKey = new Map<string, ThreadOverlayRevisionRecord>();
-  const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
-  const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
-  const streamingReconciler = new ThreadStreamingReconciler();
   const textPresentation = new ThreadTextPresentationController();
+  function getDocumentController(key: string) {
+    let controller = documentControllers.get(key);
+    if (!controller) {
+      controller = new ThreadDocumentController({
+        applyBrowseResultOverlay: thread => applyPersistedBrowseResultEntries(thread) ?? thread,
+        applyOptimisticOverlay: thread => applyOptimisticUserMessageOverlay(thread) ?? thread,
+        applyQuestionnaireOverlay: thread => applyPersistedQuestionnaireHistory(thread) ?? thread,
+        applySteerOverlay: thread => applyPersistedSteerHistory(thread) ?? thread,
+        documents: threadDocuments,
+        key,
+        normalizeCanonicalThread: thread => prepareCanonicalThreadSource(thread) ?? thread,
+      });
+      documentControllers.set(key, controller);
+    }
+    return controller;
+  }
+  function findDocumentController(key: string) {
+    return documentControllers.get(key) ?? null;
+  }
+  function getThreadStreaming(key: string) {
+    return getDocumentController(key).streaming;
+  }
+  const threadSources: ThreadSourceStore = {
+    clear() {
+      for (const controller of documentControllers.values()) controller.clear();
+      documentControllers.clear();
+    },
+    delete(key) {
+      const controller = findDocumentController(key);
+      if (!controller) return false;
+      const changed = controller.clear();
+      documentControllers.delete(key);
+      return changed;
+    },
+    get: key => findDocumentController(key)?.getSource() ?? null,
+    getRevision: key => findDocumentController(key)?.getRevision().sourceRevision ?? 0,
+    has: key => findDocumentController(key)?.hasSource() ?? false,
+    install(thread) {
+      const key = getThreadStateKey(thread.harness, thread.id);
+      return getDocumentController(key).installSource(thread);
+    },
+    update: (key, updater) => findDocumentController(key)?.updateSource(updater) ?? false,
+  };
   function getThreadController(projectId: string, target: ThreadControllerTarget) {
     const threadId = target.kind === "draft" ? target.draftId : target.threadId;
     const key = `${projectId}\0${threadId}`;
     let controller = threadControllers.get(key);
     if (!controller) {
+      const harness = target.kind === "draft"
+        ? "codex"
+        : target.harness ?? getKnownThreadHarness(threadId) ?? "codex";
       controller = new WorkbenchThreadController(projectId, target, {
         controls: {
           compactThread, stopThread, setCurrentThreadAgent, setCurrentThreadModel,
@@ -763,6 +703,7 @@ function WorkbenchThreadClient(
             return options.updateThreadStateWithAcceptance(request);
           },
         },
+        document: getDocumentController(getThreadStateKey(harness, threadId)),
         observations: threadObservations,
         readGitArcProposal: async input => await daemon.git.arc.proposal.read({
           ...input,
@@ -781,7 +722,7 @@ function WorkbenchThreadClient(
           return {
             document,
             pendingQuestionnaire: state.pendingUserInputRequestsByThreadId.get(threadId) ?? null,
-            rateLimits: state.rateLimitsByHarness.get(document?.harness ?? (target.kind === "draft" ? "codex" : target.harness ?? "codex")) ?? null,
+            rateLimits: account.getRateLimits(document?.harness ?? (target.kind === "draft" ? "codex" : target.harness ?? "codex")),
           };
         },
         subscribeNative: listener => subscribe(listener),
@@ -860,29 +801,12 @@ function WorkbenchThreadClient(
       options.onStatusMessage?.(`The message was admitted, but sidebar lifecycle publication failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const threadRenderPipeline = new ThreadRenderPipeline({
-    canonicalLayer: new ThreadCanonicalLayer({
-      normalizeCanonicalThread: (thread) => prepareCanonicalThreadSource(thread) ?? thread,
-    }),
-    overlayLayer: new ThreadWorkbenchOverlayLayer({
-      applyBrowseResultOverlay: (thread) => applyPersistedBrowseResultEntries(thread) ?? thread,
-      applyOptimisticOverlay: (thread) => applyOptimisticUserMessageOverlay(thread) ?? thread,
-      applyQuestionnaireOverlay: (thread) => applyPersistedQuestionnaireHistory(thread) ?? thread,
-      applyStablePreferenceOverlay: (thread) => projectStableThreadMetadata(thread),
-      applyStatusOverlay: (thread) => projectThreadStatus(thread),
-      applySteerOverlay: (thread) => applyPersistedSteerHistory(thread) ?? thread,
-    }),
-    visibleLayer: new ThreadVisibleLayer(),
-  });
   const optimisticInputs = ThreadOptimisticInputStore();
   let disposed = false;
   let projectContextGeneration = 0;
   let threadProjectContextGeneration = 0;
   let selectedThreadProjectContext: SelectedThreadProjectContext | null = null;
   let messageAdmissionIntentRevision = 0;
-  let rateLimitGeneration = 0;
-  const rateLimitRefreshStartedAtByHarness = new Map<WorkbenchHarness, number>();
-  const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<boolean>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
@@ -913,7 +837,7 @@ function WorkbenchThreadClient(
         messageAdmissionIntentRevision,
       };
     },
-    getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
+    getThreadStatus: (thread) => findDocumentController(getThreadStateKey(thread.harness, thread.id))?.getStatus() ?? thread.status,
     optimisticInputs,
     renderSource: renderOptimisticSource,
     sources: threadSources,
@@ -1003,7 +927,7 @@ function WorkbenchThreadClient(
       currentThreadId: state.currentThreadId,
       isLoading: state.isLoading,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
-      rateLimits: state.rateLimits,
+      rateLimits: account.getRateLimits(state.currentThread?.harness),
       subagents: state.subagents,
       threadDocuments: threadDocuments.getSnapshot(),
       threads: state.threads,
@@ -1024,6 +948,8 @@ function WorkbenchThreadClient(
       listeners.delete(listener);
     };
   }
+
+  lifecycle.addUnsubscribe(account.subscribe(emit));
 
   function areProjectRootsEquivalent(left: WorkbenchProjectRoot[], right: WorkbenchProjectRoot[]) {
     return left.length === right.length
@@ -1046,13 +972,12 @@ function WorkbenchThreadClient(
     projectContextGeneration += 1;
     threadProjectContextGeneration += 1;
     selectedThreadProjectContext = null;
-    rateLimitGeneration += 1;
     for (const harness of new Set([...installedProviderKeys, ...pendingUserInputRequestGenerationsByHarness.keys()])) {
       bumpPendingUserInputRequestGeneration(harness);
     }
     messageAdmissionIntentRevision += 1;
 
-    refreshRateLimitsPromisesByHarness.clear();
+    account.reset();
 
     state.subagents = [];
     state.threads = [];
@@ -1061,17 +986,12 @@ function WorkbenchThreadClient(
     state.threadsError = "";
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
-    state.rateLimits = null;
     threadDocuments.selectDocumentKey("");
     for (const key of Object.keys(threadDocuments.getSnapshot().documentsByKey)) {
       if (retainedKeys.has(key)) continue;
-      threadDocuments.deleteDocumentKey(key);
-      threadSources.delete(key);
+      findDocumentController(key)?.clear();
+      documentControllers.delete(key);
       optimisticInputs.deleteThread(key);
-      threadRenderPipeline.delete(key);
-    }
-    for (const map of [overlayRevisionsByKey, stablePreferencesByKey, statusRecordsByKey]) {
-      for (const key of map.keys()) if (!retainedKeys.has(key)) map.delete(key);
     }
     browseResultReadGenerationByKey.clear();
     questionnaireHistoryReadGenerationByKey.clear();
@@ -1086,11 +1006,10 @@ function WorkbenchThreadClient(
     providerPendingUserInputRequestsByHarness.clear();
     resolvedDurableQuestionnaireKeysByThreadId.clear();
     if (!retainedKeys.size) {
-      threadSources.clear();
+      for (const controller of documentControllers.values()) controller.clear();
+      documentControllers.clear();
       optimisticInputs.clear();
-      threadRenderPipeline.clear();
       textPresentation.clear();
-      streamingReconciler.clearClientCreatedItemKeys();
     }
     if (!disposed) reconcileObservedQuestionnaires();
     if (emitChange) {
@@ -1166,32 +1085,20 @@ function WorkbenchThreadClient(
   }
 
   function getOverlayRevisionRecord(key: string) {
-    let record = overlayRevisionsByKey.get(key);
-    if (!record) {
-      record = {
-        key,
-        optimisticRevision: 0,
-        questionnaireForceProjectionEpoch: 0,
-        questionnaireRevision: 0,
-        browseResultRevision: 0,
-        steerRevision: 0,
-      };
-      overlayRevisionsByKey.set(key, record);
-    }
-    return record;
+    return getDocumentController(key).getOverlayRevision();
   }
 
   function getOverlayKeysForThreadId(threadId: string) {
     const selectedThreadKey = threadDocuments.getSelectedThreadKey();
     if (selectedThreadKey) {
-      const selectedSource = threadSources.get(selectedThreadKey);
+      const selectedSource = findDocumentController(selectedThreadKey)?.getSource();
       if (selectedSource?.id === threadId) {
         return [selectedThreadKey];
       }
     }
 
     const matchingKeys = Object.entries(threadDocuments.getSnapshot().documentsByKey)
-      .filter(([key, document]) => document?.id === threadId && threadSources.has(key))
+      .filter(([key, document]) => document?.id === threadId && findDocumentController(key)?.hasSource())
       .map(([key]) => key);
     if (matchingKeys.length === 1) {
       return matchingKeys;
@@ -1204,12 +1111,11 @@ function WorkbenchThreadClient(
     return [getThreadStateKey(getThreadHarness(threadId), threadId)];
   }
 
-  function bumpOverlayRevisionForKey(key: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
-    const record = getOverlayRevisionRecord(key);
-    record[revisionKey] += 1;
+  function bumpOverlayRevisionForKey(key: string, revisionKey: keyof ThreadDocumentOverlayRevision) {
+    getDocumentController(key).bumpOverlay(revisionKey);
   }
 
-  function bumpOverlayRevision(threadId: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
+  function bumpOverlayRevision(threadId: string, revisionKey: keyof ThreadDocumentOverlayRevision) {
     for (const key of getOverlayKeysForThreadId(threadId)) {
       bumpOverlayRevisionForKey(key, revisionKey);
     }
@@ -1223,87 +1129,21 @@ function WorkbenchThreadClient(
     return getThreadStateKey(thread.harness, thread.id);
   }
 
-  function getOrCreateStablePreferenceRecord(thread: ThreadPayload) {
-    const key = getThreadSourceKey(thread);
-    let record = stablePreferencesByKey.get(key);
-    if (!record) {
-      record = {
-        agentNickname: null,
-        agentPath: null,
-        agentRole: null,
-        model: null,
-        reasoningEffort: null,
-        revision: 0,
-        serviceTier: null,
-        tokenUsage: null,
-      };
-      stablePreferencesByKey.set(key, record);
-    }
-    return record;
-  }
-
   function captureStablePreferenceSource(thread: ThreadPayload) {
-    const record = getOrCreateStablePreferenceRecord(thread);
-    const agentNickname = thread.agentNickname ?? record.agentNickname;
-    const agentPath = thread.agentPath ?? record.agentPath;
-    const agentRole = thread.agentRole ?? record.agentRole;
-    const model = thread.model ?? record.model;
-    const reasoningEffort = thread.reasoningEffort ?? record.reasoningEffort;
-    const serviceTier = thread.serviceTier ?? record.serviceTier;
-    const tokenUsage = thread.tokenUsage ?? record.tokenUsage;
-    if (
-      record.agentNickname === agentNickname
-      && record.agentPath === agentPath
-      && record.agentRole === agentRole
-      && record.model === model
-      && record.reasoningEffort === reasoningEffort
-      && record.serviceTier === serviceTier
-      && areDeeplyEqual(record.tokenUsage, tokenUsage)
-    ) {
-      return record;
-    }
-
-    record.agentNickname = agentNickname;
-    record.agentPath = agentPath;
-    record.agentRole = agentRole;
-    record.model = model;
-    record.reasoningEffort = reasoningEffort;
-    record.serviceTier = serviceTier;
-    record.tokenUsage = tokenUsage ?? null;
-    record.revision += 1;
-    return record;
+    return getDocumentController(getThreadSourceKey(thread)).captureStablePreferences(thread);
   }
 
   function getStablePreferenceRevision(key: string) {
-    return stablePreferencesByKey.get(key)?.revision ?? 0;
+    return findDocumentController(key)?.getRevision().stablePreferenceRevision ?? 0;
   }
 
   function updateStablePreferenceSource(
     thread: Pick<ThreadPayload, "harness" | "id">,
-    updater: (record: ThreadStablePreferenceRecord) => void,
+    updater: (record: Omit<ThreadStablePreferences, "revision">) => void,
   ) {
     const key = getThreadSourceKey(thread);
-    const source = threadSources.get(key);
-    if (!source) {
-      return false;
-    }
-
-    const record = getOrCreateStablePreferenceRecord(source);
-    const snapshot = { ...record };
-    updater(record);
-    if (
-      snapshot.agentNickname === record.agentNickname
-      && snapshot.agentPath === record.agentPath
-      && snapshot.agentRole === record.agentRole
-      && snapshot.model === record.model
-      && snapshot.reasoningEffort === record.reasoningEffort
-      && snapshot.serviceTier === record.serviceTier
-      && areDeeplyEqual(snapshot.tokenUsage, record.tokenUsage)
-    ) {
-      return false;
-    }
-
-    record.revision += 1;
+    const controller = findDocumentController(key);
+    if (!controller?.updateStablePreferences(updater)) return false;
     if (key === threadDocuments.getSelectedThreadKey()) {
       flushSelectedThreadRendering();
     } else {
@@ -1321,11 +1161,8 @@ function WorkbenchThreadClient(
     fields: Partial<Omit<ThreadPayload, "turns" | "id" | "isDraft">>,
   ) {
     const key = getThreadSourceKey(thread);
-    if (!threadSources.has(key)) {
-      return false;
-    }
-
-    threadSources.update(key, (source) => ({ ...source, ...fields }));
+    const controller = findDocumentController(key);
+    if (!controller?.updateSource(source => ({ ...source, ...fields }))) return false;
     if (key === threadDocuments.getSelectedThreadKey()) {
       flushSelectedThreadRendering();
     } else {
@@ -1338,55 +1175,12 @@ function WorkbenchThreadClient(
     return true;
   }
 
-  function projectStableThreadMetadata(thread: ThreadPayload) {
-    const record = stablePreferencesByKey.get(getThreadSourceKey(thread));
-    if (!record) {
-      return thread;
-    }
-
-    const nextThread = {
-      ...thread,
-      agentNickname: thread.agentNickname ?? record.agentNickname,
-      agentPath: thread.agentPath ?? record.agentPath,
-      agentRole: thread.agentRole ?? record.agentRole,
-      model: thread.model ?? record.model,
-      reasoningEffort: thread.reasoningEffort ?? record.reasoningEffort,
-      serviceTier: thread.serviceTier ?? record.serviceTier,
-      tokenUsage: thread.tokenUsage ?? record.tokenUsage,
-    };
-    return nextThread.agentNickname === thread.agentNickname
-      && nextThread.agentPath === thread.agentPath
-      && nextThread.agentRole === thread.agentRole
-      && nextThread.model === thread.model
-      && nextThread.reasoningEffort === thread.reasoningEffort
-      && nextThread.serviceTier === thread.serviceTier
-      && nextThread.tokenUsage === thread.tokenUsage
-      ? thread
-      : nextThread;
-  }
-
   function setThreadStatusSource(thread: Pick<ThreadPayload, "harness" | "id">, status: string | null) {
-    const key = getThreadSourceKey(thread);
-    const existing = statusRecordsByKey.get(key);
-    if (existing?.status === status) {
-      return existing;
-    }
-
-    const record = {
-      revision: (existing?.revision ?? 0) + 1,
-      status,
-    };
-    statusRecordsByKey.set(key, record);
-    return record;
+    return getDocumentController(getThreadSourceKey(thread)).setStatus(status);
   }
 
   function getStatusRevision(key: string) {
-    return statusRecordsByKey.get(key)?.revision ?? 0;
-  }
-
-  function projectThreadStatus(thread: ThreadPayload) {
-    const status = statusRecordsByKey.get(getThreadSourceKey(thread))?.status;
-    return status && status !== thread.status ? { ...thread, status } : thread;
+    return findDocumentController(key)?.getRevision().statusRevision ?? 0;
   }
 
   function stripProjectedThreadSource(thread: ThreadPayload) {
@@ -1618,7 +1412,8 @@ function WorkbenchThreadClient(
       }
       const liveTurnsById = new Map(currentSource.turns.map((turn) => [turn.id, turn]));
       const turnHistory = mergeThreadTurnHistory(result.payload.turnHistory, currentSource.turnHistory);
-      const incomingTurns = result.payload.turns.map((turn) => mergeLiveStreamingTurn(turn, liveTurnsById.get(turn.id)));
+      const streaming = getThreadStreaming(fence.threadKey);
+      const incomingTurns = result.payload.turns.map((turn) => mergeLiveStreamingTurn(turn, liveTurnsById.get(turn.id), streaming));
       const historicalPayload: ThreadPayload = {
         ...currentSource,
         nextPageCursor: result.payload.nextPageCursor,
@@ -1656,7 +1451,7 @@ function WorkbenchThreadClient(
     if (statusAdvanced && currentSource) {
       payload = {
         ...payload,
-        status: statusRecordsByKey.get(fence.threadKey)?.status ?? currentSource.status,
+        status: findDocumentController(fence.threadKey)?.getStatus() ?? currentSource.status,
       };
     }
     setThreadContextReadEntries(payload.id, result.pageResponse, payload.turnHistory, fence);
@@ -1685,25 +1480,9 @@ function WorkbenchThreadClient(
   }
 
   function projectThreadSource(key: string) {
-    const rawThread = threadSources.get(key);
-    if (!rawThread) {
-      return null;
-    }
-    const overlayRevision = getOverlayRevisionRecord(key);
-    return threadRenderPipeline.render({
-      canonicalRevision: threadSources.getRevision(key),
-      key,
-      optimisticRevision: overlayRevision.optimisticRevision,
-      publicRevision: 0,
-      questionnaireForceProjectionEpoch: overlayRevision.questionnaireForceProjectionEpoch,
-      questionnaireRevision: overlayRevision.questionnaireRevision,
-      rawThread,
-      browseResultRevision: overlayRevision.browseResultRevision,
+    return findDocumentController(key)?.render({
       selected: key === threadDocuments.getSelectedThreadKey(),
-      stablePreferenceRevision: getStablePreferenceRevision(key),
-      statusRevision: getStatusRevision(key),
-      steerRevision: overlayRevision.steerRevision,
-    });
+    }) ?? null;
   }
 
   function materializeFinalVisibleThread(key: string, options: { select?: boolean } = {}) {
@@ -1715,12 +1494,7 @@ function WorkbenchThreadClient(
       return null;
     }
 
-    const finalVisibleThread = projectThreadSource(key);
-    if (!finalVisibleThread) {
-      return null;
-    }
-    threadDocuments.materializeFinalVisibleDocument(key, finalVisibleThread, { select: options.select });
-    return finalVisibleThread;
+    return findDocumentController(key)?.materialize({ select: options.select }) ?? null;
   }
 
   function refreshFinalVisibleThreadForOverlay(threadId: string) {
@@ -1758,7 +1532,6 @@ function WorkbenchThreadClient(
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     if (selectionChanged) {
-      state.rateLimits = nextThread ? state.rateLimitsByHarness.get(nextThread.harness) ?? null : null;
     }
     if (publishRuntime) emit();
     if (selectionChanged) scheduleActiveTurnRateLimitRefresh();
@@ -1768,7 +1541,7 @@ function WorkbenchThreadClient(
     }
 
     if (selectionChanged) {
-      void refreshRateLimitsIfStale(nextThread.harness);
+      void account.refreshIfStale(nextThread.harness);
     }
   }
 
@@ -1911,52 +1684,6 @@ function WorkbenchThreadClient(
     return changed ? { ...thread, turns } : thread;
   }
 
-  function setRateLimits(rateLimits: RateLimitSnapshot | null) {
-    if (state.rateLimits === rateLimits) {
-      return;
-    }
-
-    state.rateLimits = rateLimits;
-    emit();
-  }
-
-  function setHarnessRateLimits(
-    harness: WorkbenchHarness,
-    rateLimits: RateLimitSnapshot | null,
-    {
-      generation = ++rateLimitGeneration,
-      source,
-    }: {
-      generation?: number;
-      source: RateLimitSnapshotSource;
-    },
-  ) {
-    const previousEntry = rateLimitSnapshotEntriesByHarness.get(harness);
-    if (previousEntry && generation < previousEntry.generation) {
-      return false;
-    }
-
-    if (source === "read" && previousEntry && generation === previousEntry.generation && previousEntry.source === "notification") {
-      return false;
-    }
-
-    if (isRegressiveRateLimitSnapshot(previousEntry?.snapshot ?? null, rateLimits)) {
-      return false;
-    }
-
-    rateLimitSnapshotEntriesByHarness.set(harness, {
-      generation,
-      receivedAt: Date.now(),
-      snapshot: rateLimits,
-      source,
-    });
-    state.rateLimitsByHarness.set(harness, rateLimits);
-    if (state.currentThread?.harness === harness) {
-      setRateLimits(rateLimits);
-    }
-    return true;
-  }
-
   function scheduleActiveTurnRateLimitRefresh() {
     const harness = state.currentThread?.harness;
     if (!harness || !getCurrentInProgressTurn(state.currentThread)) {
@@ -1968,15 +1695,15 @@ function WorkbenchThreadClient(
       return;
     }
 
-    void refreshRateLimitsIfStale(harness);
+    void account.refreshIfStale(harness);
 
-    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS, () => {
+    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, RATE_LIMIT_REFRESH_INTERVAL_MS, () => {
       if (disposed || state.currentThread?.harness !== harness || !getCurrentInProgressTurn(state.currentThread)) {
         lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
         return;
       }
 
-      return refreshRateLimitsIfStale(harness);
+      return account.refreshIfStale(harness);
     });
   }
 
@@ -2000,11 +1727,7 @@ function WorkbenchThreadClient(
   function deleteThreadOwnedState(key: string) {
     const didDeleteSource = threadSources.delete(key);
     const didDeleteDocument = threadDocuments.deleteDocumentKey(key);
-    overlayRevisionsByKey.delete(key);
-    stablePreferencesByKey.delete(key);
-    statusRecordsByKey.delete(key);
     optimisticInputs.deleteThread(key);
-    threadRenderPipeline.delete(key);
     return didDeleteSource || didDeleteDocument;
   }
 
@@ -2043,7 +1766,7 @@ function WorkbenchThreadClient(
 
     function pruneEntries<TEntry extends { turnId: string }>(
       entries: Map<string, TEntry[]>,
-      revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">,
+      revisionKey: keyof ThreadDocumentOverlayRevision,
     ) {
       const current = entries.get(threadId) ?? [];
       const retained = current.filter((entry) => !releasedTurnIds.has(entry.turnId));
@@ -2057,7 +1780,7 @@ function WorkbenchThreadClient(
     pruneEntries(state.questionnaireHistoryByThreadId, "questionnaireRevision");
     pruneEntries(state.steerHistoryByThreadId, "steerRevision");
     threadSources.install(nextSource);
-    threadRenderPipeline.delete(key);
+    findDocumentController(key)?.invalidateProjection();
     const selected = threadDocuments.getSelectedThreadKey() === key;
     const retained = materializeFinalVisibleThread(key, { select: selected }) ?? nextSource;
     if (selected) setProjectedCurrentThread(retained, { publishRuntime: false });
@@ -2291,6 +2014,7 @@ function WorkbenchThreadClient(
   function mergeLiveStreamingTurn(
     incomingTurn: Turn,
     liveTurn: Turn | undefined,
+    streaming: ThreadDocumentController["streaming"],
     options: {
       preserveUnmatchedLiveItems?: boolean;
       settleStreamingKeys?: boolean;
@@ -2304,7 +2028,7 @@ function WorkbenchThreadClient(
       incomingTurn.itemsView === "full"
       && incomingTurn.status !== "inProgress"
       && liveTurn.status !== "inProgress"
-      && !streamingReconciler.hasClientCreatedItemForTurn(incomingTurn.id)
+      && !streaming.hasClientCreatedItemForTurn(incomingTurn.id)
       && !options.preserveUnmatchedLiveItems
     ) {
       return incomingTurn;
@@ -2321,12 +2045,12 @@ function WorkbenchThreadClient(
       if (!liveItem) {
         for (const [liveItemId, candidateLiveItem] of liveItemsById) {
           if (
-            streamingReconciler.hasClientCreatedItemKey(getThreadItemKey(incomingTurn.id, liveItemId))
-            && streamingReconciler.isStructurallyMatchingItem(item, candidateLiveItem)
+            streaming.hasClientCreatedItemKey(getThreadItemKey(incomingTurn.id, liveItemId))
+            && streaming.isStructurallyMatchingItem(item, candidateLiveItem)
           ) {
             matchedLiveItem = candidateLiveItem;
             liveItemsById.delete(liveItemId);
-            streamingReconciler.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, liveItemId), options);
+            streaming.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, liveItemId), options);
             break;
           }
         }
@@ -2334,7 +2058,7 @@ function WorkbenchThreadClient(
       }
 
       liveItemsById.delete(item.id);
-      streamingReconciler.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, item.id), options);
+      streaming.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, item.id), options);
       return mergeLiveStreamingItem(item, liveItem);
     });
 
@@ -2349,7 +2073,7 @@ function WorkbenchThreadClient(
       itemsView: incomingTurn.itemsView === "full" || liveTurn.itemsView === "notLoaded"
         ? incomingTurn.itemsView
         : liveTurn.itemsView,
-      items: streamingReconciler.pruneDuplicateItems(incomingTurn.id, nextItems, mergeLiveStreamingItem, options),
+      items: streaming.pruneDuplicateItems(incomingTurn.id, nextItems, mergeLiveStreamingItem, options),
     };
   }
 
@@ -2364,9 +2088,11 @@ function WorkbenchThreadClient(
 
     const liveTurnsById = new Map(liveThread.turns.map((turn) => [turn.id, turn]));
     const turnHistory = mergeThreadTurnHistory(incomingThread.turnHistory, liveThread.turnHistory);
+    const streaming = getThreadStreaming(getThreadSourceKey(incomingThread));
     const incomingTurns = incomingThread.turns.map((turn) => mergeLiveStreamingTurn(
       turn,
       liveTurnsById.get(turn.id),
+      streaming,
       options,
     ));
     return {
@@ -2651,7 +2377,7 @@ function WorkbenchThreadClient(
 
   function getThreadModel(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.model ?? state.currentThread.model;
+      return findDocumentController(getThreadSourceKey(state.currentThread))?.getStablePreferences()?.model ?? state.currentThread.model;
     }
 
     return null;
@@ -2659,7 +2385,7 @@ function WorkbenchThreadClient(
 
   function getThreadReasoningEffort(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.reasoningEffort ?? state.currentThread.reasoningEffort;
+      return findDocumentController(getThreadSourceKey(state.currentThread))?.getStablePreferences()?.reasoningEffort ?? state.currentThread.reasoningEffort;
     }
 
     return null;
@@ -2667,7 +2393,7 @@ function WorkbenchThreadClient(
 
   function getThreadServiceTier(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.serviceTier ?? state.currentThread.serviceTier;
+      return findDocumentController(getThreadSourceKey(state.currentThread))?.getStablePreferences()?.serviceTier ?? state.currentThread.serviceTier;
     }
 
     return null;
@@ -2678,7 +2404,7 @@ function WorkbenchThreadClient(
       return null;
     }
 
-    const selectedModel = state.modelsByHarness.get(harness)?.find((model) => model.id === modelId) ?? null;
+    const selectedModel = account.getModels(harness).find((model) => model.id === modelId) ?? null;
     if (!selectedModel?.supportsReasoningEffort) {
       return null;
     }
@@ -2687,15 +2413,7 @@ function WorkbenchThreadClient(
   }
 
   async function listModels(harness: WorkbenchHarness, options: WorkbenchListModelsOptions = {}) {
-    if (!installedProviderKeys.some(key => key === harness)) throw new Error(`Provider ${harness} is not installed.`);
-    const cachedModels = state.modelsByHarness.get(harness);
-    if (cachedModels && !options.forceRefresh) {
-      return cachedModels;
-    }
-
-    const { data: models } = await daemon.models.list(harness);
-    state.modelsByHarness.set(harness, models);
-    return models;
+    return await account.listModels(harness, options);
   }
 
   function setQuestionnaireHistoryEntries(threadId: string, entries: WorkbenchQuestionnaireHistoryEntry[]) {
@@ -3146,59 +2864,8 @@ function WorkbenchThreadClient(
     return null;
   }
 
-  async function refreshRateLimitsIfStale(harness: WorkbenchHarness) {
-    const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
-    if (existingRefresh) {
-      await existingRefresh;
-      return;
-    }
-
-    const lastStartedAt = rateLimitRefreshStartedAtByHarness.get(harness);
-    const elapsedMs = lastStartedAt === undefined ? null : Date.now() - lastStartedAt;
-    if (elapsedMs !== null && elapsedMs >= 0 && elapsedMs < RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS) {
-      return;
-    }
-
-    await refreshRateLimits(harness);
-  }
-
   async function refreshRateLimits(harness = state.currentThread?.harness ?? "codex") {
-    const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
-    if (existingRefresh) {
-      await existingRefresh;
-      return;
-    }
-
-    rateLimitRefreshStartedAtByHarness.set(harness, Date.now());
-    const projectGeneration = projectContextGeneration;
-    const readGeneration = ++rateLimitGeneration;
-    let refreshPromise: Promise<void>;
-    refreshPromise = (async () => {
-      try {
-        const response = await daemon.account.limits(harness);
-        if (disposed || projectGeneration !== projectContextGeneration) {
-          return;
-        }
-        const previousSnapshot = rateLimitSnapshotEntriesByHarness.get(harness)?.snapshot ?? null;
-        setHarnessRateLimits(harness, selectRateLimitSnapshot(response, previousSnapshot), {
-          generation: readGeneration,
-          source: "read",
-        });
-      } catch {
-        if (readGeneration === rateLimitGeneration && !state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
-          setRateLimits(null);
-        }
-      }
-    })();
-
-    refreshRateLimitsPromisesByHarness.set(harness, refreshPromise);
-    try {
-      await refreshPromise;
-    } finally {
-      if (refreshRateLimitsPromisesByHarness.get(harness) === refreshPromise) {
-        refreshRateLimitsPromisesByHarness.delete(harness);
-      }
-    }
+    await account.refresh(harness);
   }
 
   function normalizeThreadMessageInput(input: UserInput[] | string) {
@@ -3331,6 +2998,7 @@ function WorkbenchThreadClient(
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
+    const streaming = getThreadStreaming(threadKey);
     return updateThreadSource(threadKey, (thread) => {
       let updated = false;
       const turns = thread.turns.map((turn) => {
@@ -3344,7 +3012,7 @@ function WorkbenchThreadClient(
         }
 
         const prunedItems = pruneStreamingDuplicates
-          ? streamingReconciler.pruneDuplicateItems(turn.id, nextItems, mergeLiveStreamingItem)
+          ? streaming.pruneDuplicateItems(turn.id, nextItems, mergeLiveStreamingItem)
           : nextItems;
         updated = true;
         return {
@@ -3364,6 +3032,7 @@ function WorkbenchThreadClient(
   }
 
   function upsertThreadItem(threadKey: string, turnId: string, incomingItem: ThreadItem) {
+    const streaming = getThreadStreaming(threadKey);
     const compactedIncomingItem = compactCommandExecutionItemOutput(incomingItem);
     return updateTurnItems(threadKey, turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === compactedIncomingItem.id);
@@ -3380,18 +3049,18 @@ function WorkbenchThreadClient(
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
-          if (!streamingReconciler.hasClientCreatedItemKey(itemKey) || !streamingReconciler.isStructurallyMatchingItem(compactedIncomingItem, item)) {
+          if (!streaming.hasClientCreatedItemKey(itemKey) || !streaming.isStructurallyMatchingItem(compactedIncomingItem, item)) {
             return true;
           }
 
           matchedClientItem = item;
-          streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, item.id));
+          streaming.forgetStreamingItemKey(getThreadItemKey(turnId, item.id));
           return false;
         });
         return [...nextItems, matchedClientItem ? mergeLiveStreamingItem(compactedIncomingItem, matchedClientItem) : compactedIncomingItem];
       }
 
-      streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, compactedIncomingItem.id));
+      streaming.forgetStreamingItemKey(getThreadItemKey(turnId, compactedIncomingItem.id));
       return items.map((item, index) => (
         index === itemIndex ? mergeLiveStreamingItem(compactedIncomingItem, item) : item
       ));
@@ -3543,6 +3212,7 @@ function WorkbenchThreadClient(
     updater: (item: ThreadItem, isExisting: boolean) => ThreadItem | null,
     { publishSelected = true }: { publishSelected?: boolean } = {},
   ) {
+    const streaming = getThreadStreaming(threadKey);
     const itemKey = getThreadItemKey(turnId, itemId);
     ensureTurnForStreamingDelta(threadKey, turnId);
     return updateTurnItems(threadKey, turnId, (items) => {
@@ -3553,7 +3223,7 @@ function WorkbenchThreadClient(
           return null;
         }
 
-        streamingReconciler.addClientCreatedItemKey(itemKey);
+        streaming.addClientCreatedItemKey(itemKey);
         return [...items, nextItem];
       }
 
@@ -3577,13 +3247,14 @@ function WorkbenchThreadClient(
   }
 
   function discardAbandonedStreamingFileChanges(threadKey: string, turnId: string, incomingItemId: string) {
+    const streaming = getThreadStreaming(threadKey);
     return updateTurnItems(threadKey, turnId, (items) => {
       const abandonedItemIds = items
         .filter((item) => (
           item.id !== incomingItemId
           && item.type === "fileChange"
           && item.status === "inProgress"
-          && streamingReconciler.hasClientCreatedItemKey(getThreadItemKey(turnId, item.id))
+          && streaming.hasClientCreatedItemKey(getThreadItemKey(turnId, item.id))
         ))
         .map((item) => item.id);
       if (!abandonedItemIds.length) {
@@ -3592,7 +3263,7 @@ function WorkbenchThreadClient(
 
       const abandonedItemIdSet = new Set(abandonedItemIds);
       for (const itemId of abandonedItemIds) {
-        streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, itemId));
+        streaming.forgetStreamingItemKey(getThreadItemKey(turnId, itemId));
       }
       return items.filter((item) => !abandonedItemIdSet.has(item.id));
     }, { pruneStreamingDuplicates: false });
@@ -4413,9 +4084,10 @@ function WorkbenchThreadClient(
           }
           const sourceAdvanced = threadSources.getRevision(startedThreadKey) !== sourceRevision;
           const liveTurn = currentSource.turns.find((candidate) => candidate.id === turn.id);
+          const streaming = getThreadStreaming(startedThreadKey);
           const mergedTurn = sourceAdvanced && liveTurn
-            ? mergeLiveStreamingTurn(liveTurn, turn)
-            : mergeLiveStreamingTurn(turn, liveTurn);
+            ? mergeLiveStreamingTurn(liveTurn, turn, streaming)
+            : mergeLiveStreamingTurn(turn, liveTurn, streaming);
           const sourceWithoutPending = withoutPendingProjection(currentSource);
           const nextSource = {
             ...sourceWithoutPending,
@@ -4809,6 +4481,7 @@ function WorkbenchThreadClient(
       const admittedTurn = mergeLiveStreamingTurn(
         turnStartResponse.turn,
         liveThread.turns.find((turn) => turn.id === turnStartResponse.turn.id),
+        getThreadStreaming(turnStartFence.threadKey),
       );
       optimisticTurnId = admittedTurn.id;
       if (pendingInitialOptimisticHandle) {
@@ -5029,7 +4702,7 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "account/rateLimits/updated") {
-      void refreshRateLimits(harness);
+      void account.refresh(harness, "notification");
       return;
     }
 
@@ -5074,7 +4747,7 @@ function WorkbenchThreadClient(
   function clearThreadSelection() {
     selectedObservation?.release();
     selectedObservation = null;
-    if (!state.currentThread && !state.currentThreadId && !state.rateLimits && !selectedThreadProjectContext) {
+    if (!state.currentThread && !state.currentThreadId && !account.hasRateLimits() && !selectedThreadProjectContext) {
       return;
     }
 
@@ -5084,7 +4757,6 @@ function WorkbenchThreadClient(
     messageAdmissionIntentRevision += 1;
     state.currentThreadId = "";
     state.currentThread = null;
-    setRateLimits(null);
     emit();
   }
 
@@ -5225,6 +4897,7 @@ function WorkbenchThreadClient(
     listeners.clear();
     transcripts.dispose();
     threadGoals.dispose();
+    account.dispose();
     textPresentation.dispose();
     lifecycle.dispose();
   }

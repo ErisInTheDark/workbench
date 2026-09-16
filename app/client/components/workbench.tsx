@@ -2,8 +2,8 @@
 
 /*
  * Exports:
- * - default Workbench: domain-hook client shell and project-qualified draft persistence bindings.
- * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations.
+ * - default Workbench: stable shell composition, providers, explorer/file dialogs, responsive chrome, and DOM surfaces.
+ * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -12,26 +12,22 @@ import type {
     ExplorerSnapshot,
     OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
     WorkbenchAppRuntimeStore,
-    WorkbenchBrowseSessionSummary,
     WorkbenchComposerInputDraft,
     WorkbenchComposerSettings,
     WorkbenchControls,
     WorkbenchFileOpenTarget,
     WorkbenchHarness,
-    WorkbenchLocalCapabilitySettings,
     WorkbenchProjectOption,
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
-import WorkbenchMainLayout, {
-    type WorkbenchDropPlacement,
-    type WorkbenchMainLayout as WorkbenchMainLayoutState,
-    type WorkbenchPanelTarget,
+import type {
+    WorkbenchDropPlacement,
+    WorkbenchMainLayout as WorkbenchMainLayoutState,
+    WorkbenchPanelTarget,
 } from "workbench-shared/workbench/layout/workbench-layout";
 import {
-    createWorkbenchMosaicSplit,
-    createWorkbenchMosaicTarget,
     type WorkbenchMosaicNode,
     type WorkbenchMosaicPanelTarget,
 } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
@@ -52,25 +48,17 @@ import {
     isWorkbenchRouteOwnerOfThread,
     isWorkbenchThreadTargetSelected,
     type WorkbenchRoute,
-    type WorkbenchSettingsScope
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
-import { writeTextToClipboard } from "../workbench/dom/clipboard";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
-import {
-    applyWorkbenchMosaicDrop,
-    applyWorkbenchMosaicResize,
-    closeWorkbenchMosaicTarget,
-    createWorkbenchMainLayoutFromMosaic,
-    moveWorkbenchMosaicTarget,
-    replaceWorkbenchMosaicTarget,
-    updateWorkbenchMosaicPanelOptions,
-} from "../workbench/layout/workbench-mosaic-layout";
+import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
+import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
+import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
 import { useWorkbenchRoute } from "../workbench/navigation/use-workbench-route";
 import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
@@ -98,7 +86,6 @@ import {
     readGlobalWorkbenchSettings,
     readProjectWorkbenchSettings,
     resolveWorkbenchSettings,
-    WORKBENCH_SETTING_DEFINITIONS,
     writeGlobalWorkbenchSetting,
     writeProjectWorkbenchSetting,
     type WorkbenchEditorFontFamily,
@@ -109,11 +96,9 @@ import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComp
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
-import SandboxNetworkSettings from "./workbench/SandboxNetworkSettings";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
-import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
@@ -149,84 +134,59 @@ import {
     WorkbenchDialog,
 } from "./workbench/workbench-dialogs";
 import {
-    BrowseSessionsList,
     ExplorerTree,
     FileVisibilityIcon,
     NewEntryIcon,
     SidebarLoadingSkeleton,
 } from "./workbench/workbench-explorer";
 import {
-    ArchiveIcon,
     BackArrowIcon,
     BinIcon,
-    BrowserSessionIcon,
-    CopyIcon,
     DraftThreadIcon,
     ExternalLinkIcon,
     FolderOpenIcon,
     GearIcon,
     HomeIcon,
-    ReloadIcon,
     SaveIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
     StatsIcon,
-    StopIcon,
 } from "./workbench/workbench-icons";
 import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
-import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
+import WorkbenchBrowseSessionsSection from "./workbench/WorkbenchBrowseSessionsSection";
+import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
-import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
-import WorkbenchReactDevelopmentModeSetting from "./workbench/WorkbenchReactDevelopmentModeSetting";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
-import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
+import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 
 installBrowserRandomUuidPolyfill();
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
 const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const MOSAIC_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
-const SETTINGS_ORDER: WorkbenchSettingKey[] = [
-  "theme",
-  "editorFontFamily",
-  "editorSpellCheck",
-  "composerSpellCheck",
-  "fileOpenBehavior",
-  "selectedProjectPinPlacement",
-  "showUnopenableFiles",
-  "threadCodeBlockWrap",
-  "editorFontSize",
-];
-const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
-  browseRawCommandsEnabled: false,
-};
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono",
   sans: "font-sans",
   serif: "font-serif",
 };
-const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, index) => ({
-  label: String(index + 1),
-  value,
-}));
 
 function createUniqueFileLinkRootId (id: string, usedIds: Set<string>) {
   const baseId = id.trim() || "root";
@@ -373,38 +333,6 @@ function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId:
   return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
 }
 
-function getPanelTargetMosaicNode (target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
-  if (target.kind === "file" || target.kind === "thread") {
-    return createWorkbenchMosaicTarget(target);
-  }
-
-  return null;
-}
-
-function createInitialMosaicNode (
-  currentTarget: WorkbenchPanelTarget,
-  droppedTarget: WorkbenchPanelTarget,
-  placement: WorkbenchDropPlacement,
-): WorkbenchMosaicNode | null {
-  const currentNode = getPanelTargetMosaicNode(currentTarget);
-  const droppedNode = getPanelTargetMosaicNode(droppedTarget);
-  if (!droppedNode) {
-    return currentNode;
-  }
-
-  if (!currentNode) {
-    return createWorkbenchMosaicSplit([droppedNode]);
-  }
-
-  const children = placement === "left" || placement === "top"
-    ? [droppedNode, currentNode]
-    : [currentNode, droppedNode];
-
-  return placement === "top" || placement === "bottom"
-    ? createWorkbenchMosaicSplit([createWorkbenchMosaicSplit(children)])
-    : createWorkbenchMosaicSplit(children);
-}
-
 function isThreadStatusActive (status: string) {
   return status === "active" || status.startsWith("active:");
 }
@@ -510,19 +438,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     () => readGlobalWorkbenchSettings(clientState.records),
     [clientState.records],
   );
-  const [localCapabilitySettings, setLocalCapabilitySettings] = useState<WorkbenchLocalCapabilitySettings>(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
-  const [isLocalCapabilitySettingsLoading, setIsLocalCapabilitySettingsLoading] = useState(false);
-  const [localCapabilitySettingsError, setLocalCapabilitySettingsError] = useState("");
-  const [browseSessions, setBrowseSessions] = useState<WorkbenchBrowseSessionSummary[]>([]);
-  const [isBrowseSessionsLoading, setIsBrowseSessionsLoading] = useState(false);
-  const [browseSessionsError, setBrowseSessionsError] = useState("");
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
   const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
-  const [mainLayout, setMainLayout] = useState<WorkbenchMainLayoutState>(() => WorkbenchMainLayout.fromTarget({ kind: "empty" }));
-  const [mosaicDraftThreadsById, setMosaicDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
+  const [workspaceController] = useState(() => new WorkbenchWorkspaceController({
+    createDraft: () => {
+      throw new Error("Workspace draft creation is not connected.");
+    },
+    navigateMosaic: () => undefined,
+    navigatePanel: () => undefined,
+    navigateProject: () => undefined,
+  }));
   const editorRef = useRef<HTMLDivElement>(null);
   const mainPaneRef = useRef<HTMLElement>(null);
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
@@ -570,6 +498,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : null;
   useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
   useEffect(() => () => { searchController.dispose(); }, [searchController]);
+  useEffect(() => () => { workspaceController.dispose(); }, [workspaceController]);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
@@ -765,20 +694,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
-  const refreshBrowseSessions = useCallback(async (
-    projectId = activeProjectId,
-    options: { signal?: AbortSignal } = {},
-  ) => {
-    if (!projectId) {
-      setBrowseSessions([]);
-      setBrowseSessionsError("");
-      return;
-    }
-
-    setIsBrowseSessionsLoading(true);
-    setBrowseSessionsError("");
-    try {
-      if (!controls) return;
+  const browseSessionController = useMemo(() => new WorkbenchBrowseSessionController({
+    mutate: async (action, input) => {
+      if (!controls) return {};
+      return await controls.daemon.browse.sessions[action](input);
+    },
+    read: async (projectId) => {
+      if (!controls) return [];
       const payload = await controls.daemon.browse.sessions.read({
         cwd: null,
         includeRuntime: true,
@@ -786,48 +708,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         threadId: null,
         timeoutMs: 5_000,
       });
-      if (!options.signal?.aborted) setBrowseSessions(payload.sessions);
-    } catch (error) {
-      if (!options.signal?.aborted) {
-        setBrowseSessionsError(error instanceof Error ? error.message : "Unable to load Browse sessions.");
-      }
-    } finally {
-      if (!options.signal?.aborted) setIsBrowseSessionsLoading(false);
-    }
-  }, [activeProjectId, controls]);
+      return payload.sessions;
+    },
+  }), [controls]);
+  useEffect(() => () => {
+    browseSessionController.dispose();
+  }, [browseSessionController]);
   useEffect(() => {
-    if (!activeProjectId) {
-      setBrowseSessions([]);
-      setBrowseSessionsError("");
-      return;
-    }
-
-    let activeController: AbortController | null = null;
-    let inFlight = false;
-    const refresh = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      const controller = new AbortController();
-      activeController = controller;
-      try {
-        await refreshBrowseSessions(activeProjectId, { signal: controller.signal });
-      } finally {
-        if (activeController === controller) {
-          activeController = null;
-          inFlight = false;
-        }
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 30_000);
-
-    return () => {
-      activeController?.abort();
-      window.clearInterval(timer);
-    };
-  }, [activeProjectId, refreshBrowseSessions]);
+    browseSessionController.selectProject(activeProjectId);
+  }, [activeProjectId, browseSessionController]);
   const threadSummariesById = useMemo(() => new Map<string, ThreadSummary>(explorer.threads.map((thread) => [thread.id, thread])), [explorer.threads]);
   useEffect(() => {
     if (route.view !== "thread" || route.threadTarget?.kind !== "provider") return;
@@ -917,62 +806,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setCreateDialogError("");
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    setIsLocalCapabilitySettingsLoading(true);
-    setLocalCapabilitySettingsError("");
-    if (!controls) return () => { cancelled = true; };
-    void controls.daemon.localCapabilities.read()
-      .then((payload) => {
-        if (cancelled) {
-          return;
-        }
-        setLocalCapabilitySettings(payload.localCapabilities);
-      })
-      .catch((error: Error) => {
-        if (cancelled) {
-          return;
-        }
-        setLocalCapabilitySettings(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
-        setLocalCapabilitySettingsError(error.message);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLocalCapabilitySettingsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [controls]);
-
-  const updateBrowseRawCommandsEnabled = useCallback((enabled: boolean) => {
-    const previousSettings = localCapabilitySettings;
-    setLocalCapabilitySettings((current) => ({
-      ...current,
-      browseRawCommandsEnabled: enabled,
-    }));
-    setIsLocalCapabilitySettingsLoading(true);
-    setLocalCapabilitySettingsError("");
-    if (!controls) return;
-    void controls.daemon.localCapabilities.update({
-        localCapabilities: {
-          browseRawCommandsEnabled: enabled,
-        },
-    })
-      .then((payload) => {
-        setLocalCapabilitySettings(payload.localCapabilities);
-      })
-      .catch((error: Error) => {
-        setLocalCapabilitySettings(previousSettings);
-        setLocalCapabilitySettingsError(error.message);
-      })
-      .finally(() => {
-        setIsLocalCapabilitySettingsLoading(false);
-      });
-  }, [controls, localCapabilitySettings]);
-
   const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
     const nextValue = (key === "editorFontSize" && typeof value === "number"
       ? clampEditorFontSize(value)
@@ -999,20 +832,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     });
   }, [clientStateController, explorer.currentProjectId]);
 
-  const resetProjectSettingOverride = useCallback((key: WorkbenchSettingKey) => {
-    const projectId = explorer.currentProjectId;
-    if (!projectId) {
-      return;
-    }
-
-    void writeProjectWorkbenchSetting(clientStateController, projectId, key, {
-      ...projectSettings[key],
-      enabled: false,
-    }).catch((error: Error) => {
-      setSelectionError(error.message);
-    });
-  }, [clientStateController, explorer.currentProjectId, projectSettings]);
-
   const updateThreadCodeBlockWrapSetting = useCallback((nextValue: boolean) => {
     if (explorer.currentProjectId) {
       updateProjectSetting("threadCodeBlockWrap", nextValue);
@@ -1038,24 +857,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     updateProjectSetting,
   ]);
 
-  const openSettingsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, scope: WorkbenchSettingsScope) => {
+  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
     if (
       event.button !== 0
       || event.metaKey
       || event.ctrlKey
       || event.shiftKey
       || event.altKey
-    ) {
-      return;
-    }
-
+    ) return;
     event.preventDefault();
-    navigateToRoute(createSettingsRoute(activeProjectId, scope));
+    navigateToRoute(createSettingsRoute(activeProjectId, "global"));
   }, [activeProjectId, navigateToRoute]);
-
-  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
-    openSettingsScopeFromLink(event, "global");
-  }, [openSettingsScopeFromLink]);
 
   const openStatsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => {
     if (
@@ -1237,68 +1049,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [searchActionContext]);
-  const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
-    if (!activeProjectId) {
-      return;
-    }
-
-    if (!controls) return;
-    try {
-      const operation = controls.daemon.browse.sessions[action];
-      const payload = await operation({
-        force: options.force === true,
-        projectId: activeProjectId,
-        session: session.name,
-      });
-      if (payload.result?.ok === false) {
-        setBrowseSessionsError(payload.result.error ?? "Unable to stop Browse session.");
-        return;
-      }
-    } catch (error) {
-      setBrowseSessionsError(error instanceof Error ? error.message : "Unable to update Browse session.");
-      return;
-    }
-    await refreshBrowseSessions(activeProjectId);
-  }, [activeProjectId, controls, refreshBrowseSessions]);
-  const getBrowseSessionContextMenu = useCallback((session: WorkbenchBrowseSessionSummary): WorkbenchContextMenuDefinition => ({
-    id: `browse-session:${session.name}`,
-    items: [
-      {
-        icon: <CopyIcon size={16} />,
-        id: "copy-session",
-        label: "Copy session name",
-        onSelect: () => {
-          void writeTextToClipboard(session.name);
-        },
-      },
-      {
-        icon: <StopIcon size={16} />,
-        id: "stop-session",
-        label: "Stop session",
-        onSelect: () => {
-          void updateBrowseSession(session, "stop");
-        },
-      },
-      {
-        icon: <StopIcon size={16} />,
-        id: "force-stop-session",
-        label: "Force stop session",
-        onSelect: () => {
-          void updateBrowseSession(session, "stop", { force: true });
-        },
-        tone: "danger",
-      },
-      {
-        icon: <ArchiveIcon size={16} />,
-        id: "forget-session",
-        label: "Forget record",
-        onSelect: () => {
-          void updateBrowseSession(session, "forget");
-        },
-      },
-    ],
-    label: `Browse session actions for ${session.name}`,
-  }), [updateBrowseSession]);
   const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -1354,12 +1104,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     const replaceMosaicDraftThread = (materializedThread: ThreadPayload, removeDraftState: boolean) => {
       if (removeDraftState) {
-        setMosaicDraftThreadsById((current) => {
-          const { [thread.id]: _removedDraft, new: _removedNewDraft, ...rest } = current;
-          void _removedDraft;
-          void _removedNewDraft;
-          return rest;
-        });
+        workspaceController.removeDraftThreads(thread.id, "new");
       }
 
       const currentRoute = currentRouteRef.current;
@@ -1451,7 +1196,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     return payload;
-  }, [composerProfileController, controls, navigateToRoute]);
+  }, [composerProfileController, controls, navigateToRoute, workspaceController]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId
@@ -1861,11 +1606,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       window.clearInterval(intervalId);
     };
   }, [shouldRunRelativeTimeClock, threadShellActivityTimestampMs, threadShellSource?.id]);
-  const routeMosaicProjection = useMemo(() => (
-    showMosaicView && route.mosaicNode
-      ? createWorkbenchMainLayoutFromMosaic(route.mosaicNode)
-      : null
-  ), [route.mosaicNode, showMosaicView]);
   const routePanelTarget = useMemo<WorkbenchPanelTarget>(() => {
     if (showFileView) {
       return { filePath: effectiveFilePath, kind: "file" };
@@ -1879,12 +1619,61 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     return { kind: "empty" };
   }, [effectiveFilePath, effectiveThreadTarget, settingsScope, showFileView, showSettingsView, showThreadView]);
-  const temporaryDropLayout = useMemo(() => (
-    !isMobile && !showMosaicView && activeWorkbenchDrag?.payload.type === "panel-target"
-      ? WorkbenchMainLayout.fromTarget(routePanelTarget)
-      : null
-  ), [activeWorkbenchDrag?.payload.type, isMobile, routePanelTarget, showMosaicView]);
-  const mainLayoutForRender = routeMosaicProjection?.layout ?? temporaryDropLayout;
+  const navigateToPanelTarget = useCallback((target: WorkbenchPanelTarget, options?: { replace?: boolean }) => {
+    if (target.kind === "file") {
+      navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, target.filePath), options);
+      return;
+    }
+    if (target.kind === "thread") {
+      navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, target.target), options);
+      return;
+    }
+    if (target.kind === "settings") {
+      navigateToRoute(createSettingsRoute(explorer.currentProjectId || route.projectId, target.scope), options);
+      return;
+    }
+
+    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId), options);
+  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+  const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
+    navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
+  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+  workspaceController.setOptions({
+    createDraft: (draftHarness) => {
+      if (!controls) throw new Error("The Workbench client is not ready.");
+      return controls.createThreadDraft(draftHarness);
+    },
+    navigateMosaic: navigateToMosaicNode,
+    navigatePanel: navigateToPanelTarget,
+    navigateProject: () => {
+      navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
+    },
+  });
+  useEffect(() => {
+    workspaceController.select({
+      isMobile,
+      isPanelTargetDragActive: activeWorkbenchDrag?.payload.type === "panel-target",
+      mosaicNode: route.view === "mosaic" ? route.mosaicNode : null,
+      routeTarget: routePanelTarget,
+      showMosaic: showMosaicView,
+    });
+  }, [
+    activeWorkbenchDrag?.payload.type,
+    isMobile,
+    route.mosaicNode,
+    route.view,
+    routePanelTarget,
+    showMosaicView,
+    workspaceController,
+  ]);
+  const workspaceSnapshot = useSyncExternalStore(
+    workspaceController.subscribe,
+    workspaceController.getSnapshot,
+    workspaceController.getSnapshot,
+  );
+  const routeMosaicProjection = workspaceSnapshot.routeProjection;
+  const mosaicDraftThreadsById = workspaceSnapshot.draftThreadsById;
+  const mainLayoutForRender = workspaceSnapshot.renderLayout;
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
@@ -1904,127 +1693,29 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
   }, [controls, showMosaicView]);
 
-  const navigateToPanelTarget = useCallback((target: WorkbenchPanelTarget, options?: { replace?: boolean }) => {
-    if (target.kind === "file") {
-      navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, target.filePath), options);
-      return;
-    }
-    if (target.kind === "thread") {
-      navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, target.target), options);
-      return;
-    }
-    if (target.kind === "settings") {
-      navigateToRoute(createSettingsRoute(explorer.currentProjectId || route.projectId, target.scope), options);
-      return;
-    }
-
-    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId), options);
-  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
-
-  useEffect(() => {
-    if (showMosaicView) {
-      return;
-    }
-
-    setMainLayout((current) => WorkbenchMainLayout.replaceFocusedPanel(current, routePanelTarget));
-  }, [routePanelTarget, showMosaicView]);
-
   const updateMainLayout = useCallback((nextLayout: WorkbenchMainLayoutState) => {
-    setMainLayout(nextLayout);
-    const focusedPanel = WorkbenchMainLayout.findPanel(nextLayout, nextLayout.focusedPanelId);
-    if (focusedPanel) {
-      navigateToPanelTarget(focusedPanel.target);
-    }
-  }, [navigateToPanelTarget]);
+    workspaceController.updateLayout(nextLayout);
+  }, [workspaceController]);
 
   const focusMainPanel = useCallback((panelId: string) => {
-    const nextLayout = WorkbenchMainLayout.focusPanel(mainLayout, panelId);
-    setMainLayout(nextLayout);
-    const focusedPanel = WorkbenchMainLayout.findPanel(nextLayout, nextLayout.focusedPanelId);
-    if (focusedPanel) {
-      navigateToPanelTarget(focusedPanel.target);
-    }
-  }, [mainLayout, navigateToPanelTarget]);
-
-  const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
-    navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
-  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+    workspaceController.focusPanel(panelId);
+  }, [workspaceController]);
 
   const handleMainLayoutPanelDrop = useCallback((drop: { panelId: string; placement: WorkbenchDropPlacement }, payload: Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>) => {
-    if (payload.type === "new-thread" && !controls) {
-      return;
-    }
-
-    let target: WorkbenchPanelTarget = payload.type === "panel-target" || payload.type === "thread-row" ? payload.target : { kind: "empty" };
-    if (payload.type === "new-thread") {
-      const draftThread = controls!.createThreadDraft(payload.harness);
-      setMosaicDraftThreadsById((current) => ({
-        ...current,
-        [draftThread.id]: draftThread,
-      }));
-      target = { kind: "thread", target: { kind: "provider", threadId: ThreadReferenceSchema.parse(draftThread.id) } };
-    }
-    if (route.view === "mosaic" && route.mosaicNode && routeMosaicProjection) {
-      const panelPath = routeMosaicProjection.panelPathsById[drop.panelId];
-      if (!panelPath) {
-        return;
-      }
-
-      const dropPanel = WorkbenchMainLayout.findPanel(routeMosaicProjection.layout, drop.panelId);
-      if (payload.type === "panel-target" && payload.sourcePanelId && dropPanel && (dropPanel.target.kind === "file" || dropPanel.target.kind === "thread")) {
-        navigateToMosaicNode(moveWorkbenchMosaicTarget(route.mosaicNode, dropPanel.target, drop.placement, target));
-        return;
-      }
-
-      navigateToMosaicNode(applyWorkbenchMosaicDrop(route.mosaicNode, panelPath, drop.placement, target));
-      return;
-    }
-
-    const nextMosaicNode = createInitialMosaicNode(routePanelTarget, target, drop.placement);
-    if (nextMosaicNode) {
-      navigateToMosaicNode(nextMosaicNode);
-    }
-  }, [controls, navigateToMosaicNode, route.mosaicNode, route.view, routeMosaicProjection, routePanelTarget]);
+    if (payload.type !== "new-thread" || controls) workspaceController.dropPanel(drop, payload);
+  }, [controls, workspaceController]);
 
   const updateMosaicPanelOptions = useCallback((panelId: string, options: { minimized?: boolean; zoomDelta?: number }) => {
-    if (route.view !== "mosaic" || !route.mosaicNode || !routeMosaicProjection) {
-      return;
-    }
-
-    const panelPath = routeMosaicProjection.panelPathsById[panelId];
-    if (!panelPath) {
-      return;
-    }
-
-    navigateToMosaicNode(updateWorkbenchMosaicPanelOptions(route.mosaicNode, panelPath, options), { replace: true });
-  }, [navigateToMosaicNode, route.mosaicNode, route.view, routeMosaicProjection]);
+    workspaceController.updatePanelOptions(panelId, options);
+  }, [workspaceController]);
 
   const resizeMosaicSplit = useCallback((splitId: string, firstPercent: number) => {
-    if (route.view !== "mosaic" || !route.mosaicNode || !routeMosaicProjection) {
-      return;
-    }
-
-    const resizeGroup = routeMosaicProjection.resizeGroupsById[splitId];
-    if (!resizeGroup) {
-      return;
-    }
-
-    navigateToMosaicNode(applyWorkbenchMosaicResize(route.mosaicNode, resizeGroup, firstPercent), { replace: true });
-  }, [navigateToMosaicNode, route.mosaicNode, route.view, routeMosaicProjection]);
+    workspaceController.resizeSplit(splitId, firstPercent);
+  }, [workspaceController]);
 
   const closeMosaicPanel = useCallback((target: WorkbenchPanelTarget) => {
-    if (route.view !== "mosaic" || !route.mosaicNode) {
-      return;
-    }
-
-    const nextNode = closeWorkbenchMosaicTarget(route.mosaicNode, target);
-    if (nextNode) {
-      navigateToMosaicNode(nextNode);
-      return;
-    }
-
-    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-  }, [explorer.currentProjectId, navigateToMosaicNode, navigateToRoute, route.mosaicNode, route.projectId, route.view]);
+    workspaceController.closePanel(target);
+  }, [workspaceController]);
 
   const revealProjectEntry = useCallback(async (path: string) => {
     const projectId = explorer.currentProjectId || route.projectId;
@@ -2043,23 +1734,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [controls, explorer.currentProjectId, route.projectId]);
 
   const closeDeletedFileViews = useCallback((filePath: string) => {
-    setMainLayout((current) => WorkbenchMainLayout.panels(current)
-      .filter((panel) => panel.target.kind === "file" && panel.target.filePath === filePath)
-      .reduce((next, panel) => WorkbenchMainLayout.closePanel(next, panel.id), current));
-
-    if (route.view === "mosaic" && route.mosaicNode) {
-      const nextNode = closeWorkbenchMosaicTarget(route.mosaicNode, { filePath, kind: "file" });
-      if (nextNode) {
-        navigateToMosaicNode(nextNode);
-      } else {
-        navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-      }
-      return;
-    }
+    workspaceController.closeFile(filePath);
     if (route.view === "file" && route.filePath === filePath) {
       navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
     }
-  }, [explorer.currentProjectId, navigateToMosaicNode, navigateToRoute, route]);
+  }, [explorer.currentProjectId, navigateToRoute, route, workspaceController]);
 
   const deleteProjectFile = useCallback(async (filePath: string, confirmUntracked = false) => {
     if (!controls || isDeletingFile) {
@@ -2333,178 +2012,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       cancelled = true;
     };
   }, [controls, explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
-
-  const renderSettingControl = (
-    key: WorkbenchSettingKey,
-    value: WorkbenchGlobalSettings[WorkbenchSettingKey],
-    disabled: boolean,
-    onChange: (nextValue: WorkbenchGlobalSettings[WorkbenchSettingKey]) => void,
-  ) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    if (key === "editorFontSize") {
-      return (
-        <WorkbenchStepSlider
-          ariaLabel={definition.label}
-          disabled={disabled}
-          steps={EDITOR_FONT_SIZE_OPTIONS}
-          value={typeof value === "number" ? value : 1.08}
-          onChange={(nextValue) => {
-            onChange(nextValue);
-          }}
-        />
-      );
-    }
-
-    if (definition.type === "boolean" && typeof value === "boolean") {
-      return (
-        <WorkbenchOptionCard
-          description={definition.description}
-          isChecked={value}
-          isSingleChoice={false}
-          label={definition.label}
-          onClick={() => {
-            onChange(!value);
-          }}
-        />
-      );
-    }
-
-    if (definition.options) {
-      return (
-        <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
-          ariaLabel={definition.label}
-          columns={definition.columns ?? "one"}
-          disabled={disabled}
-          mode="radio"
-          options={definition.options}
-          value={value}
-          onChange={(nextValue) => {
-            if (!disabled) {
-              onChange(nextValue);
-            }
-          }}
-        />
-      );
-    }
-
-    return null;
-  };
-
-  const renderGlobalSettingRow = (key: WorkbenchSettingKey) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    if (definition.type === "boolean") {
-      return (
-        <section key={key} className="rounded-[0.85rem] py-1">
-          {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
-            updateGlobalSetting(key, nextValue as never);
-          })}
-        </section>
-      );
-    }
-
-    return (
-      <section key={key} className="space-y-3 rounded-[0.85rem] py-1">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
-          </div>
-        </div>
-        {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
-          updateGlobalSetting(key, nextValue as never);
-        })}
-      </section>
-    );
-  };
-
-  const renderLocalCapabilitySettings = () => (
-    <section className="space-y-3 rounded-[0.85rem] py-1">
-      <div className="min-w-0">
-        <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Local command capabilities</h3>
-      </div>
-      <SandboxNetworkSettings key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
-      <WorkbenchOptionCard
-        description="Allow raw Browse CLI usage outside the sandbox."
-        disabled={isLocalCapabilitySettingsLoading}
-        isChecked={localCapabilitySettings.browseRawCommandsEnabled}
-        isSingleChoice={false}
-        label="Raw Browse commands"
-        onClick={() => {
-          updateBrowseRawCommandsEnabled(!localCapabilitySettings.browseRawCommandsEnabled);
-        }}
-      />
-      {localCapabilitySettingsError ? (
-        <p className="m-0 text-[0.78rem] leading-5 text-danger">{localCapabilitySettingsError}</p>
-      ) : null}
-    </section>
-  );
-
-  const renderProjectSettingRow = (key: WorkbenchSettingKey) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    const override = projectSettings[key];
-    const inheritedValue = globalSettings[key];
-    const displayedValue = override.enabled ? override.value : inheritedValue;
-    if (definition.type === "boolean" && typeof displayedValue === "boolean") {
-      return (
-        <section key={key} className="relative rounded-[0.85rem] py-1">
-          <WorkbenchOptionCard
-            className={override.enabled ? "pr-12" : undefined}
-            description={definition.description}
-            isChecked={displayedValue}
-            isSingleChoice={false}
-            label={definition.label}
-            onClick={() => {
-              updateProjectSetting(key, !displayedValue as never);
-            }}
-          />
-          {override.enabled ? (
-            <WorkbenchIconButton
-              type="button"
-              label={`Reset ${definition.label} to global`}
-              display="hover-border"
-              title={`Reset ${definition.label} to global`}
-              className="absolute top-1/2 right-3 -translate-y-1/2"
-              onClick={() => {
-                resetProjectSettingOverride(key);
-              }}
-            >
-              <ReloadIcon size={20} />
-            </WorkbenchIconButton>
-          ) : null}
-        </section>
-      );
-    }
-
-    return (
-      <section
-        key={key}
-        className="space-y-3 rounded-[0.85rem] py-1"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
-          </div>
-          {override.enabled ? (
-            <WorkbenchIconButton
-              type="button"
-              label={`Reset ${definition.label} to global`}
-              display="hover-border"
-              title={`Reset ${definition.label} to global`}
-              onClick={() => {
-                resetProjectSettingOverride(key);
-              }}
-            >
-              <ReloadIcon size={20} />
-            </WorkbenchIconButton>
-          ) : null}
-        </div>
-        {renderSettingControl(key, displayedValue, false, (nextValue) => {
-          updateProjectSetting(key, nextValue as never);
-        })}
-      </section>
-    );
-  };
 
   const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
     if (nextHarness === harness && currentThread?.harness === nextHarness) {
@@ -2812,27 +2319,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                     </WorkbenchSidebarSectionDisclosure>
                   </section> : null}
-                  {browseSessions.length ? (
-                    <section className="shrink-0 pb-5">
-                      <WorkbenchSidebarSectionDisclosure
-                        contentClassName="space-y-2"
-                        icon={BrowserSessionIcon}
-                        preferenceKey="browseSessionsOpen"
-                        title="Browse sessions"
-                      >
-                        <BrowseSessionsList
-                          getSessionContextMenu={getBrowseSessionContextMenu}
-                          isLoading={isBrowseSessionsLoading}
-                          sessions={browseSessions}
-                        />
-                        {browseSessionsError ? (
-                          <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
-                            {browseSessionsError}
-                          </p>
-                        ) : null}
-                      </WorkbenchSidebarSectionDisclosure>
-                    </section>
-                  ) : null}
+                  <WorkbenchBrowseSessionsSection controller={browseSessionController} />
                   <ReloadNecessary
                     appRuntime={appRuntime}
                     daemonRuntime={controls?.daemonRuntime ?? null}
@@ -3002,62 +2489,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     />
                 ) : null}
                 {showSettingsView && !shouldRenderMainLayout ? (
-                  <div className="mx-auto flex w-full max-w-content flex-col gap-8 py-8">
-                    <section className="space-y-6">
-                      <div className="flex flex-wrap items-end justify-between gap-4">
-                        <div className="space-y-2">
-                          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Preferences</p>
-                          <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
-                        </div>
-                        <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
-                          <a
-                            href={projectHref(createSettingsRoute(activeProjectId, "global"))}
-                            role="tab"
-                            aria-selected={settingsScope === "global"}
-                            className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
-                              ? " border-text text-text"
-                              : " border-transparent text-fg/muted hover:text-text"}`}
-                            onClick={(event) => {
-                              openSettingsScopeFromLink(event, "global");
-                            }}
-                          >
-                            Global
-                          </a>
-                          <a
-                            href={projectHref(createSettingsRoute(activeProjectId, "project"))}
-                            role="tab"
-                            aria-selected={settingsScope === "project"}
-                            className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"
-                              ? " border-text text-text"
-                              : " border-transparent text-fg/muted hover:text-text"}`}
-                            onClick={(event) => {
-                              openSettingsScopeFromLink(event, "project");
-                            }}
-                          >
-                            <span className="block max-w-[12rem] truncate">{projectTabLabel}</span>
-                          </a>
-                        </div>
-                      </div>
-
-                      <div className="space-y-7" role="tabpanel">
-                        {settingsScope === "global"
-                          ? (
-                            <>
-                              {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
-                              <WorkbenchAppPortSetting />
-                              <WorkbenchReactDevelopmentModeSetting />
-                              {renderLocalCapabilitySettings()}
-                            </>
-                          )
-                          : (
-                            <>
-                              {SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
-                              <SandboxNetworkSettings key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
-                            </>
-                          )}
-                      </div>
-                    </section>
-                  </div>
+                  <WorkbenchSettingsView
+                    activeProjectId={activeProjectId}
+                    onError={setSelectionError}
+                    onNavigate={(scope) => {
+                      navigateToRoute(createSettingsRoute(activeProjectId, scope));
+                    }}
+                    projectLabel={projectTabLabel}
+                    scope={settingsScope}
+                  />
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
@@ -3133,8 +2573,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </div>
                 ) : null}
                 {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (
-                  <WorkbenchMainLayoutView
-                    layout={mainLayoutForRender}
+                  <WorkbenchWorkspace
+                    controller={workspaceController}
                     onFocusPanel={() => { }}
                     onLayoutChange={updateMainLayout}
                     onPanelDrop={handleMainLayoutPanelDrop}

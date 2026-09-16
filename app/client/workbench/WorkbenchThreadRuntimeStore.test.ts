@@ -108,3 +108,29 @@ test("thread runtime publishes meaningful background state without replacing rou
   assert.equal(runtime.getSnapshot().pendingUserInputRequestsByThreadId.selected, pendingQuestionnaire);
   assert.equal(notifications, 2);
 });
+
+test("equivalent account projections retain the complete runtime snapshot", () => {
+  const limits = {
+    credits: null,
+    individualLimit: null,
+    limitId: "default",
+    limitName: null,
+    planType: "test",
+    primary: { resetsAt: 2, usedPercent: 20, windowDurationMins: 60 },
+    rateLimitReachedType: null,
+    secondary: null,
+    spendControlReached: null,
+  };
+  const initial = { ...snapshot(), rateLimits: limits };
+  const runtime = WorkbenchThreadRuntimeStore(initial);
+  let notifications = 0;
+  runtime.subscribe(() => { notifications += 1; });
+
+  runtime.accept({
+    ...initial,
+    rateLimits: structuredClone(limits),
+  });
+
+  assert.equal(runtime.getSnapshot(), initial);
+  assert.equal(notifications, 0);
+});

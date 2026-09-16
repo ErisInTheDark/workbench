@@ -85,26 +85,6 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.doesNotMatch(sidebarSource, /Mark as read|markThreadSeen|label: "Stop thread"|id: "stop"/u);
 });
 
-test("jit project bootstrap exposes available slices before unrelated hydration", async () => {
-  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
-  const clientSource = await readFile(new URL("../../WorkbenchClient.ts", import.meta.url), "utf8");
-  const initialRouteHydrationIndex = clientSource.indexOf("await applyRoute(activeRoute);");
-  const beginSelectionIndex = clientSource.indexOf("projectClient.beginProjectSelection(route.projectId)");
-  const openObservationIndex = clientSource.indexOf("threadSidebarClient.open(route.projectId)");
-
-  assert.notEqual(initialRouteHydrationIndex, -1);
-  assert.notEqual(beginSelectionIndex, -1);
-  assert.notEqual(openObservationIndex, -1);
-  assert.ok(beginSelectionIndex < openObservationIndex);
-  assert.doesNotMatch(clientSource, /selectProjectStrict\(route\.projectId\)/u);
-  assert.doesNotMatch(actionsSource, /isProjectLoading|isThreadsLoading|threadsError/u);
-  assert.match(actionsSource, /!currentSidebar && !projectThreadSidebars\.projects\.length/u);
-  assert.match(workbenchSource, /const isProjectIdentityLoading =/u);
-  assert.match(workbenchSource, /const isProjectTreeLoading =/u);
-  assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
-});
-
 test("successful settlement leaves the still-selected thread for a fresh draft", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");

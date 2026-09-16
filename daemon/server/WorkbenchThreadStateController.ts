@@ -6,9 +6,8 @@
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
  * - WorkbenchThreadClaimContext: thread-owned claim context.
  * - WorkbenchObservedLifecycleEvent: identity-owned provider lifecycle input.
- * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative SQLite state, durable display order, provider observation, and local/cross-project sidebar projection.
+ * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, and owned project stores.
  */
-import { z } from "zod";
 import type { WorkbenchHarness } from "workbench-shared/types";
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot, WorkbenchUserInputResponse } from "workbench-shared/types";
@@ -18,8 +17,7 @@ import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, 
 import { DraftIdSchema, ProjectIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import { dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
-import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   getWorkbenchHomeThreadKey,
   removeWorkbenchThreadFromProjectFolder,
@@ -46,13 +44,11 @@ import {
   resolveWorkbenchThreadDisplayOrder,
   sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
-  type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
   createWorkbenchProjectThreadSummary,
   WorkbenchComposerProfileSelectionSchema,
-  WorkbenchComposerSettingsSchema,
   WorkbenchHarnessSchema,
   WorkbenchThreadDraftSchema,
   WorkbenchThreadSidebarEntrySchema,
@@ -81,7 +77,6 @@ import {
   type WorkbenchGlobalThreadStateOpenResult,
   type WorkbenchThreadStateOpenResultV2,
   type WorkbenchThreadStateOpenResult,
-  type WorkbenchThreadPriority,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
   type WorkbenchThreadObservationSnapshot,
@@ -91,8 +86,17 @@ import WorkbenchThreadObservationController, { type ThreadObservationRequest } f
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
 import WorkbenchThreadArchiveController from "./WorkbenchThreadArchiveController";
+import WorkbenchProjectThreadState from "./WorkbenchProjectThreadState";
+import {
+  setWorkbenchThreadEntryDisplaySection,
+  setWorkbenchThreadEntryPriority,
+} from "./WorkbenchThreadDisplayController";
+import {
+  conformStoredWorkbenchThreadDraft,
+  projectWorkbenchThreadDraft,
+  workbenchComposerProfileFromDraft,
+} from "./WorkbenchThreadDraftStore";
 import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
-import type { WorkbenchThreadStateCommit } from "./database/thread-state/workbench-thread-state-persistence";
 import {
   conformStoredWorkbenchThreadStateRecord,
   parseWorkbenchThreadStateEntry,
@@ -161,24 +165,6 @@ function sameThreadTarget(
   return leftProjectId === rightProjectId && left.harness === right.harness && left.threadId === right.threadId;
 }
 
-function setEntryPriority(entry: WorkbenchThreadStateEntry, priority: WorkbenchThreadPriority): WorkbenchThreadStateEntry | null {
-  if (entry.entryKind !== "draft" && (entry.entryKind === "subagent" || entry.lifecycle.settled)) return null;
-  if (entry.metadata.archived) return null;
-  const metadata = priority === "pinned"
-    ? { archived: false as const, pinned: true, snoozed: false }
-    : priority === "main"
-      ? { archived: false as const, pinned: false, snoozed: false }
-      : { archived: false as const, pinned: entry.metadata.pinned, snoozed: true };
-  return entry.entryKind === "draft"
-    ? { ...entry, metadata }
-    : { ...entry, metadata, snoozedUntil: null };
-}
-
-function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: WorkbenchThreadDisplaySection) {
-  if (section === "settled") return getWorkbenchThreadDisplaySection(entry) === "settled" ? entry : null;
-  return setEntryPriority(entry, section);
-}
-
 export interface WorkbenchThreadStateControllerOptions {
   resolveProjectId: (projectId: ProjectId) => ProjectId;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
@@ -230,70 +216,11 @@ export type WorkbenchObservedLifecycleEvent =
   | { kind: "inputResolved"; requestKey: string }
   | { kind: "pendingInput"; questionnaire: WorkbenchDurableQuestionnaire | null; requestKey: string; turnId: WorkbenchTurnId | null };
 
-interface ProjectState {
-  abort: AbortController | null;
-  displayOrder: WorkbenchThreadDisplayOrder;
-  drafts: Map<string, WorkbenchThreadDraft>;
-  entries: Map<string, WorkbenchThreadStateEntry>;
-  error: string | null;
-  freshness: WorkbenchThreadSidebarSnapshot["freshness"];
-  generation: number;
-  newThreadProfile: WorkbenchComposerProfileSelectionState | null;
-  observers: Set<string>;
-  reconcilePromise: Promise<void> | null;
-  revision: number;
-  stopProjectObservation: (() => void) | null;
-}
+type ProjectState = WorkbenchProjectThreadState;
 
 function entryKey(entry: WorkbenchThreadStateEntry | WorkbenchThreadSidebarEntry) {
   if (entry.entryKind === "draft") return getThreadDisplayDraftKey(entry.draft.draftId);
   return getThreadDisplayThreadKey(entry.identity.harness, entry.identity.threadId);
-}
-
-const StoredDraftIdentitySchema = z.object({
-  draftId: z.uuid(),
-  harness: WorkbenchHarnessSchema,
-}).strip();
-
-function parseStoredDraft(candidate: unknown, projectId: ProjectId) {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { error: new Error("Stored draft identity is missing."), success: false as const };
-  }
-  const { pinned, snoozed, ...draftCandidate } = candidate as Record<string, unknown>;
-  const storedSettings = WorkbenchComposerSettingsSchema.safeParse(draftCandidate.composerSettings);
-  const identity = StoredDraftIdentitySchema.safeParse({ ...draftCandidate, harness: storedSettings.success ? storedSettings.data.harness : draftCandidate.harness });
-  if (!identity.success) return { error: identity.error, success: false as const };
-  const composerSettings = storedSettings.success
-    ? storedSettings.data
-    : {
-      agentPath: typeof draftCandidate.agent === "string" ? draftCandidate.agent : null,
-      agentSource: null,
-      harness: identity.data.harness,
-      model: typeof draftCandidate.model === "string" ? draftCandidate.model : "",
-      reasoningEffort: typeof draftCandidate.reasoningEffort === "string" ? draftCandidate.reasoningEffort : null,
-      serviceTier: draftCandidate.serviceTier === "fast" ? "fast" as const : null,
-    };
-  const conformed = conformToZodSchema(WorkbenchThreadDraftSchema, { ...draftCandidate, projectId }, {
-    attachments: [],
-    clientUpdatedAt: 0,
-    composerSettings,
-    createdAt: 0,
-    draftId: identity.data.draftId,
-    profileId: null,
-    projectId,
-    prompt: "",
-    updatedAt: 0,
-  });
-  const repairedPaths = [...conformed.repairedPaths];
-  if (draftCandidate.projectId !== projectId) repairedPaths.push(["projectId"]);
-  if (pinned !== undefined && typeof pinned !== "boolean") repairedPaths.push(["pinned"]);
-  if (snoozed !== undefined && typeof snoozed !== "boolean") repairedPaths.push(["snoozed"]);
-  return {
-    draft: conformed.data,
-    metadata: { archived: false as const, pinned: pinned === true, snoozed: snoozed === true },
-    repairedPaths,
-    success: true as const,
-  };
 }
 
 function sanitizeError(error: unknown) {
@@ -663,7 +590,7 @@ export default class WorkbenchThreadStateController {
       const draftEntry = state.entries.get(draftKey);
       draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
       const draft = state.drafts.get(input.draftId);
-      profile = draft ? this.profileFromDraft(draft) : null;
+      profile = draft ? state.draftStore.profileFromDraft(draft) : null;
       state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
       const pinnedLayoutUpdate = await this.pinnedLayout.replace(input.projectId, draftKey, getThreadDisplayThreadKey(input.harness, input.threadId));
       if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
@@ -860,7 +787,7 @@ export default class WorkbenchThreadStateController {
     if (slot.kind === "thread" && (!entry || entry.entryKind === "draft")) return null;
     if (slot.kind === "draft" && (!draft || draft.composerSettings.harness !== slot.harness)) return null;
     let selection = slot.kind === "new-thread" ? state.newThreadProfile
-      : draft ? this.profileFromDraft(draft)
+      : draft ? state.draftStore.profileFromDraft(draft)
         : entry && entry.entryKind !== "draft" ? entry.profile
           : null;
     if (refresh && !selection && slot.kind === "thread" && entry?.entryKind === "thread"
@@ -897,7 +824,7 @@ export default class WorkbenchThreadStateController {
       };
       state.drafts.set(slot.draftId, next);
       const entry = state.entries.get(`draft:${slot.draftId}`);
-      state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, entry?.entryKind === "draft" ? entry.metadata : undefined));
+      state.entries.set(`draft:${slot.draftId}`, state.draftStore.projectEntry(next, entry?.entryKind === "draft" ? entry.metadata : undefined));
       state.newThreadProfile = selection;
     } else {
       const key = `${slot.harness}:${slot.threadId}`;
@@ -911,7 +838,7 @@ export default class WorkbenchThreadStateController {
   private persistComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
     return this.enqueue(`${slot.projectId}:storage:write`, async () => {
       // Stage only profile mutations: other queued writes must never observe an unacknowledged selection.
-      const staged = { ...state, drafts: new Map(state.drafts), entries: new Map(state.entries) };
+      const staged = state.stage();
       if (!this.installComposerProfileTarget(staged, slot, selection)) return false;
       await this.writeSelectedState(slot.projectId, staged,
         slot.kind === "thread" ? [`${slot.harness}:${slot.threadId}`]
@@ -1295,33 +1222,25 @@ export default class WorkbenchThreadStateController {
 
   private async setTitleOwned(projectId: ProjectId, state: ProjectState, key: string, title: string) {
     const beforePublication = new Map(state.entries);
-    const entry = state.entries.get(key);
-    if (!entry || entry.entryKind === "draft") return null;
-    const next = parseWorkbenchThreadStateEntry({
-      ...entry, title, titleHistory: recordThreadTitle(entry.titleHistory ?? [], entry.title, title, this.now()),
-    });
-    if (next.entryKind === "draft") return null;
-    if (areDeeplyEqual(entry, next)) return next;
-    state.entries.set(key, next);
+    const result = state.recordStore.setTitle(key, title, this.now());
+    if (!result) return null;
+    if (!result.changed) return result.next;
     await this.persist(projectId, state, [key]);
     this.publish(projectId, state, state.entries.get(key), beforePublication);
-    return next;
+    return result.next;
   }
 
   private async dismissTitle(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/title/dismiss" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
-      const entry = state.entries.get(key);
-      if (!entry || entry.entryKind === "draft") throw new Error("The thread is not available in the observed project.");
-      if (request.title === entry.title) return { accepted: false };
-      const titleHistory = dismissThreadTitle(entry.titleHistory ?? [], entry.title, request.title);
-      if (!areDeeplyEqual(titleHistory, entry.titleHistory ?? [])) {
-        state.entries.set(key, { ...entry, titleHistory });
+      const result = state.recordStore.dismissTitle(key, request.title);
+      if (!result) throw new Error("The thread is not available in the observed project.");
+      if (result.changed) {
         await this.persist(request.projectId, state, [key]);
         this.publish(request.projectId, state, state.entries.get(key));
       }
-      return { accepted: true };
+      return { accepted: result.accepted };
     });
   }
 
@@ -1418,12 +1337,21 @@ export default class WorkbenchThreadStateController {
       for (const storedDraft of stored.drafts) {
         const { pinned, snoozed, ...draft } = storedDraft;
         drafts.set(draft.draftId, draft);
-        entries.set(`draft:${draft.draftId}`, this.draftEntry(draft, { archived: false, pinned: pinned === true, snoozed: snoozed === true }));
+        entries.set(`draft:${draft.draftId}`, projectWorkbenchThreadDraft(draft, {
+          archived: false,
+          pinned: pinned === true,
+          snoozed: snoozed === true,
+        }));
       }
       for (const record of stored.records) {
         entries.set(entryKey(record), record);
       }
-      const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, newThreadProfile: stored.newThreadProfile, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
+      const state = new WorkbenchProjectThreadState({
+        displayOrder: stored.displayOrder ?? {},
+        drafts,
+        entries,
+        newThreadProfile: stored.newThreadProfile,
+      });
       const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       this.projects.set(projectId, state);
@@ -1489,7 +1417,7 @@ export default class WorkbenchThreadStateController {
         const projected = projectWorkbenchThreadStateEntry(record);
         return projected ? [projected] : [];
       }),
-      ...stored.drafts.map(({ pinned, snoozed, ...draft }) => this.draftEntry(draft, {
+      ...stored.drafts.map(({ pinned, snoozed, ...draft }) => projectWorkbenchThreadDraft(draft, {
         archived: false,
         pinned: pinned === true,
         snoozed: snoozed === true,
@@ -1629,7 +1557,7 @@ export default class WorkbenchThreadStateController {
         : [];
     const drafts = Array.isArray(stored.drafts)
       ? stored.drafts.map((entry) => {
-        const parsed = parseStoredDraft(entry, projectId);
+        const parsed = conformStoredWorkbenchThreadDraft(entry, projectId);
         if (!parsed.success) throw new Error("Stored thread state contains a draft without a recoverable identity.");
         this.logStorageRepairs(projectId, `draft:${parsed.draft.draftId}`, parsed.repairedPaths);
         return { ...parsed.draft, pinned: parsed.metadata.pinned, snoozed: parsed.metadata.snoozed };
@@ -1646,19 +1574,12 @@ export default class WorkbenchThreadStateController {
       drafts,
       newThreadProfile: storedNewThreadProfile?.success
         ? storedNewThreadProfile.data
-        : latestDraft ? this.profileFromDraft(latestDraft) : null,
+        : latestDraft ? workbenchComposerProfileFromDraft(latestDraft) : null,
       records,
       version: 4,
     };
   }
 
-  private draftEntry(draft: WorkbenchThreadDraft, metadata = { archived: false as const, pinned: false, snoozed: false }): Extract<WorkbenchThreadStateEntry, { entryKind: "draft" }> { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
-
-  private profileFromDraft(draft: WorkbenchThreadDraft): WorkbenchComposerProfileSelectionState {
-    return draft.profileId
-      ? { kind: "profile", profileId: draft.profileId, settings: draft.composerSettings }
-      : { kind: "custom", settings: draft.composerSettings };
-  }
   private naturallyOrderedEntries(state: ProjectState) {
     const entries = [...state.entries.values()].flatMap((entry) => {
       const projected = projectWorkbenchThreadStateEntry(entry);
@@ -2050,7 +1971,7 @@ export default class WorkbenchThreadStateController {
       async () => {
         const source = sourceState.entries.get(sourceIdentity.threadKey);
         if (!source) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-        const nextSource = setEntryPriority(source, "pinned");
+        const nextSource = setWorkbenchThreadEntryPriority(source, "pinned");
         if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
         const priorDisplayOrder = sourceState.displayOrder;
         const sourceChanged = !areDeeplyEqual(source, nextSource);
@@ -2116,7 +2037,7 @@ export default class WorkbenchThreadStateController {
         if (!source || !target || target.entryKind !== "thread" || target.metadata.archived || target.lifecycle.settled) {
           return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
         }
-        const nextSource = setEntryPriority(source, "pinned");
+        const nextSource = setWorkbenchThreadEntryPriority(source, "pinned");
         if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
         const priorSource = source;
         const priorDisplayOrder = sourceState.displayOrder;
@@ -2200,7 +2121,7 @@ export default class WorkbenchThreadStateController {
         if ((sourceFolder && sourceFolder.section !== request.section) || (!sourceFolder && !sourceEntry)) {
           return { accepted: false, revision: queuedSnapshot.revision };
         }
-        const nextSource = sourceEntry ? setEntryDisplaySection(sourceEntry, request.section) : null;
+        const nextSource = sourceEntry ? setWorkbenchThreadEntryDisplaySection(sourceEntry, request.section) : null;
         if (sourceEntry && !nextSource) return { accepted: false, revision: queuedSnapshot.revision };
 
         const destinationFolderId = destinationIdentity?.threadKey.startsWith("folder:")
@@ -2363,35 +2284,16 @@ export default class WorkbenchThreadStateController {
   private async upsertDraft(projectId: ProjectId, draft: WorkbenchThreadDraft, folderId?: string) {
     const state = await this.getProject(projectId);
     return await this.enqueue(folderId ? `${projectId}:display-order` : `${projectId}:draft:${draft.draftId}`, () => this.enqueue(`${projectId}:storage:write`, async () => {
-      const current = state.drafts.get(draft.draftId);
-      if (current && current.clientUpdatedAt > draft.clientUpdatedAt) return { accepted: true, revision: state.revision };
-      const targetFolder = folderId ? state.displayOrder.folders?.find((folder) => folder.folderId === folderId) : null;
-      if (folderId && (!targetFolder || targetFolder.section === "settled")) return { accepted: false, revision: state.revision };
-      const timestamp = this.now();
-      const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
-      const staged = { ...state, drafts: new Map(state.drafts), entries: new Map(state.entries) };
-      staged.drafts.set(accepted.draftId, accepted);
-      staged.newThreadProfile = this.profileFromDraft(accepted);
-      const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
-      const metadata = existingEntry?.entryKind === "draft"
-        ? existingEntry.metadata
-        : targetFolder
-          ? { archived: false as const, pinned: targetFolder.section === "pinned", snoozed: targetFolder.section === "snoozed" }
-          : undefined;
-      const entry = this.draftEntry(accepted, metadata);
-      staged.entries.set(entryKey(entry), entry);
-      if (targetFolder) {
-        const displayOrder = moveWorkbenchThreadDisplayItem(this.naturallyOrderedEntries(staged), staged.displayOrder, targetFolder.section, entryKey(entry), targetFolder.folderId, targetFolder.threadKeys[0] ?? null);
-        if (!displayOrder) return { accepted: false, revision: state.revision };
-        staged.displayOrder = displayOrder;
-      }
-      await this.writeSelectedState(projectId, staged, [entryKey(entry)], { profile: true, layout: Boolean(targetFolder) });
-      state.drafts.set(accepted.draftId, accepted);
-      state.entries.set(entryKey(entry), entry);
-      state.newThreadProfile = staged.newThreadProfile;
-      if (targetFolder) state.displayOrder = staged.displayOrder;
-      this.publish(projectId, state, entry);
-      return { accepted: true, revision: state.revision };
+      const result = await state.draftStore.upsert(state, projectId, draft, folderId, {
+        beforeWrite: () => this.assertActive(),
+        entries: (candidate) => this.naturallyOrderedEntries(candidate),
+        now: this.now,
+        write: async (changes) => {
+          await this.options.threadStateStore.writeChanges(projectId, changes);
+        },
+      });
+      if (result.entry) this.publish(projectId, state, result.entry);
+      return { accepted: result.accepted, revision: result.revision };
     }));
   }
 
@@ -2413,7 +2315,7 @@ export default class WorkbenchThreadStateController {
       const sourceDisplayOrder = sourceState.displayOrder;
       const destinationDisplayOrder = destinationState.displayOrder;
       const movedDraft = WorkbenchThreadDraftSchema.parse({ ...sourceDraft, projectId: destinationProjectId });
-      const movedEntry = this.draftEntry(movedDraft, sourceEntry.metadata);
+      const movedEntry = destinationState.draftStore.projectEntry(movedDraft, sourceEntry.metadata);
       destinationState.drafts.set(draftId, movedDraft);
       destinationState.entries.set(`draft:${draftId}`, movedEntry);
 
@@ -2490,7 +2392,7 @@ export default class WorkbenchThreadStateController {
       const beforePublication = new Map(state.entries);
       const entry = state.entries.get(request.sourceKey);
       if (!entry) return { accepted: false, revision: state.revision };
-      const next = setEntryPriority(entry, request.priority);
+      const next = setWorkbenchThreadEntryPriority(entry, request.priority);
       if (!next) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
       state.entries.set(request.sourceKey, next);
@@ -2675,7 +2577,7 @@ export default class WorkbenchThreadStateController {
   ) {
     const beforePublication = new Map(state.entries);
     const source = state.entries.get(request.sourceKey);
-    const nextSource = source ? setEntryDisplaySection(source, request.section) : null;
+    const nextSource = source ? setWorkbenchThreadEntryDisplaySection(source, request.section) : null;
     if (source && !nextSource) return { accepted: false, revision: state.revision };
     const priorDisplayOrder = state.displayOrder;
     const sourceChanged = Boolean(source && nextSource && !areDeeplyEqual(source, nextSource));
@@ -2723,7 +2625,7 @@ export default class WorkbenchThreadStateController {
     if (!source || !target || target.entryKind !== "thread" || getWorkbenchThreadDisplaySection(target) !== request.section) {
       return { accepted: false, revision: state.revision };
     }
-    const nextSource = setEntryDisplaySection(source, request.section);
+    const nextSource = setWorkbenchThreadEntryDisplaySection(source, request.section);
     if (!nextSource) return { accepted: false, revision: state.revision };
     const priorDisplayOrder = state.displayOrder;
     state.entries.set(request.sourceKey, nextSource);
@@ -2918,8 +2820,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private changedEntryKeys(previous: ReadonlyMap<string, WorkbenchThreadStateEntry>, state: ProjectState) {
-    return [...new Set([...previous.keys(), ...state.entries.keys()])]
-      .filter(key => previous.get(key) !== state.entries.get(key));
+    return state.changedEntryKeys(previous);
   }
 
   private persist(
@@ -2928,33 +2829,19 @@ export default class WorkbenchThreadStateController {
     keys: Iterable<string>,
     options: { previousEntries?: ReadonlyMap<string, WorkbenchThreadStateEntry>; layout?: boolean; profile?: boolean } = {},
   ) {
-    const beforeDerived = new Map(state.entries);
-    const previousEntries = options.previousEntries ?? beforeDerived;
-    const previousOrder = state.displayOrder;
-    this.synchronizeSettlementTimestamps(state);
-    state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
-    const selectedKeys = new Set([...keys, ...this.changedEntryKeys(beforeDerived, state)]);
-    const installedEntries = new Map(state.entries);
-    const installedOrder = state.displayOrder;
-    return this.enqueue(`${projectId}:storage:write`, async () => {
-      try {
-        // Select keys now, read their current facts at execution. A preceding profile
-        // commit must not be overwritten by a record captured while it was pending.
-        const changes = this.selectedState(projectId, state, selectedKeys, {
-          ...options, layout: options.layout || !areDeeplyEqual(previousOrder, installedOrder),
-        });
+    return state.commit(projectId, keys, options, {
+      beforeWrite: () => this.assertActive(),
+      prepare: () => {
+        this.synchronizeSettlementTimestamps(state);
+        state.displayOrder = reconcileWorkbenchThreadDisplayOrder(
+          this.naturallyOrderedEntries(state),
+          state.displayOrder,
+        );
+      },
+      write: async (changes) => {
         await this.options.threadStateStore.writeChanges(projectId, changes);
-      } catch (error) {
-        for (const key of selectedKeys) {
-          if (state.entries.get(key) !== installedEntries.get(key)) continue;
-          const previous = previousEntries.get(key);
-          if (previous) state.entries.set(key, previous);
-          else state.entries.delete(key);
-        }
-        if (state.displayOrder === installedOrder) state.displayOrder = previousOrder;
-        throw error;
-      }
       this.archives.reschedule();
+      },
     });
   }
 
@@ -2962,37 +2849,12 @@ export default class WorkbenchThreadStateController {
     projectId: ProjectId, state: ProjectState, keys: Iterable<string>,
     options: { layout?: boolean; profile?: boolean } = {},
   ) {
-    return this.options.threadStateStore.writeChanges(projectId, this.selectedState(projectId, state, keys, options));
-  }
-
-  private selectedState(
-    projectId: ProjectId, state: ProjectState, keys: Iterable<string>,
-    options: { layout?: boolean; profile?: boolean },
-  ): Omit<WorkbenchThreadStateCommit, "projectId"> {
-    const records: WorkbenchThreadStateRecord[] = [];
-    const drafts: NonNullable<WorkbenchThreadStateCommit["drafts"]>[number][] = [];
-    const deletedDraftIds: DraftId[] = [];
-    for (const key of new Set(keys)) {
-      const entry = state.entries.get(key);
-      if (entry && entry.entryKind !== "draft") {
-        records.push(entry);
-      } else if (entry?.entryKind === "draft") {
-        const draft = state.drafts.get(entry.draft.draftId);
-        if (!draft) throw new Error("Draft state is missing its owned content.");
-        drafts.push({ draft, pinned: entry.metadata.pinned, snoozed: entry.metadata.snoozed });
-      } else if (key.startsWith("draft:")) {
-        deletedDraftIds.push(DraftIdSchema.parse(key.slice("draft:".length)));
-      } else {
-        throw new Error("Selected thread state is missing.");
-      }
-    }
-    return {
-      ...(records.length ? { records } : {}),
-      ...(drafts.length ? { drafts } : {}),
-      ...(deletedDraftIds.length ? { deletedDraftIds } : {}),
-      ...(options.profile ? { projectProfiles: [{ projectId, profile: state.newThreadProfile }] } : {}),
-      ...(options.layout ? { layouts: [{ owner: { kind: "project", projectId }, revision: 0, displayOrder: state.displayOrder }] } : {}),
-    };
+    return state.writeSelected(projectId, keys, options, {
+      beforeWrite: () => this.assertActive(),
+      write: async (changes) => {
+        await this.options.threadStateStore.writeChanges(projectId, changes);
+      },
+    });
   }
 }
 

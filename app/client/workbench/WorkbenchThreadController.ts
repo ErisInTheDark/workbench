@@ -4,7 +4,7 @@
  * - ThreadGitArcProposalObservation: source-local loading, loaded, refreshing, or failed proposal validity.
  * - ThreadControllerSnapshot: one thread surface, with source-local SQLite state.
  * - ThreadControllerPorts: native data, observation and transcript adapter ports.
- * - default WorkbenchThreadController: own shared thread admission, reads, proposal demand, and source lifecycle.
+ * - default WorkbenchThreadController: compose one document owner with reads, proposals, history retention, actions, and source-local failure.
  */
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchReadThreadOptions, WorkbenchSubagentSummary, WorkbenchControls } from "workbench-shared/types";
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
@@ -15,6 +15,7 @@ import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { getNextSubagentHydrationBatch } from "./thread/thread-subagents";
+import type ThreadDocumentController from "./thread/ThreadDocumentController";
 import type ThreadObservationController from "./thread/ThreadObservationController";
 import { getThreadObservationKey } from "./thread/ThreadObservationController";
 import type ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
@@ -41,6 +42,7 @@ export interface ThreadControllerSnapshot {
 }
 export interface ThreadControllerPorts {
   controls: Pick<WorkbenchControls, "compactThread" | "stopThread" | "setCurrentThreadAgent" | "setCurrentThreadModel" | "setCurrentThreadReasoningEffort" | "setCurrentThreadServiceTier" | "setCurrentThreadComposerSettings" | "submitPendingUserInputRequest" | "updateThreadStateWithAcceptance">;
+  document?: ThreadDocumentController;
   observations: ThreadObservationController;
   readGitArcProposal?: (input: {
     cwd: string;
@@ -70,6 +72,7 @@ export default class WorkbenchThreadController {
   private readonly families = new Map<object, { ids: readonly string[]; children: Map<string, { owner: WorkbenchThreadController; release: () => void }> }>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private observation: ReturnType<ThreadObservationController["acquire"]> | null = null;
+  private stopDocument: (() => void) | null = null;
   private stopNative: (() => void) | null = null;
   private transcript: ReturnType<ThreadControllerPorts["createTranscript"]> | null = null;
   private opening: Promise<ThreadPayload | null> | null = null;
@@ -167,6 +170,7 @@ export default class WorkbenchThreadController {
     const first = !this.consumers.size;
     this.consumers.set(consumer, interest);
     if (first) {
+      this.stopDocument = this.ports.document?.subscribe(() => this.reconcile()) ?? null;
       this.stopNative = this.ports.subscribeNative(() => this.reconcile());
     }
     if (interest !== "route") this.observe();
@@ -189,6 +193,8 @@ export default class WorkbenchThreadController {
         this.generation++;
         this.clearGitArcProposalObservation();
         this.opening = null;
+        this.stopDocument?.();
+        this.stopDocument = null;
         this.stopNative?.();
         this.stopNative = null;
         this.observation?.release();
@@ -303,6 +309,7 @@ export default class WorkbenchThreadController {
     }
     this.families.clear();
     this.stopNative?.();
+    this.stopDocument?.();
     this.observation?.release();
     if (transportClosing) this.transcript?.controller.setAvailable(false);
     this.releaseTranscript();
@@ -320,6 +327,8 @@ export default class WorkbenchThreadController {
   private reconcile() {
     if (this.disposed || !this.consumers.size) return;
     const current = this.ports.readNative();
+    const ownedDocument = this.ports.document?.getSnapshot().visible ?? null;
+    if (ownedDocument) current.document = ownedDocument;
     const native = { ...current, document: current.document ?? this.snapshot.document };
     const observation = this.target.kind === "draft" ? null
       : this.ports.observations.getSnapshot(getThreadObservationKey(this.projectId, this.target));

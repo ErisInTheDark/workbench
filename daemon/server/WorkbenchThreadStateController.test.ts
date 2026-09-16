@@ -2009,11 +2009,15 @@ test("draft saves update defaults atomically without defaults rewriting other dr
   const secondId = fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222");
   const draft = {
     draftId: firstId, projectId, profileId: null, composerSettings: { ...EMPTY_CODEX_SETTINGS, model: "first" },
-    prompt: "", attachments: [], clientUpdatedAt: 2, createdAt: 1, updatedAt: 2,
+    prompt: "draft", attachments: [], clientUpdatedAt: 2, createdAt: 1, updatedAt: 2,
   };
-  const save = (value: typeof draft) => controller.handleRequest("observer", {
-    method: "workbench/thread-state/draft/upsert", projectId, draft: value,
-  });
+  const save = async (value: typeof draft) => {
+    const response = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/draft/upsert", projectId, draft: value,
+    });
+    assert.equal(response.error, undefined, "draft save request");
+    return response;
+  };
   await save(draft);
   await save({ ...draft, draftId: secondId, composerSettings: { ...draft.composerSettings, model: "second" } });
   const firstSlot = { kind: "draft" as const, projectId, draftId: firstId, harness: "codex" as const };
