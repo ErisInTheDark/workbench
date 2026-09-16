@@ -80,12 +80,14 @@ class BrowseExecution implements DaemonBrowseExecution {
     if (!this.controller) {
       const nativeResults = new WorkbenchBrowseResultController(this.resultCallbacks);
       const results = {
+        captureOrigin: nativeResults.captureOrigin.bind(nativeResults),
         expire: nativeResults.expire.bind(nativeResults),
         resume: nativeResults.resume.bind(nativeResults),
         record: nativeResults.record.bind(nativeResults),
         waitForIdle: nativeResults.waitForIdle.bind(nativeResults),
-        deliverScreenshot: async (threadId: string, imageUrl: string) => {
-          const result = await nativeResults.deliverScreenshot(threadId, imageUrl);
+        deliverScreenshot: async (...args: Parameters<WorkbenchBrowseResultController["deliverScreenshot"]>) => {
+          const [threadId] = args;
+          const result = await nativeResults.deliverScreenshot(...args);
           return { ...result, turnId: await this.publicTurnId(threadId, result.turnId) };
         },
       };
@@ -130,6 +132,14 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     };
     const callbacks: WorkbenchBrowseResultCallbacks = {
       ...context.browseResultCallbacks,
+      resolveNativeTurnId: async (harness, threadId, turnId) => {
+        const canonicalThreadId = await identity.publicThreadId(threadId);
+        const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId: TurnReferenceSchema.parse(turnId) });
+        if (!turn?.native.nativeTurnId || turn.native.harness !== harness || turn.native.nativeThreadId !== threadId) {
+          throw new Error("Browse result has no matching native turn execution.");
+        }
+        return turn.native.nativeTurnId;
+      },
       injectToolContext: async (params) => {
         const response = await harnesses.request("codex", { method: WORKBENCH_TOOL_CONTEXT_METHOD, params });
         if (response.error) throw new Error(response.error.message);

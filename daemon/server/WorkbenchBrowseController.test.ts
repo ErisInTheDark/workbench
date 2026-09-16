@@ -4,14 +4,16 @@
  */
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import type { WorkbenchBrowseSessionListRequest, WorkbenchBrowseSessionSummary } from "workbench-shared/types";
-import type { WorkbenchBrowseResultSink } from "./lib/workbench/browse/browse-result-events";
+import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultOrigin, WorkbenchBrowseResultSink } from "./lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntime";
 import WorkbenchBrowseRequestHandler from "./lib/workbench/browse/WorkbenchBrowseRequestHandler";
+import WorkbenchBrowseSessionController from "./lib/workbench/browse/WorkbenchBrowseSessionController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -33,6 +35,7 @@ function createController(
   onHandle: (signal: AbortSignal) => Promise<void> | void = () => undefined,
 ) {
   const results: WorkbenchBrowseResultSink = {
+    captureOrigin: async () => null,
     record: () => undefined,
     deliverScreenshot: async () => ({ kind: "steered", turnId: "turn-1" }),
     waitForIdle: async () => undefined,
@@ -57,7 +60,7 @@ test("expired identity lookup cannot launch work after rollback resumes admissio
   const release = deferred();
   let executions = 0;
   const controller = new WorkbenchBrowseController({
-    record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+    captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
   }, new WorkbenchBrowseRuntime(), {
     handle: async () => { executions++; return Response.json({ ok: true }); },
     listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),
@@ -93,6 +96,7 @@ test("a late screenshot cannot resolve asset identity or publish a result after 
     },
   } as unknown as WorkbenchBrowseRuntime;
   const handler = new WorkbenchBrowseRequestHandler({
+    captureOrigin: async () => null,
     record() { publications++; },
     deliverScreenshot: async () => { publications++; return { kind: "steered", turnId: "turn" }; },
     waitForIdle: async () => {},
@@ -107,6 +111,50 @@ test("a late screenshot cannot resolve asset identity or publish a result after 
   assert.equal(response.status, 400);
   assert.equal(identityReads, 0);
   assert.equal(publications, 0);
+});
+
+test("automatic screenshots retain the pre-action origin without injecting agent context", async t => {
+  t.mock.method(fs, "mkdir", async () => undefined);
+  t.mock.method(fs, "writeFile", async () => undefined);
+  t.mock.method(WorkbenchBrowseSessionController.prototype, "rememberSession", async () => undefined);
+  const screenshotEntered = deferred();
+  const releaseScreenshot = deferred();
+  let commandStarted = false;
+  const original: WorkbenchBrowseResultOrigin = { commandItemId: "browse-command", harness: "codex", turnId: "original-turn" };
+  let currentOrigin = original;
+  const recorded: { event: WorkbenchBrowseResultEvent; origin: WorkbenchBrowseResultOrigin | null }[] = [];
+  const runtime = {
+    resolveExecutionContext: async () => ({ cwd: "C:/repo", projectId: null, projectRootPath: "C:/repo" }),
+    run: async (command: { action: string }) => {
+      commandStarted = true;
+      if (command.action === "screenshot") {
+        screenshotEntered.resolve();
+        await releaseScreenshot.promise;
+      }
+      return {
+        ok: true, exitCode: 0, durationMs: 1, stderr: "",
+        stdout: command.action === "screenshot" ? JSON.stringify({ base64: "YQ==" }) : "{}",
+      };
+    },
+  } as unknown as WorkbenchBrowseRuntime;
+  const handler = new WorkbenchBrowseRequestHandler({
+    captureOrigin: async () => { assert.equal(commandStarted, false); return currentOrigin; },
+    record: (event, origin) => { recorded.push({ event, origin }); },
+    deliverScreenshot: async () => { throw new Error("Automatic captures must never inject context"); },
+    waitForIdle: async () => {},
+  }, runtime);
+  const response = await handler.handle(Buffer.from(JSON.stringify({
+    action: "viewport", width: 800, height: 600, threadId: "thread", session: "default", cwd: "C:/repo",
+  })), new AbortController().signal, async task => await task());
+  assert.equal(response.status, 200);
+  await screenshotEntered.promise;
+  assert.equal(recorded.length, 0);
+  currentOrigin = { ...original, turnId: "next-turn", commandItemId: "next-command" };
+  releaseScreenshot.resolve();
+  await handler.waitForIdle();
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.origin, original);
+  assert.match(recorded[0]!.event.assetUrl!, /^\/api\/transcript-assets\//);
 });
 
 test("direct Browse request execution uses the same handler and cancellation signal as HTTP ingress", async () => {
@@ -145,7 +193,7 @@ test("Browse translates only declared targets and returns public session identit
     },
   };
   const controller = new WorkbenchBrowseController({
-    record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+    captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
   }, new WorkbenchBrowseRuntime(), {
     handle: async (body) => { received.push(JSON.parse(body.toString())); return Response.json({ ok: true }); },
     listSessions: async (request) => { received.push(request); return { generatedAt: "", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sessions: [session] }; },
@@ -186,7 +234,7 @@ test("Browse reload waits for admitted identity lookups and rejects later comman
     const gate = deferred();
     let settled = false;
     const controller = new WorkbenchBrowseController({
-      record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+      captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
     }, new WorkbenchBrowseRuntime(), {
       handle: async () => Response.json({ ok: true }),
       listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),

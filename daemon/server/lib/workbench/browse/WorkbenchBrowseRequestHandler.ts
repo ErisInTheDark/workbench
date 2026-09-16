@@ -36,7 +36,7 @@ import WorkbenchBrowseRawCli from "./WorkbenchBrowseRawCli";
 import WorkbenchBrowseRuntime, {
   type WorkbenchBrowseExecutionContext as WorkbenchBrowseProjectExecution,
 } from "./WorkbenchBrowseRuntime";
-import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultSink } from "./browse-result-events";
+import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultOrigin, WorkbenchBrowseResultSink } from "./browse-result-events";
 import {
   createBrowseAgentSequenceProgressResponse,
   createBrowseAgentSequenceResponse,
@@ -674,6 +674,8 @@ function isBrowseMarkdownHelpStatement(statement: BrowseMarkdownStatement) {
 }
 
 async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionContext, scriptRequest: WorkbenchBrowseAgentScriptRequest): Promise<WorkbenchBrowseCommandResponse> {
+  const origin = await execution.results.captureOrigin(scriptRequest.threadId);
+  execution.signal.throwIfAborted();
   const startedAt = Date.now();
   const projectExecution = await execution.runtime.resolveExecutionContext({
     cwd: scriptRequest.cwd,
@@ -738,7 +740,7 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
         result,
         session: scriptRequest.session ?? null,
         threadId: scriptRequest.threadId,
-      }));
+      }), origin);
     }
     if (!result.ok) {
       return {
@@ -917,7 +919,7 @@ async function captureBrowseSessionScreenshotAsset(
   const screenshotResult = await runBrowseCommand(execution, screenshotRequest, normalized.command, projectExecution);
   execution.signal.throwIfAborted();
   if (!screenshotResult.ok) {
-    return null;
+    throw new Error("Automatic Browse screenshot capture failed.");
   }
 
   const image = parseScreenshotBase64(screenshotResult.stdout);
@@ -931,8 +933,12 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
   payload: WorkbenchBrowseCommandRequest,
   typedCommand?: WorkbenchBrowseAgentCommand,
   projectExecution?: WorkbenchBrowseProjectExecution,
+  origin?: WorkbenchBrowseResultOrigin | null,
 ) {
   const shouldDeliver = payload.args[0] === "screenshot";
+  const screenshotOrigin = shouldDeliver && origin === undefined
+    ? await execution.results.captureOrigin(payload.threadId) : origin;
+  execution.signal.throwIfAborted();
   const commandPayload = shouldDeliver
     ? { ...payload, args: normalizeScreenshotDeliveryArgs(payload.args) }
     : payload;
@@ -943,14 +949,15 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
   }
 
   const image = parseScreenshotBase64(result.stdout);
-  await execution.persistScreenshot(payload.threadId, image);
+  const assetUrl = await execution.persistScreenshot(payload.threadId, image);
   execution.signal.throwIfAborted();
-  const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image));
+  const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image), screenshotOrigin);
   const deliveryFields = delivery.kind === "injected"
     ? { injected: true, injectionAcceptedAt: delivery.acceptedAt, injectionTurnId: delivery.turnId }
     : { steered: true, steerTurnId: delivery.turnId };
   return {
     ...result,
+    assetUrl,
     stdout: JSON.stringify({
       screenshot: "captured",
       ...deliveryFields,
@@ -1104,6 +1111,9 @@ async function runBrowseAgentCommand(
     return await execution.sessions.cleanupThreadSessions(normalized.command, execution.signal);
   }
 
+  const origin = await execution.results.captureOrigin(normalized.command.action === "forget"
+    ? normalized.command.threadId : normalized.command.commandRequest.threadId);
+  execution.signal.throwIfAborted();
   if (normalized.command.action === "forget") {
     const command = normalized.command;
     const result = await execution.sessions.forgetPersistentSession(command, execution.signal);
@@ -1115,14 +1125,14 @@ async function runBrowseAgentCommand(
       result,
       session: command.session,
       threadId: command.threadId,
-    }));
+    }), origin);
     return result;
   }
 
   const command = normalized.command;
   const executionContext = projectExecution ?? await execution.runtime.resolveExecutionContext(command.commandRequest);
   execution.signal.throwIfAborted();
-  const result = await runBrowseCommandAndMaybeDeliverScreenshot(execution, command.commandRequest, command, executionContext);
+  const result = await runBrowseCommandAndMaybeDeliverScreenshot(execution, command.commandRequest, command, executionContext, origin);
   const recordResult = (assetUrl: string | null) => {
     if (execution.signal.aborted) return;
     execution.results.record(createAutomaticBrowseResult({
@@ -1132,7 +1142,7 @@ async function runBrowseAgentCommand(
       result,
       session: command.session ?? null,
       threadId: command.commandRequest.threadId,
-    }));
+    }), origin);
   };
   if (result.ok && command.session && shouldAutoCaptureScreenshot(command.action)) {
     execution.trackBackground(captureBrowseSessionScreenshotAsset(execution, command.commandRequest, executionContext)

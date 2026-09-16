@@ -1,8 +1,7 @@
 /*
  * Exports:
- * - WorkbenchBrowseActiveThread: resolved thread-owned metadata used only behind the result boundary.
  * - WorkbenchBrowseResultCallbacks: bridge-owned thread operations injected into result enrichment.
- * - default WorkbenchBrowseResultController: resolve thread metadata, serialize deferred sidecars, and deliver explicit screenshots.
+ * - default WorkbenchBrowseResultController: capture invocation ownership, serialize sidecars, and deliver explicit screenshots.
  */
 import { createHash } from "node:crypto";
 
@@ -10,23 +9,18 @@ import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types"
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultSink, WorkbenchBrowseScreenshotDelivery } from "./lib/workbench/browse/browse-result-events";
+import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultOrigin, WorkbenchBrowseResultSink, WorkbenchBrowseScreenshotDelivery } from "./lib/workbench/browse/browse-result-events";
 import type { WorkbenchToolContextRequest, WorkbenchToolContextResponse } from "workbench-shared/workbench/thread/thread-tool-output";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 const IDLE_TAIL = Promise.resolve();
 type ThreadReadResponse = Pick<WorkbenchThreadContextReadResponse, "thread">;
 
-export interface WorkbenchBrowseActiveThread {
-  commandItemId: string | null;
-  harness: WorkbenchHarness;
-  turnId: string;
-}
-
 export interface WorkbenchBrowseResultCallbacks {
   logError: (message: string) => void;
   listHarnesses: () => readonly WorkbenchHarness[];
   readThread: (harness: WorkbenchHarness, threadId: string) => Promise<ThreadReadResponse>;
+  resolveNativeTurnId?: (harness: WorkbenchHarness, threadId: string, turnId: string) => Promise<string>;
   recordResult: (entry: WorkbenchBrowseResultEntry) => Promise<void>;
   steerTurn: (harness: WorkbenchHarness, threadId: string, expectedTurnId: string, input: UserInput[]) => Promise<string | null>;
   injectToolContext?: (request: WorkbenchToolContextRequest) => Promise<WorkbenchToolContextResponse>;
@@ -34,7 +28,7 @@ export interface WorkbenchBrowseResultCallbacks {
 
 function isActiveBrowseCommandItem(item: ThreadReadResponse["thread"]["turns"][number]["items"][number]) {
   return (item.type === "commandExecution" && item.status === "inProgress" && item.command.includes("/api/browse"))
-    || (item.type === "mcpToolCall" && item.status === "inProgress" && item.server === "wb" && item.tool === "browse_run");
+    || (item.type === "mcpToolCall" && item.status === "inProgress" && (item.server === "wb" || item.server === "wbex") && item.tool === "browse_run");
 }
 
 function findLatestBrowseCommandItemId(response: ThreadReadResponse) {
@@ -57,16 +51,24 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     this.callbacks = callbacks;
   }
 
-  record(event: WorkbenchBrowseResultEvent) {
+  async captureOrigin(threadId: string): Promise<WorkbenchBrowseResultOrigin | null> {
     const signal = this.generation.signal;
-    if (signal.aborted) return;
+    try {
+      return await this.readActiveThread(threadId, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      this.callbacks.logError((error instanceof Error ? error.message : String(error)).slice(0, 500));
+      return null;
+    }
+  }
+
+  record(event: WorkbenchBrowseResultEvent, origin: WorkbenchBrowseResultOrigin | null) {
+    const signal = this.generation.signal;
+    if (signal.aborted || !origin) return;
     const previous = this.tails.get(event.threadId) ?? IDLE_TAIL;
     const current = previous.catch(() => undefined).then(async () => {
       signal.throwIfAborted();
-      const activeThread = await this.readActiveThread(event.threadId, false, signal);
-      signal.throwIfAborted();
-      if (!activeThread) return;
-      const write = this.callbacks.recordResult(this.createEntry(event, activeThread));
+      const write = this.callbacks.recordResult(this.createEntry(event, origin));
       this.writes.add(write);
       try { await write; }
       finally { this.writes.delete(write); }
@@ -78,10 +80,10 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     this.tails.set(event.threadId, current);
   }
 
-  async deliverScreenshot(threadId: string, imageUrl: string): Promise<WorkbenchBrowseScreenshotDelivery> {
+  async deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null): Promise<WorkbenchBrowseScreenshotDelivery> {
     const signal = this.generation.signal;
     signal.throwIfAborted();
-    const activeThread = await this.readActiveThread(threadId, true, signal);
+    const activeThread = origin === undefined ? await this.readActiveThread(threadId, signal) : origin;
     signal.throwIfAborted();
     if (!activeThread) throw new Error("Unable to deliver screenshot because the target thread has no active turn.");
     if (activeThread.harness === "codex") {
@@ -119,7 +121,7 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     if (this.generation.signal.aborted) this.generation = new AbortController();
   }
 
-  private createEntry(event: WorkbenchBrowseResultEvent, activeThread: WorkbenchBrowseActiveThread): WorkbenchBrowseResultEntry {
+  private createEntry(event: WorkbenchBrowseResultEvent, activeThread: WorkbenchBrowseResultOrigin): WorkbenchBrowseResultEntry {
     return {
       ...event,
       commandItemId: activeThread.commandItemId,
@@ -131,20 +133,28 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     };
   }
 
-  private async readActiveThread(threadId: string, requireInProgress: boolean, signal: AbortSignal): Promise<WorkbenchBrowseActiveThread | null> {
+  private async readActiveThread(threadId: string, signal: AbortSignal): Promise<WorkbenchBrowseResultOrigin | null> {
     let lastError: Error | null = null;
     let readSucceeded = false;
     for (const harness of this.callbacks.listHarnesses()) {
+      let response: ThreadReadResponse;
       try {
         signal.throwIfAborted();
-        const response = await this.callbacks.readThread(harness, threadId);
+        response = await this.callbacks.readThread(harness, threadId);
         signal.throwIfAborted();
-        readSucceeded = true;
-        const turn = getCurrentInProgressTurn(response.thread) ?? (requireInProgress ? null : response.thread.turns.at(-1) ?? null);
-        if (turn) return { commandItemId: findLatestBrowseCommandItemId(response), harness, turnId: turn.id };
       } catch (error) {
         signal.throwIfAborted();
         lastError = error instanceof Error ? error : new Error(String(error));
+        continue;
+      }
+      readSucceeded = true;
+      const turn = getCurrentInProgressTurn(response.thread);
+      if (turn) {
+        const commandItemId = findLatestBrowseCommandItemId(response);
+        const turnId = this.callbacks.resolveNativeTurnId
+          ? await this.callbacks.resolveNativeTurnId(harness, threadId, turn.id) : turn.id;
+        signal.throwIfAborted();
+        return { commandItemId, harness, turnId };
       }
     }
     if (!readSucceeded && lastError) throw lastError;

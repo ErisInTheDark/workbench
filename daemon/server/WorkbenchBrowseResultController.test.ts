@@ -93,7 +93,8 @@ test("expired enrichment cannot write or steer after rollback resumes the owner"
     recordResult: async entry => { writes.push(entry); },
     steerTurn: async () => { steers++; return "turn"; },
   });
-  controller.record(createEvent("old"));
+  const capture = controller.captureOrigin("thread-1");
+  const captureRejected = assert.rejects(capture, /retired/);
   const screenshot = controller.deliverScreenshot("thread-1", "data:image/png;base64,YQ==");
   const rejected = assert.rejects(screenshot, /retired/);
   await entered.promise;
@@ -102,7 +103,8 @@ test("expired enrichment cannot write or steer after rollback resumes the owner"
   controller.resume();
   read.resolve(createThreadResponse("thread-1", "turn"));
   await rejected;
-  controller.record(createEvent("new"));
+  await captureRejected;
+  controller.record(createEvent("new"), await controller.captureOrigin("thread-1"));
   await controller.waitForIdle();
   assert.deepEqual(writes.map(entry => entry.action), ["new"]);
   assert.equal(steers, 0);
@@ -118,7 +120,7 @@ test("expiry retains the barrier for a result write that has already started", a
     recordResult: async () => { writing.resolve(); await release.promise; },
     steerTurn: async () => null,
   });
-  controller.record(createEvent("issued"));
+  controller.record(createEvent("issued"), await controller.captureOrigin("thread-1"));
   await writing.promise;
   controller.expire();
   let idle = false;
@@ -130,27 +132,28 @@ test("expiry retains the barrier for a result write that has already started", a
 });
 
 test("records one thread's deferred results in emission order", async () => {
-  const readGate = deferred<ThreadReadResponse>();
+  const writeGate = deferred<void>();
   const recorded: WorkbenchBrowseResultEntry[] = [];
   const controller = new WorkbenchBrowseResultController({
     listHarnesses: () => ["codex", "copilot", "opencode"],
     logError: () => undefined,
-    readThread: async () => await readGate.promise,
-    recordResult: async (entry) => { recorded.push(entry); },
+    readThread: async () => createThreadResponse("thread-1", "turn-1"),
+    recordResult: async (entry) => { await writeGate.promise; recorded.push(entry); },
     steerTurn: async () => null,
   });
 
-  controller.record(createEvent("first"));
-  controller.record(createEvent("second"));
+  const origin = await controller.captureOrigin("thread-1");
+  controller.record(createEvent("first"), origin);
+  controller.record(createEvent("second"), origin);
   assert.deepEqual(recorded, []);
-  readGate.resolve(createThreadResponse("thread-1", "turn-1"));
+  writeGate.resolve();
   await controller.waitForIdle();
 
   assert.deepEqual(recorded.map((entry) => entry.action), ["first", "second"]);
   assert.deepEqual(recorded.map((entry) => entry.turnId), ["turn-1", "turn-1"]);
 });
 
-test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
+test("attaches Browse sidecars to the active wbex MCP Browse item", async () => {
   const recorded: WorkbenchBrowseResultEntry[] = [];
   const response = createThreadResponse("thread-1", "turn-1", [{
     appContext: null,
@@ -161,7 +164,7 @@ test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
     pluginId: null,
     readOnlyHint: false,
     result: null,
-    server: "wb",
+    server: "wbex",
     status: "inProgress",
     tool: "browse_run",
     type: "mcpToolCall",
@@ -174,7 +177,7 @@ test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
     steerTurn: async () => null,
   });
 
-  controller.record(createEvent("snapshot"));
+  controller.record(createEvent("snapshot"), await controller.captureOrigin("thread-1"));
   await controller.waitForIdle();
 
   assert.equal(recorded[0]?.commandItemId, "mcp-browse-1");
@@ -190,9 +193,45 @@ test("logs background metadata failures without rejecting Browse execution", asy
     steerTurn: async () => null,
   });
 
-  controller.record(createEvent("status"));
+  controller.record(createEvent("status"), await controller.captureOrigin("thread-1"));
   await controller.waitForIdle();
   assert.deepEqual(errors, ["thread unavailable"]);
+});
+
+test("delayed results keep their originating command after a newer turn starts", async () => {
+  const recorded: WorkbenchBrowseResultEntry[] = [];
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex"],
+    logError: assert.fail,
+    readThread: async () => createThreadResponse("thread-1", "new-turn"),
+    recordResult: async entry => { recorded.push(entry); },
+    steerTurn: async () => null,
+  });
+  controller.record(createEvent("click"), {
+    commandItemId: "original-command", harness: "codex", turnId: "original-turn",
+  });
+  await controller.waitForIdle();
+  assert.equal(recorded[0]?.turnId, "original-turn");
+  assert.equal(recorded[0]?.commandItemId, "original-command");
+});
+
+test("screenshot delivery resolves canonical turn references before native injection", async () => {
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex"],
+    logError: assert.fail,
+    readThread: async () => createThreadResponse("thread-1", "public-turn"),
+    resolveNativeTurnId: async (harness, threadId, turnId) => {
+      assert.deepEqual([harness, threadId, turnId], ["codex", "thread-1", "public-turn"]);
+      return "native-turn";
+    },
+    recordResult: async () => {},
+    steerTurn: async () => { throw new Error("Unexpected steer"); },
+    injectToolContext: async request => {
+      assert.equal(request.expectedTurnId, "native-turn");
+      return { acceptedAt: 1, itemId: "image", turnId: "native-turn" };
+    },
+  });
+  await controller.deliverScreenshot("thread-1", "image");
 });
 
 test("resolves non-codex screenshot steering behind the thread-owned boundary", async () => {

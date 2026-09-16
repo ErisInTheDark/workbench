@@ -1,14 +1,22 @@
 /*
  * Exports:
- * - WorkbenchBrowseResultEvent: Browse-owned result data keyed only by the owning thread id. Keywords: browse, result, thread, event, sidecar.
- * - WorkbenchBrowseResultSink: thread-boundary sink for deferred results and explicit screenshots. Keywords: browse, result, context, ownership.
+ * - WorkbenchBrowseResultEvent: Browse-owned action result data.
+ * - WorkbenchBrowseResultOrigin: invocation identity captured before browser work.
+ * - WorkbenchBrowseResultSink: capture invocation ownership, record results, and deliver explicit screenshots.
  * - WorkbenchBrowseScreenshotDelivery: native queue acceptance or legacy steer result.
  */
 import type {
   WorkbenchBrowseAgentActionName,
   WorkbenchBrowseResultEntryDetailKind,
   WorkbenchBrowseResultEntryState,
+  WorkbenchHarness,
 } from "workbench-shared/types";
+
+export interface WorkbenchBrowseResultOrigin {
+  commandItemId: string | null;
+  harness: WorkbenchHarness;
+  turnId: string;
+}
 
 export interface WorkbenchBrowseResultEvent {
   action: WorkbenchBrowseAgentActionName | string;
@@ -24,8 +32,9 @@ export interface WorkbenchBrowseResultEvent {
 }
 
 export interface WorkbenchBrowseResultSink {
-  record(event: WorkbenchBrowseResultEvent): void;
-  deliverScreenshot(threadId: string, imageUrl: string): Promise<WorkbenchBrowseScreenshotDelivery>;
+  captureOrigin(threadId: string): Promise<WorkbenchBrowseResultOrigin | null>;
+  record(event: WorkbenchBrowseResultEvent, origin: WorkbenchBrowseResultOrigin | null): void;
+  deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null): Promise<WorkbenchBrowseScreenshotDelivery>;
   waitForIdle(): Promise<void>;
 }
 

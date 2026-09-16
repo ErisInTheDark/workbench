@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchBrowseMarkdownCompileOptions: defaults applied to BrowseMD script actions. Keywords: browse, markdown, compile, defaults.
- * - WorkbenchBrowseMarkdownParseError: line-aware BrowseMD parse failure. Keywords: browse, markdown, parse, error.
- * - compileWorkbenchBrowseMarkdown: compile BrowseMD text into a typed Browse action sequence. Keywords: browse, markdown, typed actions.
- * - tokenizeWorkbenchBrowseMarkdownLine: split a BrowseMD command line with shell-ish quotes. Keywords: browse, markdown, shell, tokens.
+ * - WorkbenchBrowseMarkdownCompileOptions: defaults applied to BrowseMD script actions.
+ * - WorkbenchBrowseMarkdownParseError: line-aware BrowseMD parse failure.
+ * - compileWorkbenchBrowseMarkdown: compile BrowseMD text into a typed Browse action sequence.
+ * - tokenizeWorkbenchBrowseMarkdownLine: split a BrowseMD command line with shell-ish quotes.
  */
 import type {
   WorkbenchBrowseAgentAction,
@@ -584,7 +584,7 @@ function getCommandArguments(tokens: readonly string[]) {
 }
 
 function readFlagName(token: string) {
-  if (!token.startsWith("-")) {
+  if (!token.startsWith("-") || Number.isFinite(Number(token))) {
     return null;
   }
   const withoutPrefix = token.replace(/^-+/u, "");
