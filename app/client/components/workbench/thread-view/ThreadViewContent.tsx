@@ -446,7 +446,7 @@ export default memo(function ThreadViewContent ({
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
       : [])
   ), [projectFileLinkRoots, projectRoots]);
-  const terminalCommands = useMemo(() => getThreadTerminalEntries(activityTurn?.items ?? [], {
+  const terminalCommands = useMemo(() => getThreadTerminalEntries(activityTurn?.status === "inProgress" ? activityTurn.items : [], {
     cwd: activeThread?.cwd ?? projectRootPath ?? ".",
     knownSkills: workbenchSkills, projectRootPath, workspaceRoots: workspaceFileLinkRoots,
   }), [activityTurn, activeThread?.cwd, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);

@@ -45,11 +45,12 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
       : item.type === "mcpToolCall" ? getWorkbenchMcpShellCommandItem(item, context.cwd) : null;
     if (command) {
       if (isHiddenCommandExecution(command.command)) return [];
+      const status = getThreadCommandExecutionOutcome(command.status, command.exitCode);
       return [{
         id: item.id, command: command.command, output: command.aggregatedOutput ?? "",
-        status: getThreadCommandExecutionOutcome(command.status, command.exitCode),
+        status,
         streamsOutput: item.type === "commandExecution",
-        display: getThreadCommandDisplay({ ...context, ...command }),
+        display: status === "inProgress" ? getThreadCommandDisplay({ ...context, ...command }) : null,
       }];
     }
     if (item.type === "mcpToolCall") {
@@ -60,7 +61,7 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
         command: formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool }),
         output: item.error?.message || formatToolCallOutput({ content: item.result?.content, fallback: item.result?.structuredContent ?? item.result?._meta }),
         status: item.error ? "failed" : item.status, streamsOutput: false,
-        display: getWorkbenchCommandRouteSummaryDisplay(route),
+        display: item.status === "inProgress" && !item.error ? getWorkbenchCommandRouteSummaryDisplay(route) : null,
       }];
     }
     if (item.type === "dynamicToolCall") return [{

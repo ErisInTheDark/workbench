@@ -70,7 +70,7 @@ export default function ThreadRenderSurface({
     items: projectedTurn.items.filter((item): item is ThreadPayload["turns"][number]["items"][number] =>
       item.type !== "generic" && !("requestKey" in item)),
   } : null : render?.thread.turns.at(-1) ?? null;
-  const commands = getThreadTerminalEntries(activityTurn?.items ?? [], { cwd, knownSkills, workspaceRoots });
+  const commands = getThreadTerminalEntries(activityTurn?.status === "inProgress" ? activityTurn.items : [], { cwd, knownSkills, workspaceRoots });
   const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: activityTurn, commands });
   const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? "codex"}:${threadId}` } : null);
   const turnsById = new Map(render?.thread.turns.map(turn => [turn.id, turn]));
