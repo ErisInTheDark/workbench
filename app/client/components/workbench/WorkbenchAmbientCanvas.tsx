@@ -1,10 +1,9 @@
-"use client";
-
 /*
  * Exports:
- * - WorkbenchAmbientCanvasVariant: supported ambient canvas theme variants. Keywords: theme, variant, ambient.
- * - default WorkbenchAmbientCanvas: reusable animated theme background canvas. Keywords: theme, canvas, sparkles, snow, ambient.
+ * - WorkbenchAmbientCanvasVariant: supported ambient canvas theme variants.
+ * - default WorkbenchAmbientCanvas: reusable animated theme background canvas.
  */
+"use client";
 import { useEffect, useRef } from "react";
 
 export type WorkbenchAmbientCanvasVariant = "magical-girl" | "winter";
@@ -206,6 +205,7 @@ export default function WorkbenchAmbientCanvas({ variant }: { variant: Workbench
     };
 
     const renderFrame = (timestamp: number) => {
+      animationFrameId = 0;
       context.clearRect(0, 0, width, height);
       colors = readCanvasColors(variant);
       for (let index = 0; index < particles.length; index += 1) {
@@ -223,16 +223,13 @@ export default function WorkbenchAmbientCanvas({ variant }: { variant: Workbench
     };
 
     const handleResize = () => {
+      window.cancelAnimationFrame(animationFrameId);
       resizeCanvas();
       renderFrame(window.performance.now());
     };
 
     resizeCanvas();
     renderFrame(window.performance.now());
-    if (!reducedMotion.matches) {
-      animationFrameId = window.requestAnimationFrame(renderFrame);
-    }
-
     window.addEventListener("resize", handleResize);
     reducedMotion.addEventListener("change", handleResize);
 
