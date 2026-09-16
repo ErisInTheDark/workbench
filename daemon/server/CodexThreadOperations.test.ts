@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect cold provider dispatch through the real bridge without browser initialisation.
+ * No production exports. Tests protect cold provider dispatch, identity mapping, and questionnaire waiter liveness.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,7 +15,10 @@ import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcrip
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
-async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>) {
+async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
+  nativeQuestionnaireRequestKey?: string;
+  workbenchQuestionnaireRequestKey?: string;
+} = {}) {
   const database = createThreadStateTestDatabase();
   database.admitThread("local:///project", "wb-thread", "codex", "native-thread", "C:/project");
   const thread = await database.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("wb-thread") });
@@ -30,12 +33,22 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
     state: "inProgress", createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
   }]);
   const turnId = database.identities.threads.workbenchTurnIdForNative(native);
+  const bridge = {
+    ensureInitialized: async () => {},
+    handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
+    canDeliverQuestionnaire: (requestedThreadId: string, requestKey: string) => (
+      requestedThreadId === native.nativeThreadId
+      && requestKey === options.nativeQuestionnaireRequestKey
+    ),
+  };
   const operations = new CodexThreadOperations({
     identities: database.identities,
     resolveProject: async () => { throw new Error("Known thread operations must not rediscover the project"); },
-    bridge: {
-      ensureInitialized: async () => {},
-      handleServerRequest: async request => ({ id: request.id ?? null, result: await handle(request) }),
+    bridge,
+    questionnaires: {
+      canDeliver: (_threadId, requestKey) => requestKey === options.workbenchQuestionnaireRequestKey,
+      deliver: async () => null,
+      interruptRetainingQuestionnaire: async () => false,
     },
   });
   return { operations, threadId: thread.threadId, turnId };
@@ -91,6 +104,17 @@ test("cancelled materialisation does not dispatch provider history work", async 
     /subscription replaced/,
   );
   assert.deepEqual(requests, []);
+});
+
+test("questionnaire delivery derives liveness from native and Workbench wait owners", async () => {
+  for (const owner of ["native", "workbench", "none"] as const) {
+    const fixture = await threadFixture(async () => ({}), {
+      ...(owner === "native" ? { nativeQuestionnaireRequestKey: "question" } : {}),
+      ...(owner === "workbench" ? { workbenchQuestionnaireRequestKey: "question" } : {}),
+    });
+    const deliverable = await fixture.operations.interactions.canDeliver(fixture.threadId, "question");
+    assert.equal(deliverable, owner !== "none", `${owner} questionnaire ownership`);
+  }
 });
 
 test("WB pages retain configuration supplied on native thread metadata", async () => {

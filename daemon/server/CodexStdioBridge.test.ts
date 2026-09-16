@@ -1,5 +1,5 @@
 /*
- * No exports. Tests cover Codex bridge requests, lifecycle, transcript projection, and reload recovery.
+ * No exports. Tests cover Codex bridge requests, questionnaire liveness, lifecycle, transcript projection, and reload recovery.
  */
 
 import assert from "node:assert/strict";
@@ -21,7 +21,7 @@ import {
   type WorkbenchFileChangeItem,
 } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
-import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
@@ -788,6 +788,71 @@ test("app-server restart detachment drops process-bound state", async () => {
     assert.equal(state.pendingResponses.size, 0);
     assert.equal(state.pendingUserInputRequests.size, 0);
   } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("server request resolution detaches ordinary questionnaires but resolves approvals", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-request-resolution-"));
+  const notifications: JsonRpcNotification[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) { notifications.push(notification); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      id: "question",
+      method: "item/tool/requestUserInput",
+      params: {
+        itemId: "question-item",
+        questions: [{
+          allowOther: true,
+          header: "choice",
+          id: "choice",
+          isSecret: false,
+          options: [],
+          question: "continue?",
+        }],
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "serverRequest/resolved",
+      params: { requestId: "question", threadId: "thread" },
+    });
+    const questionnaireNotifications = () => notifications
+      .map(({ method }) => method)
+      .filter(method => method?.startsWith("questionnaire/"));
+    assert.deepEqual(questionnaireNotifications(), ["questionnaire/requested"]);
+
+    await bridge.handleUpstreamMessage({
+      id: "approval",
+      method: "item/fileChange/requestApproval",
+      params: {
+        grantRoot: "C:/outside",
+        itemId: "approval-item",
+        reason: "write outside the workspace",
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "serverRequest/resolved",
+      params: { requestId: "approval", threadId: "thread" },
+    });
+    assert.deepEqual(questionnaireNotifications(), [
+      "questionnaire/requested",
+      "questionnaire/requested",
+      "questionnaire/resolved",
+    ]);
+  } finally {
+    await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
 });

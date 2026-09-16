@@ -11,9 +11,6 @@ import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/t
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
-import {
-  isWorkbenchAgentMcpRuntimeReloadInterruption,
-} from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchRequestUserInputCommandInput } from "./lib/workbench/commands/questionnaire-command-definition";
 import type { NativeThreadId, NativeTurnId, ProjectId } from "workbench-shared/workbench/identity";
 
@@ -167,11 +164,7 @@ export default class WorkbenchQuestionnaireController {
       if (this.pendingByThreadId.get(input.callerThreadId) === pending && pending.status === "waiting" && pending.releaseReason === null) {
         const onAbort = () => {
           const reason = signal.reason ?? new Error("The questionnaire caller cancelled.");
-          if (isWorkbenchAgentMcpRuntimeReloadInterruption(reason)) {
-            this.releasePending(pending, reason);
-            return;
-          }
-          void this.cancelPending(pending, reason);
+          this.releasePending(pending, reason);
         };
         signal.addEventListener("abort", onAbort, { once: true });
         pending.stopAbort = () => signal.removeEventListener("abort", onAbort);
@@ -236,11 +229,7 @@ export default class WorkbenchQuestionnaireController {
   private finishDelivery(pending: PendingQuestionnaire, response: WorkbenchUserInputResponse) {
     this.pendingByThreadId.delete(pending.threadId);
     pending.stopAbort?.();
-    const signalCancellation = pending.signal.aborted
-      && !isWorkbenchAgentMcpRuntimeReloadInterruption(pending.signal.reason)
-      ? pending.signal.reason ?? new Error("The questionnaire caller cancelled.")
-      : null;
-    const cancellation = pending.cancelReason ?? signalCancellation;
+    const cancellation = pending.cancelReason;
     if (cancellation !== null) {
       pending.reject(cancellation);
       throw cancellation;

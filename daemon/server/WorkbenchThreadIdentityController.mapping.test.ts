@@ -400,7 +400,11 @@ test("cold native thread lookup admits exact metadata before public request rout
   const operations = new CodexThreadOperations({
     identities: owners,
     resolveProject: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo" }),
-    bridge: { ensureInitialized: async () => {}, handleServerRequest: request },
+    bridge: {
+      canDeliverQuestionnaire: () => false,
+      ensureInitialized: async () => {},
+      handleServerRequest: request,
+    },
   });
   const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
   const harnesses = new WorkbenchHarnessController([{

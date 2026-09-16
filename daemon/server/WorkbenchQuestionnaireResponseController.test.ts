@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect daemon-owned questionnaire response routing, delivery fencing, and settlement order.
+ * No production exports. Tests protect daemon-owned questionnaire response routing, waiter liveness, delivery fencing, and settlement order.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -356,6 +356,23 @@ test("detached provider admission stamps its response onto the started turn", as
   assert.equal(result.route, "admitted");
   assert.equal(harness.historyTurnId(), admittedTurnId);
   assert.equal(harness.requests.some(({ method }) => method === "submit"), true);
+});
+
+test("provider questionnaire with pending lifecycle but no live waiter admits a continuation", async () => {
+  const requestKey = "provider-question";
+  const harness = createHarness({
+    kind: "needsAttention",
+    reason: "pendingInput",
+    requestKey,
+    settled: false,
+    turnId,
+  }, { deliverable: false, requestKey });
+
+  const result = await harness.controller.respond({ ...request(), requestKey });
+
+  assert.equal(result.route, "admitted");
+  assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
+  assert.equal(harness.requests.some(({ method }) => method === "respond"), false);
 });
 
 test("approval responses retain their active owner and detached approvals remain pending", async () => {

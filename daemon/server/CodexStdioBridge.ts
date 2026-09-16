@@ -2338,6 +2338,7 @@ export default class CodexStdioBridge {
     }
 
     this.pendingUserInputRequests.delete(requestKey);
+    if (pendingRequest.kind === "questionnaire") return;
     this.publishNativeNotification({
       method: "questionnaire/resolved",
       params: {
@@ -2647,6 +2648,11 @@ export default class CodexStdioBridge {
         ...this.questionnaires.list().data,
       ],
     };
+  }
+
+  canDeliverQuestionnaire(threadId: NativeThreadId, requestKey: string) {
+    const pending = this.pendingUserInputRequests.get(requestKey);
+    return Boolean(pending && pending.threadId === threadId);
   }
 
   private async listQuestionnaireHistory(params: unknown) {

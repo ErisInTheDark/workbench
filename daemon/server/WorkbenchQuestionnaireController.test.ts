@@ -221,6 +221,28 @@ test("answer persistence wins interruption, while failed persistence retains the
   }
 });
 
+test("answer persistence already in progress wins caller cancellation", async () => {
+  const clearing = deferred<void>();
+  const started = deferred<void>();
+  const harness = createHarness({ beforeClear: async () => { started.resolve(); await clearing.promise; } });
+  const cancellation = new AbortController();
+  const waiting = harness.controller.request(freeformInput, cancellation.signal);
+  const questionnaire = await harness.published;
+  const response = { answers: { details: { answers: ["proceed"] } } };
+  const answering = harness.controller.respond({
+    threadId: fixtureIdentityValues.NativeThreadId["thread-one"],
+    requestKey: questionnaire.requestKey,
+    response,
+  });
+  await started.promise;
+  cancellation.abort(new Error("caller cancelled"));
+  clearing.resolve();
+
+  assert.deepEqual(await answering, { ...questionnaire, response, threadId: "thread-one" });
+  assert.deepEqual(await waiting, response);
+  assert.equal(harness.readPending(), null);
+});
+
 test("one thread cannot open concurrent questionnaires or consume a stale answer", async () => {
   const harness = createHarness();
   const cancellation = new AbortController();
@@ -261,15 +283,17 @@ test("a resumed wait keeps the durable questionnaire identity and original turn"
   assert.equal(answered?.turnId, restored.turnId);
 });
 
-test("caller cancellation and durable dismissal both clear the invisible waiter", async () => {
+test("caller cancellation releases the waiter while durable dismissal clears the question", async () => {
   {
     const harness = createHarness();
     const cancellation = new AbortController();
     const waiting = harness.controller.request(freeformInput, cancellation.signal);
-    await harness.published;
+    const questionnaire = await harness.published;
     cancellation.abort(new Error("caller cancelled"));
     await assert.rejects(waiting, /caller cancelled/u);
     assert.deepEqual(harness.controller.list().data, []);
+    assert.deepEqual(harness.readPending(), questionnaire);
+    assert.equal(harness.clearCount(), 0);
   }
   {
     const harness = createHarness();
@@ -278,6 +302,8 @@ test("caller cancellation and durable dismissal both clear the invisible waiter"
     harness.dismiss();
     await assert.rejects(waiting, /dismissed/u);
     assert.deepEqual(harness.controller.list().data, []);
+    assert.equal(harness.readPending(), null);
+    assert.equal(harness.clearCount(), 1);
   }
 });
 

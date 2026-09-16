@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
- * - default CodexThreadOperations: translate WB thread intent into the existing Codex admission/read owners.
+ * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, and interaction owners.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -31,7 +31,7 @@ import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/p
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "ensureInitialized" | "handleServerRequest">;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest">;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
   questionnaires?: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver" | "interruptRetainingQuestionnaire">;
@@ -76,7 +76,8 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     },
     canDeliver: async (threadId, requestKey) => {
       const nativeId = await this.nativeThreadId(threadId);
-      return this.owners.questionnaires?.canDeliver(nativeId, requestKey) ?? false;
+      return this.owners.bridge.canDeliverQuestionnaire(nativeId, requestKey)
+        || (this.owners.questionnaires?.canDeliver(nativeId, requestKey) ?? false);
     },
     deliver: async input => {
       const nativeId = await this.nativeThreadId(input.threadId);

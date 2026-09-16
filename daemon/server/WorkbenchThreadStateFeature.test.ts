@@ -101,6 +101,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
 }) {
   const operations = new CodexThreadOperations({
     bridge: {
+      canDeliverQuestionnaire: () => false,
       ensureInitialized: async () => {},
       handleServerRequest: request => options.harnesses.request("codex", request),
     },
