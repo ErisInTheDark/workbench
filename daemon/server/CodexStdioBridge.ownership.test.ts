@@ -70,7 +70,7 @@ async function createThreadReadHarness(
 ) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-thread-recall-"));
   const sentRequests: JsonRpcRequest[] = [];
-  const sqliteReader = new CodexSqliteTranscriptReader(async () => null, async () => null);
+  const sqliteReader = new CodexSqliteTranscriptReader(async () => null, async () => null, async () => []);
   const sqlReads: string[] = [];
   sqliteReader.read = async (metadata) => {
     sqlReads.push(metadata.id);

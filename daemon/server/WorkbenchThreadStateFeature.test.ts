@@ -100,8 +100,10 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
   interruptRetainingQuestionnaire?: (threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => Promise<boolean>;
 }) {
   const operations = new CodexThreadOperations({
+    readStoredPage: async () => null,
     bridge: {
       canDeliverQuestionnaire: () => false,
+      refreshThreadPage() {},
       ensureInitialized: async () => {},
       handleServerRequest: request => options.harnesses.request("codex", request),
     },

@@ -14,3 +14,4 @@
 - Rematching can replace presentation.
 - Rematching cannot replace the source operation or durable subsystem facts.
 - Provider omission is not transcript deletion. Remove an admitted item only from positive same-fact identity evidence, never because a reread omits it.
+- Reading admitted transcript history must not depend on provider refresh or recovery succeeding.

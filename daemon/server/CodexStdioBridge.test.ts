@@ -39,7 +39,7 @@ import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentity
 import { mapProviderNotification } from "./thread-identity-provider-mapping";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
-import { NativeThreadIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import CodexRecoveryController from "./CodexRecoveryController";
@@ -1009,7 +1009,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
   }
 });
 
-test("foreground thread pages durably repair a newer turn omitted by an inactive provider catalog", async (context) => {
+test("provider refresh durably repairs a newer turn omitted by an inactive provider catalog", async (context) => {
   const sql = await recordingFixture();
   context.mock.method(console, "warn", () => undefined);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-foreground-turn-repair-"));
@@ -1127,7 +1127,7 @@ test("foreground thread pages durably repair a newer turn omitted by an inactive
     });
 
     await recordingStarted.promise;
-    assert.equal(responseResolved, false, "foreground page response must await repaired SQLite settlement");
+    assert.equal(responseResolved, false, "refresh completion must await repaired SQLite settlement");
     releaseRecording.resolve();
     const response = await responsePromise;
     const repaired = (response?.result as WorkbenchThreadPageResponse).thread.turns.at(-1);
@@ -2227,8 +2227,10 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
   const repository = new WorkbenchTranscriptRepository(database);
   const sqliteReader = new CodexSqliteTranscriptReader(
     async request => repository.read(request), async threadId => repository.readContext(threadId),
+    async (threadId, turnIds) => repository.readMaterializedTurnIds(threadId, turnIds),
   );
   return {
+    database,
     repository,
     ports: {
       identities, sqliteReader,
@@ -2252,13 +2254,74 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
   };
 }
 
+for (const cold of [false, true]) {
+  test(`stored-turn recovery preserves an interleaved questionnaire with ${cold ? "cold" : "warm"} identities`, async (context) => {
+    const sql = await recordingFixture("C:/repo", true);
+    const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-stored-recovery-"));
+    captureTestOutput(context, process.stderr, text => text.includes("[codex-transcript] capture failed"));
+    const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("thread") };
+    const threadId = sql.ports.identities.threads.workbenchIdForNative(native);
+    const turnId = sql.ports.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: NativeTurnIdSchema.parse("turn") });
+    const [first, question, last] = await sql.ports.identities.items.admit(["first", "question", "last"].map(sourceId => ({
+      threadId, sources: [{ turnId, kind: "stable" as const, sourceId }], legacyAliases: [],
+    })));
+    assert.ok(first && question && last);
+    const message = (id: string): ThreadItem => ({
+      id, type: "agentMessage", text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    });
+    sql.repository.settle([
+      { kind: "turn", threadId, turnId, nativeTurnId: NativeTurnIdSchema.parse("turn"),
+        nativeThreadId: native.nativeThreadId, nativeLocation: native.nativeLocation, harnessId: "codex",
+        state: "inProgress", createdAt: 1, startedAt: 1, endedAt: null, durationMs: null },
+      { kind: "item", threadId, turnId, publicItemId: first.itemId, item: message("first"), lifecycle: "completed", observedAt: 2 },
+      { kind: "questionnaire", publicItemId: question.itemId, observedAt: 3, entry: {
+        threadId, turnId, itemId: question.itemId, requestKey: "question",
+        request: { id: "question", title: "", summary: "", submitLabel: "", questions: [{
+          id: "choice", header: "", question: "continue?", options: [], allowOther: true, isSecret: false,
+        }] }, response: { answers: { choice: { answers: ["yes"] } } }, resolvedAt: 3,
+        insertAfterItemId: first.itemId, insertAfterItemIndex: 0,
+      } },
+      { kind: "item", threadId, turnId, publicItemId: last.itemId, item: message("last"), lifecycle: "completed", observedAt: 4 },
+    ]);
+    const before = sql.project().snapshot;
+    if (cold) {
+      const identities = await recordingIdentities({ database: sql.database });
+      sql.ports.identities.threads = identities.threads;
+      sql.ports.identities.items = identities.items;
+    }
+    const bridge = new CodexStdioBridge({
+      ...sql.ports, appServer: { send() { assert.fail("stored recovery must not request provider data"); } } as unknown as CodexAppServer,
+      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {}, sendToClient() {},
+      storageRoot,
+    });
+    try {
+      const metadata = { ...bridgeThread(), turns: [] };
+      const stored = await sql.ports.sqliteReader.read(metadata, { mode: "latest" });
+      assert.ok(stored);
+      const windows = (bridge as unknown as { createThreadWindowStore(): CodexThreadWindowStore }).createThreadWindowStore();
+      await windows.recordWindow({
+        source: "workbench", thread: metadata,
+        settlement: { turnId: "turn", completedAt: 5 },
+      });
+      const after = sql.project().snapshot;
+      assert.deepEqual(after.rows.threadItems, before.rows.threadItems);
+      assert.deepEqual(after.rows, before.rows);
+      assert.equal(after.turns[0]?.state, "interrupted");
+    } finally {
+      await bridge.disposeImmediately();
+      await fs.rm(storageRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test("SQL context pages settle provider bodies and then read without legacy storage", async () => {
   const database = databaseFixture();
   const identities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-sql-context-"));
   const requests: JsonRpcRequest[] = [];
-  const reader = new CodexSqliteTranscriptReader(async request => repository.read(request), async id => repository.readContext(id));
+  const reader = new CodexSqliteTranscriptReader(async request => repository.read(request), async id => repository.readContext(id),
+    async (id, turns) => repository.readMaterializedTurnIds(id, turns));
   const item: ThreadItem = { id: "reply", type: "agentMessage", text: "complete retained reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
   const fullTurn = { ...bridgeThread([item]).turns[0]!, status: "completed" as const };
   let providerTurns = [fullTurn];

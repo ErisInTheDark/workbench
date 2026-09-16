@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect exact-key single-flight and reload drain ownership. Keywords: codex, thread, page, read, reload, test.
+ * No production exports. Protect shared refresh, failure isolation, and reload drain ownership.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -25,6 +25,60 @@ function page(threadId: string): WorkbenchThreadPageResponse {
     thread: { id: threadId } as WorkbenchThreadPageResponse["thread"],
   };
 }
+
+test("detached refreshes share work, report failure, and permit a later attempt", async () => {
+  const controller = new CodexThreadPageReadController();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const failures: unknown[] = [];
+  const report = (error: unknown) => { failures.push(error); };
+  let attempts = 0;
+  const failure = new Error("recording failed");
+  const refresh = async () => {
+    attempts++;
+    entered.resolve();
+    await release.promise;
+    throw failure;
+  };
+  controller.refresh(refresh, "thread", report);
+  controller.refresh(refresh, "thread", report);
+  await entered.promise;
+  assert.equal(attempts, 1);
+  release.resolve();
+  await controller.waitForIdle();
+  assert.deepEqual(failures, [failure]);
+  controller.refresh(async () => { attempts++; return page("thread"); }, "thread", report);
+  await controller.waitForIdle();
+  assert.equal(attempts, 2);
+  assert.deepEqual(failures, [failure]);
+});
+
+test("refresh retirement fences late writes without reporting owned cancellation", async () => {
+  const controller = new CodexThreadPageReadController();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const finished = deferred<void>();
+  const failures: unknown[] = [];
+  let writes = 0;
+  controller.refresh(async signal => {
+    entered.resolve();
+    try {
+      await release.promise;
+      signal.throwIfAborted();
+      writes++;
+      return page("old");
+    } finally { finished.resolve(); }
+  }, "thread", error => failures.push(error));
+  await entered.promise;
+  controller.expire();
+  await controller.waitForIdle();
+  controller.resumeAfterFailedReload();
+  assert.equal((await controller.run(async () => page("new"), { key: "thread" })).thread.id, "new");
+  release.resolve();
+  await finished.promise;
+  assert.equal(writes, 0);
+  assert.deepEqual(failures, []);
+});
 
 test("expiry releases hung reads and fences their continuations across rollback", async () => {
   const controller = new CodexThreadPageReadController();

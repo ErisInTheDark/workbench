@@ -15,10 +15,12 @@ import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcrip
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 
 async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
   nativeQuestionnaireRequestKey?: string;
   workbenchQuestionnaireRequestKey?: string;
+  storedPage?: WorkbenchThreadPageResult;
 } = {}) {
   const database = createThreadStateTestDatabase();
   database.admitThread("local:///project", "wb-thread", "codex", "native-thread", "C:/project");
@@ -35,7 +37,10 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   }]);
   const turnId = database.identities.threads.workbenchTurnIdForNative(native);
   const bridge = {
-    ensureInitialized: async () => {},
+    ensureInitialized: async () => {
+      if (options.storedPage) assert.fail("saved history must not wait for provider initialisation");
+    },
+    refreshThreadPage() {},
     handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
     canDeliverQuestionnaire: (requestedThreadId: string, requestKey: string) => (
       requestedThreadId === native.nativeThreadId
@@ -46,6 +51,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
     identities: database.identities,
     resolveProject: async () => ({ id: thread.projectId, rootPath: "C:/project" }),
     bridge,
+    readStoredPage: async () => options.storedPage ?? null,
     questionnaires: {
       canDeliver: (_threadId, requestKey) => requestKey === options.workbenchQuestionnaireRequestKey,
       deliver: async () => null,
@@ -54,6 +60,17 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   });
   return { operations, threadId: thread.threadId, turnId };
 }
+
+test("saved foreground history bypasses provider initialisation and preserves its page", async () => {
+  const storedPage = {
+    thread: { id: "wb-thread", turns: [], isDraft: false },
+    nextCursor: "older", questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+  } as WorkbenchThreadPageResult;
+  const { operations, threadId } = await threadFixture(async () => {
+    assert.fail("saved history must not dispatch a blocking provider request");
+  }, { storedPage });
+  assert.equal(await operations.page({ threadId, cursor: null }), storedPage);
+});
 
 for (const fails of [false, true]) {
   test(`Codex interruption awaits goal clearing and ${fails ? "retains its failure" : "translates WB identities"}`, async () => {
@@ -304,6 +321,7 @@ for (const rejected of [false, true]) {
     });
     const operations = new CodexThreadOperations({
       bridge,
+      readStoredPage: async () => null,
       identities: new Proxy({} as NativeTranscriptIdentityOwners, {
         get() { throw new Error("Model reads must not access thread identity."); },
       }),

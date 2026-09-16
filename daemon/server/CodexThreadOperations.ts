@@ -35,7 +35,8 @@ import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } fro
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest">;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "refreshThreadPage">;
+  readStoredPage(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult | null>;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
   questionnaires?: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver" | "interruptRetainingQuestionnaire">;
@@ -364,6 +365,13 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
   }
 
   async page(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult> {
+    if (input.readScope !== "subagentBackground") {
+      const stored = await this.owners.readStoredPage(input);
+      if (stored) {
+        if (input.cursor === null) this.owners.bridge.refreshThreadPage(input);
+        return stored;
+      }
+    }
     const result = await this.mapped({ id: 0, method: WORKBENCH_THREAD_PAGE_READ_METHOD, params: input }) as WorkbenchThreadPageResponse;
     return {
       thread: {

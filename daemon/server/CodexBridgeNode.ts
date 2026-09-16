@@ -90,6 +90,11 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const transcript = build.get("transcript");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
+    const sqliteReader = new CodexSqliteTranscriptReader(
+      request => transcript.read(request),
+      threadId => build.get("database").readTranscriptContext!(threadId),
+      (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
+    );
     const turnRecovery = build.get("codexRecovery");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
@@ -239,10 +244,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       },
       prepareTurnStart,
       questionnaires: new CodexQuestionnaireAdapter(questionnaires, threadIdentity),
-      sqliteReader: new CodexSqliteTranscriptReader(
-        request => transcript.read(request),
-        threadId => build.get("database").readTranscriptContext!(threadId),
-      ),
+      sqliteReader,
       readSqliteProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(
@@ -261,6 +263,21 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const threadOperations = new CodexThreadOperations({
       questionnaires,
       bridge,
+      readStoredPage: async input => {
+        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
+        if (!identity) return null;
+        const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+        const page = await sqliteReader.readPage({ ...input, threadId: identity.threadId }, entry);
+        if (page && input.cursor === null) {
+          try {
+            page.thread.tokenUsage = (await build.get("database").readThreadContextUsage(identity.threadId))?.tokenUsage ?? null;
+          } catch (error) {
+            console.warn("[codex-transcript] Stored context usage is unavailable; history remains readable.",
+              (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 500));
+          }
+        }
+        return page;
+      },
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       resolveProject: async cwd => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Codex provider thread admission" })).project,
     });
@@ -354,6 +371,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/CodexFileChangeController.ts",
     "daemon/server/CodexThreadWindowLoader.ts",
+    "daemon/server/CodexSqliteTranscriptReader.ts",
+    "daemon/server/CodexThreadPageReadController.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
     "daemon/server/workbench-agent-mcp-request-registry.ts",
     "daemon/server/CodexBridgeTransitionController.ts",

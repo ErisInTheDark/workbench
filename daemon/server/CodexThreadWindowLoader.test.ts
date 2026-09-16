@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import CodexThreadWindowLoader from "./CodexThreadWindowLoader";
+import CodexThreadWindowLoader, { type CodexThreadWindowRecord } from "./CodexThreadWindowLoader";
 
 function turn(id: string, itemIds: string[] = []): Turn {
   return {
@@ -28,7 +28,7 @@ function turn(id: string, itemIds: string[] = []): Turn {
   };
 }
 
-function thread(turns: Turn[] = []): Thread {
+function thread(turns: Turn[] = []): Omit<Thread, "turns"> & { turns: Turn[] } {
   return {
     agentNickname: null,
     agentRole: null,
@@ -169,12 +169,7 @@ test("recovery cannot close over a catalogued turn omitted by full paging", asyn
 function fakeStore(previousCursors: Record<string, string | null | undefined> = {}) {
   const catalogs: Array<{ boundary?: { cursor: string | null; turnId: string }; turns: Turn[] }> = [];
   const pages: Array<{ cursor: string | null; turn: Turn }> = [];
-  const recordings: Array<{
-    catalog?: { boundary?: { cursor: string | null; turnId: string }; turns: Turn[] };
-    page?: { previousCursor: string | null; turn: Turn };
-    source: "provider" | "workbench";
-    thread: Thread;
-  }> = [];
+  const recordings: CodexThreadWindowRecord[] = [];
   return {
     catalogs,
     pages,
@@ -448,30 +443,14 @@ test("not-loaded provider metadata repairs a newer stored turn when the provider
     threadId: "thread",
   }]);
   assert.deepEqual(loaded && {
-    boundary: loaded.recording.catalog?.boundary,
-    completedAt: loaded.thread.turns[0]?.completedAt,
-    command: loaded.thread.turns[0]?.items.find(item => item.type === "commandExecution")?.command,
-    durationMs: loaded.thread.turns[0]?.durationMs,
-    itemIds: loaded.thread.turns[0]?.items.map(({ id }) => id),
-    itemStatuses: loaded.thread.turns[0]?.items.flatMap(item => "status" in item ? [item.status] : []),
-    page: loaded.recording.page,
-    requestTool: loaded.thread.turns[0]?.items.find(item => item.type === "mcpToolCall")?.tool,
     source: loaded.recording.source,
-    status: loaded.thread.turns[0]?.status,
-    turnId: loaded.thread.turns[0]?.id,
+    settlement: loaded.recording.settlement,
   }, {
-    boundary: undefined,
-    command: "wait",
-    completedAt: 3,
-    durationMs: 0,
-    itemIds: ["command", "file-change", "mcp", "dynamic", "collaboration"],
-    itemStatuses: ["completed", "completed", "completed", "completed", "interrupted"],
-    page: undefined,
-    requestTool: "request_user_input",
     source: "workbench",
-    status: "interrupted",
-    turnId: "latest",
+    settlement: { turnId: "latest", completedAt: 3 },
   });
+  assert.equal(storedTurn.status, "inProgress");
+  assert.ok(storedTurn.items.every(item => "status" in item && item.status === "inProgress"));
 });
 
 test("inactive recovery fails closed when provider latest identity differs", async () => {

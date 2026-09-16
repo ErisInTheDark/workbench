@@ -398,10 +398,12 @@ test("cold native thread lookup admits exact metadata before public request rout
     } as Thread } };
   };
   const operations = new CodexThreadOperations({
+    readStoredPage: async () => null,
     identities: owners,
     resolveProject: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo" }),
     bridge: {
       canDeliverQuestionnaire: () => false,
+      refreshThreadPage() {},
       ensureInitialized: async () => {},
       handleServerRequest: request,
     },

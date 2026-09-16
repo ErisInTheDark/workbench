@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CodexSqliteTranscriptReader: project SQL windows and resolve typed stored file changes.
+ * - default CodexSqliteTranscriptReader: read canonical pages, derive stale-turn settlement, and resolve stored file changes.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -9,16 +9,99 @@ import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
-import type { WorkbenchTranscriptContextSnapshot } from "./database/transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptContextSnapshot, WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
+import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
+import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import { readWorkbenchThreadPageNextCursor } from "workbench-shared/workbench/thread/workbench-thread-page";
+import { toThreadTurn } from "workbench-shared/codex/thread-adapter";
 
 export default class CodexSqliteTranscriptReader {
   constructor(
     private readonly readSnapshot: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>,
     private readonly readContext: (threadId: string) => Promise<WorkbenchTranscriptContextSnapshot | null>,
+    private readonly readMaterializedTurns: (threadId: string, turnIds: readonly string[]) => Promise<string[]>,
   ) {}
 
   catalog(threadId: string) {
     return this.readSnapshot({ threadId, turnIds: [], turnLimit: 1 });
+  }
+
+  async readPage(input: WorkbenchThreadPage, entry: WorkbenchThreadSidebarEntry | null): Promise<WorkbenchThreadPageResult | null> {
+    const catalog = await this.catalog(input.threadId);
+    if (!catalog) return null;
+    const boundary = input.cursor === null ? null : catalog.turns.find(turn => turn.id === input.cursor);
+    if (input.cursor !== null && !boundary) throw new Error("The requested page boundary does not belong to this thread.");
+    const candidates = boundary ? catalog.turns.filter(turn => turn.turn_index < boundary.turn_index) : catalog.turns;
+    const materialized = new Set(await this.readMaterializedTurns(catalog.thread.id, candidates.map(turn => turn.id)));
+    const selected = boundary ? candidates.at(-1) : candidates.findLast(turn => materialized.has(turn.id));
+    if ((selected && !materialized.has(selected.id)) || (!selected && candidates.length)) return null;
+    const snapshot = selected
+      ? await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [selected.id], turnLimit: 1 })
+      : catalog;
+    if (!snapshot) return null;
+    const { turns, turnHistory, ...entries } = this.content(snapshot);
+    const pageThread = { turns, workbenchTurnHistory: turnHistory };
+    const nextCursor = readWorkbenchThreadPageNextCursor(pageThread);
+    const saved = entry?.entryKind === "draft" ? null : entry;
+    const settings = saved?.profile?.settings;
+    return {
+      ...entries, nextCursor,
+      thread: {
+        id: WorkbenchThreadIdSchema.parse(snapshot.thread.id), isDraft: false, harness: "codex",
+        name: saved?.title ?? snapshot.thread.title, preview: "",
+        cwd: selected?.native_location ?? catalog.turns.at(-1)?.native_location ?? snapshot.thread.project_root,
+        createdAt: snapshot.thread.created_at / 1000, updatedAt: snapshot.thread.updated_at / 1000,
+        recencyAt: snapshot.thread.activity_at / 1000,
+        status: saved?.lifecycle.kind === "working" ? "active"
+          : saved?.lifecycle.kind === "needsAttention" && saved.lifecycle.reason === "pendingInput" ? "active:waitingOnUserInput"
+            : saved ? "idle" : "notLoaded",
+        source: saved?.entryKind === "subagent" ? "subAgent" : "unknown",
+        agentNickname: saved?.entryKind === "subagent" ? saved.name : null,
+        agentRole: null, path: null, model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null,
+        serviceTier: settings?.serviceTier ?? null, agentPath: settings?.agentPath ?? null, tokenUsage: null,
+        turns: turns.map(turn => toThreadTurn(turn)), turnHistory, nextPageCursor: nextCursor,
+        browseResultEntries: entries.browseResultEntries,
+      },
+    };
+  }
+
+  async storedTurnSettlement(threadId: string, turnReference: string, completedAt: number): Promise<WorkbenchTranscriptObservation[]> {
+    const catalog = await this.catalog(threadId);
+    const turn = catalog?.turns.find(turn => turn.id === turnReference || turn.native_turn_id === turnReference);
+    if (!catalog || !turn || turn.state !== "inProgress" || catalog.turns.at(-1)?.id !== turn.id) return [];
+    const snapshot = await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [turn.id], turnLimit: 1 });
+    if (!snapshot) throw new Error("Stored recovery turn is not materialised.");
+    const projection = projectWorkbenchTranscript(snapshot);
+    if (!projection.success) throw new Error("Stored recovery turn could not be projected.");
+    const current = snapshot.turns.find(candidate => candidate.id === turn.id)!;
+    if (current.state !== "inProgress" || snapshot.turns.at(-1)?.id !== current.id) return [];
+    const ownerThreadId = WorkbenchThreadIdSchema.parse(snapshot.thread.id);
+    const turnId = WorkbenchTurnIdSchema.parse(current.id);
+    const endedAt = Math.max(current.started_at ?? 0, Math.round(completedAt * 1000));
+    const observations: WorkbenchTranscriptObservation[] = [{
+      kind: "turn", threadId: ownerThreadId, turnId,
+      ...(current.native_turn_id === null ? { nativeTurnId: null } : { nativeTurnId: NativeTurnIdSchema.parse(current.native_turn_id) }),
+      nativeThreadId: NativeThreadIdSchema.parse(current.native_thread_id), nativeLocation: current.native_location,
+      harnessId: current.harness_id, state: "interrupted", createdAt: current.created_at,
+      startedAt: current.started_at, endedAt, durationMs: current.started_at === null ? null : endedAt - current.started_at,
+    }];
+    for (const item of projection.data.turns.find(candidate => candidate.id === current.id)?.items ?? []) {
+      if (!("status" in item) || item.status !== "inProgress") continue;
+      switch (item.type) {
+        case "commandExecution":
+        case "dynamicToolCall":
+        case "fileChange":
+        case "mcpToolCall":
+        case "collabAgentToolCall":
+          observations.push({
+            kind: "item", threadId: ownerThreadId, turnId, publicItemId: WorkbenchItemIdSchema.parse(item.id),
+            item: item.type === "collabAgentToolCall" ? { ...item, status: "interrupted" } : { ...item, status: "completed" },
+            lifecycle: "completed", observedAt: endedAt,
+          });
+      }
+    }
+    return observations;
   }
 
   async read(metadata: Thread, hydration: WorkbenchThreadHydrationRequest | null) {

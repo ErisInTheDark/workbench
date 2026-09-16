@@ -3,19 +3,93 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import CodexBridgeNode from "./CodexBridgeNode";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
+import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test("node serves saved history while refresh initialisation stalls and retires that refresh", async (t) => {
+  const fixture = createThreadStateTestDatabase();
+  fixture.admitThread("local:///project", "saved-thread", "codex", "native-thread", "C:/repo");
+  const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
+  assert.ok(identity);
+  const nativeTurnId = NativeTurnIdSchema.parse("native-turn");
+  const turn = {
+    kind: "turn" as const, threadId: identity.threadId, turnId: nativeTurnId, nativeTurnId,
+    nativeThreadId: NativeThreadIdSchema.parse("native-thread"), nativeLocation: "C:/repo", harnessId: "codex",
+    state: "completed" as const, createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+  };
+  const admitted = await fixture.identities.threads.observeTurn(turn);
+  const [item] = await fixture.identities.items.admit([{
+    threadId: identity.threadId, sources: [{ turnId: admitted.turnId, kind: "stable", sourceId: "message" }], legacyAliases: [],
+  }]);
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  repository.settle([
+    { ...turn, turnId: admitted.turnId },
+    { kind: "item", threadId: identity.threadId, turnId: admitted.turnId, publicItemId: item!.itemId,
+      observedAt: 2, lifecycle: "completed", item: {
+        id: "message", type: "agentMessage", text: "saved reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+      } },
+  ]);
+  const entered = deferred();
+  const requests: JsonRpcRequest[] = [];
+  const failures: object[] = [];
+  t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
+  t.mock.method(console, "warn", (...args: object[]) => { failures.push(args); });
+  const parent = {
+    appServer: {
+      async retirePrevious() {},
+      send(request: JsonRpcRequest) { requests.push(request); entered.resolve(); },
+    },
+    deactivateBridge() {},
+  };
+  const registrations = {
+    codexAppServer: parent, toolRevision: { revision: "catalogue" },
+    threadIdentity: fixture.identities.threads, transcriptIdentity: fixture.identities.items,
+    threadState: { controller: { getCanonicalThreadEntry: async () => null } },
+    database: { readTranscriptContext: async (id: string) => repository.readContext(id), readThreadContextUsage: async () => null },
+    transcript: {
+      read: async (request: Parameters<typeof repository.read>[0]) => repository.read(request),
+      readMaterializedTurnIds: async (id: string, turns: readonly string[]) => repository.readMaterializedTurnIds(id, turns),
+    },
+  } as unknown as DaemonRuntimeObjects;
+  const instance = CodexBridgeNode.create({
+    createCodexBridgeOptions: () => ({
+      appServer: parent.appServer, bridgeUrl: "ws://127.0.0.1:1", storageRoot: ".",
+      handleWorkbenchRequest: async () => { throw new Error("unexpected Workbench request"); },
+      onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null,
+    }),
+  } as unknown as DaemonProcessContext, {
+    get: key => registrations[key], run: () => { throw new Error("unexpected graph operation"); },
+    getSourceState: () => { throw new Error("unexpected source read"); },
+    handoffState: undefined, isReplacing: () => false, lease: { isCurrent: () => true }, mode: "initial",
+  });
+  try {
+    const operations = instance.registrations.codexThreadOperations!;
+    const page = await operations.page({ threadId: identity.threadId, cursor: null });
+    assert.equal(page.thread.turns[0]?.items[0]?.type, "agentMessage");
+    const message = page.thread.turns[0]?.items[0];
+    assert.equal(message?.type === "agentMessage" && message.text, "saved reply");
+    await entered.promise;
+    await operations.page({ threadId: identity.threadId, cursor: null });
+    assert.deepEqual(requests.map(request => request.method), ["initialize"]);
+  } finally {
+    await instance.dispose();
+    await instance.registrations.codexBridge!.disposeImmediately();
+  }
+  assert.deepEqual(failures, []);
+});
 
 test("accepted Codex steers cancel the mapped Workbench thread wait before publishing the response", async () => {
   const nativeThreadId = NativeThreadIdSchema.parse("native-thread");

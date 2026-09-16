@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CodexThreadPageReadController: own active Codex thread-page reads, exact-key single-flight, and reload draining. Keywords: codex, thread, page, read, reload.
+ * - default CodexThreadPageReadController: own page imports and detached refreshes, exact-key single-flight, and reload draining.
  */
 import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 
@@ -9,6 +9,18 @@ export default class CodexThreadPageReadController {
   private generation = new AbortController();
   private readonly activeReads = new Set<Promise<WorkbenchThreadPageResponse>>();
   private readonly keyedReads = new Map<string, Promise<WorkbenchThreadPageResponse>>();
+
+  refresh(
+    read: (signal: AbortSignal) => Promise<WorkbenchThreadPageResponse>,
+    key: string,
+    report: (error: unknown) => void,
+  ) {
+    if (!this.acceptingReads || this.keyedReads.has(key)) return;
+    const signal = this.generation.signal;
+    void this.run(read, { key }).catch(error => {
+      if (!signal.aborted || error !== signal.reason) report(error);
+    });
+  }
 
   run(
     read: (signal: AbortSignal) => Promise<WorkbenchThreadPageResponse>,

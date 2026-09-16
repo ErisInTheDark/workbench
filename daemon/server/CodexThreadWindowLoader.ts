@@ -6,14 +6,13 @@
  * - default CodexThreadWindowLoader: bounded provider paging and recovery.
  */
 import type { Thread as NativeThread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadTurnsListParams } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListParams";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
 import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
-export interface CodexThreadWindowRecord {
+export type CodexThreadWindowRecord = {
   catalog?: {
     boundary?: { cursor: string | null; turnId: string };
     turns: Turn[];
@@ -22,9 +21,16 @@ export interface CodexThreadWindowRecord {
     previousCursor: string | null;
     turn: Turn;
   };
-  source: "provider" | "workbench";
+  source: "provider";
+  settlement?: never;
   thread: Thread;
-}
+} | {
+  source: "workbench";
+  thread: Thread;
+  settlement: { turnId: string; completedAt: number };
+  catalog?: never;
+  page?: never;
+};
 
 export interface CodexThreadWindowLoad {
   recording: CodexThreadWindowRecord;
@@ -99,31 +105,6 @@ function isProviderThreadInactive(thread: Thread) {
   return status === "idle" || status === "notLoaded";
 }
 
-function settleInterruptedOperation(item: ThreadItem): ThreadItem {
-  switch (item.type) {
-    case "commandExecution":
-    case "dynamicToolCall":
-    case "fileChange":
-    case "mcpToolCall":
-      return item.status === "inProgress" ? { ...item, status: "completed" } : item;
-    case "collabAgentToolCall":
-      return item.status === "inProgress" ? { ...item, status: "interrupted" } : item;
-    default:
-      return item;
-  }
-}
-
-function interruptStoredTurn(turn: Turn, threadUpdatedAt: number): Turn {
-  const completedAt = Math.max(turn.startedAt ?? threadUpdatedAt, threadUpdatedAt);
-  return {
-    ...turn,
-    completedAt,
-    durationMs: turn.startedAt === null ? null : Math.round((completedAt - turn.startedAt) * 1_000),
-    items: turn.items.map(settleInterruptedOperation),
-    status: "interrupted",
-  };
-}
-
 function recoverLaggingLatestWindow(
   thread: Thread,
   hydratedThread: Thread,
@@ -145,7 +126,10 @@ function recoverLaggingLatestWindow(
     return null;
   }
   return createWindowLoad({
-    catalog: { turns: [interruptStoredTurn(storedLatestTurn, thread.updatedAt)] },
+    settlement: {
+      turnId: storedLatestTurn.id,
+      completedAt: Math.max(storedLatestTurn.startedAt ?? thread.updatedAt, thread.updatedAt),
+    },
     source: "workbench",
     thread,
   });

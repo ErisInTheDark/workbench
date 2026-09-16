@@ -120,6 +120,8 @@ import type { CodexQuestionnairePort } from "./CodexQuestionnaireAdapter";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import type CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
+import type { WorkbenchThreadPageReadParams } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { log, logError } from "./process-helpers";
 import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import { admitProviderNotifications, admitProviderThreads, mapProviderNotification, mapProviderThread } from "./thread-identity-provider-mapping";
@@ -1124,8 +1126,9 @@ export default class CodexStdioBridge {
   }
 
   async disposeImmediately() {
-    this.threadPageReads.beginDrain();
+    this.threadPageReads.expire();
     this.stop();
+    await this.threadPageReads.waitForIdle();
     await this.waitForIdle();
   }
 
@@ -1473,6 +1476,26 @@ export default class CodexStdioBridge {
         },
       };
     }
+  }
+
+  refreshThreadPage(input: WorkbenchThreadPageReadParams) {
+    const request: JsonRpcRequest = { method: "workbench/thread/page/read", params: input };
+    this.threadPageReads.refresh(async signal => {
+      const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
+      signal.throwIfAborted();
+      const native = identity?.bindings.find(binding => binding.harness === "codex");
+      if (!native) throw new Error("Thread refresh has no admitted Codex execution.");
+      await this.ensureInitialized(createInitializeRequest(0, {
+        capabilities: createInitializeCapabilities({ experimentalApi: true }),
+      })).catch(error => {
+        signal.throwIfAborted();
+        throw error;
+      });
+      signal.throwIfAborted();
+      return this.readThreadPage({ ...request, params: { ...input, threadId: native.nativeThreadId } }, signal);
+    }, threadPageReadKey(request), error => {
+      logError("codex-transcript", `page refresh failed thread=${input.threadId.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 160)}: ${sanitizeTranscriptErrorMessage(error).slice(0, 500)}`);
+    });
   }
 
   private async handleThreadPageReadRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -3214,59 +3237,20 @@ export default class CodexStdioBridge {
         let context: CodexTranscriptThreadContext | undefined;
         const labelTurnId = recording.page?.turn.id
           ?? recording.catalog?.turns.at(-1)?.id
+          ?? recording.settlement?.turnId
           ?? "empty";
         return this.captureTranscript(`provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
+          if (recording.source === "workbench") {
+            const observations = await this.requireSqliteReader().storedTurnSettlement(
+              recording.thread.id, recording.settlement.turnId, recording.settlement.completedAt,
+            );
+            await this.persistTranscript(() => this.recordWorkbenchTranscript(observations, { source: "workbench" }));
+            return;
+          }
           const providerThread = (await externalizeCodexTranscriptInlineImages({
             ...recording.thread,
             turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
           }, { assets: this.transcriptAssets, threadId: recording.thread.id })).value;
-          if (recording.source === "workbench") {
-            if (!this.identities || !context) {
-              throw new Error("Workbench transcript recovery requires admitted identities and thread context.");
-            }
-            if (providerThread.turns.length !== 1 || recording.page) {
-              throw new Error("Workbench transcript recovery must settle exactly one stored turn.");
-            }
-            const turn = providerThread.turns[0]!;
-            const native = this.identities.threads.knownNativeBinding(
-              "codex",
-              NativeThreadIdSchema.parse(providerThread.id),
-            );
-            const publicThreadId = this.identities.threads.workbenchIdForNative(native);
-            const publicTurnId = this.identities.threads.workbenchTurnIdForNative({
-              ...native,
-              nativeTurnId: NativeTurnIdSchema.parse(turn.id),
-            });
-            const turnObservation = mapNativeTranscriptObservation(
-              this.identities,
-              native,
-              createCodexTranscriptProviderTurnObservation({
-                context,
-                threadId: providerThread.id,
-                turn,
-              }),
-            );
-            if (turnObservation.kind !== "turn") {
-              throw new Error("Workbench transcript recovery did not produce a turn observation.");
-            }
-            const observedAt = Math.round(
-              (turn.completedAt ?? turn.startedAt ?? context.updatedAt / 1_000) * 1_000,
-            );
-            await this.persistTranscript(() => this.recordWorkbenchTranscript([
-              turnObservation,
-              ...turn.items.map((item, itemPosition): WorkbenchTranscriptObservation => ({
-                item,
-                itemPosition,
-                kind: "item",
-                lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
-                observedAt,
-                publicItemId: WorkbenchItemIdSchema.parse(item.id),
-                threadId: publicThreadId,
-                turnId: publicTurnId,
-              })),
-            ], { source: "workbench" }));
-            return;
-          }
           const observations = this.createSqliteProviderWindowObservations(providerThread, context);
           const boundary = recording.page
             ? { turnId: recording.page.turn.id, cursor: recording.page.previousCursor }
@@ -3278,7 +3262,7 @@ export default class CodexStdioBridge {
           await this.persistTranscript(() => this.recordTranscript(observations, { source: "provider" }));
         }, {
           requireSqlite: this.sqliteReader !== undefined,
-          prepare: this.sqliteTranscriptEnabled
+          prepare: this.sqliteTranscriptEnabled && recording.source === "provider"
             ? async signal => { context = await this.resolveTranscriptThreadContext(recording.thread, true, signal); }
             : undefined,
         });
