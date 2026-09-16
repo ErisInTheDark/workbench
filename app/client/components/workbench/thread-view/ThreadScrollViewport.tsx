@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own native end anchoring, normal-flow snapping, and off-screen layout preservation.
+ * - default ThreadScrollViewport: own normal-flow end snapping and off-screen layout preservation.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -23,6 +23,7 @@ import {
   getPreservedThreadScrollTop,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
+  resolveThreadTouchScrollDirection,
   type ThreadScrollDirection,
   type ThreadScrollMetrics,
   type ThreadScrollProximity,
@@ -92,6 +93,7 @@ function ActiveThreadScrollViewport ({
   const pointerScrollActiveRef = useRef(false);
   const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
+  const touchClientYRef = useRef<number | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
@@ -210,21 +212,52 @@ function ActiveThreadScrollViewport ({
       pointerScrollActiveRef.current = false;
       pointerScrollMovedRef.current = false;
     };
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+      touchClientYRef.current = event.touches.length === 1 ? event.touches[0].clientY : null;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+      const previousClientY = touchClientYRef.current;
+      if (event.touches.length !== 1 || previousClientY === null) {
+        touchClientYRef.current = null;
+        return;
+      }
+      const currentClientY = event.touches[0].clientY;
+      setScrollDirection(resolveThreadTouchScrollDirection(
+        directionRef.current,
+        previousClientY,
+        currentClientY,
+      ));
+      touchClientYRef.current = currentClientY;
+    };
+    const handleTouchEnd = () => {
+      touchClientYRef.current = null;
+    };
 
     viewport.addEventListener("keydown", handleKeyDown);
     viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
     viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
     viewport.addEventListener("scroll", handleScroll, { passive: true });
+    viewport.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    viewport.addEventListener("touchend", handleTouchEnd, { passive: true });
+    viewport.addEventListener("touchmove", handleTouchMove, { passive: true });
+    viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
     viewport.addEventListener("wheel", handleWheel, { passive: true });
     viewport.ownerDocument.addEventListener("pointercancel", handlePointerEnd, { passive: true });
     viewport.ownerDocument.addEventListener("pointerup", handlePointerEnd, { passive: true });
     return () => {
       pointerScrollActiveRef.current = false;
       pointerScrollMovedRef.current = false;
+      touchClientYRef.current = null;
       viewport.removeEventListener("keydown", handleKeyDown);
       viewport.removeEventListener("pointerdown", handlePointerDown);
       viewport.removeEventListener("pointermove", handlePointerMove);
       viewport.removeEventListener("scroll", handleScroll);
+      viewport.removeEventListener("touchcancel", handleTouchEnd);
+      viewport.removeEventListener("touchend", handleTouchEnd);
+      viewport.removeEventListener("touchmove", handleTouchMove);
+      viewport.removeEventListener("touchstart", handleTouchStart);
       viewport.removeEventListener("wheel", handleWheel);
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
       viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
@@ -244,17 +277,9 @@ function ActiveThreadScrollViewport ({
       style={THREAD_SCROLL_VIEWPORT_STYLE}
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
-        <div
-          className={joinClasses("min-h-full shrink-0", contentClassName)}
-          data-thread-scroll-content="true"
-        >
+        <div className={joinClasses("min-h-full shrink-0", contentClassName)}>
           {children}
         </div>
-        <div
-          aria-hidden="true"
-          className="h-px shrink-0"
-          data-thread-scroll-anchor="true"
-        />
       </ThreadScrollViewportContext.Provider>
     </div>
   );

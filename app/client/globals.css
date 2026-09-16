@@ -1267,15 +1267,8 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   [data-thread-scroll-target="true"] {
     --thread-scroll-inline-padding: 1.25rem;
     --thread-scroll-snap-distance: var(--thread-scroll-near-end-distance);
-    scroll-snap-type: none;
-  }
-
-  [data-thread-scroll-target="true"] > [data-thread-scroll-content="true"] {
     overflow-anchor: none;
-  }
-
-  [data-thread-scroll-target="true"] > [data-thread-scroll-anchor="true"] {
-    overflow-anchor: auto;
+    scroll-snap-type: none;
   }
 
   [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {
@@ -1298,10 +1291,6 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (hover: none) and (pointer: coarse) {
-    [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {
-      scroll-snap-type: none;
-    }
-
     .sticky-composer-shell {
       bottom: 0;
     }

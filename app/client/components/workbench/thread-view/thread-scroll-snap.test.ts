@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect initial placement, direction, proximity, end following, and layout preservation.
+ * No production exports. Tests protect initial placement, wheel/pointer/touch direction, proximity, and layout preservation.
  */
 
 import assert from "node:assert/strict";
@@ -12,6 +12,7 @@ import {
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
+  resolveThreadTouchScrollDirection,
 } from "./thread-scroll-snap";
 
 test("initial placement waits for the committed thread end target", () => {
@@ -28,6 +29,12 @@ test("thread scroll direction follows movement and ignores unchanged offsets", (
 test("thread scroll direction ignores movement without explicit user ownership", () => {
   assert.equal(resolveThreadScrollDirection("down", 80, 40, false), "down");
   assert.equal(resolveThreadScrollDirection("down", 80, 40, true), "up");
+});
+
+test("thread touch direction translates finger travel into viewport movement", () => {
+  assert.equal(resolveThreadTouchScrollDirection("down", 80, 120), "up");
+  assert.equal(resolveThreadTouchScrollDirection("up", 120, 80), "down");
+  assert.equal(resolveThreadTouchScrollDirection("up", 80, 80), "up");
 });
 
 test("thread scroll proximity becomes near only inside the bottom threshold", () => {
