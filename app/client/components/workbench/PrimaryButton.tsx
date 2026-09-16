@@ -141,10 +141,14 @@ export default function PrimaryButton ({
       pointerHoldCompletedRef.current = true;
       return;
     }
+    dispatchConfirmedClick();
+    cancelHold("keyboard");
+  }
+
+  function dispatchConfirmedClick () {
     confirmedClickRef.current = true;
     buttonRef.current?.click();
     confirmedClickRef.current = false;
-    cancelHold("keyboard");
   }
 
   return (
@@ -160,6 +164,7 @@ export default function PrimaryButton ({
         baseClassName,
         shapeClassNames[shape],
         toneClassNames[tone],
+        confirmationEnabled && "touch-none select-none [-webkit-touch-callout:none]",
         pendingHalo
           ? "disabled:text-fg/32"
           : "disabled:text-fg/10",
@@ -212,7 +217,9 @@ export default function PrimaryButton ({
       }}
       onPointerUp={(event) => {
         onPointerUp?.(event);
-        cancelHold("pointer", pointerHoldCompletedRef.current);
+        const completed = pointerHoldCompletedRef.current;
+        cancelHold("pointer");
+        if (completed && !event.defaultPrevented) dispatchConfirmedClick();
       }}
     >
       {showSpinningBorder ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
