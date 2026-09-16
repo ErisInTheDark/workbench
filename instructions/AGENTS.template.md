@@ -64,9 +64,9 @@ Keep workflow-specific process in workflow files instead of AGENTS.md.
 
 ## Control-Flow Selectors
 
-Workbench instruction sources can wrap conditional content in standalone `<harness:codex|copilot|opencode>`, `<shell:pwsh|bash>`, or `<available:mechanic-id>` blocks. Workbench filters the final assembled payload immediately before the owning harness sends it. Selector control lines are not sent to the agent.
+Workbench instruction sources can wrap conditional content in standalone `<harness:codex|copilot|opencode>`, `<model:model-id>`, `<shell:pwsh|bash>`, or `<available:mechanic-id>` blocks. Model selectors match the exact configured model ID. Workbench filters the final assembled payload immediately before the owning harness sends it. Selector control lines are not sent to the agent.
 
-Use selectors only when the content depends on the actual harness, shell, or emitted Workbench mechanic. Different selector axes can nest and all must match.
+Use selectors only when content depends on the actual harness, model, shell, or emitted Workbench mechanic. Different selector axes can nest and all must match.
 
 Lines inside Markdown code fences are examples, not active selectors.
 

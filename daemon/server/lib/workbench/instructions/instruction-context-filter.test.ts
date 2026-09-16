@@ -16,6 +16,7 @@ function filter(
   harness: "codex" | "copilot" | "opencode" = "codex",
   shell: "pwsh" | "bash" = "pwsh",
   available = new Set(["thread-recall"]),
+  model: string | null = "gpt-6-astra",
   sourceSections?: readonly RenderedInstructionContent[],
 ) {
   const warnings: WorkbenchInstructionFilterWarning[] = [];
@@ -24,6 +25,7 @@ function filter(
       available,
       field: "test",
       harness,
+      model,
       onWarning: (warning) => warnings.push(warning),
       shell,
       sourceSections,
@@ -33,8 +35,15 @@ function filter(
 }
 
 test("selectors are conjunctive and control lines never escape", () => {
-  const value = "before\n<harness:codex>\n<shell:pwsh>\nkept\n</shell:pwsh>\n</harness:codex>\n<harness:copilot>\nremoved\n</harness:copilot>\nafter";
+  const value = "before\n<harness:codex>\n<model:gpt-6-astra>\n<shell:pwsh>\nkept\n</shell:pwsh>\n</model:gpt-6-astra>\n</harness:codex>\n<model:gpt-5>\nremoved\n</model:gpt-5>\n<harness:copilot>\nremoved\n</harness:copilot>\nafter";
   assert.equal(filter(value).output, "before\nkept\nafter");
+});
+
+test("model selectors require the exact configured model", () => {
+  const value = "<model:gpt-6-astra>\nastra only\n</model:gpt-6-astra>";
+  assert.equal(filter(value).output, "astra only");
+  assert.equal(filter(value, "codex", "pwsh", new Set(), "gpt-6-astra-preview").output, "");
+  assert.equal(filter(value, "codex", "pwsh", new Set(), null).output, "");
 });
 
 test("fenced selector examples remain literal", () => {
@@ -65,12 +74,16 @@ test("unknown and malformed controls preserve body and warn", () => {
   const result = filter("<available:not-real>\nbody\n</available:not-real>");
   assert.equal(result.output, "body");
   assert.equal(result.warnings.length, 2);
+
+  const malformedModel = filter("<model:gpt 6>\nmodel body\n</model:gpt 6>");
+  assert.equal(malformedModel.output, "model body");
+  assert.equal(malformedModel.warnings.length, 2);
 });
 
 test("unknown availability reports the active source file and exact value span", () => {
   const sourceContent = "heading\n<available:thread-status>\nbody";
   const content = `wrapper\n${sourceContent}\nafter`;
-  const result = filter(content, "codex", "pwsh", new Set(["thread-recall"]), [{
+  const result = filter(content, "codex", "pwsh", new Set(["thread-recall"]), "gpt-6-astra", [{
     content: sourceContent,
     sources: [{
       absolutePath: "C:\\library\\wb\\mechanics\\thread-status.md",

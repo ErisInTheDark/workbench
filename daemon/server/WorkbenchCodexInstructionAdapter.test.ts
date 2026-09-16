@@ -43,7 +43,11 @@ test("configured creation, resume and fork retain installed mechanics in the fin
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");
   const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
   const mechanics = ["task-title", "task-status", "thread-git", "thread-recall", "thread-refresh", "long-waits"];
-  await fs.writeFile(override, mechanics.map(mechanic => `<available:${mechanic}>\nfixture ${mechanic}\n</available:${mechanic}>`).join("\n"));
+  await fs.writeFile(override, [
+    ...mechanics.map(mechanic => `<available:${mechanic}>\nfixture ${mechanic}\n</available:${mechanic}>`),
+    "<model:model>\nfixture matching model\n</model:model>",
+    "<model:other>\nfixture other model\n</model:other>",
+  ].join("\n"));
   try {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
       for (const subagentName of [null, "Akari"]) {
@@ -56,6 +60,8 @@ test("configured creation, resume and fork retain installed mechanics in the fin
         for (const mechanic of mechanics) {
           assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "task-title" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
         }
+        assert.match(packet, /fixture matching model/u);
+        assert.doesNotMatch(packet, /fixture other model/u);
       }
     }
   } finally {
@@ -208,6 +214,7 @@ test("internal resume inherits the full prompt context from its triggering reque
   const outside = adapter.createThreadResume({ threadId: "thread" }, { cwd: "C:/other", kind: "cwd" });
   const triggeringRequest: JsonRpcRequest = {
     method: "turn/start",
+    params: { model: "gpt-6-astra" },
     workbenchPromptContext: { cwd: "C:/workbench", threadId: "thread" },
   };
   const inherited = adapter.createThreadResume({ threadId: "thread" }, {
@@ -227,10 +234,11 @@ test("internal resume inherits the full prompt context from its triggering reque
   assert.equal(inheritedContext.cwd, "C:/workbench");
   assert.equal(inheritedContext.threadId, "thread");
   assert.equal(inheritedContext.instructionScope, undefined);
+  assert.equal((inherited.params as { model?: string }).model, "gpt-6-astra");
 
   const directResume = await adapter.augment({
     method: "thread/resume",
-    params: { threadId: "thread" },
+    params: { model: "gpt-6-astra", threadId: "thread" },
     workbenchPromptContext: triggeringRequest.workbenchPromptContext,
   }, "thread/resume");
   const internalResume = await adapter.augment(inherited, "thread/resume");

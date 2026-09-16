@@ -183,6 +183,10 @@ In Implement mode:
 - implement the approved plan
 <!-- Prevent tiny compile-safe passes from prolonging the entire claim set. -->
 - **Large work means many claimed files. When the approved plan leaves sequencing open, default to larger coherent implementation passes, not tiny compile-safe chunks.** Tiny passes prolong how long ALL claimed files remain held. Honour explicit sequencing and required live-safety boundaries without treating them as a mandate for tiny passes.
+<!-- GPT-6 Astra tends to turn coherent implementation into repeated micro-passes and validation. -->
+<model:gpt-6-astra>
+- **Do not micro-slice large work.** Use the largest coherent, live-safe implementation slice the approved plan allows instead of silently creating tiny slices with separate validation. If a small slice needs validation that tests will not cover, state in commentary that validation is deferred until the full coherent slice is ready.
+</model:gpt-6-astra>
 - use a simpler or better mechanism without re-briefing only inside the plan's approved edit set, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation
 - when a plan is incomplete, implement only the covered parts or stop for a revised brief. Do not fill gaps by choosing replacement architecture, deleting existing behavior, merging owned surfaces, moving ownership, changing contracts, changing persistence, changing lifecycle, or changing user workflows.
 - do not remove, replace, merge, migrate, or transfer ownership of an existing owned shape unless a visible plan line or explicit user instruction authorized that change.

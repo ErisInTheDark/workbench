@@ -3,7 +3,7 @@
  * - WorkbenchCodexInstructionSource: request-inherited or cwd-owned context for internal resume configuration.
  * - WorkbenchCodexInstructionPort: request-augmentation boundary consumed by the bridge.
  * - WorkbenchCodexThreadConfiguration: daemon-resolved settings and validated thread ownership.
- * - default WorkbenchCodexInstructionAdapter: adapt thread instructions, skills, settings and project-local MCP config into Codex requests.
+ * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
 import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
@@ -99,12 +99,16 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
 
   createThreadResume(params: Record<string, unknown>, source: WorkbenchCodexInstructionSource): JsonRpcRequest {
     const promptContext = source.kind === "request" ? readWorkbenchPromptContext(source.request) : null;
+    const sourceModel = source.kind === "request" ? asRecord(source.request.params).model : null;
     const sourceCwd = source.kind === "request"
       ? promptContext?.cwd ?? (typeof params.cwd === "string" ? params.cwd : null)
       : source.cwd;
     return {
       method: "thread/resume",
-      params: this.withMcpConfig(params, sourceCwd),
+      params: this.withMcpConfig({
+        ...params,
+        ...(typeof sourceModel === "string" ? { model: sourceModel } : {}),
+      }, sourceCwd),
       ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
     };
   }
@@ -160,6 +164,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       available,
       field,
       harness: "codex",
+      model: typeof params.model === "string" ? params.model : null,
       onWarning: (warning) => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
       sourceSections: value ? [{ content: value, sources }] : undefined,

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly.
+ * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, model, shell, and mechanics-availability blocks without rejecting prompt assembly.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -12,13 +12,14 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-type SelectorAxis = "available" | "harness" | "shell";
+type SelectorAxis = "available" | "harness" | "model" | "shell";
 type WorkbenchShell = "bash" | "pwsh";
 
 export interface WorkbenchInstructionFilterContext {
   available: ReadonlySet<string>;
   field: string;
   harness: WorkbenchHarness;
+  model: string | null;
   onWarning: (warning: WorkbenchInstructionFilterWarning) => void;
   shell: WorkbenchShell;
   sourceSections?: readonly RenderedInstructionContent[];
@@ -38,9 +39,10 @@ export interface WorkbenchInstructionFilterWarning {
 interface SelectorControl { axis: SelectorAxis; closing: boolean; neutral: boolean; value: string }
 interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
-const SELECTOR_LINE = /^\s*<(\/)?(available|harness|shell):([^<>]+)>\s*$/u;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|shell)(?::|\s|>)/u;
+const SELECTOR_LINE = /^\s*<(\/)?(available|harness|model|shell):([^<>]+)>\s*$/u;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
+const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const KNOWN_AVAILABLE_VALUES = new Set([
   "browse",
   "browse-raw",
@@ -144,12 +146,14 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 
 function isKnownValue(axis: SelectorAxis, value: string) {
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
+  if (axis === "model") return MODEL_VALUE.test(value);
   if (axis === "shell") return value === "pwsh" || value === "bash";
   return AVAILABLE_VALUE.test(value) && KNOWN_AVAILABLE_VALUES.has(value);
 }
 
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
   if (control.axis === "harness") return control.value === context.harness;
+  if (control.axis === "model") return control.value === context.model;
   if (control.axis === "shell") return control.value === context.shell;
   return context.available.has(control.value);
 }
