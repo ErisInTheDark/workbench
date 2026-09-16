@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { getWorkbenchTranscriptAssetUrl } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
@@ -150,11 +151,12 @@ test("canonical projection removes a proposal source while its card is hoisted",
 });
 
 test("native incoming messages and screenshots render once per identity after provider echo reconciliation", () => {
+  const assetUrl = "/api/transcript-assets/codex/thread/screenshot.png";
   const message = { message: "check cancellation cleanup", senderName: "iris", senderThreadId: "child" };
   const incoming: ThreadItem = { ...createWorkbenchAgentMessageOutput(message), id: "incoming", type: "functionCallOutput" };
   const screenshot: WorkbenchToolOutput = {
     id: "screenshot", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
-    output: [{ type: "input_text", text: "capture context" }, { type: "input_image", image_url: "/screenshot.png", detail: "auto" }],
+    output: [{ type: "input_text", text: "capture context" }, { type: "input_image", image_url: assetUrl, detail: "auto" }],
     workbenchInjectionAcceptedAt: 10,
   };
   const { workbenchInjectionAcceptedAt: _acceptedAt, ...echo } = screenshot;
@@ -167,7 +169,8 @@ test("native incoming messages and screenshots render once per identity after pr
   for (const durableCount of [0, items.length]) {
     const html = renderItems(items, null, durableCount);
     assert.equal(html.split(message.message).length - 1, 1);
-    assert.equal((html.match(/<img\b[^>]*src="\/screenshot\.png"/gu) ?? []).length, 1);
+    const sources = [...html.matchAll(/<img\b[^>]*src="([^"]+)"/gu)].map(match => match[1]);
+    assert.deepEqual(sources, [getWorkbenchTranscriptAssetUrl(assetUrl)]);
     assert.equal(html.includes(recovery.output as string), false);
   }
 });

@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { normalizeRelativePath, projectRoot, safeResolveProjectPath } from "../../project";
+import { encodeTranscriptPathSegment } from "../../../codex-transcript-normalizers";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
@@ -875,7 +876,7 @@ async function writeScreenshotTranscriptAsset(threadId: string, image: Screensho
 
   const digest = createHash("sha256").update(bytes).digest("hex");
   const fileName = `${digest}.${extension}`;
-  const assetsDirectoryPath = path.join(projectRoot, ".workbench", "transcripts", "codex", "threads", threadId, "assets");
+  const assetsDirectoryPath = path.join(projectRoot, ".workbench", "transcripts", "codex", "threads", encodeTranscriptPathSegment(threadId), "assets");
   const assetPath = path.join(assetsDirectoryPath, fileName);
   await fs.mkdir(assetsDirectoryPath, { recursive: true });
   await fs.writeFile(assetPath, bytes, { flag: "wx" }).catch((error) => {

@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
@@ -15,6 +16,8 @@ import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntim
 import WorkbenchBrowseRequestHandler from "./lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import WorkbenchBrowseSessionController from "./lib/workbench/browse/WorkbenchBrowseSessionController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import { projectRoot } from "./lib/project";
 
 const fixtureIdentityValues = {
   WorkbenchThreadId: {
@@ -114,8 +117,11 @@ test("a late screenshot cannot resolve asset identity or publish a result after 
 });
 
 test("automatic screenshots retain the pre-action origin without injecting agent context", async t => {
+  const assets = new Map<string, Buffer>();
   t.mock.method(fs, "mkdir", async () => undefined);
-  t.mock.method(fs, "writeFile", async () => undefined);
+  t.mock.method(fs, "writeFile", async (file: string, bytes: Buffer) => {
+    assets.set(path.resolve(file), bytes);
+  });
   t.mock.method(WorkbenchBrowseSessionController.prototype, "rememberSession", async () => undefined);
   const screenshotEntered = deferred();
   const releaseScreenshot = deferred();
@@ -155,6 +161,10 @@ test("automatic screenshots retain the pre-action origin without injecting agent
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0]?.origin, original);
   assert.match(recorded[0]!.event.assetUrl!, /^\/api\/transcript-assets\//);
+  const fileName = recorded[0]!.event.assetUrl!.split("/").at(-1)!;
+  const readerPath = path.resolve(projectRoot, ".workbench", "transcripts", "codex", "threads",
+    encodeTranscriptPathSegment("thread"), "assets", fileName);
+  assert.deepEqual(assets.get(readerPath), Buffer.from("a"), "automatic capture must be readable from native transcript storage");
 });
 
 test("direct Browse request execution uses the same handler and cancellation signal as HTTP ingress", async () => {

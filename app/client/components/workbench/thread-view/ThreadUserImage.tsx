@@ -1,5 +1,7 @@
+/* Exports: default ThreadUserImage resolves stored transcript assets for thumbnail and lightbox display. */
 "use client";
 
+import { getWorkbenchTranscriptAssetUrl } from "workbench-shared/workbench/workbench-connection";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 
 export default function ThreadUserImage({
@@ -16,7 +18,7 @@ export default function ThreadUserImage({
       alt={alt}
       buttonClassName={className}
       imageClassName="h-auto max-h-[16rem] w-auto max-w-full object-contain"
-      src={src}
+      src={getWorkbenchTranscriptAssetUrl(src)}
     />
   );
 }
