@@ -1598,6 +1598,41 @@ test("version 3 returns loaded summaries before cold projects and fences progres
   await fs.rm(root, { force: true, recursive: true });
 });
 
+test("an observed project represents a missing thread as an empty observation", async () => {
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "missing-thread-observation",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/alpha")],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+  });
+  try {
+    await controller.open("viewer", fixtureProjectIds["alpha"], 4);
+    const expectedFreshness = (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness;
+    const response = await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/observe",
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
+      subscriptionId: "709113f5-ca7c-4ba0-b26b-10bd31af8648",
+      target: {
+        harness: "codex",
+        kind: "provider",
+        threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing-thread"),
+      },
+      version: 1,
+    });
+    assert.ok("result" in response);
+    const result = WorkbenchThreadObservationResultSchema.parse(response.result);
+    assert.deepEqual(result.observation.entries, []);
+    assert.equal(result.observation.freshness, expectedFreshness);
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("pinned context admits only an unsnoozed root and its direct subagents, then fences foreign mutations to that observation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pinned-context-"));
   const pinnedRoot: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
@@ -1694,7 +1729,7 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     method: "workbench/thread-state/observe", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), version: 1,
     subscriptionId: "bb7efb3d-4670-4198-a8ab-8926782c4ed3",
     target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-  }), /not available/);
+  }), /requestedProject=owner.*observedProject=viewed.*target=provider:root-thread.*missing, snoozed, or not pinned/iu);
 
   await controller.close("viewer");
   await controller.open("viewer", fixtureProjectIds["viewed"]);

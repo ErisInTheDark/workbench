@@ -376,8 +376,19 @@ export default class WorkbenchThreadStateController {
         const observationRequest: ThreadObservationRequest = { projectId: request.projectId, subscriptionId: request.subscriptionId, target: request.target };
         const observation = await this.threadObservations.observe(connectionId, observationRequest, async () => {
           const state = await this.getProject(request.projectId);
-          const context = this.selectThreadContext(request.projectId, request.target, state, !this.isObservedProjectAuthorized(connectionId, request.projectId));
-          if (!context) throw new Error("The thread is not available through this connection's project or pinned threads.");
+          const projectAuthorized = this.isObservedProjectAuthorized(connectionId, request.projectId);
+          const context = this.selectThreadContext(request.projectId, request.target, state, !projectAuthorized);
+          if (!context && !projectAuthorized) {
+            const connection = this.connectionProjects.get(connectionId);
+            const observedProject = connection?.scope === "project" ? connection.projectId : connection?.scope ?? "none";
+            throw new Error([
+              "Thread observation rejected.",
+              `requestedProject=${sanitizeLogValue(request.projectId)}`,
+              `observedProject=${sanitizeLogValue(observedProject)}`,
+              `target=${sanitizeLogValue(request.target.kind)}:${sanitizeLogValue(request.target.threadId)}`,
+              "reason=missing, snoozed, or not pinned",
+            ].join(" "));
+          }
           return this.threadObservationSnapshot(observationRequest, state);
         });
         return { result: { observation } };

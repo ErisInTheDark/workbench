@@ -1184,7 +1184,7 @@ export default memo(function ThreadViewContent ({
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard thread={activeThread} /> : null}
-        {activeThread && threadGoalControls ? (
+        {activeThread && activeThreadController.state.entry && threadGoalControls ? (
           <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
             {agentTabs}
           </ThreadGoalControl>

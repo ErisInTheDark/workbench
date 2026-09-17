@@ -66,7 +66,10 @@ export default class WorkbenchThreadActionController {
 
   private async target(reference: string) {
     const identity = await this.owners.identities.resolve({ threadId: ThreadReferenceSchema.parse(reference) });
-    if (!identity) throw new Error("The requested Workbench thread is unavailable.");
+    if (!identity) {
+      const threadId = reference.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 160);
+      throw new Error(`The requested thread has no durable Workbench identity. threadId=${threadId}`);
+    }
     const binding = identity.bindings[0];
     if (!binding) throw new Error("The requested thread has no provider binding.");
     return { identity, harness: binding.harness, provider: this.provider(binding.harness) };

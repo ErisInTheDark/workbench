@@ -86,6 +86,15 @@ test("provider deletion resolves aliases without mutating WB state and preserves
   assert.deepEqual(f.mutations, []);
 });
 
+test("missing targets identify durable identity resolution and the requested thread", async () => {
+  const f = fixture();
+  f.owners.identities.resolve = async () => null;
+  await assert.rejects(
+    f.controller.handle("thread/goal/read", { threadId: "missing-thread" }),
+    /durable Workbench identity.*missing-thread/iu,
+  );
+});
+
 test("provider deletion rejects unsupported and ambiguous targets before any destructive call", async () => {
   const f = fixture();
   await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /does not support/);
