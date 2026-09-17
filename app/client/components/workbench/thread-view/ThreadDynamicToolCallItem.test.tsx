@@ -29,3 +29,33 @@ test("a failed dynamic tool keeps its summary visible without opening its detail
   assert.match(html, /custom_tool/u);
   assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
 });
+
+test("an unanswered questionnaire starts open", () => {
+  const item: DynamicItem = {
+    arguments: {
+      id: "questionnaire",
+      questions: [{
+        allowOther: false,
+        header: "Choice",
+        id: "choice",
+        isSecret: false,
+        options: [],
+        question: "Continue?",
+      }],
+      submitLabel: "Submit",
+      summary: "",
+      title: "Continue?",
+    },
+    contentItems: null,
+    durationMs: null,
+    id: "questionnaire-request",
+    namespace: null,
+    status: "inProgress",
+    success: null,
+    tool: "workbench_request_user_input",
+    type: "dynamicToolCall",
+  };
+  const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
+
+  assert.match(html, /<details[^>]*\bopen=/u);
+});

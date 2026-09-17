@@ -365,13 +365,13 @@ function ThreadQuestionnaireToolCallItem ({
   const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
   const { response } = parseQuestionnaireResponse(item);
   const statusLabel = response ? "Answered" : "Unanswered";
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(item.status !== "completed" || !response);
 
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      onOffscreen={() => setIsOpen(false)}
+      open={isOpen}
       onToggle={(event) => {
         setIsOpen(event.currentTarget.open);
       }}

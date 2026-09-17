@@ -2,6 +2,7 @@
  * Exports:
  * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
+ * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
  * - getThreadFileChangeTotals: cumulative counts using the same precedence as file rows.
@@ -332,12 +333,14 @@ export function ThreadFileChangeList ({
 
 function ThreadFileChangeRows ({
   changes,
+  plainInset = true,
   projectFilePaths,
   projectId,
   projectRootPath,
   workspaceRoots,
 }: {
   changes: ThreadFileChangeListChange[];
+  plainInset?: boolean;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -395,11 +398,43 @@ function ThreadFileChangeRows ({
         summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
       />
     ) : (
-      <div key={key} className="py-0.5 pl-6 text-[0.92em] leading-[1.6] text-fg/muted">
+      <div key={key} className={`py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
         {summary}
       </div>
     );
   });
+}
+
+export function ThreadFileChangePreviewList ({
+  changes,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  changes: ThreadFileChangeListChange[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  if (!changes.length) return null;
+  return (
+    <div className="space-y-1.5 py-2">
+      <ThreadFileChangeRows
+        changes={changes.map((entry) => ({
+          ...entry,
+          detailsAvailable: false,
+          staticMarker: false,
+        }))}
+        plainInset={false}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
+    </div>
+  );
 }
 
 function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {

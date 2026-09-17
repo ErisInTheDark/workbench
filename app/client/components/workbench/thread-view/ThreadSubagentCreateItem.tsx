@@ -39,6 +39,7 @@ export default function ThreadSubagentCreateItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
+      defaultOpen={active}
       summary={(
         <span>
           {active ? "Creating " : "Created "}

@@ -13,7 +13,7 @@ import ThreadWebSearchItem from "./ThreadWebSearchItem";
 
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 
-test("completed web searches leave disclosure toggles user-owned", () => {
+test("recognised web searches start closed while unknown details start open", () => {
   const item: WebSearchItem = {
     action: { queries: ["needle"], query: "needle", type: "search" },
     id: "web-search-one",
@@ -24,5 +24,5 @@ test("completed web searches leave disclosure toggles user-owned", () => {
   const html = renderToStaticMarkup(createElement(ThreadWebSearchItem, { item }));
   assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
   const other = renderToStaticMarkup(createElement(ThreadWebSearchItem, { item: { ...item, action: { type: "other" } } }));
-  assert.doesNotMatch(other, /<details[^>]*\bopen=/u);
+  assert.match(other, /<details[^>]*\bopen=/u);
 });

@@ -8,7 +8,7 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
-import ThreadMeasuredContent, { useThreadContentWasHidden } from "./ThreadMeasuredContent";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -69,8 +69,7 @@ function ThreadDisclosureContent ({
   ...props
 }: ThreadDisclosureProps) {
   const isControlled = typeof open === "boolean";
-  const wasHidden = useThreadContentWasHidden();
-  const defaultIsOpen = !wasHidden && Boolean(defaultOpen ?? initialOpen);
+  const defaultIsOpen = Boolean(defaultOpen ?? initialOpen);
   const [hasUserToggled, setHasUserToggled] = useState(false);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;

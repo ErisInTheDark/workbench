@@ -24,6 +24,10 @@ import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
+import {
+  createThreadGitArcCompareSummaryRows,
+  createThreadGitArcDiffSummaryRows,
+} from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -199,6 +203,9 @@ export default function ThreadWorkbenchCommandItem({
         durationMs={item.durationMs}
         failureReason={outcome === "failed" ? output : null}
         operationDetails={operationDetails}
+        operationSummaryRows={compareChanges?.length
+          ? createThreadGitArcCompareSummaryRows(compareChanges)
+          : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : []}
         outcome={outcome}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

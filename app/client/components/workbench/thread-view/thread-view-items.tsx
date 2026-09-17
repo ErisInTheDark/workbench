@@ -84,6 +84,10 @@ import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
+import {
+  createThreadGitArcCompareSummaryRows,
+  createThreadGitArcDiffSummaryRows,
+} from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { readThreadGitArcProposalTranscriptItem } from "./thread-git-arc-presentation";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
@@ -761,6 +765,7 @@ function ThreadReasoningSequence ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
+      defaultOpen={isMostRecent}
       summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
@@ -1410,6 +1415,9 @@ function ThreadCommandExecutionDetails ({
           ? item.aggregatedOutput
           : null}
         operationDetails={operationDetails}
+        operationSummaryRows={checkpointCompareChanges?.length
+          ? createThreadGitArcCompareSummaryRows(checkpointCompareChanges)
+          : checkpointDiffChanges?.length ? createThreadGitArcDiffSummaryRows(checkpointDiffChanges) : []}
         outcome={commandOutcome}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

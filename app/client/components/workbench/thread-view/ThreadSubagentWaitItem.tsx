@@ -91,6 +91,7 @@ export default function ThreadSubagentWaitItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
+      defaultOpen={active}
       summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >

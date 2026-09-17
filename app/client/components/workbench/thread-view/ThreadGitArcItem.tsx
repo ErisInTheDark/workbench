@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useContext, type ReactNode } from "react";
+import { useContext, useState, type MouseEvent, type ReactNode } from "react";
 
 import {
   createGitArcOperationRejected,
@@ -18,6 +18,10 @@ import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadGitArcCollapsedSummary, {
+  type ThreadGitArcCollapsedSummaryContent,
+} from "./ThreadGitArcCollapsedSummary";
+import type { ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -89,6 +93,11 @@ function failureClaimPaths (failure: ReturnType<typeof parseGitArcFailureReceipt
   return [...new Set(paths)];
 }
 
+function isInteractiveCardTarget(target: EventTarget | null) {
+  return target instanceof Element
+    && Boolean(target.closest("a, button, input, label, select, summary, textarea"));
+}
+
 export default function ThreadGitArcItem ({
   commandIntent,
   durationMs,
@@ -96,6 +105,7 @@ export default function ThreadGitArcItem ({
   failureReason,
   operationDetails,
   outcome,
+  operationSummaryRows = [],
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -109,6 +119,7 @@ export default function ThreadGitArcItem ({
   failureReason?: string | null;
   operationDetails?: ReactNode;
   outcome: ThreadCommandExecutionOutcome;
+  operationSummaryRows?: readonly ThreadFileChangeListChange[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -117,6 +128,8 @@ export default function ThreadGitArcItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const state = actionState(outcome);
+  const defaultOpen = commandIntent.action === "status" || commandIntent.action === "unknown";
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   const adoptPaths = commandIntent.adoptPaths ?? [];
   const adoptPathSet = new Set(adoptPaths);
@@ -227,13 +240,95 @@ export default function ThreadGitArcItem ({
       workspaceRoots={workspaceRoots}
     />
   ));
+  const updateSummaryGroups = [
+    {
+      label: commandIntent.action === "plan" ? "Added to plan" : "Claimed",
+      marker: primaryPathMarker,
+      paths: receipt?.additionalClaims ?? [],
+    },
+    {
+      label: commandIntent.action === "plan" ? "Removed from plan" : "Released",
+      marker: "unclaimed" as const,
+      paths: receipt?.removedClaims ?? [],
+    },
+  ];
+  const primarySummaryGroups = [
+    {
+      label: primaryPathLabel,
+      marker: primaryPathMarker,
+      paths: primaryPaths,
+    },
+    {
+      label: state === "failed" ? "Failed to adopt" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted",
+      marker: state === "failed" ? "unclaimed" as const : adoptedPathMarker,
+      paths: adoptPaths,
+    },
+  ];
+  const claimedSummaryGroups = [{
+    label: "Claimed",
+    marker: "claimed" as const,
+    paths: claimedPaths,
+  }];
+  const countSummaryRows: Extract<ThreadGitArcCollapsedSummaryContent, { kind: "counts" }>["rows"] = [];
+  if (receipt?.claimedPathCount !== undefined) {
+    countSummaryRows.push({
+      label: `${receipt.claimedPathCount} claimed ${receipt.claimedPathCount === 1 ? "file" : "files"}`,
+      marker: "claimed",
+    });
+  }
+  if (receipt?.plannedPathCount !== undefined) {
+    countSummaryRows.push({
+      label: `${receipt.plannedPathCount} planned ${receipt.plannedPathCount === 1 ? "file" : "files"}`,
+      marker: "planned",
+    });
+  }
+  if (receipt?.adoptedPathCount !== undefined) {
+    countSummaryRows.push({
+      label: `${receipt.adoptedPathCount} adopted ${receipt.adoptedPathCount === 1 ? "file" : "files"}`,
+      marker: commandIntent.action === "plan" ? "planned" : "claimed",
+    });
+  }
+  const claimSummaryGroups = updateSummaryGroups.some((entry) => entry.paths.length)
+    ? updateSummaryGroups
+    : inventory.some((entry) => entry.paths.length)
+      ? inventory
+      : primarySummaryGroups.some((entry) => entry.paths.length)
+        ? primarySummaryGroups
+        : claimedSummaryGroups;
+  const firstClaimSummaryGroup = claimSummaryGroups.find((entry) => entry.paths.length);
+  const claimSummaryCount = claimSummaryGroups.reduce((total, entry) => total + entry.paths.length, 0);
+  const collapsedContent: ThreadGitArcCollapsedSummaryContent | null = moveMappings.length
+    ? { kind: "moves", mappings: moveMappings }
+    : operationSummaryRows.length
+      ? { changes: [...operationSummaryRows], kind: "files" }
+      : firstClaimSummaryGroup
+        ? {
+          kind: "claims",
+          label: firstClaimSummaryGroup.label,
+          marker: firstClaimSummaryGroup.marker,
+          paths: firstClaimSummaryGroup.paths,
+          totalCount: claimSummaryCount,
+        }
+        : countSummaryRows.length ? { kind: "counts", rows: countSummaryRows } : null;
+
+  function openClosedCard(event: MouseEvent<HTMLElement>) {
+    if (!isOpen && !isInteractiveCardTarget(event.target)) {
+      setIsOpen(true);
+    }
+  }
 
   return (
-    <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
+    <article
+      className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5"
+      data-thread-git-arc-card={commandIntent.action}
+      onClick={openClosedCard}
+    >
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
         leading={<GitArcIcon action={commandIntent.action} size={16} />}
         leadingLabel={`${commandIntent.action} git arc`}
+        onToggle={(event) => setIsOpen(event.currentTarget.open)}
+        open={isOpen}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span className={state === "failed" || state === "timedOut" ? "text-[color:var(--danger)]" : "text-text"}>
@@ -249,11 +344,6 @@ export default function ThreadGitArcItem ({
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-fg/muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-fg/muted">{memberRefs.length} roots</span> : null}
-            {receipt?.phase ? <span>{receipt.phase}</span> : null}
-            {receipt?.claimedPathCount !== undefined ? <span>{receipt.claimedPathCount} claimed</span> : null}
-            {receipt?.plannedPathCount !== undefined ? <span>{receipt.plannedPathCount} planned</span> : null}
-            {receipt?.adoptedPathCount !== undefined && receipt.adoptedPathCount > 0 ? <span>{receipt.adoptedPathCount} adopted</span> : null}
-            {receipt?.unchanged ? <span>unchanged</span> : null}
             {durationMs !== null ? durationPresentation === "waited" ? (
               <span className="text-fg/muted" data-thread-git-arc-duration="waited">
                 (waited <ThreadDurationText className="inline" durationMs={durationMs} />)
@@ -369,6 +459,15 @@ export default function ThreadGitArcItem ({
           </ThreadDisclosure>
         ) : null}
       </ThreadDisclosure>
+      {!isOpen && collapsedContent ? (
+        <ThreadGitArcCollapsedSummary
+          content={collapsedContent}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
+        />
+      ) : null}
       {failure ? (
         <ThreadGitArcFailure
           failure={failure}
