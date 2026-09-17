@@ -34,10 +34,46 @@ test("unquoted words fuzzy-match independently across weighted fields", () => {
   assert.equal(ranked.bestFieldKind, "title");
 });
 
+test("ordinary words rank by coverage without requiring every variant", () => {
+  const query = parseWorkbenchSearchQuery("loader loading animation");
+  const partial = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: "The loader animation keeps restarting." },
+  ]);
+  const complete = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: "The loader animation keeps loading forever." },
+  ]);
+  assert.ok(partial);
+  assert.ok(complete);
+  assert.ok(complete.score > partial.score);
+});
+
+test("repeated references strengthen a result without changing field ownership", () => {
+  const query = parseWorkbenchSearchQuery("loader animation");
+  const single = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: "The loader animation is broken." },
+  ]);
+  const repeated = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: "The loader animation starts, the loader animation stops, then the loader animation starts again." },
+  ]);
+  assert.ok(single);
+  assert.ok(repeated);
+  assert.ok(repeated.score > single.score);
+  assert.equal(repeated.bestFieldKind, "userMessage");
+  const capped = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: `${"loader animation ".repeat(8)}done` },
+  ]);
+  const spammed = rankWorkbenchSearchFields(query, [
+    { kind: "userMessage", text: `${"loader animation ".repeat(64)}done` },
+  ]);
+  assert.ok(capped);
+  assert.ok(spammed);
+  assert.equal(spammed.score, capped.score);
+});
+
 test("quoted phrases are contiguous and negative clauses exclude the whole candidate", () => {
   const fields: WorkbenchSearchField[] = [
     { kind: "title", text: "Alpha exact phrase" },
-    { kind: "commentary", text: "A haunted cache remains" },
+    { kind: "assistantMessage", text: "A haunted cache remains" },
   ];
   assert.ok(rankWorkbenchSearchFields(parseWorkbenchSearchQuery('"exact phrase"'), fields));
   assert.equal(rankWorkbenchSearchFields(parseWorkbenchSearchQuery('"alpha phrase"'), fields), null);
@@ -45,14 +81,14 @@ test("quoted phrases are contiguous and negative clauses exclude the whole candi
   assert.equal(rankWorkbenchSearchFields(parseWorkbenchSearchQuery('alpha -"haunted cache"'), fields), null);
 });
 
-test("title, user, commentary, and file fields keep the requested value order", () => {
+test("title, user, assistant, and file fields keep the requested value order", () => {
   const query = parseWorkbenchSearchQuery("needle");
   const score = (kind: WorkbenchSearchField["kind"]) => (
     rankWorkbenchSearchFields(query, [{ kind, text: "needle" }])?.score ?? 0
   );
-  assert.equal(score("title") / score("userMessage"), 2);
-  assert.equal(score("userMessage") / score("commentary"), 2);
-  assert.equal(score("commentary") / score("filePath"), 2);
+  assert.ok(score("title") > score("userMessage"));
+  assert.ok(score("userMessage") > score("assistantMessage"));
+  assert.ok(score("assistantMessage") > score("filePath"));
 });
 
 function referenceWordScore(needle: string, text: string) {
@@ -84,17 +120,25 @@ test("bounded matching preserves edit-distance eligibility and scores at length 
       const text = `prefix ${word} suffix`;
       const expected = referenceWordScore(query.toLowerCase(), text.toLowerCase());
       const actual = matcher([{ kind: "title", text }]);
-      assert.equal(actual?.score ?? 0, expected * 8, `${query} against ${word}`);
       assert.equal(actual === null, expected === 0);
     }
   }
+  const exact = createWorkbenchSearchMatcher(parseWorkbenchSearchQuery("search"))([
+    { kind: "title", text: "search" },
+  ]);
+  const fuzzy = createWorkbenchSearchMatcher(parseWorkbenchSearchQuery("serch"))([
+    { kind: "title", text: "search" },
+  ]);
+  assert.ok(exact);
+  assert.ok(fuzzy);
+  assert.ok(exact.score > fuzzy.score);
 });
 
 test("nonsense does not match ordinary titles or transcript bodies and query scores cannot leak", () => {
   const fields: WorkbenchSearchField[] = [
     { kind: "title", text: "Build the search feature" },
     { kind: "userMessage", text: "Please make requests fast and keep matching relevant." },
-    { kind: "commentary", text: "Checking database performance and testing the controller." },
+    { kind: "assistantMessage", text: "Checking database performance and testing the controller." },
   ];
   const match = createWorkbenchSearchMatcher(parseWorkbenchSearchQuery("asdlfkajsdlfkjasdlfkjasdf"));
   assert.equal(match(fields), null);

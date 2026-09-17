@@ -13,6 +13,7 @@ import {
   type WorkbenchSearchResponse,
   type WorkbenchSearchResult,
   type WorkbenchSearchActionId,
+  type WorkbenchSearchField,
 } from "workbench-shared/workbench/search/workbench-search";
 import { WORKBENCH_SETTING_DEFINITIONS } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
@@ -34,15 +35,21 @@ interface ThreadTitleRow {
 }
 
 interface ThreadBodyRow {
-  commentary_text: string;
+  assistant_text: string;
   thread_id: string;
   user_text: string;
 }
 
 type RankedResult = { activityAt: number; result: WorkbenchSearchResult; score: number };
+const SEARCH_PREVIEW_CHARACTERS = 180;
+const THREAD_FRESHNESS_HALF_LIFE_MS = 14 * 86_400_000;
+const MAX_THREAD_FRESHNESS_BOOST = 0.3;
 
 export default class WorkbenchSearchRepository {
-  constructor(private readonly database: Database.Database) {
+  constructor(
+    private readonly database: Database.Database,
+    private readonly options: { now?(): number } = {},
+  ) {
     this.seedStaticDocuments();
   }
 
@@ -107,22 +114,24 @@ export default class WorkbenchSearchRepository {
       if (result) ranked.push({ activityAt: 0, result, score: match.score });
     }
 
-    const bodies = new Map(this.readUnsettledBodies().map((row) => [row.thread_id, row]));
+    const bodies = new Map(this.readThreadBodies().map((row) => [row.thread_id, row]));
     for (const row of this.readThreadTitles()) {
       const body = bodies.get(row.id);
-      const match = matchFields([
+      const fields: WorkbenchSearchField[] = [
         { kind: "title", text: row.title },
         ...(body?.user_text ? [{ kind: "userMessage" as const, text: body.user_text }] : []),
-        ...(body?.commentary_text ? [{ kind: "commentary" as const, text: body.commentary_text }] : []),
-      ]);
+        ...(body?.assistant_text ? [{ kind: "assistantMessage" as const, text: body.assistant_text }] : []),
+      ];
+      const match = matchFields(fields);
       if (!match) continue;
+      const matchedField = fields[match.bestFieldIndex];
       ranked.push({
         activityAt: row.activity_at,
         result: {
           detail: match.bestFieldKind === "userMessage"
-            ? `You: ${this.preview(body?.user_text ?? "")}`
-            : match.bestFieldKind === "commentary"
-              ? `Agent: ${this.preview(body?.commentary_text ?? "")}`
+            ? `You: ${this.preview(matchedField?.text ?? "", match.matchIndex)}`
+            : match.bestFieldKind === "assistantMessage"
+              ? `Agent: ${this.preview(matchedField?.text ?? "", match.matchIndex)}`
               : row.project_id,
           harnessId: row.harness_id,
           id: `thread:${row.id}`,
@@ -131,7 +140,7 @@ export default class WorkbenchSearchRepository {
           threadId: row.id,
           title: row.title,
         },
-        score: match.score,
+        score: this.applyThreadFreshness(match.score, row.activity_at),
       });
     }
 
@@ -169,24 +178,24 @@ export default class WorkbenchSearchRepository {
           LIMIT 1
         ), 'codex') AS harness_id
       FROM workbench_threads AS threads
+      WHERE threads.archived = 0
     `).all() as ThreadTitleRow[];
   }
 
-  private readUnsettledBodies() {
+  private readThreadBodies() {
     return this.database.prepare(`
       SELECT
         threads.id AS thread_id,
         COALESCE(GROUP_CONCAT(DISTINCT user_parts.text), '') AS user_text,
-        COALESCE(GROUP_CONCAT(DISTINCT assistant.text), '') AS commentary_text
+        COALESCE(GROUP_CONCAT(DISTINCT assistant.text), '') AS assistant_text
       FROM workbench_threads AS threads
-      LEFT JOIN workbench_thread_lifecycle AS lifecycle ON lifecycle.thread_id = threads.id
       JOIN thread_turns AS turns ON turns.thread_id = threads.id
       JOIN thread_items AS items ON items.turn_id = turns.id
       LEFT JOIN thread_user_message_parts AS user_parts
         ON user_parts.item_id = items.id AND user_parts.part_type = 'text'
       LEFT JOIN thread_item_assistant_messages AS assistant
-        ON assistant.item_id = items.id AND assistant.phase = 'commentary'
-      WHERE COALESCE(lifecycle.settled, 0) = 0
+        ON assistant.item_id = items.id AND assistant.phase IN ('commentary', 'finalAnswer')
+      WHERE threads.archived = 0
       GROUP BY threads.id
     `).all() as ThreadBodyRow[];
   }
@@ -218,9 +227,21 @@ export default class WorkbenchSearchRepository {
     seed();
   }
 
-  private preview(text: string) {
-    const compact = text.replace(/\s+/gu, " ").trim();
-    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+  private applyThreadFreshness(score: number, activityAt: number) {
+    const age = Math.max(0, (this.options.now?.() ?? Date.now()) - activityAt);
+    const boost = MAX_THREAD_FRESHNESS_BOOST * 2 ** (-age / THREAD_FRESHNESS_HALF_LIFE_MS);
+    return score * (1 + boost);
+  }
+
+  private preview(text: string, matchIndex: number) {
+    if (text.length <= SEARCH_PREVIEW_CHARACTERS) return text.replace(/\s+/gu, " ").trim();
+    const start = Math.max(
+      0,
+      Math.min(matchIndex - Math.floor(SEARCH_PREVIEW_CHARACTERS / 2), text.length - SEARCH_PREVIEW_CHARACTERS),
+    );
+    const end = Math.min(text.length, start + SEARCH_PREVIEW_CHARACTERS);
+    const compact = text.slice(start, end).replace(/\s+/gu, " ").trim();
+    return `${start > 0 ? "... " : ""}${compact}${end < text.length ? " ..." : ""}`;
   }
 
   private toDocumentResult(row: SearchDocumentRow, projectId: string | null): WorkbenchSearchResult | null {

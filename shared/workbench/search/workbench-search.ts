@@ -5,8 +5,8 @@
  * - WorkbenchSearchRequest/Response/Result and schemas: typed workspace-search RPC contract. Keywords: search, zod, rpc.
  * - WorkbenchSearchFieldKind/WorkbenchSearchField: weighted searchable text contracts.
  * - WorkbenchSearchClause: parsed positive or excluded word/phrase.
- * - parseWorkbenchSearchQuery/rankWorkbenchSearchFields: fuzzy per-word query grammar and weighted field scorer. Keywords: search, fuzzy, phrase, negative, ranking.
- * - createWorkbenchSearchMatcher: reusable query-scoped scorer with memoised token comparisons.
+ * - parseWorkbenchSearchQuery/rankWorkbenchSearchFields: fuzzy query grammar and coverage, frequency, field, and excerpt evidence.
+ * - createWorkbenchSearchMatcher: reusable query-scoped scorer with memoised token comparisons. Keywords: search, fuzzy, phrase, negative, ranking.
  */
 import { z } from "zod";
 
@@ -25,7 +25,7 @@ export const WORKBENCH_SEARCH_ACTIONS = [
 ] as const;
 
 export type WorkbenchSearchActionId = typeof WORKBENCH_SEARCH_ACTIONS[number]["id"];
-export type WorkbenchSearchFieldKind = "title" | "userMessage" | "commentary" | "filePath";
+export type WorkbenchSearchFieldKind = "title" | "userMessage" | "assistantMessage" | "filePath";
 export interface WorkbenchSearchField {
   kind: WorkbenchSearchFieldKind;
   text: string;
@@ -81,11 +81,14 @@ export type WorkbenchSearchResult = z.infer<typeof WorkbenchSearchResultSchema>;
 export type WorkbenchSearchResponse = z.infer<typeof WorkbenchSearchResponseSchema>;
 
 const FIELD_WEIGHTS: Record<WorkbenchSearchFieldKind, number> = {
-  commentary: 2,
+  assistantMessage: 2,
   filePath: 1,
   title: 8,
   userMessage: 4,
 };
+const COVERAGE_WEIGHT = 8;
+const MAX_FREQUENCY_BOOST = 0.6;
+const FREQUENCY_BOOST_PER_DOUBLING = 0.2;
 
 export function parseWorkbenchSearchQuery(query: string): WorkbenchSearchClause[] {
   const clauses: WorkbenchSearchClause[] = [];
@@ -142,27 +145,68 @@ function boundedEditDistance(left: string, right: string, limit: number) {
   return previous[right.length];
 }
 
+interface ClauseEvidence {
+  index: number;
+  occurrences: number;
+  quality: number;
+}
+
+function findOccurrences(text: string, value: string) {
+  const indexes: number[] = [];
+  let index = text.indexOf(value);
+  while (index >= 0) {
+    indexes.push(index);
+    index = text.indexOf(value, index + Math.max(1, value.length));
+  }
+  return indexes;
+}
+
 function createClauseMatcher(clause: WorkbenchSearchClause) {
-  if (clause.kind === "phrase") return (text: string) => text.includes(clause.value) ? 1 : 0;
+  if (clause.kind === "phrase") return (text: string): ClauseEvidence | null => {
+    const indexes = findOccurrences(text, clause.value);
+    return indexes.length ? { index: indexes[0]!, occurrences: indexes.length, quality: 1 } : null;
+  };
   const needle = clause.value;
   const scores = new Map<string, number>();
-  return (text: string) => {
-    if (text === needle) return 1;
-    if (text.startsWith(needle)) return 0.95;
-    if (text.includes(needle)) return 0.9;
-    let best = 0;
-    for (const [word] of text.matchAll(/[\p{L}\p{N}_./\\-]+/gu)) {
+  return (text: string): ClauseEvidence | null => {
+    const directIndexes = findOccurrences(text, needle);
+    let bestQuality = 0;
+    let bestIndex = directIndexes[0] ?? -1;
+    let fuzzyOccurrences = 0;
+    for (const match of text.matchAll(/[\p{L}\p{N}_./\\-]+/gu)) {
+      const word = match[0];
       let score = scores.get(word);
       if (score === undefined) {
-        const length = Math.max(needle.length, word.length);
-        const limit = Math.max(1, Math.floor(length / 3));
-        const distance = boundedEditDistance(needle, word, limit);
-        score = distance <= limit ? 0.75 * (1 - distance / length) : 0;
+        if (word === needle) {
+          score = 1;
+        } else if (word.startsWith(needle)) {
+          score = 0.95;
+        } else if (word.includes(needle)) {
+          score = 0.9;
+        } else {
+          const length = Math.max(needle.length, word.length);
+          const limit = Math.max(1, Math.floor(length / 3));
+          const distance = boundedEditDistance(needle, word, limit);
+          score = distance <= limit ? 0.75 * (1 - distance / length) : 0;
+        }
         scores.set(word, score);
       }
-      best = Math.max(best, score);
+      if (score <= 0) continue;
+      fuzzyOccurrences += 1;
+      if (score > bestQuality) {
+        bestQuality = score;
+        bestIndex = match.index;
+      }
     }
-    return best;
+    if (bestQuality <= 0 && directIndexes.length) {
+      bestQuality = text === needle ? 1 : text.startsWith(needle) ? 0.95 : 0.9;
+    }
+    if (bestQuality <= 0) return null;
+    return {
+      index: bestIndex,
+      occurrences: Math.max(directIndexes.length, fuzzyOccurrences),
+      quality: bestQuality,
+    };
   };
 }
 
@@ -175,31 +219,56 @@ export function rankWorkbenchSearchFields(
 
 export function createWorkbenchSearchMatcher(clauses: readonly WorkbenchSearchClause[]) {
   const negatives = clauses.filter((clause) => clause.excluded).map(createClauseMatcher);
-  const positives = clauses.filter((clause) => !clause.excluded).map(createClauseMatcher);
+  const positives = clauses.filter((clause) => !clause.excluded).map((clause) => ({
+    kind: clause.kind,
+    match: createClauseMatcher(clause),
+  }));
   return (fields: readonly WorkbenchSearchField[]) => {
-    const normalized = fields.map((field) => ({ kind: field.kind, text: field.text.toLocaleLowerCase() }));
-    if (negatives.some((match) => normalized.some((field) => match(field.text) > 0))) return null;
+    const normalized = fields.map((field, index) => ({
+      index,
+      kind: field.kind,
+      text: field.text.toLocaleLowerCase(),
+    }));
+    if (negatives.some((match) => normalized.some((field) => match(field.text) !== null))) return null;
 
-    let score = 0;
-    let bestFieldKind: WorkbenchSearchFieldKind = fields[0]?.kind ?? "title";
-    let bestFieldScore = -1;
-    for (const match of positives) {
+    const fieldEvidence = normalized.map(() => ({ highlightIndex: 0, highlightScore: -1, score: 0 }));
+    let matchedClauses = 0;
+    let textScore = 0;
+    for (const positive of positives) {
       let clauseScore = 0;
-      let clauseField: WorkbenchSearchFieldKind | null = null;
       for (const field of normalized) {
-        const weighted = match(field.text) * FIELD_WEIGHTS[field.kind];
-        if (weighted > clauseScore) {
-          clauseScore = weighted;
-          clauseField = field.kind;
+        const evidence = positive.match(field.text);
+        if (!evidence) continue;
+        const frequencyBoost = 1 + Math.min(
+          Math.log2(Math.max(1, evidence.occurrences)) * FREQUENCY_BOOST_PER_DOUBLING,
+          MAX_FREQUENCY_BOOST,
+        );
+        const weighted = evidence.quality * FIELD_WEIGHTS[field.kind] * frequencyBoost;
+        const aggregate = fieldEvidence[field.index]!;
+        aggregate.score += weighted;
+        if (weighted > aggregate.highlightScore) {
+          aggregate.highlightIndex = evidence.index;
+          aggregate.highlightScore = weighted;
         }
+        clauseScore = Math.max(clauseScore, weighted);
       }
-      if (!clauseField) return null;
-      score += clauseScore;
-      if (clauseScore > bestFieldScore) {
-        bestFieldScore = clauseScore;
-        bestFieldKind = clauseField;
+      if (clauseScore <= 0) {
+        if (positive.kind === "phrase") return null;
+        continue;
       }
+      matchedClauses += 1;
+      textScore += clauseScore;
     }
-    return { bestFieldKind, score };
+    if (positives.length > 0 && matchedClauses === 0) return null;
+    const coverage = positives.length > 0 ? matchedClauses / positives.length : 1;
+    const bestFieldIndex = fieldEvidence.reduce((best, evidence, index, all) => (
+      evidence.score > all[best]!.score ? index : best
+    ), 0);
+    return {
+      bestFieldIndex,
+      bestFieldKind: fields[bestFieldIndex]?.kind ?? "title",
+      matchIndex: fieldEvidence[bestFieldIndex]?.highlightIndex ?? 0,
+      score: (positives.length > 0 ? textScore / positives.length : 0) + coverage * COVERAGE_WEIGHT,
+    };
   };
 }

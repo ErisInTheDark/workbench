@@ -613,7 +613,7 @@ test("database requests share one evolving relational fixture", async (context) 
     await context.test("claim snapshots return bounded stats and renamed paths", () => checkClaimStats(controller));
     await context.test("typed transactions preserve rows and roll back failed writes", () => checkTransactions(controller));
     await context.test("terminal turns preserve missing timestamps and materialisation", () => checkTerminalTurn(controller));
-    await context.test("search ranks relational sources without settled bodies", () => checkWorkspaceSearch(controller));
+    await context.test("search ranks non-archived relational narrative", () => checkWorkspaceSearch(controller));
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
@@ -878,8 +878,8 @@ async function checkWorkspaceSearch(controller: WorkbenchDatabaseController) {
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "narwhal" })).results[0]?.title, "Active search thread");
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "comet" })).results[0]?.title, "Active search thread");
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "settled archive" })).results[0]?.title, "Settled archive");
-    assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "sleepyhidden" })).results, []);
-    assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "finalsecret" })).results, []);
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "sleepyhidden" })).results[0]?.title, "Settled archive");
+    assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "finalsecret" })).results[0]?.title, "Active search thread");
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "\"lowestvalue\"" })).results[0]?.kind, "file");
     assert.deepEqual((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "other-only" })).results, []);
 }

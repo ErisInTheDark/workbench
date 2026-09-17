@@ -11,6 +11,163 @@ import type { WorkbenchTranscriptObservation } from "../transcript/workbench-tra
 import WorkbenchSearchRepository from "./WorkbenchSearchRepository";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
+function seedSearchThread(
+  transcript: WorkbenchTranscriptRepository,
+  {
+    activityAt,
+    assistantText,
+    id,
+    title,
+    userText,
+  }: {
+    activityAt: number;
+    assistantText: string;
+    id: string;
+    title: string;
+    userText: string;
+  },
+) {
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id);
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(`${id}-turn`);
+  transcript.settle([{
+    kind: "canonicalWindow",
+    threadId,
+    contentVersion: 3,
+    materializedTurnIds: [turnId],
+    observations: [
+      {
+        kind: "thread",
+        threadId,
+        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+        projectRoot: "C:/project",
+        title,
+        createdAt: activityAt,
+        updatedAt: activityAt,
+        activityAt,
+      },
+      {
+        kind: "turn",
+        threadId,
+        turnId,
+        turnIndex: 0,
+        harnessId: "codex",
+        nativeLocation: "C:/project",
+        nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(id),
+        nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(`${id}-turn`),
+        state: "completed",
+        createdAt: activityAt,
+        startedAt: activityAt,
+        endedAt: activityAt,
+        durationMs: 0,
+      },
+      {
+        kind: "item",
+        threadId,
+        turnId,
+        lifecycle: "completed",
+        observedAt: activityAt,
+        item: {
+          clientId: `${id}-user`,
+          content: [{ text: userText, text_elements: [], type: "text" }],
+          id: `${id}-user`,
+          type: "userMessage",
+        },
+      },
+      {
+        kind: "item",
+        threadId,
+        turnId,
+        lifecycle: "completed",
+        observedAt: activityAt,
+        item: {
+          id: `${id}-assistant`,
+          delivery: null,
+          questions: null,
+          memoryCitation: null,
+          phase: "commentary",
+          text: assistantText,
+          type: "agentMessage",
+        },
+      },
+    ],
+  }]);
+}
+
+test("search ranks recent settled narrative, repeated terms, and match-centred excerpts without archived bodies", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    const now = Date.UTC(2026, 8, 17);
+    const transcript = new WorkbenchTranscriptRepository(database);
+    seedSearchThread(transcript, {
+      activityAt: now - 2 * 86_400_000,
+      assistantText: "The implementation kept the loading state lifecycle-owned.",
+      id: "recent-loader",
+      title: "Recent visual repair",
+      userText: `${"unrelated opening context ".repeat(20)}loader animation loader animation loader`,
+    });
+    seedSearchThread(transcript, {
+      activityAt: now - 60 * 86_400_000,
+      assistantText: "A loader animation was mentioned once.",
+      id: "stale-loader",
+      title: "Old visual note",
+      userText: "Please inspect the loader.",
+    });
+    seedSearchThread(transcript, {
+      activityAt: now - 86_400_000,
+      assistantText: "Archived loader loading animation loader loading animation.",
+      id: "archived-loader",
+      title: "Archived unrelated work",
+      userText: "Archived narrative must stay hidden.",
+    });
+    seedSearchThread(transcript, {
+      activityAt: now - 2 * 86_400_000,
+      assistantText: "freshnesssignal",
+      id: "recent-freshness",
+      title: "Recent freshness result",
+      userText: "",
+    });
+    seedSearchThread(transcript, {
+      activityAt: now - 60 * 86_400_000,
+      assistantText: "",
+      id: "stale-freshness",
+      title: "Stale freshness result",
+      userText: "freshnesssignal",
+    });
+    const lifecycle = database.prepare(`
+      INSERT INTO workbench_thread_lifecycle
+        (thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status, updated_at)
+      VALUES (?, 'completed', 'agentCompleted', ?, ?, NULL, 'completed', ?)
+    `);
+    lifecycle.run("recent-loader", 1, "recent-loader-turn", now);
+    lifecycle.run("stale-loader", 0, "stale-loader-turn", now);
+    lifecycle.run("archived-loader", 1, "archived-loader-turn", now);
+    lifecycle.run("recent-freshness", 1, "recent-freshness-turn", now);
+    lifecycle.run("stale-freshness", 0, "stale-freshness-turn", now);
+    database.prepare("UPDATE workbench_threads SET archived = 1 WHERE id = 'archived-loader'").run();
+
+    const repository = new WorkbenchSearchRepository(database, { now: () => now });
+    const results = repository.search({
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      query: "loader loading animation",
+    }).results;
+
+    assert.deepEqual(results.map(({ title }) => title), ["Recent visual repair", "Old visual note"]);
+    assert.match(results[0]?.detail ?? "", /^You: \.\.\..*loader animation/u);
+    assert.deepEqual(repository.search({
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      query: "\"Archived unrelated work\"",
+    }).results, []);
+    assert.deepEqual(repository.search({
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      query: "freshnesssignal",
+    }).results.map(({ title }) => title), ["Recent freshness result", "Stale freshness result"]);
+  } finally {
+    database.close();
+  }
+});
+
 test("search stays below 500ms per query on a multi-megabyte relational corpus", (t) => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
@@ -68,9 +225,10 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
       measurements.push({ query, elapsedMs });
       if (query === "asdlfkajsdlfkjasdlfkjasdf") assert.deepEqual(response.results, []);
       else assert.ok(response.results.length > 0, query);
-      if (query === "quartzzeppeln" || query === "quartzzeppelin state" || query === '"exact phrase"') {
+      if (query === "quartzzeppeln" || query === '"exact phrase"') {
         assert.deepEqual(response.results.map((result) => result.id), ["thread:search-thread-0"]);
       }
+      if (query === "quartzzeppelin state") assert.equal(response.results[0]?.id, "thread:search-thread-0");
     }
     t.diagnostic(`corpus=${corpusCharacters} chars; ${measurements.map(({ query, elapsedMs }) => `${query || "(empty)"}=${elapsedMs.toFixed(1)}ms`).join("; ")}`);
     for (const { query, elapsedMs } of measurements) {
