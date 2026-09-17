@@ -768,20 +768,26 @@ test("disposal owns an in-flight subscription failure without reporting it", asy
   assert.deepEqual(errors, []);
 });
 
-test("reconciled projections publish and real invalidations clear the browser read model", async () => {
+test("reconciled projections survive reconnect until a fresh subscription replaces them", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const subscriptions: string[] = [];
   const publications: Array<{ status: string; threadId: string | null }> = [];
+  const states: ThreadTranscriptProjectionState[] = [];
   const controller = new ThreadTranscriptProjectionController({
     available: true,
     onError: () => undefined,
     onStateChange: (state) => {
+      states.push(state);
       publications.push({
         status: state.status,
         threadId: "threadId" in state ? state.threadId : null,
       });
     },
     transcripts: {
-      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      subscribe: async (params, listener) => {
+        subscriptions.push(params.subscriptionId);
+        listeners.set(params.subscriptionId, listener);
+      },
       unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
     },
     turnLimit: 4,
@@ -802,12 +808,33 @@ test("reconciled projections publish and real invalidations clear the browser re
   [...listeners.values()][0]?.(emptySnapshot("two"));
   await flush();
   assert.deepEqual(publications.at(-1), { status: "ready", threadId: "two" });
+  const accepted = states.at(-1);
+  assert.ok(accepted?.status === "ready");
 
   controller.setAvailable(false);
-  assert.deepEqual(publications.at(-1), { status: "unavailable", threadId: "two" });
+  const disconnected = states.at(-1);
+  assert.ok(disconnected?.status === "loading");
+  assert.equal(disconnected.projection, accepted.projection);
+  listeners.get(subscriptions.at(-1)!)?.(emptySnapshot("two"));
+  assert.equal(states.at(-1), disconnected);
+
   controller.setAvailable(true);
-  assert.deepEqual(publications.at(-1), { status: "loading", threadId: "two" });
+  const reconnecting = states.at(-1);
+  assert.ok(reconnecting?.status === "loading");
+  assert.equal(reconnecting.projection, accepted.projection);
   await flush();
+  assert.equal(subscriptions.length, 3);
+  const baseline = emptySnapshot("two");
+  const refreshed = {
+    ...baseline,
+    thread: { ...baseline.thread, title: "Fresh after reconnect" },
+  };
+  listeners.get(subscriptions.at(-1)!)?.(refreshed);
+  const recovered = states.at(-1);
+  assert.ok(recovered?.status === "ready");
+  assert.equal(recovered.projection.thread.title, "Fresh after reconnect");
+  assert.notEqual(recovered.projection, accepted.projection);
+
   controller.dispose();
   assert.deepEqual(publications.at(-1), { status: "idle", threadId: null });
 });

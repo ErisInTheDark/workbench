@@ -173,7 +173,6 @@ export default class ThreadTranscriptProjectionController {
     if (this.#disposed || this.#available === available) return;
     this.#available = available;
     if (available) this.#hasBeenAvailable = true;
-    this.#projection = null;
     this.#streamItems.clear();
     this.#patchPreview = null;
     this.#streamLayout = null;
@@ -181,10 +180,10 @@ export default class ThreadTranscriptProjectionController {
     if (!available) {
       this.#generation += 1;
       this.#activeSubscriptionId = null;
-      this.#publishUnavailableOrIdle();
+      if (!this.#publishProjection("loading")) this.#publishUnavailableOrIdle();
       return;
     }
-    this.#publishLoadingOrIdle();
+    if (!this.#publishProjection("loading")) this.#publishLoadingOrIdle();
     this.#replaceSubscription();
   }
 
@@ -385,6 +384,7 @@ export default class ThreadTranscriptProjectionController {
   }
 
   #publishDisconnectedOrLoading() {
+    if (this.#publishProjection("loading")) return;
     if (this.#hasBeenAvailable) {
       this.#publishUnavailableOrIdle();
       return;
