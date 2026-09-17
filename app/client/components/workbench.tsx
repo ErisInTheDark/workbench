@@ -2347,7 +2347,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
                 : isDirectThreadSurface
-                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
+                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
                 : showFullBleedMainView
                   ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
                   : " overflow-y-auto px-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6"
