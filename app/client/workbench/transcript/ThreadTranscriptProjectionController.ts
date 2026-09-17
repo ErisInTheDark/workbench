@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTranscriptProjectionSelection: selected window and locally owned input presentation.
  * - ThreadTranscriptProjectionState: SQLite source presentation lifecycle.
- * - default ThreadTranscriptProjectionController: own incremental publication, transient patch previews, local input presentation and subscriptions.
+ * - default ThreadTranscriptProjectionController: own incremental publication, transient/local presentation, source-local failures and subscriptions.
  */
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -78,9 +78,12 @@ function localInitials(
   thread: ThreadPayload | undefined,
   retained: readonly OptimisticInitialInputProjection[] = [],
 ) {
+  const retainedById = new Map(retained.map(projection => [projection.item.id, projection]));
   return (thread?.turns ?? []).flatMap(turn => {
     const itemsById = new Map(turn.items
-      .filter(item => item.type === "userMessage" && isUndeliveredInitialOptimisticInputItem(item))
+      .filter(item => item.type === "userMessage"
+        && isUndeliveredInitialOptimisticInputItem(item)
+        && (retainedById.get(item.id)?.turnId ?? turn.id) === turn.id)
       .map(item => [item.id, item]));
     for (const projection of retained) {
       if (projection.turnId === turn.id) itemsById.set(projection.item.id, projection.item);
@@ -341,7 +344,21 @@ export default class ThreadTranscriptProjectionController {
   }
 
   #publishProjection(status: "loading" | "ready" = "ready") {
-    const projection = this.#reconcileCurrentProjection();
+    let projection: WorkbenchTranscriptProjection | null;
+    try {
+      projection = this.#reconcileCurrentProjection();
+    } catch (error) {
+      const threadId = this.#selection?.thread.id;
+      if (!threadId) return false;
+      const cause = error instanceof Error ? error : new Error(String(error));
+      this.#onStateChange({
+        message: "Unable to present the SQLite transcript.",
+        status: "failed",
+        threadId,
+      });
+      this.#onError(new Error(`SQLite transcript presentation failed: ${cause.message}`, { cause }));
+      return true;
+    }
     if (!projection) return false;
     this.#onStateChange({
       projection,

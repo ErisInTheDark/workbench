@@ -1044,3 +1044,79 @@ test("selection stays inert until capability and reconnect capability creates a 
   controller.dispose();
 });
 
+test("retained optimistic placement replaces a stale pending-turn copy", async () => {
+  const optimisticId = "35439acf-3a80-4895-8a93-bf74091b5c21";
+  const optimisticItem = withWorkbenchInputState({
+    clientId: optimisticId,
+    content: [{ text: "hello", text_elements: [], type: "text" }],
+    id: optimisticId,
+    type: "userMessage",
+  }, {
+    kind: "optimistic",
+    placement: "initial",
+    status: "sent",
+  });
+  const source = thread("thread", ["pending", "started"]);
+  source.status = "active";
+  source.turns = source.turns.map((turn, index) => withWorkbenchTurnAdmission({
+    ...turn,
+    completedAt: null,
+    durationMs: null,
+    items: index === 0 ? [optimisticItem] : [],
+    status: "inProgress",
+  }, index === 0 ? "providerPending" : "connecting"));
+  const states: ThreadTranscriptProjectionState[] = [];
+  let receive!: (snapshot: WorkbenchTranscriptSnapshot | null) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onStateChange: state => states.push(state),
+    readOptimisticInitials: () => [{ item: optimisticItem, turnId: "started" }],
+    transcripts: {
+      subscribe: async (_params, listener) => { receive = listener; },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+
+  controller.select({ thread: source });
+  await flush();
+  receive(emptySnapshot("thread"));
+
+  const state = states.at(-1)!;
+  assert.equal(state.status, "ready");
+  assert.deepEqual(state.projection.display.segments.flatMap(segment => (
+    segment.items.map(item => ({ id: item.id, turnId: segment.turnId }))
+  )), [{ id: optimisticId, turnId: "started" }]);
+  await controller.dispose();
+});
+
+test("display planning failures stay source-local and a valid selection recovers", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  const errors: Error[] = [];
+  let receive!: (snapshot: WorkbenchTranscriptSnapshot | null) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onError: error => errors.push(error),
+    onStateChange: state => states.push(state),
+    transcripts: {
+      subscribe: async (_params, listener) => { receive = listener; },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+  const malformed = thread("thread", ["duplicate", "duplicate"]);
+  malformed.turns = malformed.turns.map(turn => withWorkbenchTurnAdmission(turn, "connecting"));
+
+  controller.select({ thread: malformed });
+  await flush();
+  assert.doesNotThrow(() => receive(emptySnapshot("thread")));
+  assert.equal(states.at(-1)?.status, "failed");
+  assert.match(errors.at(-1)?.message ?? "", /transcript presentation failed/u);
+
+  const valid = thread("thread", ["valid"]);
+  valid.turns = valid.turns.map(turn => withWorkbenchTurnAdmission(turn, "connecting"));
+  controller.select({ thread: valid });
+  assert.equal(states.at(-1)?.status, "ready");
+  await controller.dispose();
+});
+
