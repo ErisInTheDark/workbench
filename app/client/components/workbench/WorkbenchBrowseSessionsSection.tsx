@@ -8,8 +8,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import type { WorkbenchBrowseSessionSummary } from "workbench-shared/types";
-import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
+import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { BrowseSessionsList } from "./workbench-explorer";
 import {
   ArchiveIcon,
@@ -20,7 +20,7 @@ import {
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 
-export default function WorkbenchBrowseSessionsSection({
+export default function WorkbenchBrowseSessionsSection ({
   controller,
 }: {
   controller: WorkbenchBrowseSessionController;
@@ -75,7 +75,7 @@ export default function WorkbenchBrowseSessionsSection({
   if (!snapshot.sessions.length) return null;
 
   return (
-    <section className="shrink-0 pb-5">
+    <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
         contentClassName="space-y-2"
         icon={BrowserSessionIcon}

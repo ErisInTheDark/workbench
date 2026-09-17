@@ -9,21 +9,21 @@ import { useMemo, type MouseEvent } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./project-sidebar-groups";
-import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
+import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { ProjectIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
+import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
-import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 
-export default function ProjectSidebar({
+export default function ProjectSidebar ({
   activeProjectId,
   onProjectLinkClick,
   projects,
 }: {
   activeProjectId: string;
-  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
+  onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
   projects: readonly WorkbenchProjectOption[];
 }) {
   const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
@@ -55,7 +55,7 @@ export default function ProjectSidebar({
   const nowMs = Date.now();
 
   return (
-    <section className="shrink-0 pb-5">
+    <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
         actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="other project" scope="project" />}
         contentClassName="pb-3"

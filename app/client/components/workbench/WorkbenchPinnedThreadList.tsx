@@ -7,6 +7,22 @@
 import { useMemo } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import { createPinnedThreadRoute, createThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import {
+  findThreadDisplayFolder,
+  getProjectQualifiedThreadDisplayKey,
+  getThreadDisplayDraftKey,
+  getThreadDisplayFolderKey,
+  getThreadDisplayThreadKey,
+  projectThreadDisplayLayoutSection,
+  type ThreadDisplayLayoutItem,
+} from "workbench-shared/workbench/thread/thread-display-layout";
+import type { WorkbenchThreadTarget as CanonicalThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import {
+  type WorkbenchPinnedThreadSummaryEntry,
+  type WorkbenchThreadSidebarEntry,
+  type WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
+} from "workbench-shared/workbench/thread/thread-state";
 import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
@@ -15,41 +31,26 @@ import {
   WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
   type WorkbenchDragPayload,
 } from "../../workbench/layout/workbench-drag";
-import { createPinnedThreadRoute, createThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import {
-  getProjectQualifiedThreadDisplayKey,
-  getThreadDisplayFolderKey,
-  findThreadDisplayFolder,
-  projectThreadDisplayLayoutSection,
-  type ThreadDisplayLayoutItem,
-} from "workbench-shared/workbench/thread/thread-display-layout";
-import {
-  type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchThreadSidebarEntry,
-  type WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
-} from "workbench-shared/workbench/thread/thread-state";
-import { PinIcon } from "./workbench-icons";
+  mergeContextMenuPlacementEntries,
+  useContextMenuPlacementSnapshot,
+} from "./context-menu-placement";
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
+import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
+import { PinIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
-import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
+import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
-import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
-import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadTarget as CanonicalThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import {
-  mergeContextMenuPlacementEntries,
-  useContextMenuPlacementSnapshot,
-} from "./context-menu-placement";
 
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActionsProvider.useActions>,
@@ -70,23 +71,23 @@ type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActi
 type GlobalPinnedListEntry = WorkbenchPinnedThreadSummaryEntry | Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
 type GlobalPinnedEntry = { entry: GlobalPinnedListEntry; project: WorkbenchProjectOption };
 
-function targetForEntry(entry: GlobalPinnedListEntry): CanonicalThreadTarget {
+function targetForEntry (entry: GlobalPinnedListEntry): CanonicalThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: "draftId" in entry ? entry.draftId : entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
-function displayKeyForEntry(entry: GlobalPinnedListEntry) {
+function displayKeyForEntry (entry: GlobalPinnedListEntry) {
   return entry.entryKind === "draft"
     ? getThreadDisplayDraftKey("draftId" in entry ? entry.draftId : entry.draft.draftId)
     : getThreadDisplayThreadKey(entry.identity.harness, entry.identity.threadId);
 }
 
-function displayKeyForGlobalEntry({ entry, project }: GlobalPinnedEntry) {
+function displayKeyForGlobalEntry ({ entry, project }: GlobalPinnedEntry) {
   return getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry));
 }
 
-function mergePinnedDisplayItems(
+function mergePinnedDisplayItems (
   items: Array<ThreadDisplayLayoutItem<GlobalPinnedEntry>>,
   currentEntries: readonly GlobalPinnedEntry[],
 ) {
@@ -102,7 +103,7 @@ function mergePinnedDisplayItems(
     : { ...item, entry: current(item.entry) });
 }
 
-export default function WorkbenchPinnedThreadList({
+export default function WorkbenchPinnedThreadList ({
   activeDragPayload,
   actions,
   currentTarget,
@@ -240,8 +241,8 @@ export default function WorkbenchPinnedThreadList({
       enabled={(payload) => isWorkbenchThreadRowDragPayload(payload)
         ? canMoveWorkbenchThreadRowToSection(payload, "pinned")
         : payload.type === "thread-folder"
-          && payload.section === "pinned"
-          && destinationFolderId === null}
+        && payload.section === "pinned"
+        && destinationFolderId === null}
       onDrop={(payload) => {
         if (isWorkbenchThreadRowDragPayload(payload)) {
           actions.onPinnedMove(
@@ -313,7 +314,7 @@ export default function WorkbenchPinnedThreadList({
     </li>
   );
   return (
-    <DropTargetBoundary className="pb-5">
+    <DropTargetBoundary className="pb-3">
       <WorkbenchSidebarSectionDisclosure
         actions={<WorkbenchThreadStatusCountsButton counts={statusCounts} label="pinned thread" scope="pinned" />}
         contentClassName="mt-1"

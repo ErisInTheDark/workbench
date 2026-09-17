@@ -3,12 +3,12 @@
 import type { MouseEvent } from "react";
 import { createGitRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import { GitGraphIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon } from "../workbench-icons";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
+import { GitArcCleanClaimIcon, GitArcDirtyClaimIcon, GitGraphIcon } from "../workbench-icons";
 import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclosure";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
-export default function WorkbenchGitSidebar({ active, onNavigate }: { active: boolean; onNavigate(event: MouseEvent<HTMLAnchorElement>): void }) {
+export default function WorkbenchGitSidebar ({ active, onNavigate }: { active: boolean; onNavigate (event: MouseEvent<HTMLAnchorElement>): void }) {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
   const projectHref = useWorkbenchProjectNavigation();
@@ -17,9 +17,9 @@ export default function WorkbenchGitSidebar({ active, onNavigate }: { active: bo
   const Icon = dirty ? GitArcDirtyClaimIcon : GitArcCleanClaimIcon;
   const label = snapshot.status === "idle" || snapshot.status === "loading" ? "Checking changes..."
     : snapshot.status === "error" || snapshot.data.errors.length ? "Changes unavailable"
-    : snapshot.status === "unavailable" ? "Git unavailable"
-    : dirty ? "Uncommitted changes" : "No changes";
-  return <section className="shrink-0 pb-5">
+      : snapshot.status === "unavailable" ? "Git unavailable"
+        : dirty ? "Uncommitted changes" : "No changes";
+  return <section className="shrink-0 pb-3">
     <WorkbenchSidebarSectionDisclosure icon={GitGraphIcon} preferenceKey="gitOpen" title="Git">
       <a href={projectHref(createGitRoute(state.projectId))} onClick={onNavigate} aria-current={active ? "page" : undefined} className={`
         ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
