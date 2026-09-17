@@ -4,16 +4,10 @@
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
  * - default CodexStdioBridge: own request translation, transcript recovery, questionnaires, and reload state around a stable app-server.
  */
+import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
+import { parseTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 import { randomUUID } from "node:crypto";
-import {
-  NativeThreadIdSchema,
-  NativeTurnIdSchema,
-  ProjectIdSchema,
-  ThreadReferenceSchema,
-  WorkbenchItemIdSchema,
-  type NativeThreadId,
-  type NativeTurnId,
-} from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 
 import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
@@ -33,31 +27,21 @@ import CodexProviderObservations, {
   admitCodexTranscriptObservations as admitNativeTranscriptObservations,
   mapCodexTranscriptObservation as mapNativeTranscriptObservation,
 } from "./CodexProviderObservations";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import { isSupportedWorkbenchTranscriptItem } from "workbench-shared/codex/thread-item-normalization";
+import { isSupportedWorkbenchTranscriptItem } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import { readCodexContextUsage } from "./codex-thread-context-usage";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
-import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/codex/thread-state";
+import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { ToolRequestUserInputParams } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
-import type {
-    WorkbenchApprovalCommandContext,
-    WorkbenchBrowseResultEntry,
-    WorkbenchQuestionnaireHistoryEntry,
-    WorkbenchSteerHistoryEntry,
-    WorkbenchThreadContextReadResponse,
-    WorkbenchThreadTurnHistoryEntry,
-    WorkbenchUserInputQuestion,
-    WorkbenchUserInputRequest,
-    WorkbenchUserInputResponse,
-} from "workbench-shared/types";
+import type { WorkbenchApprovalCommandContext, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputQuestion, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { resolveAgentEndpointProjectFromCwd } from "./lib/workbench/project/agent-endpoint-project";
 import {
   readWorkbenchFileChangeFailureMarker,
@@ -70,20 +54,10 @@ import {
   type WorkbenchToolOutput,
 } from "workbench-shared/workbench/thread/thread-tool-output";
 import CodexFileChangeController, { type CodexFileChangeState } from "./CodexFileChangeController";
-import {
-  readWorkbenchThreadPageNextCursor,
-  WORKBENCH_THREAD_PAGE_READ_METHOD,
-  WorkbenchThreadPageReadParamsSchema,
-  type WorkbenchThreadPageResponse,
-} from "workbench-shared/workbench/thread/workbench-thread-page";
+import { readWorkbenchThreadPageNextCursor, WORKBENCH_THREAD_PAGE_READ_METHOD, WorkbenchThreadPageReadParamsSchema } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { WorkbenchQuestionnaireHistoryEntrySchema } from "workbench-shared/workbench/thread/thread-state";
-import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type {
-  NativeTranscriptAtomicObservation,
-  NativeTranscriptObservation,
-  WorkbenchTranscriptObservation,
-  WorkbenchTranscriptRecordingContext,
-} from "./database/transcript/workbench-transcript-types.ts";
+import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { NativeTranscriptObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptRecordingContext } from "./database/transcript/workbench-transcript-types.ts";
 import {
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
@@ -124,7 +98,7 @@ import { createInitializeCapabilities, createInitializeRequest } from "workbench
 import type { WorkbenchThreadPageReadParams } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { log, logError } from "./process-helpers";
 import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
-import { admitProviderNotifications, admitProviderThreads, mapProviderNotification, mapProviderThread } from "./thread-identity-provider-mapping";
+import { admitProviderNotifications, admitProviderThreads, mapProviderNotification, mapProviderThread } from "./CodexProviderIdentity";
 import type { TranscriptTextField, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import {
   type NativeTranscriptIdentityOwners,
@@ -137,18 +111,7 @@ class CodexTranscriptSqliteRecordingFailure extends Error {
   }
 }
 
-type PendingClientResponse = {
-  client: BridgeClient;
-  clientRequestId: number | string;
-  internal: false;
-  method: string | null;
-  requestSource: WorkbenchRequestSource;
-  threadHydration: WorkbenchThreadHydrationRequest | null;
-  upstreamRequest: JsonRpcRequest;
-};
-
-type PendingInternalResponse = {
-  internal: true;
+type PendingResponse = {
   method: string | null;
   reject: (reason?: unknown) => void;
   requestSource: WorkbenchRequestSource;
@@ -164,15 +127,8 @@ type PendingInternalResponse = {
   };
 };
 
-type PendingResponse = PendingClientResponse | PendingInternalResponse;
-
-function isPendingInternalResponse(pending: PendingResponse): pending is PendingInternalResponse {
-  return pending.internal === true;
-}
-
 export type CodexStdioBridgeOptions = {
   appServer: CodexAppServer;
-  bridgeUrl: string;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   initialState?: CodexStdioBridgeReloadState;
   instructions?: WorkbenchCodexInstructionPort;
@@ -212,8 +168,6 @@ export type CodexStdioBridgeOptions = {
   readSqliteContextUsage?: (threadId: string) => Promise<ThreadContextUsageSnapshot | null>;
   restartingAppServer?: boolean;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
-  sendToClient: (client: BridgeClient, message: unknown) => void;
-  storageRoot: string;
   transcriptAssets?: Pick<import("./database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
   sqliteReader?: CodexSqliteTranscriptReader;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
@@ -255,7 +209,6 @@ export type CodexStdioBridgeReloadState = {
   fileChanges?: CodexFileChangeState;
   fileChangeFailureMarkers?: Map<string, WorkbenchFileChangeFailureMarker>;
   fileChangeTurnCursors?: Map<string, string>;
-  initializeResult: unknown;
   unmaterializedThreadIds?: Set<string>;
   pendingResponses: Map<number, PendingResponse>;
   retiringResponses?: Map<number, PendingResponse>;
@@ -412,10 +365,6 @@ function readNotificationStringParam(notification: JsonRpcNotification, key: str
 
 function readNotificationNumberParam(notification: JsonRpcNotification, key: string) {
   return asNumber(asRecord(notification.params)?.[key]);
-}
-
-function readRequestSource(message: JsonRpcRequest): WorkbenchRequestSource {
-  return message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh" ? "autoRefresh" : "user";
 }
 
 function readThreadHydration(message: JsonRpcRequest): WorkbenchThreadHydrationRequest | null {
@@ -861,7 +810,6 @@ function toFileChangeApprovalDecision(choice: ApprovalDecisionChoice): FileChang
 
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
-  private readonly bridgeUrl: string;
   private readonly fileChanges: CodexFileChangeController;
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly publishNativeNotification: (notification: JsonRpcNotification) => void;
@@ -871,7 +819,6 @@ export default class CodexStdioBridge {
   private readonly createThread: CodexStdioBridgeOptions["createThread"];
   private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
-  private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly transcriptAssets: CodexStdioBridgeOptions["transcriptAssets"];
   private readonly sqliteReader?: CodexSqliteTranscriptReader;
   private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
@@ -880,7 +827,6 @@ export default class CodexStdioBridge {
   private generation = new AbortController();
   private readonly transcriptPersistence = new Set<Promise<unknown>>();
   private threadPageReadsPreparedForReload = false;
-  private initializeResult: unknown;
   private acceptingWork = true;
   private commandQueue: Promise<unknown> = Promise.resolve();
   private readonly pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
@@ -918,12 +864,11 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, transcriptAssets, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
+  constructor({ appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
-    this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     const providerObservations = suppliedObservations ?? (identities ? new CodexProviderObservations(identities) : null);
     this.publishNativeNotification = notification => {
@@ -945,16 +890,14 @@ export default class CodexStdioBridge {
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.instructions = instructions;
     this.identities = identities;
-    this.sendToClient = sendToClient;
     this.transcriptAssets = transcriptAssets;
     this.fileChanges = new CodexFileChangeController(structuredClone(initialState?.fileChanges ?? {
       items: initialState?.fileChangeFailureMarkers ?? new Map(),
       turnCursors: initialState?.fileChangeTurnCursors ?? new Map(),
     }));
-    this.initializeResult = initialState?.initializeResult ?? null;
     this.pendingResponses = new Map([...initialState?.pendingResponses ?? []].map(([id, pending]) => [
       id,
-      isPendingInternalResponse(pending) && pending.toolContext
+      pending.toolContext
         ? { ...pending, toolContext: structuredClone(pending.toolContext) }
         : pending,
     ]));
@@ -999,7 +942,6 @@ export default class CodexStdioBridge {
       this.pendingUserInputRequests.clear();
       this.transcriptActiveTurns.clear();
       this.unmaterializedThreadIds.clear();
-      this.initializeResult = null;
       this.upstreamInitialized = false;
     }
     this.startTranscriptInstrumentation();
@@ -1011,22 +953,6 @@ export default class CodexStdioBridge {
       this.logTranscriptInstrumentation();
     }, CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS);
     this.transcriptInstrumentationTimer.unref();
-  }
-
-  getInitializeResult() {
-    return this.initializeResult;
-  }
-
-  getListenDescriptor() {
-    const parsedUrl = new URL(this.bridgeUrl);
-    if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
-      throw new Error(`Codex bridge URL must use ws:// or wss://, received ${this.bridgeUrl}`);
-    }
-
-    return {
-      host: parsedUrl.hostname || "127.0.0.1",
-      port: Number(parsedUrl.port || (parsedUrl.protocol === "wss:" ? 443 : 80)),
-    };
   }
 
   stop() {
@@ -1092,7 +1018,6 @@ export default class CodexStdioBridge {
     this.transcriptInstrumentationTimer = null;
     return {
       fileChanges: structuredClone(this.fileChanges.state),
-      initializeResult: options.restartingAppServer ? null : this.initializeResult,
       pendingResponses: options.restartingAppServer ? new Map() : new Map(this.pendingResponses),
       retiringResponses: options.restartingAppServer ? new Map(this.pendingResponses) : new Map(this.retiringResponses),
       pendingUserInputRequests: options.restartingAppServer ? new Map() : new Map(this.pendingUserInputRequests),
@@ -1110,7 +1035,6 @@ export default class CodexStdioBridge {
     this.transcriptActiveTurns.clear();
     this.unmaterializedThreadIds.clear();
     for (const pending of this.pendingResponses.values()) {
-      if (!isPendingInternalResponse(pending)) continue;
       if (pending.toolContext) {
         if (pending.toolContext.patch) pending.toolContext.patch.approvalId = null;
         void this.settleToolContext(pending, {
@@ -1119,7 +1043,6 @@ export default class CodexStdioBridge {
       } else pending.reject(new Error(reason));
     }
     this.pendingResponses.clear();
-    this.initializeResult = null;
     this.upstreamInitialized = false;
     if (this.upstreamInitializePromise) this.upstreamInitializePromise.catch(() => undefined);
     this.upstreamInitializePromise = null;
@@ -1145,17 +1068,13 @@ export default class CodexStdioBridge {
 
     const signal = this.generation.signal;
     const initialization = (async () => {
-      const dispatch = await this.dispatchRequest(initializeMessage, { internal: true, signal });
-      if (!dispatch.response) {
-        throw new Error("Codex initialize request did not create an internal response.");
-      }
+      const dispatch = await this.dispatchRequest(initializeMessage, { signal });
       const response = await dispatch.response;
       signal.throwIfAborted();
       if (response.error) {
         throw new Error(response.error.message);
       }
 
-      this.initializeResult = response.result;
       this.send({ method: "initialized" });
       this.upstreamInitialized = true;
       this.onInitialized();
@@ -1167,49 +1086,6 @@ export default class CodexStdioBridge {
     } finally {
       if (this.upstreamInitializePromise === initialization) this.upstreamInitializePromise = null;
     }
-  }
-
-  async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
-    if (message.method === "thread/start" && this.createThread) {
-      const response = await this.createManagedThread(message);
-      this.sendToClient(client, { ...response, id: clientRequestId });
-      return;
-    }
-    if (message.method === "thread/compact/start") {
-      const response = await this.enqueueCommand(() => this.compactThread(message));
-      this.sendToClient(client, { ...response, id: clientRequestId });
-      return;
-    }
-    if (message.method === "turn/start") {
-      const response = await this.enqueueCommand(async () => {
-        this.assertAcceptingWork();
-        const admission = await this.admitNativeCodexTurn({
-          requestId: message.id ?? clientRequestId,
-          startRequest: message,
-        });
-        return this.toNativeTurnStartResponse(admission, clientRequestId);
-      });
-      this.sendToClient(client, response);
-      return;
-    }
-    if (message.method === "thread/resume" || message.method === "thread/unsubscribe") {
-      this.sendToClient(client, {
-        id: clientRequestId,
-        error: { code: -32600, message: `${message.method} is owned by the Workbench turn-start lifecycle.` },
-      });
-      return;
-    }
-    await this.enqueueCommand(() => {
-      this.assertAcceptingWork();
-      return this.dispatchRequest(message, { client, clientRequestId });
-    });
-  }
-
-  async forwardNotification(message: JsonRpcRequest) {
-    await this.enqueueCommand(() => {
-      this.assertAcceptingWork();
-      this.send(message);
-    });
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
@@ -1281,9 +1157,8 @@ export default class CodexStdioBridge {
       const dispatch = await this.enqueueCommand(() => {
         if (controller?.signal.aborted) throw controller.signal.reason;
         this.assertAcceptingWork();
-        return this.dispatchRequest(message, { internal: true, signal: controller?.signal });
+        return this.dispatchRequest(message, { signal: controller?.signal });
       });
-      if (!dispatch.response) throw new Error(`Codex internal request ${message.method} did not create a response.`);
       return await dispatch.response;
     };
     if (!controller || options.timeoutMs === undefined) {
@@ -1311,7 +1186,7 @@ export default class CodexStdioBridge {
     }
   }
 
-  async readThreadForBrowse(threadId: string): Promise<Pick<WorkbenchThreadContextReadResponse, "thread">> {
+  async readThreadForBrowse(threadId: string): Promise<Pick<CodexThreadContextReadResponse, "thread">> {
     this.assertAcceptingWork();
     const response = await this.readThreadContext({
       method: "thread/context/read",
@@ -1398,8 +1273,7 @@ export default class CodexStdioBridge {
     const dispatch = await this.dispatchRequest({
       method: "turn/steer",
       params: { expectedTurnId, input, threadId },
-    }, { internal: true });
-    if (!dispatch.response) throw new Error("turn/steer did not create an internal response.");
+    }, {});
     const response = await dispatch.response;
     if (response.error) {
       throw new Error(response.error.message);
@@ -1605,13 +1479,13 @@ export default class CodexStdioBridge {
     this.appServer.send(message);
   }
 
-  private queueToolContext(context: NonNullable<PendingInternalResponse["toolContext"]>) {
+  private queueToolContext(context: NonNullable<PendingResponse["toolContext"]>) {
     context.sent = false;
     const id = this.nextUpstreamRequestId();
-    let pending!: PendingInternalResponse;
+    let pending!: PendingResponse;
     const response = new Promise<JsonRpcResponse>((resolve, reject) => {
       pending = {
-        internal: true, method: "thread/inject_items", requestSource: "internal",
+        method: "thread/inject_items", requestSource: "internal",
         resolve, reject, threadHydration: null, toolContext: context,
         upstreamRequest: { id, method: "thread/inject_items", params: { threadId: context.threadId, items: [] } },
       };
@@ -1622,7 +1496,7 @@ export default class CodexStdioBridge {
     return response;
   }
 
-  private prepareQueuedToolContext(id: number, pending: PendingInternalResponse) {
+  private prepareQueuedToolContext(id: number, pending: PendingResponse) {
     const signal = this.generation.signal;
     void this.enqueueCommand(async () => {
       try {
@@ -1642,13 +1516,13 @@ export default class CodexStdioBridge {
 
   resumePendingToolContexts() {
     for (const [id, pending] of this.pendingResponses) {
-      if (isPendingInternalResponse(pending) && pending.toolContext?.sent === false) {
+      if (pending.toolContext?.sent === false) {
         this.prepareQueuedToolContext(id, pending);
       }
     }
   }
 
-  private async prepareToolContext(pending: PendingInternalResponse) {
+  private async prepareToolContext(pending: PendingResponse) {
     const signal = this.generation.signal;
     const context = pending.toolContext!;
     const { threadId, turnId, patch } = context;
@@ -1746,7 +1620,7 @@ export default class CodexStdioBridge {
     }
   }
 
-  private async settleToolContext(pending: PendingInternalResponse, response: JsonRpcResponse): Promise<JsonRpcResponse> {
+  private async settleToolContext(pending: PendingResponse, response: JsonRpcResponse): Promise<JsonRpcResponse> {
     const { threadId, turnId, item, patch } = pending.toolContext!;
     const acceptedAt = Date.now();
     const error = response.error
@@ -1832,14 +1706,8 @@ export default class CodexStdioBridge {
   private async dispatchRequest(
     message: JsonRpcRequest,
     {
-      client,
-      clientRequestId,
-      internal = false,
       signal: callerSignal,
     }: {
-      client?: BridgeClient;
-      clientRequestId?: number | string;
-      internal?: boolean;
       signal?: AbortSignal;
     },
   ) {
@@ -1847,74 +1715,34 @@ export default class CodexStdioBridge {
     signal.throwIfAborted();
     const callerRequestId = message.id ?? null;
     const upstreamRequestId = this.nextUpstreamRequestId();
-    const requestSource: WorkbenchRequestSource = internal
-      ? message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh"
-        ? "autoRefresh"
-        : message[WORKBENCH_REQUEST_SOURCE_FIELD] === "sqliteRecovery" ? "sqliteRecovery" : "internal"
-      : readRequestSource(message);
+    const requestSource: WorkbenchRequestSource = message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh"
+      ? "autoRefresh"
+      : message[WORKBENCH_REQUEST_SOURCE_FIELD] === "sqliteRecovery" ? "sqliteRecovery" : "internal";
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
     if (method === "thread/start") this.traceThreadCreation(message.id, "instruction-augmentation", upstreamRequestId);
     const upstreamMessage = createUpstreamRequest(await this.instructions.augment(message, method), upstreamRequestId);
     signal.throwIfAborted();
 
-    if (internal) {
-      if (signal?.aborted) throw signal.reason;
-      let rejectResponse!: (error: Error) => void;
-      const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
-        rejectResponse = reject;
-        this.pendingResponses.set(upstreamRequestId, {
-          internal: true,
-          method,
-          reject,
-          requestSource,
-          resolve: response => resolve({ ...response, id: callerRequestId }),
-          threadHydration,
-          upstreamRequest: upstreamMessage,
-        });
+    let rejectResponse!: (error: Error) => void;
+    const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
+      rejectResponse = reject;
+      this.pendingResponses.set(upstreamRequestId, {
+        method,
+        reject,
+        requestSource,
+        resolve: response => resolve({ ...response, id: callerRequestId }),
+        threadHydration,
+        upstreamRequest: upstreamMessage,
       });
-      // Cancellation can settle this before transcript admission returns it to the caller.
-      void responsePromise.catch(() => undefined);
-      const abortPendingResponse = () => {
-        if (!this.pendingResponses.delete(upstreamRequestId)) return;
-        rejectResponse(signal?.reason instanceof Error ? signal.reason : new Error("Codex internal request was cancelled."));
-      };
-      signal?.addEventListener("abort", abortPendingResponse, { once: true });
-      if (shouldCapturePollingTranscript(method, requestSource)) {
-        const capture = this.captureTranscriptClientRequest(upstreamMessage, {
-          propagateFailure: method === "turn/steer",
-        });
-        if (method === "turn/steer") await capture;
-        else void capture;
-      }
-      try {
-        signal.throwIfAborted();
-        if (method === "thread/start") this.traceThreadCreation(message.id, "native-send", upstreamRequestId);
-        this.send(upstreamMessage);
-      } catch (error) {
-        this.pendingResponses.delete(upstreamRequestId);
-        rejectResponse(error instanceof Error ? error : new Error(String(error)));
-      }
-      return {
-        response: signal
-          ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse))
-          : responsePromise,
-      };
-    }
-
-    if (!client || clientRequestId === undefined) {
-      throw new Error("Bridge client and client request id are required for external requests.");
-    }
-
-    this.pendingResponses.set(upstreamRequestId, {
-      client,
-      clientRequestId,
-      internal: false,
-      method,
-      requestSource,
-      threadHydration,
-      upstreamRequest: upstreamMessage,
     });
+    // Cancellation can settle this before transcript admission returns it to the caller.
+    void responsePromise.catch(() => undefined);
+    const abortPendingResponse = () => {
+      if (!this.pendingResponses.delete(upstreamRequestId)) return;
+      rejectResponse(signal?.reason instanceof Error ? signal.reason : new Error("Codex internal request was cancelled."));
+    };
+    signal?.addEventListener("abort", abortPendingResponse, { once: true });
     if (shouldCapturePollingTranscript(method, requestSource)) {
       const capture = this.captureTranscriptClientRequest(upstreamMessage, {
         propagateFailure: method === "turn/steer",
@@ -1928,13 +1756,16 @@ export default class CodexStdioBridge {
       this.send(upstreamMessage);
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
-      const errorMessage = sanitizeTranscriptErrorMessage(error);
       if (method === "turn/steer") {
-        void this.captureTranscriptSteerFailure(upstreamMessage, errorMessage);
+        await this.captureTranscriptSteerFailure(upstreamMessage, sanitizeTranscriptErrorMessage(error));
       }
-      throw error;
+      rejectResponse(error instanceof Error ? error : new Error(String(error)));
     }
-    return { response: null };
+    return {
+      response: signal
+        ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse))
+        : responsePromise,
+    };
   }
 
   private toNativeTurnStartResponse(admission: JsonRpcResponse, requestId: number | string | null): JsonRpcResponse {
@@ -2022,17 +1853,13 @@ export default class CodexStdioBridge {
       // Removing a pending response transfers settlement here. Identity failure
       // must reject that caller, never leave it waiting forever.
       logError("codex-response", sanitizeTranscriptErrorMessage(error));
-      if (isPendingInternalResponse(pending)) pending.reject(error);
-      else this.sendToClient(pending.client, {
-        id: pending.clientRequestId,
-        error: { code: -32000, message: sanitizeTranscriptErrorMessage(error) },
-      });
+      pending.reject(error);
     }
   }
 
   private async settleUpstreamResponse(pending: PendingResponse, message: JsonRpcResponse) {
     const signal = this.generation.signal;
-    if (isPendingInternalResponse(pending) && pending.toolContext) {
+    if (pending.toolContext) {
       const response = await this.settleToolContext(pending, message);
       pending.resolve(response);
       return;
@@ -2044,11 +1871,6 @@ export default class CodexStdioBridge {
     if (!message.error && pending.method === "turn/start") {
       const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
       if (threadId) this.unmaterializedThreadIds.delete(threadId);
-    }
-    if (!isPendingInternalResponse(pending) && pending.method === "turn/steer" && !message.error) {
-      const turnId = asString(asRecord(message.result)?.turnId)?.trim();
-      const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
-      if (turnId && threadId) this.onAcceptedTurnSteer(NativeThreadIdSchema.parse(threadId));
     }
     const hydratedMessage = message;
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
@@ -2122,15 +1944,7 @@ export default class CodexStdioBridge {
           : undefined,
       });
     }
-    if (isPendingInternalResponse(pending)) {
-      pending.resolve(hydratedMessage);
-      return;
-    }
-
-    this.sendToClient(pending.client, {
-      ...hydratedMessage,
-      id: pending.clientRequestId,
-    });
+    pending.resolve(hydratedMessage);
   }
 
   private async handleUpstreamNonResponseMessage(message: unknown) {
@@ -2204,7 +2018,7 @@ export default class CodexStdioBridge {
         if (message.method === "item/completed" && item?.type === "fileChange" && item.status === "failed" && threadId && turnId) {
           const remembered = this.fileChanges.get(threadId, turnId, item.id)?.item ?? item;
           const recovering = [...this.pendingResponses.values()].some((pending) => (
-            isPendingInternalResponse(pending) && pending.toolContext?.threadId === threadId
+            pending.toolContext?.threadId === threadId
             && pending.toolContext.turnId === turnId && pending.toolContext.patch?.itemId === item.id
           ));
           if (!recovering && !remembered.workbenchPolicy && !remembered.workbenchFailureKind
@@ -2220,7 +2034,6 @@ export default class CodexStdioBridge {
         if (turnId) this.transcriptActiveTurns.delete(turnId);
         const threadId = asString(asRecord(message.params)?.threadId);
         for (const pending of this.pendingResponses.values()) {
-          if (!isPendingInternalResponse(pending)) continue;
           const context = pending.toolContext;
           if (context?.threadId === threadId && context.turnId === turnId && context.patch) {
             context.patch.approvalId = null;
@@ -2347,7 +2160,6 @@ export default class CodexStdioBridge {
 
     const requestKey = String(requestId);
     for (const pending of this.pendingResponses.values()) {
-      if (!isPendingInternalResponse(pending)) continue;
       const context = pending.toolContext;
       if (context?.threadId === threadId && context.patch && String(context.patch.approvalId) === requestKey) {
         context.patch.approvalId = null;
@@ -2745,7 +2557,7 @@ export default class CodexStdioBridge {
     };
   }
 
-  private async readThreadContext(message: JsonRpcRequest, signal = this.generation.signal): Promise<WorkbenchThreadContextReadResponse> {
+  private async readThreadContext(message: JsonRpcRequest, signal = this.generation.signal): Promise<CodexThreadContextReadResponse> {
     signal.throwIfAborted();
     const record = asRecord(message.params);
     const threadId = asString(record?.threadId)?.trim() ?? "";
@@ -2766,8 +2578,7 @@ export default class CodexStdioBridge {
           threadId,
         },
       };
-      const preflightDispatch = await this.dispatchRequest(preflightRequest, { internal: true, signal });
-      if (!preflightDispatch.response) throw new Error("Thread Recall preflight did not create an internal response.");
+      const preflightDispatch = await this.dispatchRequest(preflightRequest, { signal });
       const preflightResponse = await preflightDispatch.response;
       signal.throwIfAborted();
       if (preflightResponse.error) throw new Error(preflightResponse.error.message);
@@ -2789,8 +2600,7 @@ export default class CodexStdioBridge {
         ? { [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh" as const }
         : {}),
     };
-    const dispatch = await this.dispatchRequest(readRequest, { internal: true, signal });
-    if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
+    const dispatch = await this.dispatchRequest(readRequest, { signal });
     const upstreamReadResponse = await dispatch.response;
     signal.throwIfAborted();
     if (upstreamReadResponse.error) throw new Error(upstreamReadResponse.error.message);
@@ -2813,7 +2623,7 @@ export default class CodexStdioBridge {
     hydration: WorkbenchThreadHydrationRequest | null,
     signal: AbortSignal,
     background: boolean,
-  ): Promise<WorkbenchThreadContextReadResponse> {
+  ): Promise<CodexThreadContextReadResponse> {
     const reader = this.requireSqliteReader();
     const identityContext = await this.resolveTranscriptThreadContext(metadata, true, signal);
     await this.transcriptQueue;
@@ -2922,7 +2732,7 @@ export default class CodexStdioBridge {
     throw new Error("Codex SQLite transcript reader is not configured.");
   }
 
-  private async readThreadPage(message: JsonRpcRequest, signal: AbortSignal): Promise<WorkbenchThreadPageResponse> {
+  private async readThreadPage(message: JsonRpcRequest, signal: AbortSignal): Promise<CodexThreadPageResponse> {
     const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
     const hydration: WorkbenchThreadHydrationRequest = params.cursor === null
       ? { mode: "latest" }
@@ -2955,16 +2765,12 @@ export default class CodexStdioBridge {
     const settlements = [...this.retiringResponses].map(async ([id, pending]) => {
       this.retiringResponses.delete(id);
       const response: JsonRpcResponse = { id, error: { code: -32000, message: reason } };
-      if (isPendingInternalResponse(pending)) {
-        if (pending.toolContext) {
-          const toolContext = structuredClone(pending.toolContext);
-          if (toolContext.patch) toolContext.patch.approvalId = null;
-          pending.resolve(await this.settleToolContext({ ...pending, toolContext }, response));
-        } else {
-          pending.reject(new Error(reason));
-        }
+      if (pending.toolContext) {
+        const toolContext = structuredClone(pending.toolContext);
+        if (toolContext.patch) toolContext.patch.approvalId = null;
+        pending.resolve(await this.settleToolContext({ ...pending, toolContext }, response));
       } else {
-        this.sendToClient(pending.client, { ...response, id: pending.clientRequestId });
+        pending.reject(new Error(reason));
       }
     });
     await Promise.all(settlements);
@@ -3065,14 +2871,11 @@ export default class CodexStdioBridge {
   private async readSqliteBrowseAsset(threadId: string, assetUrl: string | null) {
     if (!assetUrl) return undefined;
 
-    const match = /^\/api\/transcript-assets\/codex\/([^/?#]+)\/([^/?#]+)$/u.exec(assetUrl);
-    if (!match) throw new Error("Browse asset URL is not a Workbench Codex transcript asset.");
-
-    const encodedThreadId = decodeURIComponent(match[1]!);
-    const fileName = decodeURIComponent(match[2]!);
+    const address = parseTranscriptAssetAddress(assetUrl);
+    if (!address || address.surface !== "api") throw new Error("Browse asset URL is not a Workbench transcript asset.");
     if (!this.transcriptAssets) throw new Error("Transcript image storage is not configured.");
     const asset = await this.transcriptAssets.readTranscriptAsset({
-      threadId: encodedThreadId, assetName: fileName, ownerThreadId: threadId,
+      threadId: address.threadId, assetName: address.assetName, ownerThreadId: threadId,
     });
     if (!asset) throw new Error("Browse asset was not found in its thread's SQLite storage.");
     return {
@@ -3559,8 +3362,7 @@ export default class CodexStdioBridge {
   }
 
   private async dispatchManagedProviderRequest(request: JsonRpcRequest, signal?: AbortSignal) {
-    const dispatch = await this.dispatchRequest(request, { internal: true, signal });
-    if (!dispatch.response) throw new Error(`Managed Codex request ${request.method} produced no response.`);
+    const dispatch = await this.dispatchRequest(request, { signal });
     return await dispatch.response;
   }
 
@@ -3614,7 +3416,7 @@ export default class CodexStdioBridge {
   }
 
   private createSqliteProviderWindowObservations(
-    thread: WorkbenchThreadContextReadResponse["thread"],
+    thread: CodexThreadContextReadResponse["thread"],
     context?: CodexTranscriptThreadContext,
   ): NativeTranscriptObservation[] {
     if (!this.sqliteTranscriptEnabled) return [];
@@ -3790,7 +3592,7 @@ export default class CodexStdioBridge {
   }
 
   private async resolveTranscriptThreadContext(
-    thread: WorkbenchThreadContextReadResponse["thread"],
+    thread: CodexThreadContextReadResponse["thread"],
     remember = true,
     signal = this.generation.signal,
   ): Promise<CodexTranscriptThreadContext> {

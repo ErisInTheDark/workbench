@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { conformWorkbenchTranscriptSnapshot, type WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
+
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
 
 class FakeClock {
@@ -52,15 +52,11 @@ function createClient(send: BridgeClient["send"] = (_data, callback) => callback
 }
 
 function createController(options: {
-  acceptProviderIntent?: WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"];
   clock: FakeClock;
   daemonRequests?: WorkbenchWebSocketRequestControllerOptions["daemonRequests"];
   initialState?: WorkbenchWebSocketRequestControllerOptions["initialState"];
   lines?: string[];
   onDisconnect?: (connectionId: string) => void;
-  onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
-  onHarnessRequest?: (message: JsonRpcRequest) => Promise<JsonRpcResponse> | JsonRpcResponse;
-  resolvePublicRequest?: WorkbenchWebSocketRequestControllerOptions["harnesses"]["resolvePublicRequest"];
   reportDelivery?: WorkbenchWebSocketRequestControllerOptions["reportDelivery"];
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
@@ -69,22 +65,11 @@ function createController(options: {
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
-    acceptProviderIntent: options.acceptProviderIntent,
     clearTimeout: options.clock.clearTimeout,
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
-      handleNativeBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
-      resolvePublicRequest: options.resolvePublicRequest ?? (async (value, request) => {
-        if (value !== "codex" && value !== "copilot" && value !== "opencode") throw new Error("Unknown Workbench harness.");
-        return { harness: value, request };
-      }),
-      request: async (_harness, message) => await options.onHarnessRequest?.(message) ?? {
-        id: message.id ?? null,
-        result: {},
-      },
-      resolveHarness: (value, resolveOptions) => {
-        if ((value === undefined || value === null || value === "") && resolveOptions?.defaultToCodex) return "codex";
-        if (value === "codex" || value === "copilot" || value === "opencode") return value;
+      resolveHarness: value => {
+        if (value === "codex") return value;
         throw new Error("Unknown Workbench harness.");
       },
     },
@@ -113,38 +98,6 @@ function createController(options: {
   return { controller, lines };
 }
 
-test("an old identity lookup cannot dispatch a new command after rollback resumes admission", async () => {
-  let enter!: () => void;
-  let release!: () => void;
-  const entered = new Promise<void>(resolve => { enter = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
-  let dispatched = 0;
-  const { controller } = createController({
-    clock: new FakeClock(),
-    resolvePublicRequest: async (_harness, request) => {
-      enter();
-      await held;
-      return { harness: "codex", request };
-    },
-    onHarnessMessage: () => { dispatched++; },
-  });
-  try {
-    const handling = controller.handleMessage(createClient(), "connection", Buffer.from(JSON.stringify({
-      id: 1, method: "thread/read", params: { threadId: "thread" },
-    })), false);
-    const rejected = assert.rejects(handling, /retired/);
-    await entered;
-    controller.suspend();
-    await controller.resumeAfterFailedReload();
-    release();
-    await rejected;
-    assert.equal(dispatched, 0);
-  } finally {
-    release();
-    controller.dispose();
-  }
-});
-
 for (const kind of ["event", "response"] as const) {
   test(`a late ${kind} send failure settles through the current graph owner`, async () => {
     const clock = new FakeClock();
@@ -152,25 +105,30 @@ for (const kind of ["event", "response"] as const) {
     const reportDelivery: NonNullable<WorkbenchWebSocketRequestControllerOptions["reportDelivery"]> = (
       delivery,
     ) => current.completeDelivery(delivery);
-    const previous = createController({ clock, reportDelivery }).controller;
+    const previous = createController({
+      clock, reportDelivery,
+      daemonRequests: {
+        accepts: method => method === "project/catalog/read",
+        handle: async request => ({ id: request.id ?? null, result: {} }),
+      },
+    }).controller;
     current = previous;
     let finish!: (error?: Error) => void;
-    let hold = false;
-    const client = createClient((_data, callback) => {
-      if (hold) finish = callback!;
-      else callback?.();
+    let sent!: () => void;
+    const sendingStarted = new Promise<void>(resolve => { sent = resolve; });
+    const client = createClient((data, callback) => {
+      const message = JSON.parse(data);
+      if (message.id === 7 || message.method === "item/agentMessage/delta") {
+        finish = callback!;
+        sent();
+      } else callback?.();
     });
-    if (kind === "response") {
-      await previous.handleMessage(client, "connection", Buffer.from(JSON.stringify({
-        id: 7, method: "thread/read", params: { threadId: "thread" }, workbenchHarness: "codex",
-      })), false);
-    }
-    hold = true;
     const failure = new Error("socket write failed");
-    const sending = previous.sendJsonToClient(client, kind === "event"
-      ? { workbenchHarness: "codex", method: "item/agentMessage/delta", params: {} }
-      : { id: 7, result: {} });
+    const sending = kind === "event"
+      ? previous.sendJsonToClient(client, { workbenchHarness: "codex", method: "item/agentMessage/delta", params: {} })
+      : previous.handleMessage(client, "connection", frame("project/catalog/read", 7), false);
     const checked = assert.rejects(sending, (error) => error === failure);
+    await sendingStarted;
     current = createController({ clock, initialState: previous.detachForReload(), reportDelivery }).controller;
     try {
       finish(failure);
@@ -235,7 +193,7 @@ test("traffic logs cover notifications in both directions without adding event l
   await controller.sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
   await controller.sendJsonToClient(client, { id: 300, result: {} });
   const traffic = lines.filter(line => / WS (in|out) /u.test(line));
-  assert.ok(traffic.some(line => line.includes("in codex:initialized") && line.includes(`in: ${incoming.length}B`)));
+  assert.ok(traffic.some(line => line.includes("in unknown:initialized") && line.includes(`in: ${incoming.length}B`)));
   const reset = sent.find(data => JSON.parse(data).method === "workbench/thread-state/reset")!;
   assert.ok(traffic.some(line => line.includes("out wb:thread-state/reset") && line.includes(`out: ${Buffer.byteLength(reset)}B`)));
   assert.ok(!traffic.some(line => line.includes("response")));
@@ -376,213 +334,15 @@ function notificationFrame(method: string, params: Record<string, unknown>) {
   return Buffer.from(JSON.stringify({ method, params }));
 }
 
-test("successful provider message responses publish daemon-owned intent admission", async () => {
-  const accepted: Parameters<NonNullable<WorkbenchWebSocketRequestControllerOptions["acceptProviderIntent"]>>[0][] = [];
-  const { controller } = createController({
-    acceptProviderIntent: async (input) => { accepted.push(input); },
-    clock: new FakeClock(),
-  });
-  const client = createClient();
-  const cases = [
-    {
-      harness: "codex" as const,
-      method: "turn/start",
-      params: { input: [], threadId: "native-thread" },
-      response: { result: { turn: { id: "started-turn" } } },
-      turnId: "started-turn",
-    },
-    {
-      harness: "codex" as const,
-      method: "turn/steer",
-      params: { expectedTurnId: "steered-turn", input: [], threadId: "native-thread" },
-      response: { result: { turnId: "steered-turn" } },
-      turnId: "steered-turn",
-    },
-    {
-      harness: "copilot" as const,
-      method: "turn/steer",
-      params: { expectedTurnId: "fallback-turn", input: [], threadId: "native-thread" },
-      response: { result: { ok: true } },
-      turnId: "fallback-turn",
-    },
-    {
-      harness: "codex" as const,
-      method: "workbench/codex/message/admit",
-      params: { threadId: "native-thread" },
-      response: { result: { kind: "started", turn: { id: "managed-start" } } },
-      turnId: "managed-start",
-    },
-    {
-      harness: "codex" as const,
-      method: "workbench/codex/message/admit",
-      params: { threadId: "native-thread" },
-      response: { result: { kind: "steered", turnId: "managed-steer" } },
-      turnId: "managed-steer",
-    },
-  ];
-  for (const [index, candidate] of cases.entries()) {
-    const id = index + 1;
-    await controller.handleMessage(client, "connection-1", frame(candidate.method, id, {
-      params: candidate.params,
-      workbenchHarness: candidate.harness,
-    }), false);
-    await controller.sendJsonToClient(client, { id, ...candidate.response });
-  }
-  await controller.handleMessage(client, "connection-1", frame("turn/start", 99, {
-    params: { input: [], threadId: "native-thread" },
-    workbenchHarness: "codex",
-  }), false);
-  await controller.sendJsonToClient(client, { id: 99, error: { code: -32000, message: "failed" } });
-
-  assert.deepEqual(accepted, cases.map(({ harness, turnId }) => ({
-    harness,
-    nativeThreadId: "native-thread",
-    nativeTurnId: turnId,
-  })));
-  controller.dispose();
-});
-
-test("provider success survives a lifecycle publication failure with a bounded daemon error", async () => {
-  const lines: string[] = [];
-  const sent: Array<Record<string, unknown>> = [];
-  const client = createClient((data, callback) => {
-    sent.push(JSON.parse(data) as Record<string, unknown>);
-    callback?.();
-  });
-  const { controller } = createController({
-    acceptProviderIntent: async () => { throw new Error(`lifecycle failed ${"x".repeat(1_000)}`); },
-    clock: new FakeClock(),
-    lines,
-  });
-  await controller.handleMessage(client, "connection-1", frame("turn/steer", 1, {
-    params: { expectedTurnId: "native-turn", input: [], threadId: "native-thread" },
-    workbenchHarness: "codex",
-  }), false);
-
-  await controller.sendJsonToClient(client, { id: 1, result: { turnId: "native-turn" } });
-
-  assert.deepEqual(sent.at(-1), { id: 1, result: { turnId: "native-turn" } });
-  const warning = lines.find(line => line.includes("working lifecycle publication failed"));
-  assert.ok(warning);
-  assert.ok(warning.length < 600);
-  controller.dispose();
-});
-
-test("warns every two seconds until the matching response send completes", async () => {
-  const clock = new FakeClock();
-  const { controller, lines } = createController({ clock });
-  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
-  const client = createClient();
-  await controller.handleMessage(client, "connection-1", frame("thread/read", 7, { params: { secret: "never-log-me" } }), false);
-
-  clock.advance(1_999);
-  assert.equal(requestLines().length, 0);
-  clock.advance(1);
-  assert.equal(requestLines().length, 1);
-  assert.match(requestLines()[0] ?? "", /codex:thread\/read .*pending.* 2\.0s/u);
-  clock.advance(2_000);
-  assert.equal(requestLines().length, 2);
-
-  await controller.sendJsonToClient(client, { id: 7, result: { ok: true } });
-  assert.equal(requestLines().length, 3);
-  assert.match(requestLines()[2] ?? "", /codex:thread\/read .*ok.*process:.*json:.*send:.*in:.*out:/u);
-  assert.match(requestLines()[2] ?? "", /in 4\.0s \u001b\[2m\(process:.*out:.*\)\u001b\[0m$/u);
-  assert.equal(lines.join("\n").includes("never-log-me"), false);
-  clock.advance(10_000);
-  assert.equal(requestLines().length, 3);
-  controller.dispose();
-});
-
-test("error completions log the full multiline message in a red follow-up entry without response data", async () => {
-  const clock = new FakeClock();
-  const { controller, lines } = createController({ clock });
-  const client = createClient();
-  await controller.handleMessage(client, "connection-1", frame("thread/read", 7), false);
-
-  const longTail = "x".repeat(1_000);
-  await controller.sendJsonToClient(client, {
-    error: {
-      code: -32000,
-      data: { secret: "never-log-response-data" },
-      message: `first line\nsecond line ${longTail}`,
-    },
-    id: 7,
-  });
-
-  const requests = lines.filter(line => line.includes(" WS codex:thread/read"));
-  assert.equal(requests.length, 2);
-  assert.match(requests[0] ?? "", /codex:thread\/read .*error.*process:.*json:.*send:.*in:.*out:/u);
-  assert.equal(requests[0]?.includes("first line"), false);
-  assert.equal(requests[1], ` WS codex:thread/read \u001b[31mfirst line\nsecond line ${longTail}\u001b[0m`);
-  assert.equal(lines.join("\n").includes("never-log-response-data"), false);
-  controller.dispose();
-});
-
-test("uses longer first-warning thresholds only for initialization and compaction", async () => {
-  const initializeClock = new FakeClock();
-  const initialize = createController({ clock: initializeClock });
-  await initialize.controller.handleMessage(createClient(), "initialize", frame("initialize", 1), false);
-  initializeClock.advance(9_999);
-  assert.equal(initialize.lines.filter(line => line.includes("codex:initialize")).length, 0);
-  initializeClock.advance(1);
-  assert.equal(initialize.lines.filter(line => line.includes("codex:initialize")).length, 1);
-  initialize.controller.dispose();
-
-  const compactClock = new FakeClock();
-  const compact = createController({ clock: compactClock });
-  await compact.controller.handleMessage(createClient(), "compact", frame("thread/compact/start", 2), false);
-  compactClock.advance(29_999);
-  assert.equal(compact.lines.filter(line => line.includes("codex:thread/compact/start")).length, 0);
-  compactClock.advance(1);
-  assert.equal(compact.lines.filter(line => line.includes("codex:thread/compact/start")).length, 1);
-  compact.controller.dispose();
-});
-
-test("hands pending requests to one replacement warning schedule", async () => {
-  const clock = new FakeClock();
-  const lines: string[] = [];
-  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
-  const client = createClient();
-  const first = createController({ clock, lines });
-  await first.controller.handleMessage(client, "connection-1", frame("thread/read", 4), false);
-  clock.advance(2_000);
-  assert.equal(requestLines().length, 1);
-
-  const state = first.controller.detachForReload();
-  const replacement = createController({ clock, initialState: state, lines });
-  clock.advance(2_000);
-  assert.equal(requestLines().length, 2);
-  await replacement.controller.sendJsonToClient(client, { id: 4, result: {} });
-  clock.advance(4_000);
-  assert.equal(requestLines().length, 3);
-  replacement.controller.dispose();
-});
-
-test("keeps identical request ids isolated by WebSocket client", async () => {
-  const clock = new FakeClock();
-  const { controller, lines } = createController({ clock });
-  const firstClient = createClient();
-  const secondClient = createClient();
-  await controller.handleMessage(firstClient, "connection-1", frame("thread/read", 1), false);
-  await controller.handleMessage(secondClient, "connection-2", frame("model/list", 1, { workbenchHarness: "opencode" }), false);
-  await controller.sendJsonToClient(firstClient, { id: 1, result: {} });
-  clock.advance(2_000);
-  assert.equal(lines.filter((line) => line.includes("codex:thread/read")).length, 1);
-  assert.equal(lines.filter((line) => line.includes("opencode:model/list") && line.includes("pending")).length, 1);
-  controller.dispose();
-});
-
 test("sequences provider events and consumes browser receipts without harness routing", async () => {
   const clock = new FakeClock();
   const sent: Array<Record<string, unknown>> = [];
-  const harnessMessages: JsonRpcRequest[] = [];
   const client = createClient((data, callback) => {
     sent.push(JSON.parse(data) as Record<string, unknown>);
     callback?.();
   });
   const { controller, lines } = createController({
     clock,
-    onHarnessMessage: (message) => { harnessMessages.push(message); },
   });
 
   await controller.sendJsonToClient(client, {
@@ -596,33 +356,8 @@ test("sequences provider events and consumes browser receipts without harness ro
 
   await controller.handleMessage(client, "connection-1", notificationFrame("workbench/event-stream/ack", { sequence: 1 }), false);
   assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 0);
-  assert.deepEqual(harnessMessages, []);
   assert.ok(lines.some(line => line.includes("out codex:item/agentMessage/delta")));
   assert.ok(!lines.some(line => line.includes("in wb:event-stream/ack") || line.includes("secret commentary")));
-  controller.dispose();
-});
-
-test("disconnect and send failure terminate their request lifecycles", async () => {
-  const clock = new FakeClock();
-  const disconnects: string[] = [];
-  const { controller, lines } = createController({ clock, onDisconnect: (connectionId) => { disconnects.push(connectionId); } });
-  const requestLines = () => lines.filter(line => line.includes("codex:thread/read"));
-  const disconnectedClient = createClient();
-  await controller.handleMessage(disconnectedClient, "connection-1", frame("thread/read", 1), false);
-  await controller.disconnect(disconnectedClient, "connection-1");
-  assert.deepEqual(disconnects, ["connection-1"]);
-  assert.match(requestLines()[0] ?? "", /closed/u);
-
-  let sends = 0;
-  const failedClient = createClient((_data, callback) => {
-    sends += 1;
-    callback?.(sends === 1 ? undefined : new Error("socket write failed"));
-  });
-  await controller.handleMessage(failedClient, "connection-2", frame("thread/read", 2), false);
-  await assert.rejects(controller.sendJsonToClient(failedClient, { id: 2, result: {} }), /socket write failed/u);
-  assert.match(requestLines()[1] ?? "", /send-error/u);
-  clock.advance(10_000);
-  assert.equal(requestLines().length, 2);
   controller.dispose();
 });
 
@@ -951,19 +686,71 @@ test("a superseded transcript materialisation cannot install its stale subscript
   controller.dispose();
 });
 
-test("an unregistered transcript-like method receives no Workbench routing privilege", async () => {
+test("an unknown request fails only itself while WB requests remain available", async () => {
   const clock = new FakeClock();
-  const harnessMethods: string[] = [];
+  const replies: JsonRpcResponse[] = [];
+  let closed = false;
+  const client = createClient((data, callback) => {
+    const message = JSON.parse(data);
+    if ("id" in message) replies.push(message);
+    callback?.();
+  });
+  client.close = () => { closed = true; };
   const { controller } = createController({
     clock,
-    onHarnessMessage: (message) => { harnessMethods.push(message.method); },
+    daemonRequests: {
+      accepts: method => method === "project/catalog/read",
+      handle: async request => ({ id: request.id ?? null, result: { data: [] } }),
+    },
   });
+  try {
+    await controller.handleMessage(client, "connection-1", frame("workbench/transcript/read/fake", 1, { params: {} }), false);
+    await controller.handleMessage(client, "connection-1", frame("project/catalog/read", 2), false);
+    assert.equal(replies[0]?.error?.code, -32601);
+    assert.deepEqual(replies[1], { id: 2, result: { data: [] } });
+    assert.equal(closed, false);
+  } finally {
+    controller.dispose();
+  }
+});
 
-  await controller.handleMessage(
-    createClient(),
-    "connection-1",
-    frame("workbench/transcript/read/fake", 1, { params: {} }),
-    false,
-  );
-  assert.deepEqual(harnessMethods, ["workbench/transcript/read/fake"]);
+test("pending WB requests retain client isolation and settle through replacement delivery receipts", async () => {
+  const clock = new FakeClock();
+  const gates: Array<(response: JsonRpcResponse) => void> = [];
+  let admitted!: () => void;
+  const bothAdmitted = new Promise<void>(resolve => { admitted = resolve; });
+  const firstClient = createClient();
+  const secondClient = createClient();
+  const previous = createController({
+    clock,
+    daemonRequests: {
+      accepts: method => method === "project/catalog/read",
+      handle: () => new Promise(resolve => {
+        gates.push(resolve);
+        if (gates.length === 2) admitted();
+      }),
+    },
+  }).controller;
+  const requests = [firstClient, secondClient].map((client, index) =>
+    previous.handleMessage(client, `connection-${index}`, frame("project/catalog/read", 1), false));
+  const retired = requests.map(request => assert.rejects(request, /detached|disposed|retired/i));
+  await bothAdmitted;
+  clock.advance(2_000);
+  const state = previous.detachForReload();
+  assert.equal(state.pending.length, 2);
+  const replacement = createController({ clock, initialState: state }).controller;
+  try {
+    for (const resolve of gates) resolve({ id: 1, result: {} });
+    await Promise.all(retired);
+    await replacement.sendJsonToClient(firstClient, { id: 1, result: {} });
+    const surviving = replacement.detachForReload();
+    assert.equal(surviving.pending.length, 1);
+    assert.equal(surviving.pending[0]?.client, secondClient);
+    await replacement.resumeAfterFailedReload();
+    await replacement.sendJsonToClient(secondClient, { id: 1, error: { code: -32000, message: "request failed" } });
+    assert.deepEqual(replacement.detachForReload().pending, []);
+  } finally {
+    previous.dispose();
+    replacement.dispose();
+  }
 });

@@ -11,15 +11,17 @@ import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/threa
 import type { WorkbenchHarness, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchNativeThreadIdentity } from "./database/thread-identity/workbench-thread-identity-types";
 import type { NativeTranscriptAtomicObservation, NativeTranscriptObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission, WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
-import type { WorkbenchProviderIdentityOwners, WorkbenchNativeTurnIdentity } from "./thread-identity-provider-mapping";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchItemIdSchema, WorkbenchTurnIdSchema, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 
-type IdentityOwners = WorkbenchProviderIdentityOwners & {
-  threads: Pick<WorkbenchThreadIdentityController, "knownTurn">;
-  items: Pick<WorkbenchTranscriptIdentityController, "itemIdForReference">;
+type IdentityOwners = {
+  threads: Pick<WorkbenchThreadIdentityController, "knownTurn" | "workbenchIdForNative" | "workbenchTurnIdForNative" | "knownNativeBinding">;
+  items: Pick<WorkbenchTranscriptIdentityController, "admit" | "hasAdmitted" | "findItemIdForSource" | "itemIdForSource" | "itemIdForReference">;
+};
+type WorkbenchNativeTurnIdentity = WorkbenchNativeThreadIdentity & {
+  nativeTurnId: import("workbench-shared/workbench/identity").NativeTurnId;
 };
 export interface NativeTranscriptIdentityOwners {
   threads: WorkbenchThreadIdentityController;

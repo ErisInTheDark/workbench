@@ -64,7 +64,7 @@ export default function ThreadContextStatus ({
     contextWindow,
     remainingTokens,
   });
-  const canCompact = thread.harness === "codex" && !thread.isDraft;
+  const canCompact = !thread.isDraft;
   const active = isThreadActive(thread);
   const compactDisabled = isCompacting || active;
   const compactTitle = active

@@ -1,12 +1,11 @@
 /*
- * Keywords: thread context, attribution, markdown, stable refs.
  * Exports:
- * - renderUserInputMarkdown: convert UserInput records into reorientation-safe Markdown with image placeholders. Keywords: user input, image placeholder, markdown.
- * - renderWorkbenchThreadContextPieceMarkdown: render one heading-free chronological context piece. Keywords: thread context, piece, markdown.
- * - getWorkbenchThreadContextPieceRef: derive one stable stateless ref for a projected context piece. Keywords: thread context, ref.
+ * - renderUserInputMarkdown: render user input with image placeholders.
+ * - renderWorkbenchThreadContextPieceMarkdown: render one chronological context piece.
+ * - getWorkbenchThreadContextPieceRef: derive a stable context-piece reference.
  */
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   getQuestionnairePromptText,
   getQuestionnaireTopicLabel,

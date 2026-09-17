@@ -204,13 +204,12 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
       && entry.status !== "interrupted"
       && areUserInputsEquivalentForUserMessageDedupe(entry.input, clonedInput)
     )).length;
-    const nativeClientId = thread.harness === "codex"
-      ? clientUserMessageId?.trim().toLowerCase() || (placement === "steer" ? createClientUserMessageId().toLowerCase() : null)
-      : null;
-    const handle = nativeClientId ?? crypto.randomUUID();
+    const clientMessageId = clientUserMessageId?.trim().toLowerCase()
+      || (placement === "steer" ? createClientUserMessageId().toLowerCase() : null);
+    const handle = clientMessageId ?? crypto.randomUUID();
     const entry: OptimisticInputEntry = {
       enqueuedAt: now(),
-      clientUserMessageId: nativeClientId,
+      clientUserMessageId: clientMessageId,
       canonicalItemId: null,
       canonicalMatchBaseline,
       duplicateOrdinal,

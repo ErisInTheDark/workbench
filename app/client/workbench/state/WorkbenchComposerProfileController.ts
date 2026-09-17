@@ -208,7 +208,7 @@ export default class WorkbenchComposerProfileController {
           agentPath: null, agentSource: null, harness, model: model.id,
           reasoningEffort: model.supportsReasoningEffort ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
           serviceTier: null,
-          contextWindowTokens: harness === "codex" ? model.contextWindow?.defaultTokens ?? null : null,
+          contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
         } });
       } catch (error) {
         this.fail(error instanceof Error ? error.message : "Unable to change provider.");

@@ -1,17 +1,22 @@
 /*
  * Exports:
  * - CodexAppServerRuntimeOptions: inject the stable Codex app-server process for lifecycle tests.
+ * - CodexAppServerRuntimePorts: native process configuration and failure notification.
  * - default CodexAppServerRuntime: own stable app-server ingress and two-phase bridge handoff.
  */
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
-import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonCodexAppServerRuntime } from "./daemon-runtime-objects";
 import type { ReloadableNodeHandoff } from "../../shared/reload/ReloadableNode";
 
 export interface CodexAppServerRuntimeOptions {
   createAppServer?: (options: CodexAppServerOptions) => CodexAppServer;
   previousAppServer?: CodexAppServer;
+}
+
+export interface CodexAppServerRuntimePorts {
+  appServer: Omit<CodexAppServerOptions, "onFatalExit" | "onMessage" | "previousAppServer">;
+  onFatalExit(reason: string): void;
 }
 
 function deferred() {
@@ -24,24 +29,24 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
   readonly appServer: CodexAppServer;
   private acceptingMessages = true;
   private bridge: CodexStdioBridge | null = null;
-  private readonly context: DaemonProcessContext;
+  private readonly ports: CodexAppServerRuntimePorts;
   private handoffGate: ReturnType<typeof deferred> | null = null;
   private messageTail = Promise.resolve();
   private messageGeneration = new AbortController();
 
   constructor(
-    context: DaemonProcessContext,
+    ports: CodexAppServerRuntimePorts,
     { createAppServer = (options) => new CodexAppServer(options), previousAppServer }: CodexAppServerRuntimeOptions = {},
   ) {
-    this.context = context;
+    this.ports = ports;
     this.appServer = createAppServer({
-      ...context.codexAppServerOptions,
+      ...ports.appServer,
       previousAppServer,
       onFatalExit: (reason) => {
         this.acceptingMessages = false;
         this.releaseHandoffGate();
         this.bridge?.beginStopping(reason);
-        context.onCodexFatalExit(reason, this.bridge);
+        ports.onFatalExit(reason);
       },
       onMessage: (message) => this.enqueueMessage(message),
     });
@@ -147,7 +152,7 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
       });
       const work = bridge.handleUpstreamMessage(message).catch(error => {
         if (signal.aborted && error !== signal.reason) {
-          this.context.codexAppServerOptions.logError?.("codex-bridge", `retired upstream handler failed: ${String(error).slice(0, 500)}`);
+          this.ports.appServer.logError?.("codex-bridge", `retired upstream handler failed: ${String(error).slice(0, 500)}`);
         }
         throw error;
       });
@@ -159,7 +164,7 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
         signal.removeEventListener("abort", onAbort);
       }
     }).catch((error) => {
-      this.context.codexAppServerOptions.logError?.("codex-bridge", `failed to handle upstream message: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+      this.ports.appServer.logError?.("codex-bridge", `failed to handle upstream message: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
     });
   }
 

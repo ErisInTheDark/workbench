@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - installLifecycleProbe: time startup and instrument only a private copy's node lifecycle callbacks.
- * - writeLifecycleFault: select held drain or failed activation for the next transition.
+ * - writeLifecycleFault: select native unavailability, held drain or failed activation.
  * - appendLifecycleMigration: append a synthetic release without changing sealed production history.
  * - seedLifecycleTranscript: admit an isolated durable transcript and image without JSON recording.
  */
@@ -69,7 +69,7 @@ async function replaceOnce(file: string, before: string, after: string) {
 }
 
 export async function writeLifecycleFault(project: string, fault: {
-  hold?: string; fail?: string; database?: string; table?: string; initial?: boolean;
+  hold?: string; fail?: string; database?: string; table?: string; initial?: boolean; nativeInitialization?: boolean;
 }) {
   await fs.mkdir(path.join(project, ".workbench"), { recursive: true });
   await fs.writeFile(path.join(project, ".workbench/lifecycle-control.json"), JSON.stringify(fault));
@@ -92,6 +92,17 @@ exports.instrument = (instance, scope, mode) => {
   const identity = randomUUID();
   const read = () => JSON.parse(fs.readFileSync(control, "utf8"));
   const mark = (phase) => console.log("[lifecycle] " + phase + " " + scope + " " + identity);
+  if (scope === "server:codex" && instance.registrations?.codexBridge) {
+    const bridge = instance.registrations.codexBridge;
+    const initialise = bridge.ensureInitialized.bind(bridge);
+    bridge.ensureInitialized = (...args) => {
+      if (read().nativeInitialization) {
+        mark("native-unavailable");
+        return Promise.reject(new Error("Lifecycle injected native unavailability"));
+      }
+      return initialise(...args);
+    };
+  }
   if (instance.start && mode === "initial") {
     const start = instance.start.bind(instance);
     instance.start = async (report = () => {}, signal) => {

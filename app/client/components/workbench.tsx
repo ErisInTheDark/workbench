@@ -5,9 +5,10 @@
  * - default Workbench: stable shell composition, providers, explorer/file dialogs, responsive chrome, and DOM surfaces.
  * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
     ExplorerSnapshot,
     OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
@@ -33,6 +34,7 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import {
     createFileRoute,
+    createGitRoute,
     createHomeHref,
     createHomeRoute,
     createHomeThreadRoute,
@@ -41,7 +43,6 @@ import {
     createProjectRoute,
     createSettingsRoute,
     createStatsRoute,
-    createGitRoute,
     createThreadRoute,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
@@ -54,16 +55,16 @@ import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
 import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
-import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
+import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchRoute } from "../workbench/navigation/use-workbench-route";
 import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
-import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import {
     handleWorkbenchActionShortcut,
     runWorkbenchAction,
@@ -99,17 +100,17 @@ import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-su
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
+import WorkbenchGitRefreshButton from "./workbench/git/WorkbenchGitRefreshButton";
+import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositoryControl";
+import WorkbenchGitSidebar from "./workbench/git/WorkbenchGitSidebar";
+import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
+import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
-import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
-import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositoryControl";
-import WorkbenchGitRefreshButton from "./workbench/git/WorkbenchGitRefreshButton";
-import WorkbenchGitSidebar from "./workbench/git/WorkbenchGitSidebar";
-import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
@@ -161,9 +162,8 @@ import {
 } from "./workbench/workbench-icons";
 import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
-import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchBrowseSessionsSection from "./workbench/WorkbenchBrowseSessionsSection";
-import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
+import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
@@ -174,14 +174,15 @@ import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSideb
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
+import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
+import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
-import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 
 installBrowserRandomUuidPolyfill();
 
@@ -430,7 +431,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     clientStateController.records("globalPreference").find((record) => (
       record.preference.key === "harness"
     ))?.preference.value as WorkbenchHarness | undefined
-  ) ?? "codex");
+  ) ?? defaultProviderKey);
   const [isMobile, setIsMobile] = useState(false);
   const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
@@ -1262,10 +1263,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         create: (ownerProjectId, id) => {
           const profileSlot = isNew
             ? { kind: "new-thread" as const, projectId: ownerProjectId }
-            : { kind: "draft" as const, projectId: ownerProjectId, draftId: id, harness: currentThread?.harness ?? "codex" };
+            : { kind: "draft" as const, projectId: ownerProjectId, draftId: id, harness: currentThread?.harness ?? defaultProviderKey };
           const selection = composerProfileController.getSelection(profileSlot);
           const settings: WorkbenchComposerSettings = composerProfileController.resolveSettings(profileSlot) ?? {
-            agentPath: null, agentSource: null, harness: currentThread?.harness ?? "codex", model: "", reasoningEffort: null, serviceTier: null,
+            agentPath: null, agentSource: null, harness: currentThread?.harness ?? defaultProviderKey, model: "", reasoningEffort: null, serviceTier: null,
           };
           const now = Date.now();
           return {
@@ -2210,7 +2211,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     event.preventDefault();
                     navigateToRoute(createGitRoute(activeProjectId));
                   }} />
-                  <section className="shrink-0 pb-5">
+                  <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
                       icon={DraftThreadIcon}
@@ -2248,7 +2249,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
 
-                  {activeProjectId ? <section className="shrink-0 pb-5">
+                  {activeProjectId ? <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">

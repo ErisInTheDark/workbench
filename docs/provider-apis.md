@@ -47,9 +47,17 @@ Thread operations translate WB identities, inputs and results. Existing admissio
 
 Provider callbacks already inside admitted work use that owner's translated WB descriptors. Do not reacquire a provider handle from profile/MCP callbacks while the admitted owner is draining.
 
-The app and daemon adopt these actions together. This boundary move changes no database schema or durable format. Internal tools, recovery and legacy raw server ports remain separate migration work; their compatibility socket adapter retains its native handshake.
+The app and daemon adopt these actions together. Native browser forwarding and `/daemon/bridge-request` are removed. Unknown socket requests fail individually; provider replacement never closes the shared WB socket.
+
+`server:codex/lifecycle` supervises its `harness:codex` child, surviving the restart it requests. The bridge owns native readiness, health probes, ingress and admitted reply drain. Retired probes cannot request recovery. Failed lifecycle replacement resumes the previous supervisor.
+
+The bridge translates native events into WB observations. Shared core settles those observations and returns WB lifecycle state; Codex decides native continuation afterwards. This work drains with the bridge's existing persistence work, without reacquiring a provider-definition lease.
+
+Transcript assets remain SQLite-owned and readable without a running provider. New URLs use `/api/transcript-assets/<wb-thread-id>/<asset>`; retained Codex-shaped URLs and stored aliases remain readable. No schema change or asset rewrite is required.
 
 ## stateful operations
+
+`thread/provider/delete` (`daemon.threads.deleteProvider`) deletes one backing provider session through optional `threads.delete`. WB identity, state, drafts and SQL history remain. Multiple bindings require explicit selection before deletion; this API does not guess or purge WB data.
 
 An operation lease is not a session lifecycle. An implementation owns sessions, subscriptions, cancellation and reload handoff. Native replies for admitted work stay with that owner.
 

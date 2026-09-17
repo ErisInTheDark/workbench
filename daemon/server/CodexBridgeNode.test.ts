@@ -1,17 +1,19 @@
 /*
- * No exports. Tests exercise accepted-steer mapping and recovery through the real bridge node lifecycle.
+ * No exports. Tests exercise saved history and recovery through the real bridge node lifecycle.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import CodexBridgeNode from "./CodexBridgeNode";
 import type CodexStdioBridge from "./CodexStdioBridge";
-import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import type { JsonRpcRequest } from "./bridge-types";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import CodexLifecycleController from "./CodexLifecycleController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function deferred() {
   let resolve!: () => void;
@@ -65,11 +67,9 @@ test("node serves saved history while refresh initialisation stalls and retires 
     },
   } as unknown as DaemonRuntimeObjects;
   const instance = CodexBridgeNode.create({
-    createCodexBridgeOptions: () => ({
-      appServer: parent.appServer, bridgeUrl: "ws://127.0.0.1:1", storageRoot: ".",
-      handleWorkbenchRequest: async () => { throw new Error("unexpected Workbench request"); },
-      onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null,
-    }),
+    isShuttingDown: () => false,
+    isHardReloadPending: () => false,
+    broadcastProviderNotification() {},
   } as unknown as DaemonProcessContext, {
     get: key => registrations[key], run: () => { throw new Error("unexpected graph operation"); },
     getSourceState: () => { throw new Error("unexpected source read"); },
@@ -91,77 +91,72 @@ test("node serves saved history while refresh initialisation stalls and retires 
   assert.deepEqual(failures, []);
 });
 
-test("accepted Codex steers cancel the mapped Workbench thread wait before publishing the response", async () => {
-  const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
-  const workbenchThreadId = WorkbenchThreadIdSchema.parse("workbench-thread");
+test("managed steering interrupts only the mapped WB thread wait before returning", async () => {
+  const fixture = createThreadStateTestDatabase();
+  fixture.admitThread("local:///project", "saved-thread", "codex", "native-thread", "C:/repo");
+  const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
+  assert.ok(identity);
   const registry = getProcessWorkbenchAgentMcpRequestRegistry();
-  const wait = registry.register(`codex-bridge-${process.pid}-${Date.now()}`, 1, {
-    owner: {},
-    steerInterruptible: true,
-    toolName: "git_arc_wait",
-  });
-  wait.setWorkbenchThreadId(workbenchThreadId);
+  const wait = registry.register(randomUUID(), 1, { owner: {}, steerInterruptible: true, toolName: "git_arc_wait" });
+  const other = registry.register(randomUUID(), 1, { owner: {}, steerInterruptible: true, toolName: "git_arc_wait" });
+  wait.setWorkbenchThreadId(identity.threadId);
+  other.setWorkbenchThreadId(WorkbenchThreadIdSchema.parse(randomUUID()));
   let bridge!: CodexStdioBridge;
-  let upstreamRequest!: JsonRpcRequest;
-  const responses: unknown[] = [];
-  const parent = {
-    appServer: {
-      async retirePrevious() {},
-      send(request: JsonRpcRequest) { upstreamRequest = request; },
-    },
-    attachBridge(value: CodexStdioBridge) { bridge = value; },
-    deactivateBridge() {},
+  const turn = { id: "native-turn", items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null };
+  const thread = {
+    id: "native-thread", cwd: "C:/repo", createdAt: 1, updatedAt: 1, name: null, preview: "",
+    status: { type: "active", activeFlags: [] }, source: "appServer", turns: [],
   };
   const registrations = {
-    codexAppServer: parent,
-    toolRevision: { revision: "catalogue" },
-    threadIdentity: {
-      knownNativeBinding: (_harness: string, threadId: string) => {
-        assert.equal(threadId, nativeThreadId);
-        return { harness: "codex", nativeLocation: "C:/repo", nativeThreadId };
-      },
-      workbenchIdForNative: () => workbenchThreadId,
+    codexAppServer: {
+      appServer: { send(request: JsonRpcRequest) {
+        const result = request.method === "thread/read" ? { thread }
+          : request.method === "thread/turns/list" ? { data: [turn], nextCursor: null }
+            : request.method === "turn/steer" ? { turnId: turn.id } : null;
+        assert.ok(result, `Unexpected native operation: ${request.method}`);
+        assert.equal(wait.signal.aborted, false);
+        queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: request.id ?? null, result }); });
+      } },
+      deactivateBridge() {},
     },
-    transcript: { pendingRecoveryThreadIds: Promise.resolve([]), record: async () => undefined },
+    codexInstructions: {
+      augment: async (request: JsonRpcRequest) => request,
+      createThreadResume: (params: object) => ({ method: "thread/resume", params }),
+    },
+    toolRevision: { revision: "catalogue" },
+    threadIdentity: fixture.identities.threads, transcriptIdentity: fixture.identities.items,
+    projectCatalog: { resolveAgentEndpointProjectFromCwd: async () => ({
+      project: { id: identity.projectId }, root: { rootPath: "C:/repo" },
+    }) },
+    transcript: { record: async () => undefined, readMaterializedTurnIds: async () => [] },
   } as unknown as DaemonRuntimeObjects;
   const instance = CodexBridgeNode.create({
-    createCodexBridgeOptions: () => ({
-      appServer: parent.appServer,
-      bridgeUrl: "ws://127.0.0.1:1",
-      handleWorkbenchRequest: async () => { throw new Error("unexpected Workbench request"); },
-      onNotification() {},
-      resolveProjectFromCwd: async () => null,
-      sendToClient(_client, response) {
-        assert.equal(wait.signal.aborted, true);
-        responses.push(response);
-      },
-      storageRoot: ".",
-    }),
-    onCodexBridgeReady: async () => undefined,
-    onCodexBridgeUnavailable() {},
+    isShuttingDown: () => false, isHardReloadPending: () => false, broadcastProviderNotification() {},
   } as unknown as DaemonProcessContext, {
-    get: key => registrations[key],
-    run: () => { throw new Error("Unexpected graph operation in node fixture"); },
-    getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
-    handoffState: undefined,
-    isReplacing: () => false,
-    lease: { isCurrent: () => true },
-    mode: "initial",
+    get: key => registrations[key], run: () => { throw new Error("Unexpected graph operation"); },
+    getSourceState: () => { throw new Error("Unexpected source read"); },
+    handoffState: undefined, isReplacing: () => false, lease: { isCurrent: () => true }, mode: "initial",
   });
   bridge = instance.registrations.codexBridge!;
-  const client = { OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {} } as BridgeClient;
   try {
-    await bridge.forwardRequest({
-      id: 7,
-      method: "turn/steer",
-      params: { threadId: nativeThreadId },
-    }, client, 7);
-    assert.equal(wait.signal.aborted, false);
-    await bridge.handleUpstreamMessage({ id: upstreamRequest.id ?? null, result: { turnId: "native-turn" } });
+    const response = await bridge.handleServerRequest({
+      id: 7, method: "workbench/codex/message/admit", params: {
+        threadId: "native-thread",
+        resumeRequest: { method: "thread/resume", params: { threadId: "native-thread" } },
+        startRequest: { method: "turn/start", params: {
+          threadId: "native-thread", clientUserMessageId: randomUUID(),
+          input: [{ type: "text", text: "continue", text_elements: [] }],
+        } },
+        steerRequest: { method: "turn/steer", params: {} },
+      },
+    });
+    assert.equal(response.error, undefined);
+    assert.deepEqual(response.result, { kind: "steered", turnId: turn.id });
     assert.equal(wait.signal.aborted, true);
-    assert.deepEqual(responses, [{ id: 7, result: { turnId: "native-turn" } }]);
+    assert.equal(other.signal.aborted, false);
   } finally {
     wait.unregister();
+    other.unregister();
     await instance.dispose();
     await bridge.disposeImmediately();
   }
@@ -186,6 +181,8 @@ for (const mode of ["initial", "replacement"] as const) {
       },
       attachBridge(value: CodexStdioBridge) { bridge = value; },
       deactivateBridge() {},
+      isAvailable: () => true,
+      isTransitioning: () => false,
       beginBridgeHandoff(value: CodexStdioBridge) {
         return {
           waitForIdle: () => value.waitForIdle(),
@@ -200,18 +197,17 @@ for (const mode of ["initial", "replacement"] as const) {
     const registrations = {
       codexAppServer: parent,
       toolRevision: { revision: "catalogue" },
-      codexHealth: { start() {} },
+      codexLifecycle: new CodexLifecycleController({
+        isShuttingDown: () => false,
+        log() {}, logError() {},
+        recover: async () => { throw new Error("Unexpected process recovery"); },
+      }),
       transcript: { pendingRecoveryThreadIds: Promise.resolve(["thread"]) },
     } as unknown as DaemonRuntimeObjects;
     const instance = CodexBridgeNode.create({
-      createCodexBridgeOptions: () => ({
-        appServer: parent.appServer, bridgeUrl: "ws://127.0.0.1:1",
-        handleWorkbenchRequest: async () => { throw new Error("unexpected Workbench request"); },
-        onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null,
-        storageRoot: ".",
-      }),
-      onCodexBridgeReady: async () => {},
-      onCodexBridgeUnavailable() {},
+      isShuttingDown: () => false,
+      isHardReloadPending: () => false,
+      broadcastProviderNotification() {},
     } as unknown as DaemonProcessContext, {
       get: (key) => registrations[key],
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
@@ -252,6 +248,7 @@ for (const mode of ["initial", "replacement"] as const) {
     } finally {
       release.resolve();
       await activation;
+      registrations.codexLifecycle.dispose();
       await instance.dispose();
       await bridge.disposeImmediately();
     }

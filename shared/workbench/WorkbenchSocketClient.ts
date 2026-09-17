@@ -5,6 +5,7 @@
  */
 import type { WorkbenchHarness } from "../types.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
+import { defaultProviderKey } from "./provider/provider-registrations.ts";
 import reportClientSchemaError from "../workbench/report-client-schema-error.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "../workbench/stats/workbench-stats-contract.ts";
@@ -272,7 +273,7 @@ export default class WorkbenchSocketClient {
 
     if (isWorkbenchPublicNotification(parsed)) {
       const rawHarness = (parsed as WorkbenchClientNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness;
-      const provider = ProviderKeySchema.safeParse(rawHarness ?? "codex");
+      const provider = ProviderKeySchema.safeParse(rawHarness ?? defaultProviderKey);
       if (!provider.success) {
         reportClientSchemaError("provider notification identity", provider.error);
         return;

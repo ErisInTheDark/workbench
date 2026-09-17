@@ -90,12 +90,9 @@ async function createThreadReadHarness(
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:4500",
     handleWorkbenchRequest: async (request) => ({ id: request.id ?? null, error: { code: -32000, message: "Unexpected Workbench request." } }),
     onNotification: () => undefined,
     resolveProjectFromCwd,
-    sendToClient: () => undefined,
-    storageRoot,
     sqliteReader,
   });
   return { bridge, sentRequests, storageRoot, sqlReads };
@@ -107,15 +104,12 @@ test("stable Codex bridge delegates subagent requests through the current featur
   let currentOwner = "alpha";
   const bridge = new CodexStdioBridge({
     appServer: { send: () => undefined } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:4500",
     handleWorkbenchRequest: async (request) => {
       delegatedTo.push(currentOwner);
       return { id: request.id ?? null, result: { owner: currentOwner } };
     },
     onNotification: () => undefined,
     resolveProjectFromCwd: async (cwd) => createResolution(currentOwner, cwd ?? "C:/projects/alpha"),
-    sendToClient: () => undefined,
-    storageRoot,
   });
 
   const first = await bridge.handleBridgeRequest({ id: "before-reload", method: "workbench/subagent/list", params: { cwd: "C:/projects/alpha" } });

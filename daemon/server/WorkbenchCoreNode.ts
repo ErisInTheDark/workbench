@@ -14,7 +14,6 @@ import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
-import CodexHealthMonitor from "./CodexHealthMonitor";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type {
   DaemonDatabaseRegistration,
@@ -24,7 +23,6 @@ import type {
 } from "./daemon-runtime-objects";
 import ReloadableNode, { type ReloadableNodeBuild, type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
-import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -34,7 +32,8 @@ import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
+import WorkbenchHarnessController from "./WorkbenchHarnessController";
+import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
@@ -52,7 +51,6 @@ import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
-import type CodexRecoveryController from "./CodexRecoveryController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
@@ -61,44 +59,11 @@ function createModules(): DaemonReloadableModules {
   return { project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
 }
 
-function createRecoveryCapability(
-  harness: string,
-  controller: CodexRecoveryController,
-): WorkbenchHarnessAdapter["recovery"] {
-  return {
-    kind: "turn",
-    observeNotification: (notification) => controller.observeNotification(harness, notification),
-    observeRequest: (request) => controller.observeRequest(harness, request),
-    resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
-    completeObservedTurn: (notification, lifecycle) => controller.completeObservedTurn(harness, notification, lifecycle),
-  };
-}
-
-function createHarnessAdapters(context: DaemonProcessContext, controller: CodexRecoveryController): WorkbenchHarnessAdapter[] {
-  const ports = context.harnessPorts;
-  return [
-    {
-      browse: ports.codex,
-      browser: ports.codex,
-      id: "codex",
-      internal: ports.codex,
-      recovery: createRecoveryCapability("codex", controller),
-      serverMethods: [
-        "workbench/codex/message/admit",
-        "thread/context/read",
-        "thread/name/set",
-        "workbench/notification/broadcast",
-      ],
-    },
-  ];
-}
-
 function createWorkbenchCoreFeature(
   context: DaemonProcessContext,
   run: ReloadableNodeBuild<DaemonRuntimeObjects>["run"],
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
-  turnRecovery: CodexRecoveryController,
   database: DaemonDatabaseRegistration,
   transcript: Pick<DaemonTranscriptRegistration, "read">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
@@ -127,16 +92,9 @@ function createWorkbenchCoreFeature(
     if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
     return threadState;
   };
-  const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery), {
+  const harnesses = new WorkbenchHarnessController({
     providers,
-    admitTurnStart: () => database.assertReady(),
     identities: threadIdentity,
-    itemIdentities: transcriptIdentity,
-    resolveProject: async (cwd) => {
-      const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Provider identity" });
-      void projectCatalog.observeProjectIcon(project.id);
-      return { projectId: project.id, projectRoot: project.rootPath };
-    },
   });
   const profileStore = new WorkbenchComposerProfileStore(database);
   const logThreadStateWarning = (message: string) => {
@@ -248,7 +206,6 @@ function createWorkbenchCoreFeature(
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
-    harnesses,
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: logThreadStateWarning,
     projectState: projectSnapshot,
@@ -308,7 +265,7 @@ function createWorkbenchCoreFeature(
     threadActions,
     agents: new WorkbenchAgentSkillCatalogController(
       (projectId) => projectCatalog.resolveProjectById(projectId),
-      sections => providers.get("codex").configuration.guidance.contains(sections),
+      (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
     ),
     files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
     gitArc,
@@ -325,25 +282,39 @@ function createWorkbenchCoreFeature(
     stats,
     threadIdentity: { resolve: (input, options) => harnesses.resolveThreadIdentity(input, options) },
   });
-  const bridgeRequest = new WorkbenchBridgeRequestController({ harnesses });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
-    ...context.browseCleanupOptions,
+    readThreadActive: async threadId => {
+      if (!lease.isCurrent()) return null;
+      try {
+        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+        if (!identity) return null;
+        const key = installedProviderKeys.find(key => identity.bindings.some(binding => binding.harness === key));
+        if (!key) return null;
+        const thread = await providers.get(key).threads.read(identity.threadId, { background: true });
+        return isThreadStatusActive(thread.status);
+      } catch (error) {
+        console.warn("[browse-cleanup]", (error instanceof Error ? error.message : String(error)).slice(0, 500));
+        return null;
+      }
+    },
     cleanupStaleInactiveSessions: async (options) => {
       if (!lease.isCurrent()) {
         browseSessionCleanup.dispose();
         return;
       }
-      await context.browseCleanupOptions.cleanupStaleInactiveSessions(options);
+      await run("browseExecution", execution => execution.cleanupStaleInactiveSessions(options), "Browse stale-session cleanup");
     },
   });
-  const codexHealth = new CodexHealthMonitor({
-    ...context.codexHealthOptions,
-    isProbeAllowed: () => lease.isCurrent() && context.codexHealthOptions.isProbeAllowed(),
-    isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
-    requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
-  });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
+    providerObservations: {
+      observe: async (harness, facts) => {
+        if (!lease.isCurrent()) return null;
+        stats.observeProviderNotification(harness, facts);
+        const observation = await threadState!.observeProviderNotification(harness, facts);
+        return lease.isCurrent() ? observation?.lifecycle ?? null : null;
+      },
+    },
   };
   return new WorkbenchCoreFeature({
     captureReloadState: () => projectCatalog.captureReloadState(),
@@ -353,7 +324,6 @@ function createWorkbenchCoreFeature(
       browseSessionCleanup.start();
       for (const [phase, start] of [
         ["composer profiles", () => profileStore.start()],
-        ["loaded harness identities", () => harnesses.restoreLoadedIdentities()],
         ["project discovery", () => projectCatalog.readCatalog()],
       ] as const) {
         void start().catch((error: unknown) => {
@@ -365,8 +335,6 @@ function createWorkbenchCoreFeature(
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("working-tree disposal");
       await workingTree.dispose();
-      reportPhase("codex health disposal");
-      codexHealth.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
       reportPhase("subagent disposal");
@@ -388,25 +356,6 @@ function createWorkbenchCoreFeature(
       reportPhase("project catalog disposal");
       await projectCatalog.dispose();
     },
-    observeProviderNotification: async ({ harness, notification, observation: facts }) => {
-      if (!lease.isCurrent()) {
-        await harnesses.completeObservedTurn(harness, notification, null);
-        return;
-      }
-      stats.observeProviderNotification(harness, facts);
-      let observation;
-      try {
-        observation = await threadState!.observeProviderNotification(harness, facts);
-      } catch (error) {
-        await harnesses.completeObservedTurn(harness, notification, null);
-        throw error;
-      }
-      if (!lease.isCurrent()) {
-        await harnesses.completeObservedTurn(harness, notification, null);
-        return;
-      }
-      await harnesses.completeObservedTurn(harness, notification, observation?.lifecycle ?? null);
-    },
     registrations,
     start: async (reportPhase) => {
       if (initialCatalog) return;
@@ -414,8 +363,6 @@ function createWorkbenchCoreFeature(
       await projectCatalog.ensureLoaded();
       reportPhase("composer profile startup");
       await profileStore.start();
-      reportPhase("loaded harness identity admission");
-      await harnesses.restoreLoadedIdentities();
       reportPhase("stats startup");
       stats.start();
       reportPhase("browse session cleanup startup");
@@ -433,7 +380,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     run,
     lease,
     get("reloadDirt"),
-    get("codexRecovery"),
     get("database"),
     get("transcript"),
     get("threadIdentity"),
@@ -443,7 +389,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "reloadDirt", "codexRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:core",
   sources: [
@@ -476,7 +422,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
     "daemon/server/WorkbenchQuestionnaireController.ts",
     "daemon/server/WorkbenchQuestionnaireResponseController.ts",
     "daemon/server/BrowseSessionCleanupSupervisor.ts",
-    "daemon/server/CodexHealthMonitor.ts",
     "daemon/server/lib/thread-bootstrap.ts",
     "daemon/server/lib/workbench-library.ts",
     "daemon/server/lib/workbench/git/**",

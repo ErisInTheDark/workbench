@@ -50,7 +50,6 @@ function createRouter(events: string[], failurePath: string | null = null) {
   const projects = controller("projects");
   return new WorkbenchDaemonHttpRouter({
     agentCommand: controller("agent"),
-    bridgeRequest: controller("bridge"),
     gitArc: controller("git-arc"),
     mcp: controller("mcp"),
     projectCatalog: {
@@ -69,7 +68,6 @@ test("routes every reloadable HTTP controller and preserves method gates", async
   for (const [url, method, expected] of [
     ["/daemon/agent-command", "POST", "agent"],
     ["/daemon/mcp", "POST", "mcp"],
-    ["/daemon/bridge-request", "POST", "bridge"],
     ["/daemon/git-arc", "POST", "git-arc"],
     ["/daemon/thread-git", "POST", "thread-git"],
     ["/daemon/projects", "GET", "projects"],
@@ -81,7 +79,7 @@ test("routes every reloadable HTTP controller and preserves method gates", async
     await router.handleHttpRequest(request(url, method), output);
     assert.equal((output as unknown as TestResponse).body, expected);
   }
-  assert.deepEqual(events, ["agent", "mcp", "bridge", "git-arc", "thread-git", "projects", "project-icon", "tree", "transcript-assets"]);
+  assert.deepEqual(events, ["agent", "mcp", "git-arc", "thread-git", "projects", "project-icon", "tree", "transcript-assets"]);
 
   const rejected = response();
   await router.handleHttpRequest(request("/daemon/projects", "POST"), rejected);
@@ -94,9 +92,9 @@ test("routes every reloadable HTTP controller and preserves method gates", async
 });
 
 test("turns controller failures into bounded HTTP errors", async () => {
-  const router = createRouter([], "/daemon/bridge-request");
+  const router = createRouter([], "/daemon/agent-command");
   const output = response();
-  await router.handleHttpRequest(request("/daemon/bridge-request", "POST"), output);
+  await router.handleHttpRequest(request("/daemon/agent-command", "POST"), output);
   assert.equal(output.statusCode, 500);
   assert.deepEqual(JSON.parse((output as unknown as TestResponse).body), { error: "controller exploded" });
 });

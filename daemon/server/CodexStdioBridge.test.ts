@@ -2,6 +2,7 @@
  * No exports. Tests cover Codex bridge requests, questionnaire liveness, lifecycle, transcript projection, and reload recovery.
  */
 
+import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -20,7 +21,7 @@ import {
   createWorkbenchFileChangeFailureSystemMessage,
   type WorkbenchFileChangeItem,
 } from "workbench-shared/workbench/thread/workbench-file-change";
-import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
+
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
@@ -36,7 +37,7 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import { mapProviderNotification } from "./thread-identity-provider-mapping";
+import { mapProviderNotification } from "./CodexProviderIdentity";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
@@ -171,11 +172,10 @@ function bridgeThread(items: ThreadItem[] = []) {
   };
 }
 
-for (const route of ["managed-creation", "internal", "browser"] as const) {
+for (const route of ["managed-creation", "internal"] as const) {
   for (const failed of [false, true]) {
     test(`${route} preserves caller correlation for provider ${failed ? "errors" : "results"}`, async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-correlation-"));
-      const sent: unknown[] = [];
       const upstreamIds: JsonRpcRequest["id"][] = [];
       const payload = failed
         ? { error: { code: -32000, message: "Provider refused the request." } }
@@ -185,7 +185,6 @@ for (const route of ["managed-creation", "internal", "browser"] as const) {
           upstreamIds.push(request.id);
           queueMicrotask(() => void bridge.handleUpstreamMessage({ ...payload, id: request.id ?? null }));
         } } as unknown as CodexAppServer,
-        bridgeUrl: "ws://127.0.0.1:1",
         createThread: (request, create) => create(request),
         resolveProjectFromCwd: async () => ({
           cwd: "C:/repo",
@@ -195,8 +194,6 @@ for (const route of ["managed-creation", "internal", "browser"] as const) {
         handleWorkbenchRequest: rejectWorkbenchRequest,
         instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
         onNotification() {},
-        sendToClient(_client, response) { sent.push(response); },
-        storageRoot: root,
       });
       try {
         const request = {
@@ -204,22 +201,14 @@ for (const route of ["managed-creation", "internal", "browser"] as const) {
           method: route === "managed-creation" ? "thread/start" : "model/list",
           params: { cwd: "C:/repo" },
         };
-        let response: unknown;
-        if (route === "browser") {
-          await bridge.forwardRequest(request, {} as BridgeClient, "browser-request");
-          await bridge.waitForIdle();
-          assert.equal(sent.length, 1);
-          response = sent[0];
-        } else {
-          response = route === "managed-creation"
-            ? await bridge.handleBridgeRequest(request)
-            : await bridge.handleServerRequest(request);
-        }
+        const response = route === "managed-creation"
+          ? await bridge.handleBridgeRequest(request)
+          : await bridge.handleServerRequest(request);
         assert.equal(upstreamIds.length, 1);
         assert.notEqual(upstreamIds[0], request.id);
-        assert.equal((response as JsonRpcResponse).id, route === "browser" ? "browser-request" : request.id);
+        assert.equal((response as JsonRpcResponse).id, request.id);
         if (failed || route !== "managed-creation") {
-          assert.deepEqual(response, { ...payload, id: route === "browser" ? "browser-request" : request.id });
+          assert.deepEqual(response, { ...payload, id: request.id });
         } else {
           assert.equal(((response as JsonRpcResponse).result as { thread: Thread }).thread.id, "thread");
         }
@@ -269,10 +258,9 @@ test("bridge admits public identity before structural publication and records th
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result: { data: [pageTurn], nextCursor: null } }));
     } } as unknown as CodexAppServer,
     initialState: {
-      upstreamInitialized: true, initializeResult: {}, requestIdAllocator: { next: 100 },
+      upstreamInitialized: true, requestIdAllocator: { next: 100 },
       pendingResponses: new Map(), pendingUserInputRequests: new Map(),
-    },
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    }, handleWorkbenchRequest: rejectWorkbenchRequest,
     ...{ identities }, transcriptAssets: assetPorts(database),
     onNotification(notification) {
       publicEvents.push(notification as ServerNotification);
@@ -288,7 +276,6 @@ test("bridge admits public identity before structural publication and records th
       cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {}, storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: { ...bridgeThread(), turns: [] } } });
@@ -396,15 +383,13 @@ test("database replacement preserves ordered live events and usage without repla
   const reasoning: ThreadItem = { type: "reasoning", id: "cold-reasoning", summary: ["title"], content: [] };
   const createBridge = (initialState?: ConstructorParameters<typeof CodexStdioBridge>[0]["initialState"]) => new CodexStdioBridge({
     appServer: { send() { throw new Error("Cold identity lookup must not request provider history"); } } as unknown as CodexAppServer,
-    initialState, identities,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState, identities, handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(event) { published.push(event as ServerNotification); },
     recordSqliteTranscript: async (batch) => { transcripts.settle(batch); },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {}, storageRoot: root,
   });
   let bridge = createBridge();
   try {
@@ -489,10 +474,9 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
           })());
         }
       } } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1",
       handleWorkbenchRequest: rejectWorkbenchRequest,
       initialState: {
-        initializeResult: {}, pendingResponses: new Map(), pendingUserInputRequests,
+        pendingResponses: new Map(), pendingUserInputRequests,
         requestIdAllocator: { next: 100 }, upstreamInitialized: true,
       },
       onNotification(notification) { notifications.push(notification); },
@@ -501,7 +485,6 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
         project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
         root: { id: "root", name: "repo", root, rootPath: root },
       }),
-      sendToClient() {}, storageRoot: root,
     };
     let bridge = new CodexStdioBridge(options);
     try {
@@ -597,15 +580,13 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
             : { data: [{ ...bridgeThread().turns[0], id: origin === "changed" ? "new-turn" : "turn" }] },
           }));
         }
-      } } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+      } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
       onNotification(message) { visible.push(message); },
       recordSqliteTranscript: async (batch) => { facts.push(...batch); await sql.ports.recordSqliteTranscript(batch); },
       resolveProjectFromCwd: async () => ({
         cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       }),
-      sendToClient() {}, storageRoot: root,
     });
     try {
       await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: metadata } });
@@ -671,9 +652,8 @@ test("stopping before passive-context preparation dispatches no provider work", 
     appServer: { send(message: JsonRpcRequest) {
       requests.push(message);
       throw new Error("Provider is stopped.");
-    } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
+    } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
   });
   try {
     const delivery = bridge.handleServerRequest({
@@ -703,9 +683,8 @@ test("ordinary failed patches receive current-file findings without automatic re
     appServer: { send(message: JsonRpcRequest) {
       requests.push(message);
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id, result: { thread: metadata } }));
-    } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {}, sendToClient() {}, storageRoot: root,
+    } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
     resolveProjectFromCwd: async () => ({
       cwd: root, project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
       root: { id: "root", name: "repo", root, rootPath: root },
@@ -735,10 +714,8 @@ test("bridge-only reload preserves the initialized app-server generation", async
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-capability-"));
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState: {
-      initializeResult: { preserved: "upstream" },
       pendingResponses: new Map(),
       pendingUserInputRequests: new Map(),
       requestIdAllocator: { next: 1 },
@@ -746,8 +723,6 @@ test("bridge-only reload preserves the initialized app-server generation", async
     },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   let replacement: InstanceType<typeof CodexStdioBridge> | null = null;
   try {
@@ -755,17 +730,12 @@ test("bridge-only reload preserves the initialized app-server generation", async
     let sent = false;
     replacement = new CodexStdioBridge({
       appServer: { send() { sent = true; } } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1",
       handleWorkbenchRequest: rejectWorkbenchRequest,
       initialState: state,
       onNotification() {},
       resolveProjectFromCwd: async () => null,
-      sendToClient() {},
-      storageRoot: root,
     });
     await replacement.ensureInitialized({ id: 0, method: "initialize", params: {} });
-    const initializeResult = replacement.getInitializeResult() as { preserved?: string };
-    assert.equal(initializeResult.preserved, "upstream");
     assert.equal(sent, false);
   } finally {
     await replacement?.disposeImmediately();
@@ -777,10 +747,8 @@ test("app-server restart detachment drops process-bound state", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-restart-"));
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState: {
-      initializeResult: { stale: "generation" },
       pendingResponses: new Map(),
       pendingUserInputRequests: new Map(),
       requestIdAllocator: { next: 7 },
@@ -788,13 +756,10 @@ test("app-server restart detachment drops process-bound state", async () => {
     },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const state = await bridge.detachForReload({ restartingAppServer: true });
     assert.equal(state.upstreamInitialized, false);
-    assert.equal(state.initializeResult, null);
     assert.equal(state.pendingResponses.size, 0);
     assert.equal(state.pendingUserInputRequests.size, 0);
   } finally {
@@ -807,12 +772,9 @@ test("server request resolution detaches ordinary questionnaires but resolves ap
   const notifications: JsonRpcNotification[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) { notifications.push(notification); },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({
@@ -870,7 +832,6 @@ test("server request resolution detaches ordinary questionnaires but resolves ap
 test("replacement bridge sanitizes legacy handoff state and initializes the new generation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-upgrade-"));
   const legacyState = {
-    initializeResult: { stale: "generation" },
     pendingResponses: new Map(),
     pendingUserInputRequests: new Map(),
     requestIdAllocator: { next: 7 },
@@ -889,19 +850,16 @@ test("replacement bridge sanitizes legacy handoff state and initializes the new 
     } as unknown as CodexAppServer;
     replacement = new CodexStdioBridge({
       appServer,
-      bridgeUrl: "ws://127.0.0.1:1",
       handleWorkbenchRequest: rejectWorkbenchRequest,
       initialState: legacyState,
       onNotification() {},
       restartingAppServer: true,
       resolveProjectFromCwd: async () => null,
-      sendToClient() {},
-      storageRoot: root,
     });
-    assert.equal(replacement.getInitializeResult(), null);
     await replacement.ensureInitialized({ id: 0, method: "initialize", params: {} });
     assert.deepEqual(upstreamRequests.map(({ method }) => method), ["initialize", "initialized"]);
-    assert.deepEqual(replacement.getInitializeResult(), { fresh: "generation" });
+    await replacement.ensureInitialized({ id: 1, method: "initialize", params: {} });
+    assert.equal(upstreamRequests.filter(request => request.method === "initialize").length, 1);
   } finally {
     await replacement?.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -931,13 +889,10 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const pageOwner = bridge as unknown as {
     readThreadContext(message: JsonRpcRequest): Promise<{
@@ -1080,7 +1035,6 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
   bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
@@ -1090,8 +1044,6 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
       }
       await sql.ports.recordSqliteTranscript(observations);
     },
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({
@@ -1130,7 +1082,7 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
     assert.equal(responseResolved, false, "refresh completion must await repaired SQLite settlement");
     releaseRecording.resolve();
     const response = await responsePromise;
-    const repaired = (response?.result as WorkbenchThreadPageResponse).thread.turns.at(-1);
+    const repaired = (response?.result as CodexThreadPageResponse).thread.turns.at(-1);
     const expectedLatestId = sql.ports.identities.threads.workbenchTurnIdForNative({
       harness: "codex",
       nativeLocation: "C:/repo",
@@ -1232,7 +1184,6 @@ test("background thread pages await SQL repair without losing later live facts",
   bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
@@ -1253,8 +1204,6 @@ test("background thread pages await SQL repair without losing later live facts",
         root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
       };
     },
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: { ...bridgeThread(), turns: [] } } });
@@ -1290,7 +1239,7 @@ test("background thread pages await SQL repair without losing later live facts",
     const response = await responsePromise;
     await laterProviderFactRecorded.promise;
 
-    const recovered = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]!;
+    const recovered = (response?.result as CodexThreadPageResponse).thread.turns[0]!;
     assert.equal(recovered.status, "interrupted");
     assert.deepEqual(recovered.items.map(({ type }) => type), ["userMessage", "agentMessage"]);
     assert.ok(recovered.items.some(item => item.type === "agentMessage" && item.text === "recovered tail"));
@@ -1347,7 +1296,6 @@ test("provider catalog identities and the materialized page record as one SQL fa
   const bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
@@ -1359,8 +1307,6 @@ test("provider catalog identities and the materialized page record as one SQL fa
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   const owner = bridge as unknown as {
     createThreadWindowStore(): {
@@ -1428,7 +1374,6 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
@@ -1439,8 +1384,6 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({
@@ -1504,10 +1447,9 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
             : null;
         queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: message.id ?? null, result }); });
       },
-    } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
-    initialState, restartingAppServer, onNotification() {}, sendToClient() {}, storageRoot: root,
+    initialState, restartingAppServer, onNotification() {},
     recordSqliteTranscript: async (batch) => { observations.push(...batch); },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
@@ -1588,7 +1530,6 @@ test("live provider observations and active baselines stay ordered across a brid
         });
       },
     } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     onNotification() {},
@@ -1604,8 +1545,6 @@ test("live provider observations and active baselines stay ordered across a brid
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   const item: ThreadItem = {
     type: "agentMessage",
@@ -1699,7 +1638,6 @@ test("blocked SQLite recording holds bridge detach", async () => {
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async () => {
@@ -1711,8 +1649,6 @@ test("blocked SQLite recording holds bridge detach", async () => {
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
@@ -1742,7 +1678,6 @@ test("provider-live transcript bursts bypass durable recording until item settle
   const bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) {
       notifications.push(notification.method ?? "");
@@ -1756,8 +1691,6 @@ test("provider-live transcript bursts bypass durable recording until item settle
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   const streamingItem: ThreadItem = {
     id: "message",
@@ -1874,7 +1807,6 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
   bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (_observations, context) => {
@@ -1887,8 +1819,6 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     let requestSettled = false;
@@ -1927,10 +1857,8 @@ test("failed process replacement resumes the retained initialized bridge", async
   let sent = false;
   const bridge = new CodexStdioBridge({
     appServer: { send() { sent = true; } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState: {
-      initializeResult: { retained: true },
       pendingResponses: new Map(),
       pendingUserInputRequests: new Map(),
       requestIdAllocator: { next: 7 },
@@ -1938,15 +1866,12 @@ test("failed process replacement resumes the retained initialized bridge", async
     },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const candidateState = await bridge.detachForReload({ restartingAppServer: true });
     assert.equal(candidateState.upstreamInitialized, false);
     bridge.resumeAfterReloadFailure();
     await bridge.ensureInitialized({ id: 0, method: "initialize", params: {} });
-    assert.deepEqual(bridge.getInitializeResult(), { retained: true });
     assert.equal(sent, false);
   } finally {
     await bridge.disposeImmediately();
@@ -1957,10 +1882,8 @@ test("failed process replacement resumes the retained initialized bridge", async
 test("rollback starts a fresh initialization without letting the old attempt overwrite it", async () => {
   const oldResponse = deferred<JsonRpcResponse>();
   const bridge = new CodexStdioBridge({
-    appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {}, resolveProjectFromCwd: async () => null, sendToClient() {},
-    storageRoot: testWorkbenchLibraryRoot,
+    appServer: { send() {} } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
   });
   let attempts = 0;
   const owner = bridge as unknown as { dispatchRequest(): Promise<{ response: Promise<JsonRpcResponse> }> };
@@ -1977,7 +1900,8 @@ test("rollback starts a fresh initialization without letting the old attempt ove
     await second;
     oldResponse.resolve({ id: 1, result: { stale: true } });
     assert.match(String(await first), /retired/);
-    assert.deepEqual(bridge.getInitializeResult(), { fresh: true });
+    await bridge.ensureInitialized({ method: "initialize" });
+    assert.equal(attempts, 2);
   } finally {
     oldResponse.resolve({ id: 1, result: { stale: true } });
     await first;
@@ -1992,12 +1916,9 @@ test("an expired page read cannot begin transcript hydration after the old provi
   const finished = deferred<void>();
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: testWorkbenchLibraryRoot,
   });
   const owner = bridge as unknown as {
     dispatchRequest(): Promise<{ response: Promise<JsonRpcResponse> }>;
@@ -2034,15 +1955,12 @@ test("expired command preparation cannot send through a bridge resumed after rol
   instructions.augment = async message => { entered.resolve(); await release.promise; return message; };
   let sends = 0;
   const bridge = new CodexStdioBridge({
-    appServer: { send() { sends++; } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", instructions,
+    appServer: { send() { sends++; } } as unknown as CodexAppServer, instructions,
     handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {},
-    resolveProjectFromCwd: async () => null, sendToClient() {},
-    storageRoot: testWorkbenchLibraryRoot,
+    resolveProjectFromCwd: async () => null,
   });
-  const client: BridgeClient = { OPEN: 1, readyState: 1, send() {}, close() {}, on() {}, once() {} };
   try {
-    const preparing = bridge.forwardRequest({ id: 1, method: "thread/read", params: { threadId: "thread" } }, client, 1);
+    const preparing = bridge.handleServerRequest({ id: 1, method: "thread/read", params: { threadId: "thread" } });
     const rejected = assert.rejects(preparing, /retired/);
     await entered.promise;
     bridge.expireForReload();
@@ -2065,10 +1983,9 @@ test("SQLite recovery rejects unknown WB identity before contacting the provider
         id: request.id, error: { code: -32000, message: "thread not loaded" },
       }));
     } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     identities: { threads: { resolve: async () => null } } as unknown as NonNullable<ConstructorParameters<typeof CodexStdioBridge>[0]["identities"]>,
-    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: ".",
+    onNotification() {}, resolveProjectFromCwd: async () => null,
   });
   try {
     await assert.rejects(bridge.recoverSqliteTranscriptThread("missing-wb-id"), /binding|identity/);
@@ -2126,9 +2043,8 @@ test("paged recovery shares one worker across independent thread histories", asy
                 ? { data: [...turns].reverse().map((turn) => ({ ...turn, items: [], itemsView: "notLoaded" })), nextCursor: null }
                 : { data: [params.cursor ? turns[0] : turns[1]], nextCursor: params.cursor ? null : "older" },
           }));
-        } } as unknown as CodexAppServer,
-        bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-        identities, onNotification() {}, sendToClient() {}, storageRoot: root,
+        } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+        identities, onNotification() {},
         resolveProjectFromCwd: async () => ({
           cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
           root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
@@ -2290,9 +2206,7 @@ for (const cold of [false, true]) {
       sql.ports.identities.items = identities.items;
     }
     const bridge = new CodexStdioBridge({
-      ...sql.ports, appServer: { send() { assert.fail("stored recovery must not request provider data"); } } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {}, sendToClient() {},
-      storageRoot,
+      ...sql.ports, appServer: { send() { assert.fail("stored recovery must not request provider data"); } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {},
     });
     try {
       const metadata = { ...bridgeThread(), turns: [] };
@@ -2342,9 +2256,8 @@ test("SQL context pages settle provider bodies and then read without legacy stor
         : { data: data.map(turn => params.itemsView === "full" ? turn : { ...turn, items: [], itemsView: "notLoaded" }),
           nextCursor: offset + data.length < providerTurns.length ? String(offset + data.length) : null };
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
-    } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {}, sendToClient() {}, storageRoot: root,
+    } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
@@ -2357,7 +2270,7 @@ test("SQL context pages settle provider bodies and then read without legacy stor
         id: pass, method: "workbench/thread/page/read", params: { threadId: "thread", cursor: null },
       });
       assert.equal(response?.error, undefined);
-      const result = response?.result as WorkbenchThreadPageResponse;
+      const result = response?.result as CodexThreadPageResponse;
       assert.notEqual(result.thread.id, "thread");
       assert.equal(result.thread.turns[0]?.items[0]?.type, "agentMessage");
       const reply = result.thread.turns[0]?.items[0];
@@ -2392,7 +2305,7 @@ test("SQL context pages settle provider bodies and then read without legacy stor
         params: { threadId: "thread", cursor: boundary },
       });
       assert.equal(response?.error, undefined);
-      const reply = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]?.items[0];
+      const reply = (response?.result as CodexThreadPageResponse).thread.turns[0]?.items[0];
       assert.equal(reply?.type, "agentMessage");
       assert.equal(reply?.type === "agentMessage" && reply.text, "historical reply");
     }
@@ -2415,13 +2328,10 @@ test("SQLite recording cannot bypass canonical admission when the identity owner
   let writes = 0;
   const bridge = new CodexStdioBridge({
     appServer: { send() { throw new Error("Unexpected provider request"); } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    storageRoot: os.tmpdir(),
     recordSqliteTranscript: async () => { writes++; },
-    sendToClient() {},
   });
   try {
     const recording = bridge as unknown as {
@@ -2461,15 +2371,14 @@ test("ordinary page reads restore context without activity and isolate context r
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
     } } as unknown as CodexAppServer,
     initialState: {
-      upstreamInitialized: true, initializeResult: {}, requestIdAllocator: { next: 100 },
+      upstreamInitialized: true, requestIdAllocator: { next: 100 },
       pendingResponses: new Map(), pendingUserInputRequests: new Map(),
     },
     ...{ readSqliteContextUsage: async () => {
       if (fails) throw new Error("context read unavailable");
       return { tokenUsage: usage };
-    } },
-    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {}, resolveProjectFromCwd: sql.ports.resolveProjectFromCwd, sendToClient() {}, storageRoot: root,
+    } }, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
   });
   try {
     const read = () => bridge.handleBridgeRequest({
@@ -2521,7 +2430,6 @@ test("Workbench questionnaires share native listing, response, and transcript hi
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     questionnaires: {
@@ -2536,8 +2444,6 @@ test("Workbench questionnaires share native listing, response, and transcript hi
       sqliteBatches.push([...observations]);
     },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const listed = await bridge.handleBridgeRequest({
@@ -2606,17 +2512,19 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
   };
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
-    appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
+    appServer: { send(message: JsonRpcRequest) {
+      upstreamMessages.push(message);
+      if (message.method === "turn/steer") {
+        queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { turnId: "turn" } }));
+      }
+    } } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
-    await bridge.forwardRequest({
+    await bridge.handleServerRequest({
       id: "steer",
       method: "turn/steer",
       params: {
@@ -2624,7 +2532,7 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
         input: [{ text: "hello", text_elements: [], type: "text" }],
         threadId: "thread",
       },
-    }, client, "steer");
+    });
     assert.equal((upstreamMessages[0] as { method?: string } | undefined)?.method, "turn/steer");
 
     await bridge.handleUpstreamMessage({
@@ -2678,7 +2586,6 @@ test("detached questionnaire history records directly without answering a provid
   const bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
@@ -2686,8 +2593,6 @@ test("detached questionnaire history records directly without answering a provid
       await sql.ports.recordSqliteTranscript(observations);
     },
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
-    sendToClient() {},
-    storageRoot: root,
   });
   const entry: WorkbenchQuestionnaireHistoryEntry = {
     insertAfterItemId: "prompt",
@@ -2767,7 +2672,6 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async () => {
@@ -2776,8 +2680,6 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
       });
     },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const item = {
     id: "message",
@@ -2832,7 +2734,6 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     identities: fixtureIdentities,
     transcriptAssets: assetPorts(database),
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) { notifications.push(notification); },
     recordSqliteTranscript: async (batch) => {
@@ -2843,8 +2744,6 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   const entry: WorkbenchBrowseResultEntry = {
     action: "screenshot",
@@ -2913,13 +2812,10 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) { notifications.push(notification); },
     recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.recordBrowseResultForBrowse({
@@ -2959,12 +2855,23 @@ test("live transcript recording and reload use only SQL and preserve image asset
   const publications: Parameters<ConstructorParameters<typeof CodexStdioBridge>[0]["onNotification"]>[] = [];
   const streamed: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptTextUpdate[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
-  const client: BridgeClient = {
-    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
-  };
   const appServer = {
     send(message: JsonRpcRequest) {
       if (typeof message.method === "string") upstreamRequests.push(message);
+      const params = message.params as { clientUserMessageId?: string } | undefined;
+      if (message.method === "turn/steer") {
+        queueMicrotask(() => void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          ...(params?.clientUserMessageId === "failed"
+            ? { error: { code: -32000, message: "rejected" } }
+            : { result: { turnId: "turn" } }),
+        }));
+      } else if (message.method === "thread/read") {
+        queueMicrotask(() => void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: { thread: { ...bridgeThread(), turns: [], updatedAt: 5 } },
+        }));
+      }
     },
   } as unknown as CodexAppServer;
   const createBridge = (
@@ -2973,7 +2880,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
     identities: fixtureIdentities,
     transcriptAssets: assetPorts(database),
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     onNotification(...publication) { publications.push(publication); },
@@ -2995,8 +2901,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   const item: ThreadItem = {
     id: "message",
@@ -3109,7 +3013,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
         turnId: "turn",
       },
     });
-    await bridge.forwardRequest({
+    await bridge.handleServerRequest({
       id: "failed-steer",
       method: "turn/steer",
       params: {
@@ -3118,13 +3022,8 @@ test("live transcript recording and reload use only SQL and preserve image asset
         input: [{ text: "fail", text_elements: [], type: "text" }],
         threadId: "thread",
       },
-    }, client, "failed-steer");
-    const failedSteer = upstreamRequests.slice().reverse().find((request) => request.method === "turn/steer")!;
-    await bridge.handleUpstreamMessage({
-      error: { code: -32000, message: "rejected" },
-      id: failedSteer.id ?? null,
     });
-    await bridge.forwardRequest({
+    await bridge.handleServerRequest({
       id: "interrupted-steer",
       method: "turn/steer",
       params: {
@@ -3133,11 +3032,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
         input: [{ text: "interrupt", text_elements: [], type: "text" }],
         threadId: "thread",
       },
-    }, client, "interrupted-steer");
-    const interruptedSteer = upstreamRequests.slice().reverse().find((request) => request.method === "turn/steer")!;
-    await bridge.handleUpstreamMessage({
-      id: interruptedSteer.id ?? null,
-      result: { turnId: "turn" },
     });
     await bridge.recordBrowseResultForBrowse({
       action: "screenshot",
@@ -3172,16 +3066,11 @@ test("live transcript recording and reload use only SQL and preserve image asset
         },
       },
     });
-    await bridge.forwardRequest({
+    await bridge.handleServerRequest({
       id: "read",
       method: "thread/read",
       params: { includeTurns: false, threadId: "thread" },
       workbenchThreadHydration: { mode: "latest" },
-    }, client, "read");
-    const readRequest = upstreamRequests.slice().reverse().find((request) => request.method === "thread/read")!;
-    await bridge.handleUpstreamMessage({
-      id: readRequest.id ?? null,
-      result: { thread: { ...bridgeThread(), turns: [], updatedAt: 5 } },
     });
     await bridge.waitForIdle();
     const observations = sqliteBatches.flat();
@@ -3307,13 +3196,10 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
   const createBridge = (initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState) => new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     onNotification(notification) { notifications.push(notification as { params?: { item?: ThreadItem } }); },
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
-    sendToClient() {},
-    storageRoot: root,
   });
 
   try {
@@ -3453,7 +3339,7 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
   }
 });
 
-test("external socket send failure clears pending response and records exact steer failure", async () => {
+test("native send failure clears pending response and records exact steer failure", async () => {
   const sql = await recordingFixture("C:/repo", true);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-test-"));
   const client: BridgeClient = {
@@ -3472,17 +3358,14 @@ test("external socket send failure clears pending response and records exact ste
   const bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread() } });
     await bridge.waitForIdle();
-    await assert.rejects(bridge.forwardRequest({
+    await assert.rejects(bridge.handleServerRequest({
       id: 7,
       method: "turn/steer",
       params: {
@@ -3491,7 +3374,7 @@ test("external socket send failure clears pending response and records exact ste
         input: [{ text: "one", text_elements: [], type: "text" }],
         threadId: "thread",
       },
-    }, client, 7), /upstream socket failed/u);
+    }), /upstream socket failed/u);
     const state = await bridge.detachForReload();
     assert.equal(state.pendingResponses.size, 0);
     const persisted = await sql.ports.sqliteReader.history("thread");
@@ -3499,131 +3382,6 @@ test("external socket send failure clears pending response and records exact ste
     assert.doesNotMatch(persisted.steerEntries?.[0]?.error ?? "", /secret-token|Users\\private/u);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});
-
-test("successful external send remaps the response id and detaches with settled reload state", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-success-test-"));
-  const client: BridgeClient = {
-    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
-  };
-  let upstreamRequest: { id: number; method: string } | null = null;
-  const appServer = {
-    send(message: unknown) {
-      upstreamRequest = message as { id: number; method: string };
-    },
-  } as unknown as CodexAppServer;
-  const clientMessages: unknown[] = [];
-  const acceptedSteers: string[] = [];
-  const bridge = new CodexStdioBridge({
-    appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
-    onNotification() {},
-    resolveProjectFromCwd: async () => null,
-    sendToClient(_client, message) {
-      assert.deepEqual(acceptedSteers, ["thread"], "accepted steer handling must finish before its response is published");
-      clientMessages.push(message);
-    },
-    storageRoot: root,
-  });
-  try {
-    await bridge.forwardRequest({
-      id: 41,
-      method: "turn/steer",
-      params: {
-        clientUserMessageId: "native", expectedTurnId: "turn",
-        input: [{ text: "one", text_elements: [], type: "text" }], threadId: "thread",
-      },
-    }, client, 41);
-    assert.equal(upstreamRequest?.method, "turn/steer");
-    await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, result: { turnId: "turn" } });
-    assert.deepEqual(clientMessages, [{ id: 41, result: { turnId: "turn" } }]);
-    assert.deepEqual(acceptedSteers, ["thread"]);
-    const state = await bridge.detachForReload();
-    assert.equal(state.pendingResponses.size, 0);
-    assert.ok(state.requestIdAllocator.next > upstreamRequest!.id);
-  } finally {
-    await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});
-
-test("direct thread resume is rejected without forwarding or transcript hydration", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-metadata-resume-test-"));
-  const client: BridgeClient = {
-    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
-  };
-  const upstreamRequests: JsonRpcRequest[] = [];
-  const appServer = {
-    send(message: JsonRpcRequest) { upstreamRequests.push(message); },
-  } as unknown as CodexAppServer;
-  const clientMessages: unknown[] = [];
-  const bridge = new CodexStdioBridge({
-    appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {},
-    resolveProjectFromCwd: async () => null,
-    sendToClient(_client, message) { clientMessages.push(message); },
-    storageRoot: root,
-  });
-  try {
-    await bridge.forwardRequest({
-      id: 51,
-      method: "thread/resume",
-      params: { excludeTurns: true, threadId: "thread" },
-      workbenchThreadHydration: { mode: "latest" },
-    }, client, 51);
-    assert.deepEqual(upstreamRequests, []);
-    const response = clientMessages[0] as { error?: { code?: number; message?: string } };
-    assert.equal(response.error?.code, -32600);
-    assert.match(response.error?.message ?? "", /turn-start lifecycle/u);
-  } finally {
-    await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});
-
-test("rejected and empty external steer responses do not interrupt MCP waits", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-rejected-steer-test-"));
-  const client: BridgeClient = {
-    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
-  };
-  let upstreamRequest: JsonRpcRequest | null = null;
-  const appServer = {
-    send(message: JsonRpcRequest) { upstreamRequest = message; },
-  } as unknown as CodexAppServer;
-  const acceptedSteers: string[] = [];
-  const bridge = new CodexStdioBridge({
-    appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
-    onNotification() {},
-    resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
-  });
-  const steer = (id: number) => bridge.forwardRequest({
-    id,
-    method: "turn/steer",
-    params: {
-      expectedTurnId: "turn",
-      input: [{ text: "one", text_elements: [], type: "text" }],
-      threadId: "thread",
-    },
-  }, client, id);
-  try {
-    await steer(42);
-    await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, result: { turnId: "" } });
-    await steer(43);
-    await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, error: { code: -32000, message: "rejected" } });
-    assert.deepEqual(acceptedSteers, []);
-  } finally {
-    await bridge.dispose();
     await fs.rm(root, { force: true, recursive: true });
   }
 });
@@ -3639,13 +3397,10 @@ test("accepted internal steers do not interrupt MCP waits", async () => {
   const acceptedSteers: string[] = [];
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     assert.equal(await bridge.steerTurnForBrowse("thread", "turn", [{ text: "one", text_elements: [], type: "text" }]), "turn");
@@ -3696,7 +3451,6 @@ test("fresh first turn prepares its stored profile across reload and failed admi
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
@@ -3711,8 +3465,6 @@ test("fresh first turn prepares its stored profile across reload and failed admi
     },
     prepareTurnStart: async () => { events.push("prepare:mcp"); },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   bridge = createBridge();
   const firstTurn = {
@@ -3758,13 +3510,11 @@ test("fresh first turn prepares its stored profile across reload and failed admi
   }
 });
 
-for (const route of ["server", "forward"] as const) {
 for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) {
-  test(`compaction prepares only a cold thread without admitting a turn: ${route} ${status}`, async () => {
+  test(`compaction prepares only a cold thread without admitting a turn: ${status}`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-"));
     const requests: JsonRpcRequest[] = [];
     const configured: string[][] = [];
-    const responses: JsonRpcResponse[] = [];
     let bridge!: InstanceType<typeof CodexStdioBridge>;
     const appServer = {
       send(message: JsonRpcRequest) {
@@ -3782,7 +3532,7 @@ for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) 
       },
     } as unknown as CodexAppServer;
     bridge = new CodexStdioBridge({
-      appServer, bridgeUrl: "ws://127.0.0.1:1", storageRoot: root,
+      appServer,
       handleWorkbenchRequest: rejectWorkbenchRequest,
       instructions: {
         augment: async request => request,
@@ -3795,12 +3545,11 @@ for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) 
           params: { ...pending.resumeRequest.params as object, baseInstructions: "managed prefix", model: "saved-model" },
         } };
       },
-      onNotification() {}, sendToClient(_client, response) { responses.push(response as JsonRpcResponse); }, resolveProjectFromCwd: async () => null,
+      onNotification() {}, resolveProjectFromCwd: async () => null,
     });
     try {
       const request = { id: 71, method: "thread/compact/start", params: { threadId: "thread" } };
-      const response = route === "server" ? await bridge.handleServerRequest(request)
-        : (await bridge.forwardRequest(request, {} as BridgeClient, 71), responses[0]!);
+      const response = await bridge.handleServerRequest(request);
       const methods = requests.map(request => request.method);
       assert.deepEqual(methods, status === "notLoaded"
         ? ["thread/read", "thread/resume", "thread/compact/start"]
@@ -3820,7 +3569,6 @@ for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) 
     }
   });
 }
-}
 
 test("retired compaction preparation cannot resume or compact through a replacement generation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-cancel-"));
@@ -3837,7 +3585,6 @@ test("retired compaction preparation cannot resume or compact through a replacem
         id: request.id ?? null, result: { thread: { ...bridgeThread(), status: { type: "notLoaded" }, turns: [] } },
       }); });
     } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1", storageRoot: root,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: { augment: async request => request, createThreadResume: params => ({ method: "thread/resume", params }) },
     prepareThreadConfiguration: async (_thread, requests) => {
@@ -3845,7 +3592,7 @@ test("retired compaction preparation cannot resume or compact through a replacem
       await preparation;
       return requests;
     },
-    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
   });
   try {
     const compact = bridge.handleServerRequest({ id: 1, method: "thread/compact/start", params: { threadId: "thread" } });
@@ -3907,7 +3654,6 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() { events.push("receive:notification"); },
@@ -3947,8 +3693,6 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       if (response.error) throw new Error(response.error.message);
     },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const promptContext = {
     agentPath: null,
@@ -4060,8 +3804,8 @@ test("explicit refresh rebuilds the current instruction prefix and prepares MCP 
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
-    appServer, bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions, onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
+    appServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions, onNotification() {}, resolveProjectFromCwd: async () => null,
     withThreadAdmission: async (_thread, pending, admit) => (await admit(pending)).result,
     prepareTurnStart: async () => { order.push("prepare:mcp"); },
   });
@@ -4115,9 +3859,9 @@ test("profile preparation failure prevents native effects for ordinary, detached
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
-    appServer, bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    appServer, handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
-    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
     prepareThreadConfiguration: async () => { throw new Error("Profile persistence failed"); },
   });
   context.after(async () => { await bridge.disposeImmediately(); await fs.rm(root, { force: true, recursive: true }); });
@@ -4165,7 +3909,6 @@ test("managed admission steers a provider-confirmed active turn without changing
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onAcceptedTurnSteer: (threadId) => { acceptedSteers.push(threadId); },
     onNotification() {},
@@ -4176,8 +3919,6 @@ test("managed admission steers a provider-confirmed active turn without changing
     prepareThreadConfiguration: async () => { throw new Error("Active steers must not prepare a new profile."); },
     prepareTurnStart: async () => { prepared = true; },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const response = await bridge.handleBridgeRequest({
@@ -4296,13 +4037,10 @@ test("managed continuation starts the unchanged input when its active turn ends 
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     prepareTurnStart: async () => undefined,
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const input = [
     { text: "questionnaire response", text_elements: [], type: "text" as const },
@@ -4397,13 +4135,10 @@ test("managed admission rejects active metadata without a newest in-progress tur
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     prepareTurnStart: async () => undefined,
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await assert.rejects(bridge.handleBridgeRequest({
@@ -4487,13 +4222,10 @@ test("managed admission attempts a prepared turn start from provider system erro
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     prepareTurnStart: async () => { prepared = true; },
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const response = await bridge.handleBridgeRequest({
@@ -4561,13 +4293,10 @@ test("managed inactive admissions serialize complete resume and start lifecycles
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     prepareTurnStart: async () => undefined,
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const admit = (threadId: string) => bridge.handleBridgeRequest({
     id: threadId,
@@ -4641,12 +4370,9 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
-    sendToClient() {},
-    storageRoot: root,
   });
   const queueGate = deferred<{ data: [] }>();
   const queueOwner = bridge as unknown as {
@@ -4746,7 +4472,6 @@ test("exact transcript windows await ordered provider recording and Thread Recal
   bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
@@ -4764,8 +4489,6 @@ test("exact transcript windows await ordered provider recording and Thread Recal
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     let responseSettled = false;
@@ -4911,7 +4634,6 @@ test("durable transcript and recall materialisation propagate SQLite failure and
           ? turn : { ...turn, items: [], itemsView: "notLoaded" }), nextCursor: null };
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
     } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
@@ -4927,8 +4649,6 @@ test("durable transcript and recall materialisation propagate SQLite failure and
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const metadata = { ...bridgeThread(), turns: [] } as Thread;
@@ -4966,7 +4686,6 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
@@ -4987,8 +4706,6 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleUpstreamMessage({
@@ -5055,7 +4772,6 @@ test("turn start responses admit the live turn before materialisation reads SQL"
   bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
@@ -5077,8 +4793,6 @@ test("turn start responses admit the live turn before materialisation reads SQL"
       project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const threadStart = await bridge.handleServerRequest({
@@ -5220,13 +4934,10 @@ test("bounded context reads bootstrap unseen threads through one full turn page"
   bridge = new CodexStdioBridge({
     ...sql.ports,
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const response = await bridge.handleBridgeRequest({
@@ -5276,12 +4987,9 @@ test("observational internal thread lists skip transcripts without forwarding th
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer,
-    bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     await bridge.handleServerRequest({
@@ -5309,12 +5017,9 @@ test("caller cancellation clears a pending internal app-server response", async 
     appServer: {
       send() { requestSent.resolve(); },
     } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:4500/codex",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   const abortController = new AbortController();
   try {
@@ -5341,12 +5046,9 @@ test("fatal bridge stop rejects a pending internal app-server response", async (
     appServer: {
       send() { requestSent.resolve(); },
     } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:4500/codex",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
   });
   try {
     const response = bridge.handleServerRequest({

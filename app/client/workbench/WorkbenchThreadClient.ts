@@ -7,7 +7,7 @@
  */
 
 import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
-import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
 import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
@@ -16,9 +16,9 @@ import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchControls } from "workbench-shared/types";
 import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -35,30 +35,7 @@ import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getCurrentInProgressTurn, getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
-import type {
-    ThreadPayload,
-    ThreadSummary,
-    WorkbenchBrowseResultEntry,
-    WorkbenchComposerSettings,
-    WorkbenchHarness,
-    WorkbenchListModelsOptions,
-    WorkbenchModelOption,
-    WorkbenchPendingUserInputRequest,
-    WorkbenchProjectOption,
-    WorkbenchProjectRoot,
-    WorkbenchQuestionnaireHistoryEntry,
-    WorkbenchReadThreadOptions,
-    WorkbenchSendThreadMessageOptions,
-    WorkbenchSteerHistoryEntry,
-    WorkbenchSubagentSummary,
-    WorkbenchSubmitUserInputRequestOptions,
-    WorkbenchThreadDocumentSnapshot,
-    WorkbenchThreadGoalControls,
-    WorkbenchThreadRuntimeSnapshot,
-    WorkbenchThreadTurnHistoryEntry,
-    WorkbenchUserInputRequest,
-    WorkbenchUserInputResponse,
-} from "workbench-shared/types";
+import type { ThreadPayload, ThreadSummary, WorkbenchBrowseResultEntry, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchListModelsOptions, WorkbenchModelOption, WorkbenchPendingUserInputRequest, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchQuestionnaireHistoryEntry, WorkbenchReadThreadOptions, WorkbenchSendThreadMessageOptions, WorkbenchSteerHistoryEntry, WorkbenchSubagentSummary, WorkbenchSubmitUserInputRequestOptions, WorkbenchThreadGoalControls, WorkbenchThreadRuntimeSnapshot, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { normalizeWorkbenchAgentPath } from "workbench-shared/workbench/agent-paths";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
@@ -691,8 +668,8 @@ function WorkbenchThreadClient(
     let controller = threadControllers.get(key);
     if (!controller) {
       const harness = target.kind === "draft"
-        ? "codex"
-        : target.harness ?? getKnownThreadHarness(threadId) ?? "codex";
+        ? defaultProviderKey
+        : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
       controller = new WorkbenchThreadController(projectId, target, {
         controls: {
           compactThread, stopThread, setCurrentThreadAgent, setCurrentThreadModel,
@@ -713,7 +690,7 @@ function WorkbenchThreadClient(
           kind: "subagent", harness: subagent.harness, parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
         }),
         releaseHistoricalTurns: turnIds => releaseHistoricalTurns(
-          target.kind === "draft" ? "codex" : target.harness ?? getKnownThreadHarness(threadId) ?? "codex",
+          target.kind === "draft" ? defaultProviderKey : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey,
           threadId,
           turnIds,
         ),
@@ -722,7 +699,7 @@ function WorkbenchThreadClient(
           return {
             document,
             pendingQuestionnaire: state.pendingUserInputRequestsByThreadId.get(threadId) ?? null,
-            rateLimits: account.getRateLimits(document?.harness ?? (target.kind === "draft" ? "codex" : target.harness ?? "codex")),
+            rateLimits: account.getRateLimits(document?.harness ?? (target.kind === "draft" ? defaultProviderKey : target.harness ?? defaultProviderKey)),
           };
         },
         subscribeNative: listener => subscribe(listener),
@@ -735,7 +712,7 @@ function WorkbenchThreadClient(
           const observed = target.kind === "draft" ? null : threadObservations.getSnapshot(getThreadObservationKey(projectId, target))
             .observation?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
           const harness = observed && observed.entryKind !== "draft" ? observed.identity.harness
-            : target.kind === "draft" ? "codex" : target.harness ?? getKnownThreadHarness(threadId) ?? "codex";
+            : target.kind === "draft" ? defaultProviderKey : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
           const cwd = observed?.entryKind === "subagent" ? observed.cwd : options.getProjectById?.(projectId)?.rootPath;
           readOptions = { ...(cwd ? { cwd } : {}), ...readOptions };
           const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId && selectedThreadProjectContext.isCurrent()
@@ -2367,7 +2344,7 @@ function WorkbenchThreadClient(
     return state.threads.find((thread) => thread.id === threadId)?.harness ?? null;
   }
 
-  function getThreadHarness(threadId: string, fallback: WorkbenchHarness = "codex") {
+  function getThreadHarness(threadId: string, fallback: WorkbenchHarness = defaultProviderKey) {
     return getKnownThreadHarness(threadId) ?? fallback;
   }
 
@@ -2864,7 +2841,7 @@ function WorkbenchThreadClient(
     return null;
   }
 
-  async function refreshRateLimits(harness = state.currentThread?.harness ?? "codex") {
+  async function refreshRateLimits(harness = state.currentThread?.harness ?? defaultProviderKey) {
     await account.refresh(harness);
   }
 
@@ -3750,13 +3727,13 @@ function WorkbenchThreadClient(
         harness = identity.harness;
       } catch (error) {
         return { kind: "failure", failure: {
-          harness: harness ?? "codex", transientRollout: false,
+          harness: harness ?? defaultProviderKey, transientRollout: false,
           message: error instanceof Error ? error.message : "Thread identity lookup failed.",
         } } satisfies ThreadPayloadFetchOutcome;
       }
     }
     if (!isCurrent()) return { kind: "superseded" } as const;
-    const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? "codex";
+    const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
     const nextProjectId = project?.id ?? state.projectId;
     const selectedProjectId = selectedThreadProjectContext?.projectId ?? state.projectId;
     const reuseCurrent = (

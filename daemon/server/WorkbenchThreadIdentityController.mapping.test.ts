@@ -1,3 +1,4 @@
+/* No production exports. Protect durable identity admission, observations and shared publication. */
 /*
  * No exports. Tests protect canonical references, durable alias convergence, projection timing and body-free live projection.
  */
@@ -5,7 +6,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
-
 import Database from "better-sqlite3";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { readWorkbenchTurnHistory } from "workbench-shared/codex/thread-adapter";
@@ -18,15 +18,13 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import { admitProviderThreads, admitProviderThreadItems, admitProviderNotifications, mapProviderThread, mapProviderThreadItem, mapProviderTurn, mapProviderNotification } from "./thread-identity-provider-mapping";
+import { admitProviderThreads, admitProviderThreadItems, admitProviderNotifications, mapProviderThread, mapProviderThreadItem, mapProviderTurn, mapProviderNotification } from "./CodexProviderIdentity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
 import CodexProviderObservations, { mapProviderLifecycleNotification } from "./CodexProviderObservations";
-import {
-  admitCodexTranscriptObservations as admitNativeTranscriptObservations,
-  mapCodexTranscriptObservation as mapNativeTranscriptObservation,
-} from "./CodexProviderObservations";
-import { createWorkbenchQuestionnaireStatePorts, mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import { admitCodexTranscriptObservations as admitNativeTranscriptObservations, mapCodexTranscriptObservation as mapNativeTranscriptObservation } from "./CodexProviderObservations";
+import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
+import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./CodexPublicIdentity";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
@@ -97,26 +95,6 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   return { database, owners: { threads, items }, native, parent, child, turn, admissions: () => admissions };
 }
 
-test("SQL context responses remain canonical across the provider response boundary", async () => {
-  const { database, owners, native, parent, turn } = await setup();
-  try {
-    for (const method of ["thread/context/read", "workbench/thread/page/read"]) {
-      const response = { id: 1, result: {
-        thread: { id: parent.threadId, turns: [{ id: turn.turnId, items: [] }] },
-        questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
-        entryScope: { mode: "turns", turnIds: [turn.turnId] },
-      } };
-      assert.deepEqual(await mapNativeProviderResponse(owners, "codex", {
-        method, params: { threadId: native.nativeThreadId },
-      }, response), response);
-    }
-  } finally {
-    owners.items.dispose();
-    owners.threads.dispose();
-    database.close();
-  }
-});
-
 test("accepted-intent ingress resolves canonical ownership before publishing lifecycle evidence", async () => {
   const { database, owners, native, parent, child, turn } = await setup();
   const emitted: Array<{ id?: number; error?: { message: string }; result?: { accepted: boolean } }> = [];
@@ -125,15 +103,10 @@ test("accepted-intent ingress resolves canonical ownership before publishing lif
     OPEN: 1, readyState: 1, close() {}, on() {}, once() {},
     send(data, callback) { emitted.push(JSON.parse(String(data))); callback?.(); },
   };
-  const harnesses = new WorkbenchHarnessController([{
-    id: "codex", serverMethods: [], recovery: { kind: "none" },
-    internal: { request: async () => { throw new Error("Lifecycle evidence must not execute a provider request"); } },
-    browse: {
-      readThread: async () => { throw new Error("Unexpected Browse read"); },
-      steerTurn: async () => { throw new Error("Unexpected Browse steer"); },
-    },
-    browser: { handleBrowserMessage: async () => { throw new Error("Unexpected provider dispatch"); } },
-  }], { identities: owners.threads, itemIdentities: owners.items });
+  const harnesses = new WorkbenchHarnessController({
+    identities: owners.threads,
+    providers: { get: () => { throw new Error("Lifecycle evidence must not execute a provider request"); } },
+  });
   const controller = new WorkbenchWebSocketRequestController({
     harnesses, identities: owners,
     reportDelivery: delivery => controller.completeDelivery(delivery),
@@ -409,22 +382,17 @@ test("cold native thread lookup admits exact metadata before public request rout
     },
   });
   const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
-  const harnesses = new WorkbenchHarnessController([{
-    id: "codex", serverMethods: [], recovery: { kind: "none" },
-    internal: { request: async () => { throw new Error("Provider lookup must not re-enter the legacy harness port"); } },
-    browser: { handleBrowserMessage: async () => { throw new Error("Lookup must not open a turn"); } },
-    browse: { readThread: async () => { throw new Error("Lookup must not materialise history"); }, steerTurn: async () => null },
-  }], {
-    identities: owners.threads, itemIdentities: owners.items,
+  const harnesses = new WorkbenchHarnessController({
+    identities: owners.threads,
     providers: { get: () => ({
       threads: operations,
       configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },
     }) },
-    resolveProject: async () => ({ projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo" }),
   });
   try {
     const request = { method: "thread/read", params: { threadId: "unobserved", includeTurns: false } };
-    const routed = await harnesses.resolvePublicRequest("codex", request);
+    await harnesses.resolveThreadIdentity({ harness: "codex", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("unobserved") });
+    const routed = await mapWorkbenchProviderRequest(owners.threads, "codex", request);
     const identity = await owners.threads.resolve({ threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("unobserved"), harness: "codex" });
     assert.ok(identity);
     assert.notEqual(identity.threadId, "unobserved");
@@ -432,62 +400,10 @@ test("cold native thread lookup admits exact metadata before public request rout
     assert.equal(requests.length, 1);
     assert.equal(requests[0]!.method, "thread/read");
     assert.equal((requests[0]!.params as { includeTurns: boolean }).includeTurns, false);
-    await harnesses.resolvePublicRequest("codex", { ...request, params: { ...request.params, threadId: identity.threadId } });
+    await harnesses.resolveThreadIdentity({ harness: "codex", threadId: identity.threadId });
     assert.equal(requests.length, 1);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_items").get() as { count: number }).count, 0);
   } finally { database.close(); }
-});
-
-test("managed message routing preserves the steer template and rejects explicit cross-thread targets", async () => {
-  const { database, owners, native, parent, child } = await setup();
-  try {
-    for (const threadId of [parent.threadId, native.nativeThreadId]) {
-      const steerRequest = { method: "turn/steer", params: {}, workbenchPromptContext: { source: "template" } };
-      const request = {
-        method: "workbench/codex/message/admit",
-        params: {
-          threadId,
-          resumeRequest: { method: "thread/resume", params: { threadId } },
-          startRequest: { method: "turn/start", params: { threadId, input: [] } },
-          steerRequest,
-        },
-      };
-      const mapped = await mapWorkbenchProviderRequest(owners.threads, "codex", request);
-      const params = mapped.request.params as typeof request.params;
-      assert.equal(params.threadId, native.nativeThreadId);
-      assert.equal(params.startRequest.params.threadId, native.nativeThreadId);
-      assert.equal(params.resumeRequest.params.threadId, native.nativeThreadId);
-      assert.deepEqual(params.steerRequest, steerRequest, "The admission owner supplies the active destination later");
-      await assert.rejects(mapWorkbenchProviderRequest(owners.threads, "codex", {
-        ...request, params: { ...request.params, steerRequest: {
-          ...steerRequest, params: { threadId: child.threadId },
-        } },
-      }), /same thread/);
-    }
-  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
-});
-
-test("pending questionnaire lists use the same public identity as the durable sidebar", async () => {
-  const { database, owners, native, parent, turn } = await setup();
-  try {
-    const [item] = await admitProviderThreadItems(owners, native, [{
-      type: "dynamicToolCall", id: "native-question", namespace: null, tool: "request_user_input",
-      arguments: {}, status: "inProgress", contentItems: null, success: null, durationMs: null,
-    }]);
-    const pending = {
-      threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: "native-question",
-      requestKey: "opaque-request-key",
-      request: { id: "request", title: "Choose", summary: "", submitLabel: "", questions: [] },
-    };
-    const response = await mapNativeProviderResponse(owners, "codex", { method: "questionnaire/list" }, {
-      id: 1, result: { data: [pending, { ...pending, turnId: null, itemId: null }] },
-    });
-    const result = response.result as { data: Array<Omit<typeof pending, "turnId" | "itemId"> & { turnId: string | null; itemId: string | null }> };
-    assert.deepEqual(result.data, [
-      { ...pending, threadId: parent.threadId, turnId: turn.turnId, itemId: item!.id },
-      { ...pending, threadId: parent.threadId, turnId: null, itemId: null },
-    ]);
-  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
 
 test("repeated provider catalogues admit only new identity evidence without hiding conflicts", async (context) => {
@@ -772,31 +688,20 @@ test("notification admission restores cold durable references without replaying 
   }
 });
 
-test("public socket routing and reload handoff retain native request correlation and canonical live identity", async (t) => {
+test("socket reload preserves canonical publications without resolving their identities again", async (t) => {
   const fixture = await setup();
   const { owners, native, parent, turn } = fixture;
   const emitted: Array<Record<string, unknown>> = [];
   const lines: string[] = [];
   let now = 0;
-  let requested: JsonRpcRequest | undefined;
-  const recoveryRequests: JsonRpcRequest[] = [];
   const client: BridgeClient = {
     OPEN: 1, readyState: 1, close() {}, on() {}, once() {},
     send(data, callback) { emitted.push(JSON.parse(String(data))); now += 500; callback?.(); },
   };
-  const harnesses = new WorkbenchHarnessController([{
-    id: "codex", serverMethods: [],
-    recovery: { kind: "observe", observeNotification() {}, observeRequest(request) { recoveryRequests.push(request); } },
-    internal: { request: async () => { throw new Error("Public request changed its send owner"); } },
-    browse: {
-      readThread: async () => { throw new Error("Unexpected Browse read"); },
-      steerTurn: async () => { throw new Error("Unexpected Browse steer"); },
-    },
-    browser: { handleBrowserMessage: async (request, originalClient) => {
-      assert.equal(originalClient, client);
-      requested = request;
-    } },
-  }], { identities: owners.threads, itemIdentities: owners.items });
+  const harnesses = new WorkbenchHarnessController({
+    identities: owners.threads,
+    providers: { get: () => { throw new Error("Canonical publications must not call the provider"); } },
+  });
   const create = (initialState?: ReturnType<WorkbenchWebSocketRequestController["detachForReload"]>) => (
     new WorkbenchWebSocketRequestController({
       reportDelivery: (delivery) => controller.completeDelivery(delivery),
@@ -814,20 +719,7 @@ test("public socket routing and reload handoff retain native request correlation
   try {
     const item: ThreadItem = { type: "reasoning", id: "native-reasoning", summary: ["title"], content: [] };
     const [admitted] = await admitProviderThreadItems(owners, native, [item]);
-    await controller.handleMessage(client, "socket", Buffer.from(JSON.stringify({
-      id: 7, method: "turn/start", params: { threadId: parent.threadId, input: [{ type: "text", text: parent.threadId }] },
-    })), false);
-    assert.equal((requested?.params as { threadId: string }).threadId, native.nativeThreadId);
-    assert.deepEqual(recoveryRequests, [requested]);
-    assert.deepEqual((requested?.params as { input: unknown }).input, [{ type: "text", text: parent.threadId }]);
     controller = create(controller.detachForReload());
-    await controller.sendJsonToClient(client, { id: 7, result: { turn: {
-      id: native.nativeTurnId, items: [item], status: "inProgress", itemsView: "full",
-      error: null, startedAt: 1, completedAt: null, durationMs: null,
-    } } });
-    const response = emitted.find((message) => message.id === 7) as { result: { turn: { id: string; items: ThreadItem[] } } } | undefined;
-    assert.equal(response?.result.turn.id, turn.turnId);
-    assert.equal(response?.result.turn.items[0]?.id, admitted!.id);
     const publication = new CodexProviderObservations(owners).native({ method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, delta: "native-parent is text" } });
     await controller.sendJsonToClient(client, { ...publication.notification, workbenchHarness: "codex" });
@@ -873,14 +765,6 @@ test("public socket routing and reload handoff retain native request correlation
     assert.deepEqual(Object.keys(sidebar.displayOrder.pinned), [`codex:${parent.threadId}`]);
     assert.equal(lookup.mock.callCount(), 0);
     lookup.mock.restore();
-    await controller.handleMessage(client, "socket", Buffer.from(JSON.stringify({
-      id: 8, method: "turn/start", params: { threadId: parent.threadId, input: [] },
-    })), false);
-    await controller.sendJsonToClient(client, { id: 8, result: { turn: {
-      id: "unadmitted-turn", items: [], status: "inProgress", itemsView: "full",
-      error: null, startedAt: 1, completedAt: null, durationMs: null,
-    } } });
-    assert.equal((emitted.find((message) => message.id === 8)?.error as { code?: number })?.code, -32000);
     assert.deepEqual(controller.detachForReload().pending, []);
   } finally {
     controller.dispose();
@@ -1071,69 +955,6 @@ test("thread metadata maps known parents without admitting unsupported fork ance
       ...history[0], turnId: childTurn.turnId, itemIds: [childItem!.id],
       itemTimeline: [{ ...history[0]!.itemTimeline![0], itemId: childItem!.id }],
     }]);
-  } finally {
-    fixture.owners.items.dispose();
-    fixture.owners.threads.dispose();
-    fixture.database.close();
-  }
-});
-
-test("public request routing resolves thread and turn aliases without touching input or prefix context", async () => {
-  const fixture = await setup();
-  try {
-    const { owners, native, parent, turn, child } = fixture;
-    const input = [{ type: "text", text: parent.threadId, text_elements: [] }];
-    const request = {
-      id: "caller-correlation", method: "turn/steer",
-      params: { threadId: parent.threadId, expectedTurnId: turn.turnId, input },
-      workbenchPromptContext: { threadId: parent.threadId, prefix: "leave these instructions alone" },
-    };
-    const routed = await mapWorkbenchProviderRequest(owners.threads, "codex", request);
-    assert.deepEqual(routed, { harness: "codex", request: {
-      ...request, params: { ...request.params, threadId: native.nativeThreadId, expectedTurnId: native.nativeTurnId },
-    } });
-    assert.equal(routed.request.params && (routed.request.params as { input: typeof input }).input, input);
-    assert.equal(request.params.threadId, parent.threadId);
-    assert.deepEqual(await mapWorkbenchProviderRequest(owners.threads, "codex", {
-      ...request, params: { ...request.params, threadId: native.nativeThreadId, expectedTurnId: native.nativeTurnId },
-    }), routed);
-    await assert.rejects(mapWorkbenchProviderRequest(owners.threads, "codex", {
-      ...request, params: { ...request.params, threadId: child.threadId },
-    }), /turn.*thread/iu);
-    await assert.rejects(mapWorkbenchProviderRequest(owners.threads, "codex", {
-      ...request, params: { ...request.params, threadId: "unobserved" },
-    }), /thread.*not.*observed/iu);
-    const initialise = { id: 1, method: "initialize", params: { clientInfo: { name: "test" } } };
-    assert.equal((await mapWorkbenchProviderRequest(owners.threads, "codex", initialise)).request, initialise);
-    const admission = {
-      id: 2, method: "workbench/codex/message/admit",
-      params: { threadId: parent.threadId,
-        resumeRequest: { method: "thread/resume", params: { threadId: parent.threadId, baseInstructions: "keep the prefix" } },
-        startRequest: { method: "turn/start", params: { threadId: parent.threadId, input } },
-        steerRequest: request,
-      },
-    };
-    assert.deepEqual(await mapWorkbenchProviderRequest(owners.threads, "codex", admission), {
-      harness: "codex", request: { ...admission, params: {
-        threadId: native.nativeThreadId,
-        resumeRequest: { method: "thread/resume", params: { threadId: native.nativeThreadId, baseInstructions: "keep the prefix" } },
-        startRequest: { method: "turn/start", params: { threadId: native.nativeThreadId, input } },
-        steerRequest: routed.request,
-      } },
-    });
-    await assert.rejects(mapWorkbenchProviderRequest(owners.threads, "codex", {
-      ...admission, params: { ...admission.params, startRequest: {
-        ...admission.params.startRequest, params: { threadId: child.threadId, input },
-      } },
-    }), /admission.*thread/iu);
-    const page = { id: 3, method: "workbench/thread/page/read", params: { threadId: parent.threadId, cursor: turn.turnId } };
-    assert.deepEqual(await mapWorkbenchProviderRequest(owners.threads, "codex", page), {
-      harness: "codex", request: { ...page, params: { threadId: native.nativeThreadId, cursor: native.nativeTurnId } },
-    });
-    const nativePage = { ...page, method: "thread/turns/list", params: { ...page.params, cursor: "opaque-provider-cursor" } };
-    assert.deepEqual(await mapWorkbenchProviderRequest(owners.threads, "codex", nativePage), {
-      harness: "codex", request: { ...nativePage, params: { threadId: native.nativeThreadId, cursor: "opaque-provider-cursor" } },
-    });
   } finally {
     fixture.owners.items.dispose();
     fixture.owners.threads.dispose();

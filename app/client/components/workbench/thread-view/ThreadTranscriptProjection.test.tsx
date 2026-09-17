@@ -7,7 +7,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/workbench/thread/thread-item-normalization";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { getWorkbenchTranscriptAssetUrl } from "workbench-shared/workbench/workbench-connection";

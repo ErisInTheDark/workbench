@@ -51,7 +51,7 @@ export function getThreadHistoryRetentionCandidates(
   thread: ThreadPayload,
   nowMs: number,
 ): ThreadHistoryRetentionCandidates {
-  if (thread.harness !== "codex" || thread.isDraft || thread.turns.length <= 2) {
+  if (thread.isDraft || thread.turns.length <= 2) {
     return { nextReviewAtMs: null, turnIds: [] };
   }
   if (thread.turns.some(isPendingWorkbenchTurn)) {
@@ -138,7 +138,7 @@ export default class ThreadHistoryRetentionController {
   }
 
   releaseInactive() {
-    if (this.#disposed || !this.#thread || this.#thread.harness !== "codex"
+    if (this.#disposed || !this.#thread
       || this.#thread.isDraft || this.#thread.turns.length <= 1) return this.#thread;
     this.#cancelScheduledReview();
     this.#thread = this.#releaseTurns(this.#thread.turns.slice(0, -1).map(({ id }) => id));

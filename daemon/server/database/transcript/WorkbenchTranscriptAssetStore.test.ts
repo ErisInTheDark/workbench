@@ -15,7 +15,7 @@ test("immutable image bytes cross the worker, deduplicate, reopen and remain thr
   let database = new WorkbenchDatabaseController(options);
   try {
     const identities = await database.observeThreadIdentities(["first", "second"].map(id => ({
-      native: { harness: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse(id) },
+      native: { harness: "fixture-provider", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse(id) },
       projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/project",
       title: id, createdAt: 1, updatedAt: 1, activityAt: 1,
     })));

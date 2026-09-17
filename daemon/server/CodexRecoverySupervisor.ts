@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - CodexRecoverySupervisorOptions: configure autonomous Codex recovery, retry timing, logging, and shutdown awareness. Keywords: codex, recovery, retry, lifecycle.
- * - default CodexRecoverySupervisor: coalesce recovery requests and retry failed attempts with capped exponential backoff. Keywords: codex, supervisor, backoff, recovery.
+ * - CodexRecoverySupervisorOptions: configure native recovery, retry timing and shutdown awareness.
+ * - default CodexRecoverySupervisor: own coalesced recovery attempts and reversible reload suspension.
  */
 
 export type CodexRecoverySupervisorOptions = {
@@ -22,6 +22,7 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>) {
 export default class CodexRecoverySupervisor {
   private readonly options: CodexRecoverySupervisorOptions;
   private disposed = false;
+  private paused = false;
   private failureCount = 0;
   private inFlight = false;
   private latestReason = "Codex recovery requested.";
@@ -39,13 +40,28 @@ export default class CodexRecoverySupervisor {
 
     this.latestReason = reason;
     this.recoveryRequested = true;
-    if (!this.inFlight && !this.retryTimer) {
+    if (!this.paused && !this.inFlight && !this.retryTimer) {
       void this.attemptRecovery();
+    }
+  }
+
+  pause() {
+    this.paused = true;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+  }
+
+  resume() {
+    if (this.disposed) return;
+    this.paused = false;
+    if (this.recoveryRequested && !this.inFlight) {
+      this.scheduleAttempt(this.failureCount ? this.retryDelayMs() : 0);
     }
   }
 
   dispose() {
     this.disposed = true;
+    this.pause();
     this.recoveryRequested = false;
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
@@ -54,7 +70,7 @@ export default class CodexRecoverySupervisor {
   }
 
   private scheduleAttempt(delayMs: number) {
-    if (this.disposed || this.options.isShuttingDown() || this.retryTimer) {
+    if (this.disposed || this.paused || this.options.isShuttingDown() || this.retryTimer) {
       return;
     }
 
@@ -71,7 +87,7 @@ export default class CodexRecoverySupervisor {
   }
 
   private async attemptRecovery() {
-    if (this.disposed || this.inFlight || !this.recoveryRequested || this.options.isShuttingDown()) {
+    if (this.disposed || this.paused || this.inFlight || !this.recoveryRequested || this.options.isShuttingDown()) {
       return;
     }
 
@@ -92,7 +108,7 @@ export default class CodexRecoverySupervisor {
       );
     } finally {
       this.inFlight = false;
-      if (this.recoveryRequested && !this.disposed && !this.options.isShuttingDown()) {
+      if (this.recoveryRequested && !this.disposed && !this.paused && !this.options.isShuttingDown()) {
         if (nextDelayMs === null) {
           void this.attemptRecovery();
         } else {

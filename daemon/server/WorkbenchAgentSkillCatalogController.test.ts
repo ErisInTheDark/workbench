@@ -34,7 +34,7 @@ test("catalog delegates source reads and excludes globally installed instruction
   const controller = new WorkbenchAgentSkillCatalogController(async (projectId) => {
     resolvedProjectIds.push(projectId);
     return project;
-  }, async sections => sections.map(text => ["LILY PREFIX", "GLOBAL PACK"].includes(text)), {
+  }, async (provider, sections) => sections.map(text => provider === "provider-a" && ["LILY PREFIX", "GLOBAL PACK"].includes(text)), {
     buildBootstrap: async (_skills, options) => {
       bootstrapOptions = options;
       return "assembled";
@@ -47,11 +47,11 @@ test("catalog delegates source reads and excludes globally installed instruction
   });
 
   assert.deepEqual(await controller.listAgents("project"), { data: [agent] });
-  assert.deepEqual(await controller.readAgent("project", agent.path), {
-    codexGlobalDuplicate: true,
+  assert.deepEqual(await controller.readAgent("project", agent.path, "provider-a"), {
+    providerGlobalDuplicate: true,
     data: agent,
   });
-  assert.deepEqual(await controller.readSkills("project"), {
+  assert.deepEqual(await controller.readSkills("project", "provider-a"), {
     data: [{
       description: projectSkill.description,
       name: projectSkill.name,
@@ -64,4 +64,7 @@ test("catalog delegates source reads and excludes globally installed instruction
   assert.deepEqual(bootstrapOptions?.skipInstructionPackContents, ["GLOBAL PACK"]);
   assert.deepEqual(resolvedProjectIds, ["project", "project", "project"]);
   assert.deepEqual(projectRoots, ["C:/repo", "C:/repo", "C:/repo"]);
+  assert.equal((await controller.readAgent("project", agent.path, "provider-b")).providerGlobalDuplicate, false);
+  await controller.readSkills("project", "provider-b");
+  assert.deepEqual(bootstrapOptions?.skipInstructionPackContents, []);
 });

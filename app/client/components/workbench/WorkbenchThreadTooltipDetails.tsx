@@ -6,7 +6,7 @@
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";

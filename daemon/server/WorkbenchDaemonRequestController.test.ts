@@ -40,7 +40,7 @@ test("context capability bounds reject invalid target mutations without writing"
   } });
   assert.equal(response.error, undefined);
   assert.equal(targetWrites.length, 1);
-  assert.deepEqual((await controller.handle({ id: 3, method: "models/context/read", params: {} })).result, {
+  assert.deepEqual((await controller.handle({ id: 3, method: "models/context/read", params: { provider: "codex" } })).result, {
     data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
   });
 });
@@ -99,7 +99,7 @@ function createController(options: {
     threadIdentity: options.threadIdentity ?? { resolve: async () => null },
     agents: {
       listAgents: async () => ({ data: [] }),
-      readAgent: async () => ({ codexGlobalDuplicate: false, data: { description: "", name: "", path: "", prompt: "" } }),
+      readAgent: async () => ({ providerGlobalDuplicate: false, data: { description: "", name: "", path: "", prompt: "" } }),
       readSkills: async () => ({ data: [], instructionPacks: [], instructions: "" }),
     },
     files: {

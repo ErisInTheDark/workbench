@@ -11,6 +11,7 @@
  * - admitProviderNotifications: restore retained references and admit structural facts before ordered publication.
  * - WorkbenchProviderIdentityAdmissionOwners: durable admission ports at the provider boundary.
  */
+import type { CodexThreadContextReadResponse } from "workbench-shared/codex/thread-context";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -21,7 +22,7 @@ import { getCodexItemIdentityKind, withCodexItemMetadata } from "workbench-share
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getWorkbenchTurnAdmission, isPendingWorkbenchTurn } from "workbench-shared/workbench/thread/thread-admission";
 import type { WorkbenchNativeThreadIdentity, WorkbenchThreadIdentityMetadata } from "./database/thread-identity/workbench-thread-identity-types";
-import type { WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
@@ -119,7 +120,7 @@ export async function admitProviderNotifications(
 
 export async function admitProviderThreads(
   owners: WorkbenchProviderIdentityAdmissionOwners,
-  inputs: readonly { metadata: WorkbenchThreadIdentityMetadata; thread: WorkbenchThreadContextReadResponse["thread"] }[],
+  inputs: readonly { metadata: WorkbenchThreadIdentityMetadata; thread: CodexThreadContextReadResponse["thread"] }[],
 ) {
   const identities = await owners.threads.observeMany(inputs.map(({ metadata }) => metadata));
   const catalogs = inputs.map(({ metadata, thread }, index) => {

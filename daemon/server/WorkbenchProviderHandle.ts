@@ -57,6 +57,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     messageAgent: input => this.run(providerRegistrations[this.key], provider => provider.threads.messageAgent(input), `${this.key}: threads.messageAgent`),
     rename: (threadId, title) => this.run(providerRegistrations[this.key], provider => provider.threads.rename(threadId, title), `${this.key}: threads.rename`),
     compact: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.compact(threadId), `${this.key}: threads.compact`),
+    delete: threadId => this.run(providerRegistrations[this.key], provider => {
+      if (!provider.threads.delete) throw new Error(`Provider ${this.key} does not support deleting its threads.`);
+      return provider.threads.delete(threadId);
+    }, `${this.key}: threads.delete`),
     interrupt: (threadId, turnId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.interrupt(threadId, turnId, options), `${this.key}: threads.interrupt`),
     materialize: (threadId, turnIds, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.materialize(threadId, turnIds, signal), `${this.key}: threads.materialize`),
   };

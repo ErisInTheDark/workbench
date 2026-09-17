@@ -496,8 +496,10 @@ await new Promise((resolve, reject) => {
         const current = await runtime.request<ThreadPayload>("thread/metadata/read", { threadId }, {}, cleanup);
         assert.equal(current.id, threadId);
         assert.equal(path.resolve(current.cwd), runtime.project);
-        await runtime.request("thread/delete", { threadId }, {}, cleanup);
+        const retained = await runtime.transcripts.read({ threadId, turnLimit: 20 });
+        await runtime.request("thread/provider/delete", { threadId }, {}, cleanup);
         await assert.rejects(runtime.request("thread/metadata/read", { threadId }, {}, cleanup), /thread not loaded|not found|unavailable/iu);
+        assert.deepEqual(await runtime.transcripts.read({ threadId, turnLimit: 20 }), retained, "Provider deletion must retain WB transcript history");
         await runtime.request("project/catalog/read", {}, {}, cleanup);
         console.log("deleted exact test-created Codex thread");
       }

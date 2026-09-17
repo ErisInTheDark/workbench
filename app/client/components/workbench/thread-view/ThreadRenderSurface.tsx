@@ -4,6 +4,7 @@
  */
 "use client";
 
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useMemo, type CSSProperties } from "react";
 
 import type { ThreadPayload, WorkbenchProjectRoot } from "workbench-shared/types";
@@ -80,7 +81,7 @@ export default function ThreadRenderSurface({
     { ...terminalContext, includeOutput: false },
   );
   const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: activityTurn, commands });
-  const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? "codex"}:${threadId}` } : null);
+  const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` } : null);
   const turnsById = new Map(render?.thread.turns.map(turn => [turn.id, turn]));
   const style = {
     fontSize: `${fontSizeRem}rem`,

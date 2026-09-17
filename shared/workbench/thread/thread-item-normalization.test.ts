@@ -6,17 +6,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
 import {
   mergeThreadItem,
   normalizeThreadItems,
   reconcileCompleteThreadItems,
 } from "./thread-item-normalization.ts";
-import type { WorkbenchToolOutput } from "../workbench/thread/thread-tool-output.ts";
-import type { WorkbenchFileChangeItem } from "../workbench/thread/workbench-file-change.ts";
-import { withWorkbenchThreadItemIdentity } from "../workbench/thread/thread-item-identity.ts";
-import { withWorkbenchInputState } from "../workbench/thread/thread-input-item.ts";
-import { getCodexItemIdentityKind } from "./thread-item-source.ts";
+import type { WorkbenchToolOutput } from "./thread-tool-output.ts";
+import type { WorkbenchFileChangeItem } from "./workbench-file-change.ts";
+import { withWorkbenchThreadItemIdentity } from "./thread-item-identity.ts";
+import { withWorkbenchInputState } from "./thread-input-item.ts";
+import { getCodexItemIdentityKind } from "../../codex/thread-item-source.ts";
 
 function user(id: string, clientId: string | null, text = "same"): Extract<ThreadItem, { type: "userMessage" }> {
   return { clientId, content: [{ text, text_elements: [], type: "text" }], id, type: "userMessage" };

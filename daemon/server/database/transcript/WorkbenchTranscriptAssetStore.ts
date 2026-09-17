@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
-import { encodeTranscriptPathSegment } from "../../codex-transcript-normalizers.ts";
+import { createTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 
 export interface TranscriptAssetWrite {
   threadId: string;
@@ -48,10 +48,10 @@ export default class WorkbenchTranscriptAssetStore {
     const assetName = `${digest}.${extension}`;
     return this.database.transaction(() => {
       const thread = new WorkbenchThreadIdentityRepository(this.database).resolve({
-        threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex",
+        threadId: ThreadReferenceSchema.parse(input.threadId),
       });
       if (!thread) throw new Error("Transcript image thread has not been admitted.");
-      const assetUrl = `/api/transcript-assets/codex/${encodeURIComponent(thread.threadId)}/${assetName}`;
+      const assetUrl = createTranscriptAssetAddress(thread.threadId, assetName);
       const existing = this.database.prepare("SELECT mime_type, byte_length FROM transcript_assets WHERE digest = ?")
         .get(digest) as { mime_type: string; byte_length: number } | undefined;
       if (existing && (existing.mime_type !== input.mimeType || existing.byte_length !== input.bytes.byteLength)) {
@@ -62,7 +62,7 @@ export default class WorkbenchTranscriptAssetStore {
       const retained = this.database.prepare("SELECT bytes FROM transcript_asset_content WHERE digest = ?").get(digest) as { bytes: Uint8Array } | undefined;
       if (retained && !Buffer.from(retained.bytes).equals(input.bytes)) throw new Error("Transcript image content-addressed bytes changed.");
       this.database.prepare("INSERT OR IGNORE INTO transcript_asset_content(digest, bytes) VALUES (?, ?)").run(digest, input.bytes);
-      for (const address of new Set([thread.threadId, encodeTranscriptPathSegment(input.threadId), input.compatibilityAddress].filter(value => value !== undefined))) {
+      for (const address of new Set([thread.threadId, Buffer.from(input.threadId, "utf8").toString("base64url"), input.compatibilityAddress].filter(value => value !== undefined))) {
         if (!/^[A-Za-z0-9_-]+$/u.test(address)) throw new Error("Invalid transcript image compatibility address.");
         this.database.prepare(`INSERT OR IGNORE INTO transcript_asset_addresses(thread_id, address, asset_name, digest)
           VALUES (?, ?, ?, ?)`).run(thread.threadId, address, assetName, digest);
@@ -76,7 +76,7 @@ export default class WorkbenchTranscriptAssetStore {
     if (!match || !/^[A-Za-z0-9_-]+$/u.test(input.threadId)) throw new Error("Invalid transcript image address.");
     return this.database.transaction(() => {
       const identities = new WorkbenchThreadIdentityRepository(this.database);
-      const thread = identities.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
+      const thread = identities.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId) });
       const addresses = thread
         ? this.database.prepare("SELECT DISTINCT thread_id, digest FROM transcript_asset_addresses WHERE thread_id = ? AND asset_name = ?").all(thread.threadId, input.assetName)
         : this.database.prepare("SELECT DISTINCT thread_id, digest FROM transcript_asset_addresses WHERE address = ? AND asset_name = ?").all(input.threadId, input.assetName);
@@ -85,7 +85,7 @@ export default class WorkbenchTranscriptAssetStore {
       const owner = owners[0];
       if (!owner) return null;
       if (input.ownerThreadId !== undefined) {
-        const expected = identities.resolve({ threadId: ThreadReferenceSchema.parse(input.ownerThreadId), harness: "codex" });
+        const expected = identities.resolve({ threadId: ThreadReferenceSchema.parse(input.ownerThreadId) });
         if (expected?.threadId !== owner.thread_id) throw new Error("Transcript image belongs to another thread.");
       }
       const content = this.database.prepare(`SELECT c.bytes, a.mime_type, a.byte_length FROM transcript_asset_content c
@@ -98,7 +98,7 @@ export default class WorkbenchTranscriptAssetStore {
       }
       return {
         bytes: content.bytes, byteLength: content.byte_length, digest: owner.digest, mimeType: content.mime_type,
-        assetUrl: `/api/transcript-assets/codex/${encodeURIComponent(input.threadId)}/${input.assetName}`,
+        assetUrl: createTranscriptAssetAddress(owner.thread_id, input.assetName),
       };
     })();
   }

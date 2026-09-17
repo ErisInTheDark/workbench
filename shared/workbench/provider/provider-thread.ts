@@ -51,6 +51,8 @@ export interface WorkbenchProviderThreads {
   messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<void>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string): Promise<void>;
+  /** Delete the backing provider session, retaining WB identity, state and history. */
+  delete?(threadId: string): Promise<void>;
   interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }): Promise<void>;
   materialize(threadId: string, turnIds: string[], signal?: AbortSignal): Promise<void>;
 }

@@ -1,21 +1,20 @@
 /*
- * Keywords: thread context, chronology, incoming agent, attribution.
  * Exports:
- * - WorkbenchThreadContextPiece: semantic thread context piece for client and Markdown projections. Keywords: thread, context, projection.
+ * - WorkbenchThreadContextPiece: semantic context piece for client and Markdown projections.
  * - WorkbenchThreadContextAgentMessagePiece: attributed native incoming message.
  * - WorkbenchThreadContextUserMessagePiece: canonical user input.
  * - WorkbenchThreadContextUserSteerPiece: recorded user steer.
  * - WorkbenchThreadContextQuestionnairePiece: questionnaire response.
  * - WorkbenchThreadContextPlanBlockPiece: extracted plan block.
- * - createWorkbenchThreadContextSortKey: build one sortable chronological key shared by context projections. Keywords: thread, context, chronology.
- * - extractThreadPlanBlocks: collect literal outer <plan> blocks from agent messages. Keywords: plan, markdown, outer block.
- * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces from a thread context bundle. Keywords: context, questionnaire, steer, user message.
+ * - createWorkbenchThreadContextSortKey: build a shared chronological sort key.
+ * - extractThreadPlanBlocks: collect outer plan blocks from agent messages.
+ * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces.
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,

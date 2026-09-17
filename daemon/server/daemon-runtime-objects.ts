@@ -48,11 +48,10 @@ import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSuperviso
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
-import type CodexHealthMonitor from "./CodexHealthMonitor";
+import type CodexLifecycleController from "./CodexLifecycleController";
 import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
-import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import type WorkbenchToolRevisionController from "./WorkbenchToolRevisionController";
 import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
@@ -77,7 +76,6 @@ import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryControl
 import type CodexRecoveryController from "./CodexRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
-import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 import type WorkbenchProvider from "./WorkbenchProvider";
 
 export type DaemonReloadableModules = {
@@ -88,8 +86,7 @@ export type DaemonReloadableModules = {
 };
 
 export interface DaemonProviderNotification {
-  harness: HarnessKind;
-  notification: JsonRpcNotification;
+  harness: WorkbenchHarness;
   observation: import("workbench-shared/workbench/provider/provider-observation").WorkbenchProviderObservation;
 }
 
@@ -179,6 +176,13 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  providerObservations: {
+    observe(
+      harness: WorkbenchHarness,
+      facts: import("workbench-shared/workbench/provider/provider-observation").WorkbenchProviderObservation,
+    ): Promise<import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadLifecycle | null>;
+  };
+  codexLifecycle: CodexLifecycleController;
   codexConfiguration: WorkbenchProvider["configuration"]["modelContext"] & {
     containsGlobalGuidance(sections: string[]): Promise<boolean[]>;
   };
@@ -187,12 +191,10 @@ export interface DaemonRuntimeObjects {
   codexTools: import("./CodexToolsController").default;
   codexProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
-  bridgeRequest: WorkbenchBridgeRequestController;
   browseExecution: DaemonBrowseExecution;
   browseSessionCleanup: BrowseSessionCleanupSupervisor;
   codexAppServer: DaemonCodexAppServerRuntime;
   codexBridge: CodexStdioBridge;
-  codexHealth: CodexHealthMonitor;
   toolRevision: WorkbenchToolRevisionController;
   codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;

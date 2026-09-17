@@ -7,7 +7,6 @@ import test from "node:test";
 import type CodexAppServer from "./CodexAppServer";
 import CodexAppServerRuntime from "./CodexAppServerRuntime";
 import type CodexStdioBridge from "./CodexStdioBridge";
-import type { DaemonProcessContext } from "./daemon-process-context";
 
 function deferred<TValue = void>() {
   let resolve!: (value: TValue) => void;
@@ -18,14 +17,14 @@ function deferred<TValue = void>() {
 function runtimeOwner(stopAsync = async () => {}, retirePrevious = async () => {}) {
   let deliver!: (message: unknown) => void;
   const appServer = { stopAsync, retirePrevious } as unknown as CodexAppServer;
-  const context = {
-    codexAppServerOptions: {
+  const ports = {
+    appServer: {
       logError() {},
       projectRoot: "C:/repo",
     },
-    onCodexFatalExit() {},
-  } as unknown as DaemonProcessContext;
-  const runtime = new CodexAppServerRuntime(context, {
+    onFatalExit() {},
+  };
+  const runtime = new CodexAppServerRuntime(ports, {
     createAppServer(options) {
       deliver = options.onMessage;
       return appServer;

@@ -8,13 +8,13 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import CodexRecoveryController, { type CodexRecoveryControllerState } from "./CodexRecoveryController";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexProvider from "./CodexProvider";
-import WorkbenchCoreNode from "./WorkbenchCoreNode";
+import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import { recoverCodexTurn } from "./codex-turn-recovery";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [WorkbenchCoreNode, CodexBridgeNode, CodexProvider],
+  children: [CodexBridgeNode, CodexProvider],
   create: (context, build) => {
     const coordinator = build.get("turnRecovery");
     const identities = build.get("threadIdentity");
@@ -22,7 +22,15 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const request = async (request: import("./bridge-types").JsonRpcRequest, signal?: AbortSignal) => {
       signal?.throwIfAborted();
       owner.observeRequest("codex", request);
-      const response = await context.harnessPorts.codex.request(request, signal);
+      if (context.isHardReloadPending()) throw new Error("The daemon is hard reloading; Codex recovery is paused.");
+      const response = await build.run("codexBridge", async bridge => {
+        signal?.throwIfAborted();
+        await bridge.ensureInitialized(createInitializeRequest(0, {
+          capabilities: createInitializeCapabilities({ experimentalApi: true }),
+        }));
+        signal?.throwIfAborted();
+        return bridge.handleServerRequest(request, { signal });
+      }, `Codex recovery: ${request.method}`);
       signal?.throwIfAborted();
       return response;
     };

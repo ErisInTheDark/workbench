@@ -14,13 +14,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState").controller;
     const controller = new WorkbenchWebSocketRequestController({
-      acceptProviderIntent: async ({ harness, nativeThreadId, nativeTurnId }) => {
-        const native = threadIdentity.knownNativeBinding(harness, nativeThreadId);
-        const threadId = threadIdentity.workbenchIdForNative(native);
-        const identity = threadIdentity.knownThread(threadId);
-        const turnId = threadIdentity.workbenchTurnIdForNative({ ...native, nativeTurnId });
-        await threadState.acceptProviderIntent(identity.projectId, harness, threadId, turnId);
-      },
       harnesses: build.get("harnesses"),
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
@@ -63,10 +56,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/websocket-log-format.ts",
     "daemon/server/WorkbenchWebSocketRequestController.ts",
     "daemon/server/WorkbenchWebSocketEventLog.ts",
-    "daemon/server/thread-identity-provider-mapping.ts",
-    "daemon/server/CodexProviderIdentity.ts",
-    "daemon/server/CodexProviderObservations.ts",
-    "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/thread-identity-workbench-mapping.ts",
     "daemon/server/WorkbenchWebSocketStreamController.ts",
   ].join("\n"),

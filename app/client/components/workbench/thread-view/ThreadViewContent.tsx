@@ -4,23 +4,12 @@
  */
 "use client";
 import { useWorkbenchThread } from "../use-workbench-thread";
-import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
-import type {
-  ThreadPayload,
-  WorkbenchBrowseResultEntry,
-  WorkbenchComposerInputDraft,
-  WorkbenchComposerSettings,
-  WorkbenchHarness,
-  WorkbenchPendingUserInputRequest,
-  WorkbenchProjectRoot,
-  WorkbenchSendThreadMessageOptions,
-  WorkbenchSkillSummary,
-  WorkbenchSubagentSummary,
-} from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -357,6 +346,7 @@ export default memo(function ThreadViewContent ({
   const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
   const relatedThreadsById = rootThreadController.state.relatedDocuments;
   const activeThread = activeThreadController.state.document;
+  const activeProvider = activeThread?.harness ?? thread.harness;
   const activeSidebarEntry = activeThreadController.state.entry;
   const activeGitArcSelection = useMemo<{
     gitArc: WorkbenchGitArcLifecycleState | null;
@@ -571,12 +561,13 @@ export default memo(function ThreadViewContent ({
 
   useEffect(() => {
     let cancelled = false;
-    void daemon.skills.read({ projectId: projectId || null }).then((payload) => {
+    void daemon.skills.read({ projectId: projectId || null, provider: activeProvider }).then((payload) => {
       if (!cancelled) {
         setWorkbenchSkills(payload.data ?? []);
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (!cancelled) {
+        console.warn("Provider skill catalogue read failed.", (error instanceof Error ? error.message : String(error)).slice(0, 500));
         setWorkbenchSkills([]);
       }
     });
@@ -584,7 +575,7 @@ export default memo(function ThreadViewContent ({
     return () => {
       cancelled = true;
     };
-  }, [daemon, projectId]);
+  }, [daemon, projectId, activeProvider]);
 
   useEffect(() => rootThreadController.owner?.acquireChildren(visibleSubagentThreadIds),
     [rootThreadController.owner, visibleSubagentThreadIds]);
@@ -889,7 +880,7 @@ export default memo(function ThreadViewContent ({
   const handleComposerHarnessToggle = () => {
     if (!activeThread?.isDraft) return;
     const harnesses = installedProviderKeys;
-    const nextHarness = harnesses[(harnesses.findIndex(harness => harness === activeThread.harness) + 1) % harnesses.length] ?? "codex";
+    const nextHarness = harnesses[(harnesses.findIndex(harness => harness === activeThread.harness) + 1) % harnesses.length] ?? defaultProviderKey;
     handleComposerHarnessSelect(nextHarness);
   };
   const composerStatus = activeThread ? (

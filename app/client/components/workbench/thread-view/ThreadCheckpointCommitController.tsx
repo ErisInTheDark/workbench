@@ -5,6 +5,7 @@
  */
 "use client";
 
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -366,7 +367,7 @@ function ThreadCheckpointCommitController({
 export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckpointCommitControllerProps) {
   const presentation = useContext(ThreadGitArcPresentationContext);
   const proposalObservation = useThreadGitArcProposalObservation(props.proposalId);
-  const harness = props.harness ?? presentation?.harness ?? "codex";
+  const harness = props.harness ?? presentation?.harness ?? defaultProviderKey;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
   if (!props.proposalId && (
     props.commandOutcome === "failed" || props.commandOutcome === "declined" || props.commandOutcome === "timedOut"

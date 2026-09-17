@@ -58,7 +58,7 @@ function normalizeSettings(value: unknown): WorkbenchComposerSettings | null {
     harness,
     model,
     reasoningEffort: typeof value.reasoningEffort === "string" && value.reasoningEffort.trim() ? value.reasoningEffort.trim() : null,
-    serviceTier: harness === "codex" && value.serviceTier === "fast" ? "fast" : null,
+    serviceTier: value.serviceTier === "fast" ? "fast" : null,
   };
 }
 

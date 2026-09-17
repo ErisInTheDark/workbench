@@ -1,10 +1,11 @@
 /*
  * No production exports. Protect shared refresh, failure isolation, and reload drain ownership.
  */
+import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
+
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 
 function deferred<TValue>() {
@@ -13,7 +14,7 @@ function deferred<TValue>() {
   return { promise, resolve };
 }
 
-function page(threadId: string): WorkbenchThreadPageResponse {
+function page(threadId: string): CodexThreadPageResponse {
   return {
     browseResultEntries: [],
     model: null,
@@ -22,7 +23,7 @@ function page(threadId: string): WorkbenchThreadPageResponse {
     reasoningEffort: null,
     serviceTier: null,
     steerEntries: [],
-    thread: { id: threadId } as WorkbenchThreadPageResponse["thread"],
+    thread: { id: threadId } as CodexThreadPageResponse["thread"],
   };
 }
 
@@ -111,7 +112,7 @@ test("expiry releases hung reads and fences their continuations across rollback"
 
 test("identical keyed reads share one active operation while distinct keys stay independent", async () => {
   const controller = new CodexThreadPageReadController();
-  const shared = deferred<WorkbenchThreadPageResponse>();
+  const shared = deferred<CodexThreadPageResponse>();
   let sharedCalls = 0;
   let distinctCalls = 0;
 
@@ -138,7 +139,7 @@ test("identical keyed reads share one active operation while distinct keys stay 
 
 test("reload drain rejects new reads, waits for active reads, and reopens after failure", async () => {
   const controller = new CodexThreadPageReadController();
-  const active = deferred<WorkbenchThreadPageResponse>();
+  const active = deferred<CodexThreadPageResponse>();
   const read = controller.run(async () => await active.promise);
   controller.beginDrain();
 

@@ -1,24 +1,19 @@
 /*
- * Exports: none. Starts the bridge server and graph host, wires stable recovery ingress,
- * and provides process-owned harness, reload, and supervisor ports to reloadable nodes.
+ * Exports: none. Owns physical HTTP/WebSocket connections, process shutdown and graph hosting.
  */
 import http from "node:http";
 import path from "node:path";
 
 import { WebSocketServer } from "ws";
 
-import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
-import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
     DaemonReloadResponse,
     DaemonReloadScope,
-    WorkbenchBrowseResultEntry,
     WorkbenchHarness,
 } from "workbench-shared/types";
 import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
-import type CodexStdioBridge from "./CodexStdioBridge";
+import type { BridgeClient, JsonRpcNotification } from "./bridge-types";
 import {
     log,
     logError,
@@ -30,35 +25,26 @@ import ReloadableNodeHost from "./ReloadableNodeHost";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchDaemonReloadController";
 import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
-import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
 const PROJECT_ROOT = path.resolve(DAEMON_PACKAGE_ROOT, "..");
-const DEFAULT_CODEX_BRIDGE_URL = "ws://0.0.0.0:4500";
-const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDGE_URL;
+const WORKBENCH_SOCKET_URL = process.env.CODEX_APP_SERVER_URL ?? "ws://0.0.0.0:4500";
 const DAEMON_RELOAD_PATH = "/daemon/reload";
 const DAEMON_BROWSE_PATH = "/daemon/browse";
 const DAEMON_BROWSE_SESSIONS_PATH = "/daemon/browse/sessions";
-const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 10000;
-const CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS = 4000;
-const CODEX_RECOVERY_MAX_RETRY_DELAY_MS = 60000;
-const CODEX_HEALTH_INTERVAL_MS = 60000;
-const CODEX_HEALTH_REQUEST_TIMEOUT_MS = 10000;
-const CODEX_HEALTH_FAILURE_THRESHOLD = 10;
-const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 
 function parseWebSocketPort(url: string) {
   const parsedUrl = new URL(url);
   if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
-    throw new Error(`Codex bridge URL must use ws:// or wss://, received ${url}`);
+    throw new Error(`Workbench socket URL must use ws:// or wss://, received ${url}`);
   }
 
   return parsedUrl.port || (parsedUrl.protocol === "wss:" ? "443" : "80");
 }
 
-const LOCAL_DAEMON_ORIGIN = `http://127.0.0.1:${parseWebSocketPort(CODEX_BRIDGE_URL)}`;
+const LOCAL_DAEMON_ORIGIN = `http://127.0.0.1:${parseWebSocketPort(WORKBENCH_SOCKET_URL)}`;
 const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
   origin: LOCAL_DAEMON_ORIGIN,
   runtimeDirectoryPath: path.join(DAEMON_PACKAGE_ROOT, "node_modules", ".bin"),
@@ -81,7 +67,6 @@ let lastReloadResponse: DaemonReloadResponse = {
 let shuttingDown = false;
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
-let codexRecoverySupervisor: CodexRecoverySupervisor;
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const featureHost = new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>(
   createDaemonFeatureContext(),
@@ -100,8 +85,6 @@ const featureHost = new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeOb
   },
 );
 
-codexRecoverySupervisor = createCodexRecoverySupervisor();
-
 function sendJsonToClient(client: BridgeClient, message: unknown) {
   void featureHost.run(
     "webSocketRequests",
@@ -112,11 +95,7 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
   });
 }
 
-function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification, observation: import("workbench-shared/workbench/provider/provider-observation").WorkbenchProviderObservation, nativeNotification: JsonRpcNotification) {
-  featureHost.get("harnesses").observeNotification(harness, nativeNotification);
-  void featureHost.observeProviderNotification({ harness, notification: nativeNotification, observation }, `provider notification: ${harness} ${message.method}`).catch((error) => {
-    logError("thread-state", `failed to observe provider notification: ${error instanceof Error ? error.message : String(error)}`);
-  });
+function broadcastToClients(harness: WorkbenchHarness, message: JsonRpcNotification) {
   for (const client of bridgeConnections) {
     sendJsonToClient(client, {
       ...message,
@@ -134,18 +113,6 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function getBridgeInitializeMessage() {
-  return createInitializeRequest(0, {
-    capabilities: createInitializeCapabilities({
-      experimentalApi: true,
-    }),
-  });
-}
-
-function ensureCodexReady(bridge = featureHost.get("codexBridge")) {
-  return bridge.ensureInitialized(getBridgeInitializeMessage());
 }
 
 function sendHttpJson(response: http.ServerResponse, statusCode: number, payload: unknown) {
@@ -197,7 +164,6 @@ function finalizeReloadResponse(
 }
 
 async function stopAllChildren() {
-  codexRecoverySupervisor.dispose();
   const closures = [featureHost.dispose()];
 
   for (const client of bridgeConnections) {
@@ -225,7 +191,6 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
       name: "process lifecycle",
       notify: () => {
         shuttingDown = true;
-        codexRecoverySupervisor.dispose();
       },
     },
     {
@@ -244,46 +209,15 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
 
 function createDaemonFeatureContext(): DaemonProcessContext {
   return {
-    browseCleanupOptions: {
-      cleanupStaleInactiveSessions: async (options) => await featureHost.run("browseExecution", (execution) => execution.cleanupStaleInactiveSessions(options), "Browse stale-session cleanup"),
-      readThreadActive: readThreadActiveForBrowseCleanup,
-    },
+    daemonPackageRoot: DAEMON_PACKAGE_ROOT,
+    isShuttingDown: () => shuttingDown,
+    webSocketUrl: WORKBENCH_SOCKET_URL,
+    isHardReloadPending: () => featureHost.get("reloadController").isHardReloadPending(),
+    broadcastProviderNotification: broadcastToClients,
     browseProjectResolvers: {
       resolveProjectById: (projectId) => featureHost.run("projectCatalog", (controller) => controller.resolveProjectById(projectId), "project catalog: browse project id"),
       resolveProjectFromCwd: (cwd, options) => featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options), "project catalog: browse cwd"),
     },
-    codexAppServerOptions: {
-      log,
-      logError,
-      projectRoot: DAEMON_PACKAGE_ROOT,
-    },
-    codexHealthOptions: {
-      failureThreshold: CODEX_HEALTH_FAILURE_THRESHOLD,
-      intervalMs: CODEX_HEALTH_INTERVAL_MS,
-      isProbeAllowed: () => {
-        const runtime = featureHost.get("codexAppServer");
-        return runtime.isAvailable() && !runtime.isTransitioning() && !featureHost.get("reloadController").isHardReloadPending();
-      },
-      isShuttingDown: () => shuttingDown,
-      log: (message) => log("codex-health", message),
-      logError: (message) => logError("codex-health", message),
-      probe: async () => {
-        const response = await requestLiveCodexWithDeadline({ id: "codex-health", method: "account/read", params: {} });
-        if (response.error) throw new Error(response.error.message);
-      },
-      requestRecovery: (reason) => codexRecoverySupervisor.requestRecovery(reason),
-    },
-    codexBridgeUrl: CODEX_BRIDGE_URL,
-    createCodexBridgeOptions: (appServer, initialState) => ({
-      appServer,
-      bridgeUrl: CODEX_BRIDGE_URL,
-      handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
-      initialState,
-      onNotification: (notification, observation, nativeNotification) => broadcastToClients("codex", notification, observation, nativeNotification),
-      resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
-      sendToClient: (client, message) => sendJsonToClient(client, message),
-      storageRoot: PROJECT_ROOT,
-    }),
     executeBrowseRequest: async (body, signal) => await featureHost.run("browseExecution", (execution) => execution.executeBrowseRequest(body, signal), "Browse command request"),
     executeBrowseSessionRequest: async (request, signal) => await featureHost.run("browseExecution", (execution) => execution.executeSessionRequest(request, signal), "Browse session request"),
     executeReloadScopes,
@@ -300,24 +234,9 @@ function createDaemonFeatureContext(): DaemonProcessContext {
       (feature) => feature.installSubagentRelationship(record),
       `thread state: install subagent ${record.harness}:${record.threadId}`,
     ),
-    harnessPorts: createHarnessPorts(),
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localDaemonOrigin: LOCAL_DAEMON_ORIGIN,
     logTurnRecovery: (message) => log("turn-recovery", message),
-    onCodexFatalExit: (reason, bridge) => {
-      if (shuttingDown) return;
-      bridge?.beginStopping();
-      closeBridgeClients(1011, reason);
-      codexRecoverySupervisor.requestRecovery(reason);
-    },
-    onCodexBridgeReady: async (bridge) => {
-      await ensureWorkbenchPromptFiles();
-      await ensureCodexReady(bridge);
-    },
-    onCodexBridgeUnavailable: (restartingAppServer) => {
-      if (!restartingAppServer) return;
-      closeBridgeClients(1012, "Codex app-server is reloading; reconnect shortly.");
-    },
     publishThreadState,
     reportWebSocketDelivery: (delivery) => {
       // Do not hold physical send completion behind the reload admission gate.
@@ -355,115 +274,8 @@ function createDaemonFeatureContext(): DaemonProcessContext {
   };
 }
 
-async function readThreadActiveForBrowseCleanup(threadId: string) {
-  const harnesses = featureHost.get("harnesses");
-  for (const harness of harnesses.listHarnesses()) {
-    try {
-      const response = await harnesses.request(harness, {
-        id: 0,
-        method: "thread/read",
-        params: { includeTurns: false, threadId },
-      });
-      if (response.error) throw new Error(response.error.message);
-      const result = response.result as { thread?: { status?: string } };
-      const status = result.thread?.status ?? "";
-      return status === "active" || status.startsWith("active:");
-    } catch {
-      // Try the next harness; preserve sessions if no harness can read the thread.
-    }
-  }
-
-  return null;
-}
-
-function createCodexRecoverySupervisor() {
-  return new CodexRecoverySupervisor({
-    initialRetryDelayMs: CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS,
-    isShuttingDown: () => shuttingDown,
-    log: (message) => log("codex-recovery", message),
-    logError: (message) => logError("codex-recovery", message),
-    maxRetryDelayMs: CODEX_RECOVERY_MAX_RETRY_DELAY_MS,
-    recover: recoverCodexBridge,
-  });
-}
-
-function resolveProjectFromCurrentCatalog(
-  cwd: string | null | undefined,
-  options: { endpointName?: string } = {},
-) {
-  return featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options), `project catalog: ${options.endpointName ?? "cwd resolution"}`);
-}
-
-async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
-  return await featureHost.run("harnesses", (controller) => controller.request(harness, request), `harnesses: ${harness} ${request.method}`);
-}
-
-function requireHarnessAdmission() {
-  if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The daemon is hard reloading; new harness work is temporarily unavailable.");
-}
-
-function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimePort> {
-  return {
-    codex: {
-      handleBrowserMessage: async (message, client) => {
-        if (message.method === "initialize" && "id" in message) {
-          try {
-            await runAfterCodexBridgeReload(async (bridge) => {
-              await ensureCodexReady(bridge);
-              sendJsonToClient(client, { id: message.id, result: bridge.getInitializeResult() });
-            });
-          } catch (error) {
-            sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Codex app-server initialize failed." } });
-          }
-          return;
-        }
-        if (message.method === "initialized" && !("id" in message)) return;
-        if ("id" in message) {
-          try {
-            const bridgeResponse = await runAfterCodexBridgeReload((bridge) => bridge.handleBridgeRequest(message));
-            if (bridgeResponse) {
-              sendJsonToClient(client, bridgeResponse);
-              return;
-            }
-            await runAfterCodexBridgeReload((bridge) => bridge.forwardRequest(message, client, message.id as number | string));
-          } catch (error) {
-            sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Codex bridge request failed." } });
-          }
-          return;
-        }
-        await runAfterCodexBridgeReload((bridge) => bridge.forwardNotification(message)).catch((error) => {
-          logError("codex-bridge", error instanceof Error ? error.message : String(error));
-        });
-      },
-      readThread: async (threadId) => await runAfterCodexBridgeReload((bridge) => bridge.readThreadForBrowse(threadId)),
-      request: async (request, signal) => {
-        requireHarnessAdmission();
-        return await runAfterCodexBridgeReload(async (bridge) => {
-          signal?.throwIfAborted();
-          await ensureCodexReady(bridge);
-          signal?.throwIfAborted();
-          return await bridge.handleServerRequest(request);
-        });
-      },
-      steerTurn: async (threadId, expectedTurnId, input) => await runAfterCodexBridgeReload((bridge) => bridge.steerTurnForBrowse(threadId, expectedTurnId, input)),
-    },
-  };
-}
-
-async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
-  if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The daemon is hard reloading; new harness work is temporarily unavailable.");
-  return await runAfterCodexBridgeReload(async (bridge) => {
-    await ensureCodexReady(bridge);
-    return await bridge.handleServerRequest(request, { timeoutMs });
-  });
-}
-
 async function ensureWorkbenchPromptFiles() {
   await featureHost.get("modules").workbenchPromptFiles.ensureWorkbenchPromptFiles();
-}
-
-async function runAfterCodexBridgeReload<TValue>(task: (bridge: CodexStdioBridge) => TValue | Promise<TValue>) {
-  return await featureHost.run("codexBridge", task, "Codex bridge operation");
 }
 
 function closeBridgeClients(code: number, reason: string) {
@@ -471,11 +283,6 @@ function closeBridgeClients(code: number, reason: string) {
     client.close(code, reason);
   }
   bridgeConnections.clear();
-}
-
-async function recoverCodexBridge(reason: string) {
-  await featureHost.reload(["harness:codex"]);
-  log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
 }
 
 async function executeReloadScopes(scopes: DaemonReloadScope[]) {
@@ -600,7 +407,9 @@ const controlIngress = new WorkbenchDaemonControlIngress({
 });
 
 function startBridgeServer() {
-  const { host, port } = featureHost.get("codexBridge").getListenDescriptor();
+  const address = new URL(WORKBENCH_SOCKET_URL);
+  const host = address.hostname || "127.0.0.1";
+  const port = Number(parseWebSocketPort(WORKBENCH_SOCKET_URL));
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -661,11 +470,11 @@ function startBridgeServer() {
     const connectionId = `connection-${++nextBridgeConnectionId}`;
     bridgeClientsByConnectionId.set(connectionId, bridgeClient);
     bridgeConnections.add(bridgeClient);
-    log("codex-bridge", `client connected (${bridgeConnections.size} active)`);
+    log("workbench-socket", `client connected (${bridgeConnections.size} active)`);
 
     bridgeClient.on("message", (payload) => {
       void controlIngress.handle(bridgeClient, connectionId, payload).catch((error) => {
-        logError("codex-bridge", error instanceof Error ? error.message : String(error));
+        logError("workbench-socket", error instanceof Error ? error.message : String(error));
       });
     });
 
@@ -673,14 +482,14 @@ function startBridgeServer() {
       bridgeClientsByConnectionId.delete(connectionId);
       if (!shuttingDown) {
         void featureHost.run("webSocketRequests", (controller) => controller.disconnect(bridgeClient, connectionId), "browser WebSocket disconnect")
-          .catch(error => logError("codex-bridge", `disconnect failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+          .catch(error => logError("workbench-socket", `disconnect failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
       }
       bridgeConnections.delete(bridgeClient);
-      log("codex-bridge", `client disconnected (${bridgeConnections.size} active)`);
+      log("workbench-socket", `client disconnected (${bridgeConnections.size} active)`);
     });
 
     bridgeClient.once("error", (error) => {
-      logError("codex-bridge", error instanceof Error ? error.message : String(error));
+      logError("workbench-socket", error instanceof Error ? error.message : String(error));
     });
   });
 
@@ -689,7 +498,7 @@ function startBridgeServer() {
   });
 
   bridgeServer.listen(port, host, () => {
-    log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio`);
+    log("workbench-socket", `listening on ${WORKBENCH_SOCKET_URL}`);
   });
 }
 
@@ -726,20 +535,11 @@ process.on("exit", () => {
 });
 
 async function startDaemon() {
-  log("daemon", `starting bridge at ${CODEX_BRIDGE_URL}`);
+  log("daemon", `starting socket at ${WORKBENCH_SOCKET_URL}`);
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   await featureHost.start();
   startBridgeServer();
-  const startupBridge = featureHost.get("codexBridge");
-  const codexReadiness = ensureCodexReady(startupBridge);
-  void codexReadiness
-    .catch((error) => {
-      startupBridge.beginStopping();
-      codexRecoverySupervisor.requestRecovery(
-        `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
 }
 
 void startDaemon().catch((error) => {

@@ -1135,7 +1135,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
     assert.ok(identity);
     const converted = repository.read({ threadId: identity.threadId, turnLimit: 10 });
     assert.ok(converted);
-    const canonicalAssetUrl = `/api/transcript-assets/codex/${identity.threadId}/${browseAsset.digest}.png`;
+    const canonicalAssetUrl = `/api/transcript-assets/${identity.threadId}/${browseAsset.digest}.png`;
     repository.settle([{
       ...browseObservation,
       asset: { ...browseAsset, storageKey: canonicalAssetUrl },

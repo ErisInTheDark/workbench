@@ -66,9 +66,9 @@ test("model capabilities reject invalid bounds at the daemon response boundary",
   context.after(() => assert.equal(diagnostics.length, 1));
   const valid = { data: [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }] };
   const client = new WorkbenchDaemonClient({ request: async <TResponse>() => valid as TResponse });
-  assert.deepEqual(await client.models.context(), valid);
+  assert.deepEqual(await client.models.context({ provider: "codex" }), valid);
   const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ data: [{ model: "model", defaultTokens: 1000000, maximumTokens: 128000 }] }) as TResponse });
-  await assert.rejects(malformed.models.context(), /response was invalid/);
+  await assert.rejects(malformed.models.context({ provider: "codex" }), /response was invalid/);
 });
 
 test("transport failures never fall back to app HTTP", async () => {

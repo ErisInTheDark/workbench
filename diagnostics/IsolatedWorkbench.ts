@@ -147,7 +147,7 @@ export default class IsolatedWorkbench {
     child.once("exit", () => { for (const observer of this.observers) observer(); });
     await this.until(() => {
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Isolated daemon exited ${child.exitCode}\n${this.log.slice(-12000)}`);
-      return this.log.slice(logOffset).includes("[codex-bridge] listening on");
+      return this.log.slice(logOffset).includes("[workbench-socket] listening on");
     });
     const client = new WorkbenchSocketClient();
     this.client = client;

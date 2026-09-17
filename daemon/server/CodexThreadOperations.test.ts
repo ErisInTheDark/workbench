@@ -61,6 +61,23 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   return { operations, threadId: thread.threadId, turnId };
 }
 
+for (const fails of [false, true]) {
+  test(`provider deletion translates only its owned thread and ${fails ? "propagates failure" : "settles"}`, async () => {
+    const requests: JsonRpcRequest[] = [];
+    const fixture = await threadFixture(async request => {
+      requests.push(request);
+      if (fails) throw new Error("deletion failed");
+      return {};
+    });
+    const deletion = fixture.operations.delete(fixture.threadId);
+    if (fails) await assert.rejects(deletion, /deletion failed/);
+    else await deletion;
+    assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
+      { method: "thread/delete", params: { threadId: "native-thread" } },
+    ]);
+  });
+}
+
 test("saved foreground history bypasses provider initialisation and preserves its page", async () => {
   const storedPage = {
     thread: { id: "wb-thread", turns: [], isDraft: false },
@@ -312,12 +329,9 @@ for (const rejected of [false, true]) {
           }
         },
       } as unknown as CodexAppServer,
-      bridgeUrl: "ws://127.0.0.1:1",
       resolveProjectFromCwd: async () => { throw new Error("Model reads must not resolve project ownership."); },
       handleWorkbenchRequest: async () => { throw new Error("Model reads must not enter Workbench thread admission."); },
       onNotification() {},
-      sendToClient() { throw new Error("Server operations must not require a browser client."); },
-      storageRoot: root,
     });
     const operations = new CodexThreadOperations({
       bridge,

@@ -66,7 +66,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual(graph.roots.map(({ scope }) => scope), [
     "server:turns",
     "server:database",
-    "harness:codex",
+    "server:codex/lifecycle",
   ]);
   const { nodes, parents } = flattenParents(graph.roots);
 
@@ -77,6 +77,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:codex/configuration",
     "server:codex/def",
     "server:codex/instructions",
+    "server:codex/lifecycle",
     "server:codex/recovery",
     "server:codex/tools",
     "server:commands",
@@ -88,17 +89,17 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:turns",
     "server:websocket",
   ]);
-  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:codex/recovery", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
-  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/lifecycle", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex/instructions")!], ["server:database"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:instructions")!], ["server:database"]);
   assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
-  assert.equal(parents.has("harness:codex"), false);
+  assert.deepEqual([...parents.get("harness:codex")!], ["server:codex/lifecycle"]);
   assert.deepEqual({
     lifecycle: nodes.get("server:turns")!.lifecycle,
     provides: nodes.get("server:turns")!.provides,

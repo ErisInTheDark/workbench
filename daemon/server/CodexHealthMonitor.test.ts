@@ -44,18 +44,48 @@ test("health monitor arms on success and signals only after the configured failu
   monitor.dispose();
 });
 
+test("a retired probe cannot affect resumed monitoring", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let rejectProbe!: (error: Error) => void;
+  const probe = new Promise<void>((_resolve, reject) => { rejectProbe = reject; });
+  const recoveries: string[] = [];
+  let probes = 0;
+  let rejectCurrent!: (error: Error) => void;
+  const current = new Promise<void>((_resolve, reject) => { rejectCurrent = reject; });
+  const monitor = new CodexHealthMonitor({
+    failureThreshold: 1,
+    intervalMs: 10,
+    isProbeAllowed: () => true,
+    isShuttingDown: () => false,
+    log: () => undefined,
+    logError: () => undefined,
+    probe: () => ++probes === 1 ? probe : current,
+    requestRecovery: reason => recoveries.push(reason),
+  });
+  monitor.start({ armed: true });
+  context.mock.timers.tick(1);
+  monitor.dispose();
+  monitor.start({ armed: true });
+  context.mock.timers.tick(1);
+  rejectProbe(new Error("old process failed"));
+  await Promise.resolve();
+  assert.deepEqual(recoveries, []);
+  assert.equal(probes, 2);
+  rejectCurrent(new Error("current process failed"));
+  await Promise.resolve();
+  assert.equal(recoveries.length, 1);
+  monitor.dispose();
+});
+
 test("health requests use their deadline without waiting behind another internal response", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-health-deadline-"));
   const sentRequests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send: (message: unknown) => sentRequests.push(message as JsonRpcRequest) } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:4500",
     handleWorkbenchRequest: async (request) => ({ id: request.id ?? null, error: { code: -32000, message: "Unexpected Workbench request." } }),
     onNotification: () => undefined,
     resolveProjectFromCwd: async () => { throw new Error("Project resolution is not expected in this test."); },
-    sendToClient: () => undefined,
-    storageRoot,
   });
   const deadline = assert.rejects(
     bridge.handleServerRequest({ id: "health", method: "account/read", params: {} }, { timeoutMs: 20 }),

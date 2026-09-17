@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { CodexJsonRpcResponse } from "../../shared/codex/protocol.ts";
+import type { WorkbenchRpcResponse } from "../../shared/workbench/workbench-rpc.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
 
 function deferred<T>() {
@@ -17,7 +17,7 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-function fixture(response: Promise<CodexJsonRpcResponse<unknown>>) {
+function fixture(response: Promise<WorkbenchRpcResponse<unknown>>) {
   let disposed = 0;
   const requests: Array<{ method: string; params: object }> = [];
   const urls: string[] = [];
@@ -54,7 +54,7 @@ test("surfaces RPC and contract failures before disposing", async () => {
 });
 
 test("bounds and cancels an unsettled health request", async () => {
-  const pending = deferred<CodexJsonRpcResponse<unknown>>();
+  const pending = deferred<WorkbenchRpcResponse<unknown>>();
   const scheduled: Array<() => void> = [];
   let disposed = 0;
   const client = new WorkbenchDaemonHealthClient({

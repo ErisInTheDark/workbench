@@ -35,7 +35,7 @@ const defaultOperations: WorkbenchAgentSkillCatalogOperations = {
 export default class WorkbenchAgentSkillCatalogController {
   constructor(
     private readonly resolveProjectById: (projectId: string) => Promise<ResolvedProject>,
-    private readonly containsGlobalGuidance: (sections: string[]) => Promise<boolean[]>,
+    private readonly containsGlobalGuidance: (provider: string, sections: string[]) => Promise<boolean[]>,
     private readonly operations = defaultOperations,
   ) {}
 
@@ -44,16 +44,16 @@ export default class WorkbenchAgentSkillCatalogController {
     return { data: await this.operations.listUserAgents(project) };
   }
 
-  async readAgent(projectId: string, agentPath: string) {
+  async readAgent(projectId: string, agentPath: string, provider: string) {
     const readAgent = agentPath.startsWith("library:")
       ? this.operations.readAgent(agentPath, "")
       : this.resolveProjectById(projectId).then((project) => this.operations.readAgent(agentPath, project.root));
     const data = await readAgent;
-    const [codexGlobalDuplicate] = await this.containsGlobalGuidance([data.prompt]);
-    return { codexGlobalDuplicate: codexGlobalDuplicate ?? false, data };
+    const [providerGlobalDuplicate] = await this.containsGlobalGuidance(provider, [data.prompt]);
+    return { providerGlobalDuplicate: providerGlobalDuplicate ?? false, data };
   }
 
-  async readSkills(projectId: string | null) {
+  async readSkills(projectId: string | null, provider: string) {
     const project = projectId ? await this.resolveProjectById(projectId) : null;
     const [projectSkills, instructionPacks] = await Promise.all([
       project && project.kind !== "workbench-library" ? this.operations.listProjectSkills(project.root) : Promise.resolve([]),
@@ -61,7 +61,7 @@ export default class WorkbenchAgentSkillCatalogController {
     ]);
     const [activeSkills, globallyIncluded] = await Promise.all([
       this.operations.listActiveSkills(projectSkills),
-      this.containsGlobalGuidance(instructionPacks.map(pack => pack.content)),
+      this.containsGlobalGuidance(provider, instructionPacks.map(pack => pack.content)),
     ]);
     const globallyPresent = instructionPacks
       .filter((_pack, index) => globallyIncluded[index])

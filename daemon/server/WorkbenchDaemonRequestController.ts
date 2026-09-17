@@ -28,7 +28,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-failures";
 import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
-import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
     WorkbenchThreadIdentityResolutionSchema,
     WorkbenchThreadIdentityResolveRequestSchema,
@@ -257,21 +257,19 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "models/list":
+        case "models/context/read":
         case "account/limits/read": {
           const key = installedProviderKeys.find(candidate => candidate === params.provider);
           if (!key || !this.owners.providers) throw new InvalidParamsError("The requested provider is unavailable.");
           const provider = this.owners.providers.get(key);
           if (request.method === "models/list") {
             result = { data: await provider.configuration.models.read() };
+          } else if (request.method === "models/context/read") {
+            result = { data: await provider.configuration.modelContext.read() };
           } else {
             if (!provider.account) throw new InvalidParamsError("The provider does not report account limits.");
             result = await provider.account.limits.read();
           }
-          break;
-        }
-        case "models/context/read": {
-          if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
-          result = { data: await this.owners.providers.get("codex").configuration.modelContext.read() };
           break;
         }
         case "thread/identity/resolve": {
@@ -387,8 +385,8 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "agents/list": result = await this.owners.agents.listAgents(requiredString(params, "projectId")); break;
-        case "agents/read": result = await this.owners.agents.readAgent(requiredString(params, "projectId"), requiredString(params, "agentPath")); break;
-        case "skills/read": result = await this.owners.agents.readSkills(typeof params.projectId === "string" ? params.projectId : null); break;
+        case "agents/read": result = await this.owners.agents.readAgent(requiredString(params, "projectId"), requiredString(params, "agentPath"), requiredString(params, "provider")); break;
+        case "skills/read": result = await this.owners.agents.readSkills(typeof params.projectId === "string" ? params.projectId : null, requiredString(params, "provider")); break;
         case "native/file/open": result = await this.owners.nativeFiles.open(openFileRequest(params)); break;
         case "native/file/reveal": result = await this.owners.nativeFiles.reveal({
           path: requiredString(params, "path"),
@@ -458,9 +456,10 @@ export default class WorkbenchDaemonRequestController {
   private async validateContextWindow(settings: WorkbenchComposerSettings, previous: WorkbenchComposerSettings | null) {
     const cap = settings.contextWindowTokens;
     if (cap == null || (previous?.harness === settings.harness && previous.model === settings.model && previous.contextWindowTokens === cap)) return;
-    if (settings.harness !== "codex") throw new InvalidParamsError("This provider does not support a configurable context window.");
+    const key = installedProviderKeys.find(key => key === settings.harness);
+    if (!key) throw new InvalidParamsError("The requested provider is unavailable.");
     if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
-    const capability = (await this.owners.providers.get("codex").configuration.modelContext.read()).find((entry) => entry.model === settings.model);
+    const capability = (await this.owners.providers.get(key).configuration.modelContext.read()).find((entry) => entry.model === settings.model);
     if (!capability) throw new InvalidParamsError("This model has no configurable context capability.");
     if (cap < capability.defaultTokens || cap > capability.maximumTokens || (cap - capability.defaultTokens) % 1000 !== 0) {
       throw new InvalidParamsError("Context window must be within the model bounds in 1K steps.");

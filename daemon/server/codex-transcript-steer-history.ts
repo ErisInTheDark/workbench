@@ -1,21 +1,21 @@
 /*
- * createSteerHistoryEntryFromRequest: admit one typed Workbench steer from a Codex request. Keywords: codex, transcript, steer, admission.
- * readSteerHistoryRequest: parse steer correlation without allocating transcript identity. Keywords: codex, steer, correlation.
- * getJsonRpcErrorMessage: read one bounded JSON-RPC steer failure. Keywords: codex, transcript, steer, error.
- * hasNativeSteerReconciliationEvidence: identify provider turns that can settle native steers. Keywords: codex, transcript, steer, provider.
- * reconcileNativeSteerEntriesForTurns: apply provider user-message and interruption evidence to native steers. Keywords: codex, transcript, steer, reconcile.
- * sortSteerEntries: order native and legacy steer history deterministically. Keywords: codex, transcript, steer, order.
- * updateMatchingPendingSteerEntriesForUserMessage: settle legacy steers by semantic user-input match. Keywords: codex, transcript, steer, legacy.
- * updateNativeSteerEntriesForInterruptedTurn: settle native steers from one interrupted provider turn. Keywords: codex, transcript, steer, interrupted.
- * updateNativeSteerEntriesForUserMessage: settle native steers from one provider user item. Keywords: codex, transcript, steer, delivery.
- * updatePendingSteerEntriesForInterruptedTurn: settle legacy steers from one interrupted provider turn. Keywords: codex, transcript, steer, interrupted.
- * updateSteerEntryStatus: apply one terminal or delivered steer state. Keywords: codex, transcript, steer, state.
+ * createSteerHistoryEntryFromRequest: admit a steer from a Codex request.
+ * readSteerHistoryRequest: parse steer correlation without allocating identity.
+ * getJsonRpcErrorMessage: read a bounded steer failure.
+ * hasNativeSteerReconciliationEvidence: identify turns that can settle steers.
+ * reconcileNativeSteerEntriesForTurns: reconcile delivery and interruption evidence.
+ * sortSteerEntries: order native and legacy steer history.
+ * updateMatchingPendingSteerEntriesForUserMessage: settle legacy steers by input match.
+ * updateNativeSteerEntriesForInterruptedTurn: settle native interrupted steers.
+ * updateNativeSteerEntriesForUserMessage: settle native delivered steers.
+ * updatePendingSteerEntriesForInterruptedTurn: settle legacy interrupted steers.
+ * updateSteerEntryStatus: apply terminal or delivered state.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
+import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";

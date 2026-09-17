@@ -8,8 +8,9 @@
  * - WorkbenchClient: compose browser domain owners, DOM/editor adapters, bridge recovery, and explorer publication.
  */
 
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
-import { getCurrentTurn } from "workbench-shared/codex/thread-state";
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
     ExplorerSnapshot,
     DeleteFileResponse,
@@ -100,7 +101,7 @@ function readInitialHarness(controller?: WorkbenchClientStateController): Workbe
   ));
   return record?.preference.key === "harness"
     ? record.preference.value
-    : "codex";
+    : defaultProviderKey;
 }
 
 function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary) {
@@ -474,7 +475,7 @@ export async function WorkbenchClient(
       emitExplorerStateChange();
     },
     createDraft: (project) => {
-      const draft = threadClient.createThread("codex", DraftIdSchema.parse(crypto.randomUUID()), { project });
+      const draft = threadClient.createThread(defaultProviderKey, DraftIdSchema.parse(crypto.randomUUID()), { project });
       applyThreadPayloadToCurrentView(draft);
       emitExplorerStateChange();
     },

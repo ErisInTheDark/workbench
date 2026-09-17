@@ -1,23 +1,16 @@
 /*
  * Exports:
- * - mapWorkbenchProviderRequest: resolve public references at ingress without changing payload or send ownership.
- * - mapNativeProviderResponse: project declared provider response references through committed identities.
+ * - resolveNativeReference: resolve retained or canonical thread identity with bounded failure context.
+ * - mapNativeQuestionnaire/mapNativeQuestionnaireHistory: project retained questionnaire identities.
  * - mapNativeThreadStateSnapshot: retain canonical state and derive legacy draft wire aliases.
  * - mapNativeThreadStateResult: derive draft wire aliases in canonical open and context responses.
  * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation and observation targets.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
  * - createWorkbenchQuestionnaireStatePorts: validate WB questionnaire ownership without live-turn admission.
  */
-import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { WorkbenchHarness, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
 import { getWorkbenchLifecycleTurnId, serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import { mapProviderThread, mapProviderTurn } from "./thread-identity-provider-mapping";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { mapCodexTranscriptObservation as mapNativeTranscriptObservation } from "./CodexProviderObservations";
 import type {
   WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot, WorkbenchDurableQuestionnaire,
   WorkbenchThreadStateRequest, WorkbenchThreadStateOpenResult, WorkbenchGlobalThreadStateOpenResult,
@@ -30,8 +23,8 @@ import {
 import { z } from "zod";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
-import { ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchItemIdSchema } from "workbench-shared/workbench/identity";
-import type { NativeThreadId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { ItemReferenceSchema, ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchItemIdSchema } from "workbench-shared/workbench/identity";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type { WorkbenchQuestionnaireControllerOptions } from "./WorkbenchQuestionnaireController";
 
@@ -94,15 +87,9 @@ export function createWorkbenchQuestionnaireStatePorts(
 export type NativeThreadStateIdentityOwners = NativeTranscriptIdentityOwners
   & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
 
-const admissionRequests = {
-  resumeRequest: "thread/resume",
-  startRequest: "turn/start",
-  steerRequest: "turn/steer",
-} as const;
-
 type ThreadIdentity = { harness: WorkbenchHarness; threadId: string };
 
-async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, identity: { threadId: string; harness?: WorkbenchHarness }, projectId?: string) {
+export async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, identity: { threadId: string; harness?: WorkbenchHarness }, projectId?: string) {
   const input = { ...identity, threadId: ThreadReferenceSchema.parse(identity.threadId), ...(projectId ? { projectId: ProjectIdSchema.parse(projectId) } : {}) };
   try {
     const thread = await owners.threads.resolve(input)
@@ -129,7 +116,7 @@ async function mapNativeTurnReference(owners: NativeThreadStateIdentityOwners, i
   return turn.turnId;
 }
 
-async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, questionnaire: Omit<WorkbenchDurableQuestionnaire, "turnId"> & { turnId: string | null }) {
+export async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, questionnaire: Omit<WorkbenchDurableQuestionnaire, "turnId"> & { turnId: string | null }) {
   const thread = await resolveNativeReference(owners, identity);
   const turnId = questionnaire.turnId === null ? null : await mapNativeTurnReference(owners, identity, questionnaire.turnId);
   let itemId = questionnaire.itemId;
@@ -152,7 +139,7 @@ async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwners, id
   return { ...questionnaire, turnId, itemId };
 }
 
-async function mapNativeQuestionnaireHistory(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, entry: WorkbenchQuestionnaireHistoryEntry): Promise<WorkbenchQuestionnaireHistoryEntry> {
+export async function mapNativeQuestionnaireHistory(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, entry: WorkbenchQuestionnaireHistoryEntry): Promise<WorkbenchQuestionnaireHistoryEntry> {
   const thread = await resolveNativeReference(owners, identity);
   const questionnaire = await mapNativeQuestionnaire(owners, identity, { ...entry, itemId: resolveQuestionnaireHistoryItemId(entry) });
   const turnId = questionnaire.turnId!;
@@ -278,153 +265,4 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
     }) } as WorkbenchThreadStateRequest;
   }
   return result;
-}
-
-export async function mapNativeProviderResponse(
-  owners: NativeTranscriptIdentityOwners,
-  harness: WorkbenchHarness,
-  request: JsonRpcRequest,
-  response: JsonRpcResponse,
-): Promise<JsonRpcResponse> {
-  if (response.error || !response.result || typeof response.result !== "object" || Array.isArray(response.result)) return response;
-  const result = response.result as Record<string, unknown>;
-  const params = request.params && typeof request.params === "object" && !Array.isArray(request.params)
-    ? request.params as Record<string, unknown> : {};
-  const native = () => {
-    if (typeof params.threadId !== "string") throw new Error("Provider response requires its originating thread.");
-    return owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(params.threadId));
-  };
-  if ((request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD)
-    && result.thread && (result.thread as Thread).id === owners.threads.workbenchIdForNative(native())) {
-    return response;
-  }
-  let mapped = { ...result };
-  if (typeof result.threadId === "string") {
-    mapped.threadId = owners.threads.workbenchIdForNative(owners.threads.knownNativeBinding(harness, NativeThreadIdSchema.parse(result.threadId)));
-  }
-  if (result.thread) {
-    const thread = result.thread as Thread;
-    mapped.thread = mapProviderThread(owners, { harness, nativeLocation: thread.cwd }, thread);
-  }
-  if (request.method === "thread/list") {
-    mapped.data = (result.data as Thread[]).map((thread) => mapProviderThread(owners, { harness, nativeLocation: thread.cwd }, thread));
-  }
-  if (request.method === "thread/turns/list") {
-    mapped.data = (result.data as Turn[]).map((turn) => mapProviderTurn(owners, native(), turn));
-  }
-  if (request.method === "questionnaire/list") {
-    const pending = result.data as Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
-    mapped.data = await Promise.all(pending.map(async (entry) => {
-      const identity = { harness, threadId: entry.threadId };
-      const thread = await resolveNativeReference(owners, identity);
-      return { ...entry, ...await mapNativeQuestionnaire(owners, identity, entry), threadId: thread.threadId };
-    }));
-  }
-  if (result.turn) mapped.turn = mapProviderTurn(owners, native(), result.turn as Turn);
-  if (typeof result.turnId === "string") {
-    mapped.turnId = owners.threads.workbenchTurnIdForNative({ ...native(), nativeTurnId: NativeTurnIdSchema.parse(result.turnId) });
-  }
-  if (request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
-    const context = result as unknown as WorkbenchThreadContextReadResponse;
-    const binding = native();
-    const mapTurn = (nativeTurnId: string) => owners.threads.workbenchTurnIdForNative({ ...binding, nativeTurnId: NativeTurnIdSchema.parse(nativeTurnId) });
-    mapped = {
-      ...mapped,
-      questionnaireEntries: await Promise.all(context.questionnaireEntries.map((entry) => (
-        mapNativeQuestionnaireHistory(owners, { harness, threadId: binding.nativeThreadId }, entry)
-      ))),
-      steerEntries: context.steerEntries.map((entry) => {
-        const fact = mapNativeTranscriptObservation(owners, binding, {
-          kind: "steer", entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
-          observedAt: entry.resolvedAt ?? entry.attemptedAt,
-        });
-        if (fact.kind !== "steer") throw new Error("Steer mapping changed its kind.");
-        return fact.entry;
-      }),
-      browseResultEntries: context.browseResultEntries.map((entry) => {
-        const fact = mapNativeTranscriptObservation(owners, binding, {
-          kind: "browse", entry: { ...entry, threadId: NativeThreadIdSchema.parse(entry.threadId), turnId: NativeTurnIdSchema.parse(entry.turnId) },
-        });
-        if (fact.kind !== "browse") throw new Error("Browse mapping changed its kind.");
-        return fact.entry;
-      }),
-      ...(context.entryScope?.mode === "turns" ? { entryScope: { ...context.entryScope, turnIds: context.entryScope.turnIds.map(mapTurn) } } : {}),
-      ...(typeof result.nextCursor === "string" ? { nextCursor: mapTurn(result.nextCursor) } : {}),
-    };
-  }
-  return { ...response, result: mapped };
-}
-
-export async function mapWorkbenchProviderRequest(
-  threads: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">,
-  harness: WorkbenchHarness,
-  request: JsonRpcRequest,
-): Promise<{ harness: WorkbenchHarness; request: JsonRpcRequest }> {
-  if (!request.params || typeof request.params !== "object" || Array.isArray(request.params)) return { harness, request };
-  const params = request.params as Record<string, unknown>;
-  if (typeof params.threadId !== "string" || !params.threadId.trim()) return { harness, request };
-  const thread = await threads.resolve({
-    threadId: ThreadReferenceSchema.parse(params.threadId), harness,
-    ...(typeof params.projectId === "string" ? { projectId: ProjectIdSchema.parse(params.projectId) } : {}),
-  });
-  if (!thread) throw new Error("Workbench thread identity has not been observed.");
-  const turnFields = request.method === WORKBENCH_THREAD_PAGE_READ_METHOD
-    ? ["cursor", "turnId", "expectedTurnId"] : ["turnId", "expectedTurnId"];
-  const turns = await Promise.all(turnFields.flatMap((field) => {
-    const reference = params[field];
-    if (typeof reference !== "string" || !reference.trim()) return [];
-    return [(async () => {
-      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(reference.trim()) });
-      if (!turn) throw new Error("Requested turn does not belong to the Workbench thread.");
-      if (turn.native.nativeTurnId === null) throw new Error("Requested Workbench turn has no native execution.");
-      return { field, turn };
-    })()];
-  }));
-  const requestedTurnIds = request.method === "workbench/transcript/materialize" && Array.isArray(params.turnIds)
-    ? await Promise.all(params.turnIds.map(async (turnId) => {
-      if (typeof turnId !== "string") throw new Error("Transcript turn references must be strings.");
-      const turn = await threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId) });
-      if (!turn?.native.nativeTurnId) throw new Error("Requested transcript turn has no native execution.");
-      return turn;
-    })) : [];
-  const native = turns[0]?.turn.native ?? requestedTurnIds[0]?.native ?? thread.bindings[0];
-  if (!native) throw new Error("Workbench thread has no native destination.");
-  const mappedParams: Record<string, unknown> = { ...params, threadId: native.nativeThreadId };
-  for (const { field, turn } of turns) {
-    if (turn.native.harness !== native.harness || turn.native.nativeLocation !== native.nativeLocation
-      || turn.native.nativeThreadId !== native.nativeThreadId) {
-      throw new Error("Requested turns belong to different native executions.");
-    }
-    mappedParams[field] = turn.native.nativeTurnId;
-  }
-  if (requestedTurnIds.length) {
-    if (requestedTurnIds.some((turn) => turn.native.harness !== native.harness
-      || turn.native.nativeLocation !== native.nativeLocation || turn.native.nativeThreadId !== native.nativeThreadId)) {
-      throw new Error("Transcript materialisation must target one native execution per request.");
-    }
-    mappedParams.turnIds = requestedTurnIds.map((turn) => turn.native.nativeTurnId);
-  }
-  if (request.method === "workbench/codex/message/admit") {
-    await Promise.all(Object.entries(admissionRequests).map(async ([field, method]) => {
-      const nested = params[field];
-      if (field === "steerRequest" && (nested === null || nested === undefined)) return;
-      if (!nested || typeof nested !== "object" || Array.isArray(nested) || !("method" in nested) || nested.method !== method) {
-        throw new Error(`Message admission requires its ${field}.`);
-      }
-      if (field === "steerRequest" && "params" in nested && nested.params
-        && typeof nested.params === "object" && !Array.isArray(nested.params) && !("threadId" in nested.params)) {
-        // This is a template, not a routed turn/steer. The admission owner supplies
-        // the checked thread and current turn only after reading provider state.
-        mappedParams[field] = nested;
-        return;
-      }
-      const mapped = await mapWorkbenchProviderRequest(threads, harness, nested as JsonRpcRequest);
-      const target = mapped.request.params as Record<string, unknown> | undefined;
-      if (mapped.harness !== "codex" || native.harness !== "codex" || target?.threadId !== native.nativeThreadId) {
-        throw new Error("Message admission requests must target the same thread.");
-      }
-      mappedParams[field] = mapped.request;
-    }));
-  }
-  return { harness: WorkbenchHarnessSchema.parse(native.harness), request: { ...request, params: mappedParams } };
 }

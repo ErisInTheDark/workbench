@@ -28,7 +28,7 @@ import type {
 import {
   isSupportedWorkbenchTranscriptItem,
   normalizeThreadItems,
-} from "workbench-shared/codex/thread-item-normalization";
+} from "workbench-shared/workbench/thread/thread-item-normalization";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types.ts";

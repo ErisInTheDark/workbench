@@ -68,7 +68,7 @@ export interface WorkbenchInstructionPack {
 }
 
 export interface WorkbenchAgentDefinitionResponse {
-  codexGlobalDuplicate: boolean;
+  providerGlobalDuplicate: boolean;
   data: WorkbenchAgentDefinition;
 }
 
@@ -125,11 +125,11 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/working-tree/diff": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreeDiff };
   "git/working-tree/preview": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreePreview };
   "git/working-tree/mutate": { params: import("../git/working-tree-contracts").WorkingTreeMutation; result: import("../git/working-tree-contracts").WorkingTreeResult };
-  "models/context/read": { params: object; result: { data: WorkbenchModelContextCapability[] } };
+  "models/context/read": { params: { provider: string }; result: { data: WorkbenchModelContextCapability[] } };
   "models/list": { params: { provider: string }; result: { data: WorkbenchModelOption[] } };
   "account/limits/read": { params: { provider: string }; result: WorkbenchAccountLimits };
   "agents/list": { params: { projectId: string }; result: { data: WorkbenchAgentOption[] } };
-  "agents/read": { params: { agentPath: string; projectId: string }; result: WorkbenchAgentDefinitionResponse };
+  "agents/read": { params: { agentPath: string; projectId: string; provider: string }; result: WorkbenchAgentDefinitionResponse };
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
   "browse/sessions/read": { params: WorkbenchBrowseSessionListRequest; result: WorkbenchBrowseSessionListResponse };
   "browse/sessions/stop": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
@@ -173,7 +173,7 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
     params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
     result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
   };
-  "skills/read": { params: { projectId: string | null }; result: WorkbenchSkillCatalogResponse };
+  "skills/read": { params: { projectId: string | null; provider: string }; result: WorkbenchSkillCatalogResponse };
   "thread/identity/resolve": { params: WorkbenchThreadIdentityResolveRequest; result: { data: WorkbenchThreadIdentityResolution | null } };
 }
 

@@ -137,6 +137,7 @@ export const workbenchThreadActions = {
   "thread/message/submit": { params: WorkbenchThreadMessageSchema, result: WorkbenchThreadMessageResultSchema },
   "thread/title/set": { params: WorkbenchThreadTargetSchema.extend({ title: z.string() }), result: ok },
   "thread/compact": { params: WorkbenchThreadTargetSchema, result: ok },
+  "thread/provider/delete": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/stop": { params: WorkbenchThreadStopSchema, result: ok },
   "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },
   "thread/goal/update": { params: WorkbenchProviderGoalUpdateSchema, result: goalResult },

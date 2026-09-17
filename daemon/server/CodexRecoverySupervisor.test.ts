@@ -61,3 +61,31 @@ test("recovery supervisor retries failures and disposal cancels later retries", 
   await flushMicrotasks();
   assert.equal(attempts, 2);
 });
+
+test("failed replacement resumes pending recovery without admitting work during handoff", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls: string[] = [];
+  const supervisor = new CodexRecoverySupervisor({
+    initialRetryDelayMs: 10,
+    isShuttingDown: () => false,
+    log: () => undefined,
+    logError: () => undefined,
+    maxRetryDelayMs: 40,
+    recover: async reason => {
+      calls.push(reason);
+      if (calls.length === 1) throw new Error("replacement failed");
+    },
+  });
+  supervisor.requestRecovery("process exited");
+  await flushMicrotasks();
+  supervisor.pause();
+  supervisor.requestRecovery("latest exit");
+  context.mock.timers.tick(100);
+  await flushMicrotasks();
+  assert.deepEqual(calls, ["process exited"]);
+  supervisor.resume();
+  context.mock.timers.tick(10);
+  await flushMicrotasks();
+  assert.deepEqual(calls, ["process exited", "latest exit"]);
+  supervisor.dispose();
+});

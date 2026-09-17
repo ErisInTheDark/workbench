@@ -264,7 +264,7 @@ test("failed provider attempt stays visible while canonical content settles its 
   const provider = { ...thread(), harness: "copilot" as const, source: "copilot" };
   const store = ThreadOptimisticInputStore();
   const failed = store.enqueueSteer(provider, "turn", input("same"), "failed");
-  store.enqueueSteer(provider, "turn", input("same"));
-  const projected = store.apply({ ...provider, turns: [{ ...provider.turns[0]!, items: [user("canonical", null, "same")] }] }, []);
+  const retry = store.enqueueSteer(provider, "turn", input("same"));
+  const projected = store.apply({ ...provider, turns: [{ ...provider.turns[0]!, items: [user("canonical", retry.handle, "same")] }] }, []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical", failed.item.id]);
 });

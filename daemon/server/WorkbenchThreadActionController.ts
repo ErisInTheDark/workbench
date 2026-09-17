@@ -115,6 +115,13 @@ export default class WorkbenchThreadActionController {
       await target.provider.threads.compact(target.identity.threadId);
       return { ok: true };
     },
+    "thread/provider/delete": async input => {
+      const target = await this.target(input.threadId);
+      if (target.identity.bindings.length !== 1) throw new Error("Provider deletion requires one unambiguous thread binding.");
+      if (!target.provider.threads.delete) throw new Error("This provider does not support deleting its threads.");
+      await target.provider.threads.delete(target.identity.threadId);
+      return { ok: true };
+    },
     "thread/stop": (input, connectionId) => this.stop(input, connectionId),
     "thread/goal/read": async input => {
       const target = await this.target(input.threadId);

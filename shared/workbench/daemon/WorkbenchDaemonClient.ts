@@ -92,7 +92,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),
     }).strict();
     case "agents/list": return z.object({ data: z.array(recordSchema) }).strict();
-    case "agents/read": return z.object({ codexGlobalDuplicate: z.boolean(), data: recordSchema }).strict();
+    case "agents/read": return z.object({ providerGlobalDuplicate: z.boolean(), data: recordSchema }).strict();
     case "skills/read": return z.object({
       data: z.array(recordSchema), instructionPacks: z.array(recordSchema), instructions: z.string(),
     }).strict();
@@ -130,7 +130,7 @@ class WorkbenchDaemonClient {
 
   readonly models = {
     list: (provider: string) => this.request("models/list", { provider }),
-    context: () => this.request("models/context/read", {}),
+    context: (params: WorkbenchDaemonParams<"models/context/read">) => this.request("models/context/read", params),
   };
 
   readonly account = {
@@ -153,6 +153,7 @@ class WorkbenchDaemonClient {
     message: (params: WorkbenchDaemonParams<"thread/message/submit">) => this.request("thread/message/submit", params),
     title: (params: WorkbenchDaemonParams<"thread/title/set">) => this.request("thread/title/set", params),
     compact: (params: WorkbenchDaemonParams<"thread/compact">) => this.request("thread/compact", params),
+    deleteProvider: (params: WorkbenchDaemonParams<"thread/provider/delete">) => this.request("thread/provider/delete", params),
     stop: (params: WorkbenchDaemonParams<"thread/stop">) => this.request("thread/stop", params),
     goal: {
       read: (params: WorkbenchDaemonParams<"thread/goal/read">) => this.request("thread/goal/read", params),

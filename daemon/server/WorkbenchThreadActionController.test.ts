@@ -66,12 +66,36 @@ function fixture(providerWarning?: string) {
     warn: message => warnings.push(message),
   };
   return {
+    provider, owners,
     controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder,
     failInterrupt: () => { interruptFailure = true; },
     failSettlement: () => { settlementFailure = true; },
     failTitle: () => { titleFailure = true; },
   };
 }
+
+test("provider deletion resolves aliases without mutating WB state and preserves failures", async () => {
+  const f = fixture();
+  const deleted: string[] = [];
+  f.provider.threads.delete = async threadId => { deleted.push(threadId); };
+  assert.deepEqual(await f.controller.handle("thread/provider/delete", { threadId: "native-thread" }), { ok: true });
+  assert.deepEqual(deleted, ["wb-thread"]);
+  assert.deepEqual(f.mutations, []);
+  f.provider.threads.delete = async () => { throw new Error("provider refused deletion"); };
+  await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /provider refused deletion/);
+  assert.deepEqual(f.mutations, []);
+});
+
+test("provider deletion rejects unsupported and ambiguous targets before any destructive call", async () => {
+  const f = fixture();
+  await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /does not support/);
+  const identity = await f.owners.identities.resolve({ threadId: WorkbenchThreadIdSchema.parse("wb-thread") });
+  assert.ok(identity);
+  f.owners.identities.resolve = async () => ({ ...identity, bindings: [...identity.bindings, ...identity.bindings] });
+  f.provider.threads.delete = async () => assert.fail("Ambiguous deletion must not reach the provider");
+  await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /unambiguous/);
+  assert.deepEqual(f.mutations, []);
+});
 
 test("accepted messages retain WB identity and are not resent when state settlement fails", async () => {
   const f = fixture();

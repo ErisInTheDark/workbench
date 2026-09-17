@@ -575,6 +575,7 @@ test("provider changes await capability loading and install the destination draf
       id: "native/default", displayName: "Default", description: "", hidden: false, isDefault: true,
       supportsPersonality: false, supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
       supportsVision: false, supportsFastMode: false, inputModalities: ["text"], maxContextWindowTokens: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+      contextWindow: { defaultTokens: 200_000, maximumTokens: 400_000 },
     }];
   });
   let ready = false;
@@ -585,7 +586,7 @@ test("provider changes await capability loading and install the destination draf
   assert.equal(await changing, true);
   await waiting;
   assert.deepEqual(controller.resolveSettings({ ...slot, harness: "opencode" }), {
-    harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null, contextWindowTokens: null,
+    harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null, contextWindowTokens: 200_000,
   });
   controller.dispose();
 });

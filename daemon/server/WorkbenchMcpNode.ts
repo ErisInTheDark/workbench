@@ -14,7 +14,6 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
-  "bridgeRequest",
   "toolRevision",
   "database",
   "gitArc",
@@ -67,7 +66,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     });
     const daemonHttp = new WorkbenchDaemonHttpRouter({
       agentCommand,
-      bridgeRequest: build.get("bridgeRequest"),
       gitArc: build.get("gitArc"),
       mcp,
       projectCatalog: build.get("projectCatalog"),

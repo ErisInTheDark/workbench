@@ -7,7 +7,7 @@
  * - createSqliteWorkbenchThreadRecallRef/readSqliteWorkbenchThreadRecallRef: encode and decode SQLite record refs.
  */
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchThreadContextBundle,

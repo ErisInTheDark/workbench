@@ -22,22 +22,26 @@ test("queued native recovery survives replacement as captured context, never as 
   const context = {
     logTurnRecovery: (message: string) => assert.fail(message),
     reportTurnRecoveryFailure: async () => assert.fail("unexpected recovery failure"),
-    harnessPorts: { codex: { request: async (request: JsonRpcRequest) => {
-      requests.push(request);
-      return { id: request.id, result: request.method === "thread/read"
-        ? { thread: { turns: [{ id: "native-turn", items: [], status: "interrupted" }] } }
-        : { kind: "started" } };
-    } } },
+    isHardReloadPending: () => false,
   } as unknown as DaemonProcessContext;
   const native = new ReloadableNode({ ...CodexRecoveryNode, children: [] });
   const graph = () => defineReloadableNodeGraph([
     new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
       access: "agent", children: [native], description: "Shared recovery dependencies", lifecycle: "atomic",
-      provides: ["turnRecovery", "threadIdentity"], requires: [], safeAll: true,
+      provides: ["turnRecovery", "threadIdentity", "codexBridge"], requires: [], safeAll: true,
       scope: "server:test-recovery-parent", sources: "",
       create: () => ({
         registrations: {
           turnRecovery: coordinator,
+          codexBridge: {
+            ensureInitialized: async () => undefined,
+            handleServerRequest: async (request: JsonRpcRequest) => {
+              requests.push(request);
+              return { id: request.id, result: request.method === "thread/read"
+                ? { thread: { turns: [{ id: "native-turn", items: [], status: "interrupted" }] } }
+                : { kind: "started" } };
+            },
+          } as unknown as DaemonRuntimeObjects["codexBridge"],
           threadIdentity: { resolve: async () => ({
             threadId: "wb-thread", bindings: [{ harness: "codex", nativeThreadId: "native-thread" }],
           }) } as unknown as DaemonRuntimeObjects["threadIdentity"],

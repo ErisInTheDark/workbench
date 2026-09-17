@@ -4,9 +4,7 @@
  */
 import type http from "node:http";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-
-const THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
-const ASSET_PATTERN = /^[a-f0-9]{64}\.(?:png|jpg|webp|gif)$/u;
+import { parseTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 
 function sendJson(response: http.ServerResponse, status: number, error: string) {
   response.writeHead(status, { "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" });
@@ -19,14 +17,12 @@ export default class WorkbenchTranscriptAssetController {
   ) {}
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const match = /^\/daemon\/transcript-assets\/codex\/([^/]+)\/([^/]+)$/u.exec(new URL(request.url ?? "/", "http://localhost").pathname);
-    const threadId = match?.[1] ?? "";
-    const asset = match?.[2] ?? "";
-    if (!THREAD_PATTERN.test(threadId) || !ASSET_PATTERN.test(asset)) {
+    const address = parseTranscriptAssetAddress(new URL(request.url ?? "/", "http://localhost").pathname);
+    if (!address || address.surface !== "daemon") {
       sendJson(response, 400, "Invalid transcript asset path.");
       return;
     }
-    const content = await this.assets.readTranscriptAsset({ threadId, assetName: asset });
+    const content = await this.assets.readTranscriptAsset({ threadId: address.threadId, assetName: address.assetName });
     if (content) {
       response.writeHead(200, {
         "Cache-Control": "public, max-age=31536000, immutable",

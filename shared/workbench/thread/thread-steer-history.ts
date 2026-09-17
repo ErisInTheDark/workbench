@@ -145,10 +145,6 @@ export function applySteerHistoryToThread<Payload extends ThreadPayloadData<stri
   thread: Payload,
   entries: WorkbenchSteerHistoryEntry[],
 ) {
-  if (thread.harness !== "codex") {
-    return thread;
-  }
-
   const entriesByTurnId = new Map<string, WorkbenchSteerHistoryEntry[]>();
   for (const entry of entries) {
     if (entry.threadId !== thread.id) {

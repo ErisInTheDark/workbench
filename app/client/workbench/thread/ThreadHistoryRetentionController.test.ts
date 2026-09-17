@@ -27,7 +27,7 @@ function thread(completedAtSeconds: readonly number[]): ThreadPayload {
   const turnHistory = completedAtSeconds.map((completedAt, index) => history(`turn-${index}`, completedAt));
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    harness: "codex", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false,
+    harness: "fixture-provider", id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), isDraft: false,
     model: null, name: null, path: null, preview: "", reasoningEffort: null, serviceTier: null, source: "codex",
     status: "idle", tokenUsage: null, turnHistory,
     turns: turnHistory.map((entry) => ({

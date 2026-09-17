@@ -2,6 +2,7 @@
  * Exports:
  * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute structured commands while preserving direct-port lifecycles.
  */
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -212,7 +213,7 @@ export default class WorkbenchAgentCommandController {
       const argv = form.getAll("arg");
       const cwd = form.get("cwd")?.trim() || "";
       const callerThreadId = form.get("callerThreadId")?.trim() || null;
-      const callerHarness = form.get("callerHarness")?.trim() || "codex";
+      const callerHarness = form.get("callerHarness")?.trim() || defaultProviderKey;
       const workbenchOrigin = form.get("workbenchOrigin")?.trim() || this.daemonOrigin;
       active.label = `wb ${argv[0]?.trim() || "command"}`;
       if (!cwd || argv.length > 256 || argv.some((arg) => arg.length > 65_536 || arg.includes("\0"))) {

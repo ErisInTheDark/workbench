@@ -2,16 +2,17 @@
  * Exports:
  * - default CodexThreadPageReadController: own page imports and detached refreshes, exact-key single-flight, and reload draining.
  */
-import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
+import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
+
 
 export default class CodexThreadPageReadController {
   private acceptingReads = true;
   private generation = new AbortController();
-  private readonly activeReads = new Set<Promise<WorkbenchThreadPageResponse>>();
-  private readonly keyedReads = new Map<string, Promise<WorkbenchThreadPageResponse>>();
+  private readonly activeReads = new Set<Promise<CodexThreadPageResponse>>();
+  private readonly keyedReads = new Map<string, Promise<CodexThreadPageResponse>>();
 
   refresh(
-    read: (signal: AbortSignal) => Promise<WorkbenchThreadPageResponse>,
+    read: (signal: AbortSignal) => Promise<CodexThreadPageResponse>,
     key: string,
     report: (error: unknown) => void,
   ) {
@@ -23,7 +24,7 @@ export default class CodexThreadPageReadController {
   }
 
   run(
-    read: (signal: AbortSignal) => Promise<WorkbenchThreadPageResponse>,
+    read: (signal: AbortSignal) => Promise<CodexThreadPageResponse>,
     options: { key?: string } = {},
   ) {
     if (!this.acceptingReads) {
@@ -49,7 +50,7 @@ export default class CodexThreadPageReadController {
       }
       throw error;
     });
-    let activeRead!: Promise<WorkbenchThreadPageResponse>;
+    let activeRead!: Promise<CodexThreadPageResponse>;
     activeRead = Promise.race([work, cancelled]).finally(() => {
       signal.removeEventListener("abort", onAbort);
       this.activeReads.delete(activeRead);

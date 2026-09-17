@@ -3,8 +3,8 @@
  * - WorkbenchDaemonHealthClientOptions: injectable socket and timer edge for runner tests.
  * - default WorkbenchDaemonHealthClient: perform one bounded typed health round trip over the existing shared socket client.
  */
-import { CodexAppServerClient } from "../../shared/codex/app-server-client.ts";
-import { isCodexJsonRpcFailure, type CodexJsonRpcResponse } from "../../shared/codex/protocol.ts";
+import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient.ts";
+import { isWorkbenchRpcFailure, type WorkbenchRpcResponse } from "../../shared/workbench/workbench-rpc.ts";
 import {
   WORKBENCH_DAEMON_HEALTH_METHOD,
   WorkbenchDaemonHealthResultSchema,
@@ -15,8 +15,7 @@ interface HealthSocketClient {
   dispose(): void;
   sendRequest(
     message: { method: string; params: object },
-    options: { socketOnly: true },
-  ): Promise<CodexJsonRpcResponse<unknown>>;
+  ): Promise<WorkbenchRpcResponse<unknown>>;
 }
 
 type Timer = ReturnType<typeof globalThis.setTimeout>;
@@ -34,7 +33,7 @@ export default class WorkbenchDaemonHealthClient {
 
   constructor(options: WorkbenchDaemonHealthClientOptions = {}) {
     this.cancelTimer = options.clearTimeout ?? globalThis.clearTimeout;
-    this.createClient = options.createClient ?? (() => new CodexAppServerClient());
+    this.createClient = options.createClient ?? (() => new WorkbenchSocketClient());
     this.scheduleTimer = options.setTimeout ?? globalThis.setTimeout;
   }
 
@@ -61,7 +60,7 @@ export default class WorkbenchDaemonHealthClient {
         this.request(client, url),
         interrupted,
       ]);
-      if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+      if (isWorkbenchRpcFailure(response)) throw new Error(response.error.message);
       const parsed = WorkbenchDaemonHealthResultSchema.safeParse(response.result);
       if (!parsed.success) throw new Error("Daemon WebSocket health response was invalid.");
       return parsed.data;
@@ -72,11 +71,11 @@ export default class WorkbenchDaemonHealthClient {
     }
   }
 
-  private async request(client: HealthSocketClient, url: string): Promise<CodexJsonRpcResponse<unknown>> {
+  private async request(client: HealthSocketClient, url: string): Promise<WorkbenchRpcResponse<unknown>> {
     await client.connectSocket(url);
     return await client.sendRequest({
       method: WORKBENCH_DAEMON_HEALTH_METHOD,
       params: {},
-    }, { socketOnly: true });
+    });
   }
 }

@@ -19,7 +19,6 @@ interface ProjectCatalogHttpController extends HttpController {
 
 export interface WorkbenchDaemonHttpRouterOptions {
   agentCommand: HttpController;
-  bridgeRequest: HttpController;
   gitArc: HttpController;
   mcp: HttpController;
   projectCatalog: ProjectCatalogHttpController;
@@ -71,12 +70,6 @@ export default class WorkbenchDaemonHttpRouter {
         handle: (request, response) => options.mcp.handleHttpRequest(request, response),
         methods: ["GET", "POST", "DELETE"],
         path: "/daemon/mcp",
-      },
-      {
-        errorMessage: "Bridge request failed.",
-        handle: (request, response) => options.bridgeRequest.handleHttpRequest(request, response),
-        methods: ["POST"],
-        path: "/daemon/bridge-request",
       },
       {
         errorMessage: "Project discovery failed.",

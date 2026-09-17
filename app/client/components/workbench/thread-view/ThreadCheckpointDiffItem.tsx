@@ -4,6 +4,7 @@
  */
 "use client";
 
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useContext, useEffect, useMemo, useState } from "react";
 
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -84,7 +85,7 @@ export default function ThreadCheckpointDiffItem({
     void daemon.git.arc.diffArtifact(buildFullDiffRequestBody({
         cwd,
         diffArtifactId,
-        harness: gitArcPresentation?.harness ?? "codex",
+        harness: gitArcPresentation?.harness ?? defaultProviderKey,
         threadId,
       })).then((text) => {
       if (!abortController.signal.aborted) {

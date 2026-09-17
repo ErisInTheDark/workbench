@@ -5,10 +5,9 @@
 
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem, JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
 import { z } from "zod";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -259,7 +258,7 @@ function createLabTurn(items: ThreadItem[]): Turn {
 function createLabThreadPayload(turns: Turn[], cwd = "."): ThreadPayload<WorkbenchThreadId> {
   return {
     id: LabThreadIdSchema.parse("thread-render-lab"),
-    harness: "codex",
+    harness: defaultProviderKey,
     name: "Thread render lab",
     preview: "Pasted thread data",
     createdAt: 0,
@@ -292,7 +291,7 @@ function createLabThreadPayload(turns: Turn[], cwd = "."): ThreadPayload<Workben
 
 function readHarness(record: JsonObject, key: string): WorkbenchHarness {
   const value = readString(record, key);
-  return ProviderKeySchema.parse(value ?? "codex");
+  return ProviderKeySchema.parse(value ?? defaultProviderKey);
 }
 
 function normalizeTurn(value: JsonValue, index = 0): Turn | null {
@@ -367,14 +366,6 @@ function normalizeItems(values: JsonValue[]): ThreadItem[] {
 function normalizeThreadPayload(value: JsonValue): ThreadPayload | null {
   if (!isJsonObject(value) || !Array.isArray(value.turns)) {
     return null;
-  }
-
-  if (readString(value, "harness")) {
-    return createThreadPayloadFromRecord(value);
-  }
-
-  if (value.status !== undefined && isJsonObject(value.status)) {
-    return toThreadPayload({ ...value as Thread, id: LabThreadIdSchema.parse(value.id) }, "codex");
   }
 
   return createThreadPayloadFromRecord(value);

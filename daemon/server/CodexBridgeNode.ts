@@ -10,6 +10,8 @@ import CodexProvider from "./CodexProvider";
 import CodexToolsNode from "./CodexToolsNode";
 import CodexThreadOperations from "./CodexThreadOperations";
 import CodexConfigurationController from "./CodexConfigurationController";
+import CodexHealthMonitor from "./CodexHealthMonitor";
+import { log, logError } from "./process-helpers";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
@@ -81,6 +83,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   children: [CodexProvider, CodexToolsNode],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
+    const lifecycle = build.get("codexLifecycle");
     const toolRevision = build.get("toolRevision");
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(() => toolRevision.revision);
     const codexSandboxNetwork = build.get("codexSandboxNetwork");
@@ -201,7 +204,25 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return { ...requests, resumeRequest, startRequest };
     };
     bridge = new CodexStdioBridge({
-      ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
+      appServer: parent.appServer,
+      initialState: build.handoffState as CodexStdioBridgeReloadState | undefined,
+      handleWorkbenchRequest: request => build.run("subagents", feature => feature.handleRequest(request), `subagents: ${request.method}`),
+      resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+      onNotification: (notification, facts, nativeNotification) => {
+        turnRecovery.observeNotification("codex", nativeNotification);
+        context.broadcastProviderNotification("codex", notification);
+        void persist(async () => {
+          let lifecycle;
+          try {
+            lifecycle = await build.get("providerObservations").observe("codex", facts);
+          } catch (error) {
+            await turnRecovery.completeObservedTurn("codex", nativeNotification, null);
+            throw error;
+          }
+          await turnRecovery.completeObservedTurn("codex", nativeNotification, lifecycle);
+        }).catch(error => logError("thread-state",
+          `failed to observe Codex notification: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+      },
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       transcriptAssets: build.get("database"),
       providerObservations: new CodexProviderObservations({ threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") }),
@@ -285,6 +306,24 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       request: (method, params, options) => threadOperations.requestNative(method, params, options),
       warn: message => console.warn(message),
     });
+    const health = new CodexHealthMonitor({
+      failureThreshold: 10,
+      intervalMs: 60_000,
+      isProbeAllowed: () => build.lease.isCurrent() && parent.isAvailable() && !parent.isTransitioning() && !context.isHardReloadPending(),
+      isShuttingDown: () => context.isShuttingDown() || !build.lease.isCurrent(),
+      log: message => log("codex-health", message),
+      logError: message => logError("codex-health", message),
+      probe: signal => persist(async () => {
+        await lifecycle.initialize(bridge);
+        signal.throwIfAborted();
+        const response = await bridge.handleServerRequest(
+          { id: "codex-health", method: "account/read", params: {} },
+          { signal, timeoutMs: 10_000 },
+        );
+        if (response.error) throw new Error(response.error.message);
+      }),
+      requestRecovery: reason => lifecycle.requestRecovery(reason),
+    });
     let releaseLiveBoundary: (() => void) | undefined;
     return {
       activate: () => {
@@ -296,17 +335,13 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         parent.deactivateBridge(bridge);
       },
       afterCommit: () => {
-        if (build.isReplacing("harness:codex")) {
-          context.onCodexBridgeUnavailable(true);
-        }
         parent.attachBridge(bridge);
         bridge.resumePendingToolContexts();
         void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
-        build.get("codexHealth").start({ armed: true });
-        if (build.mode === "initial") return;
+        health.start({ armed: true });
         const signal = generation.signal;
         void parent.appServer.retirePrevious().then(async () => {
-          if (!signal.aborted) await context.onCodexBridgeReady(bridge);
+          if (!signal.aborted) await lifecycle.ready(bridge);
         }).then(() => {
           if (!signal.aborted) startRecovery();
         }).catch(error => {
@@ -317,6 +352,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         const restartingAppServer = replacement.isReplacing("harness:codex");
         const handoff = parent.beginBridgeHandoff(bridge, { restartingAppServer });
         const suspend = () => {
+          health.dispose();
           generation.abort(new Error("Codex bridge node retired."));
           stopRecovery();
         };
@@ -335,12 +371,14 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
           resume: async () => {
             generation = new AbortController();
             await handoff.resume();
+            health.start({ armed: true });
             startRecovery();
           },
           commit: () => handoff.commit(),
         };
       },
       dispose: async () => {
+        health.dispose();
         releaseLiveBoundary?.();
         generation.abort(new Error("Codex bridge node disposed."));
         stopRecovery();
@@ -355,7 +393,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "codexRecovery"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "codexRecovery", "providerObservations"],
   safeAll: true,
   scope: "server:codex",
   sources: [
@@ -367,7 +405,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/CodexStdioBridge.ts",
     "daemon/server/CodexProviderObservations.ts",
     "daemon/server/CodexProviderIdentity.ts",
-    "daemon/server/thread-identity-provider-mapping.ts",
+    "daemon/server/CodexPublicIdentity.ts",
     "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/CodexFileChangeController.ts",
     "daemon/server/CodexThreadWindowLoader.ts",
@@ -376,6 +414,6 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "shared/workbench/thread/workbench-thread-page.ts",
     "daemon/server/workbench-agent-mcp-request-registry.ts",
     "daemon/server/CodexBridgeTransitionController.ts",
-    "daemon/server/CodexRecoverySupervisor.ts",
+    "daemon/server/CodexHealthMonitor.ts",
   ].join("\n"),
 });

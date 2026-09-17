@@ -120,7 +120,6 @@
  * - WorkbenchQuestionnaireHistoryEntry: questionnaire history entry.
  * - WorkbenchSteerHistoryStatus: steer delivery lifecycle state.
  * - WorkbenchSteerHistoryEntry: correlated steer history entry.
- * - WorkbenchThreadContextReadResponse: context-read response.
  * - WorkbenchThreadContextBundle: thread context projection bundle.
  * - WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS: recall response size limit.
  * - WorkbenchThreadRecallKind: recall record kind.
@@ -161,7 +160,6 @@ import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "./workbenc
 import type { WorkbenchModelOption } from "./workbench/provider/provider-model.ts";
 import type { DraftId, FolderId, ProjectId, WorkbenchThreadId } from "./workbench/identity.ts";
 import type { CommandAction } from "./workbench/thread/workbench-thread-items.ts";
-export type { CodexThreadContextReadResponse as WorkbenchThreadContextReadResponse } from "./codex/thread-context.ts";
 import type { WorkbenchProviderGoal as ThreadGoal } from "./workbench/provider/provider-goal.ts";
 import type { ThreadTokenUsage } from "./workbench/thread/thread-context-usage.ts";
 import type { Turn } from "./workbench/thread/workbench-thread-turn.ts";

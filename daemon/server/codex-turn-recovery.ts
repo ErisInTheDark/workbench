@@ -4,7 +4,7 @@
  * - recoverCodexTurn: deduplicate, interrupt, and delegate replacement to managed admission.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
-import { getCurrentTurn } from "workbench-shared/codex/thread-state";
+import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { createWorkbenchThreadRecoveryInput, isWorkbenchThreadRecoveryUserMessage } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { CodexObservedTurnCandidate as WorkbenchObservedTurnCandidate } from "./CodexRecoveryController";

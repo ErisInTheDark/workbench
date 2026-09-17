@@ -3,6 +3,7 @@
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
  * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, and interaction owners.
  */
+import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
@@ -19,12 +20,12 @@ import type {
 import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult, WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchThreadMessageResultSchema } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchProviderGoalSchema, type WorkbenchProviderGoalUpdate } from "workbench-shared/workbench/provider/provider-goal";
-import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
+
 import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { admitProviderNotifications, admitProviderThreads, mapProviderThread } from "./CodexProviderIdentity";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
+import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./CodexPublicIdentity";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
@@ -372,7 +373,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
         return stored;
       }
     }
-    const result = await this.mapped({ id: 0, method: WORKBENCH_THREAD_PAGE_READ_METHOD, params: input }) as WorkbenchThreadPageResponse;
+    const result = await this.mapped({ id: 0, method: WORKBENCH_THREAD_PAGE_READ_METHOD, params: input }) as CodexThreadPageResponse;
     return {
       thread: {
         ...toThreadPayload(result.thread, "codex", result.model ?? result.thread.model, result.reasoningEffort ?? result.thread.reasoningEffort, result.serviceTier ?? null),
@@ -437,6 +438,10 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
 
   async compact(threadId: string) {
     await this.mapped({ id: 0, method: "thread/compact/start", params: { threadId } });
+  }
+
+  async delete(threadId: string) {
+    await this.mapped({ id: 0, method: "thread/delete", params: { threadId } });
   }
 
   async readGoal(threadId: string) {

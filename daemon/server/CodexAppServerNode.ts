@@ -8,7 +8,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 import type CodexAppServer from "./CodexAppServer";
-import { logError } from "./process-helpers";
+import { log, logError } from "./process-helpers";
 
 interface CodexServerHandoff {
   appServer: CodexAppServer;
@@ -20,7 +20,11 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   children: [CodexBridgeNode],
   create: (context, build) => {
     const previous = build.handoffState as CodexServerHandoff | undefined;
-    const runtime = new CodexAppServerRuntime(context, { previousAppServer: previous?.appServer });
+    const lifecycle = build.get("codexLifecycle");
+    const runtime = new CodexAppServerRuntime({
+      appServer: { log, logError, projectRoot: context.daemonPackageRoot },
+      onFatalExit: reason => lifecycle.requestRecovery(reason),
+    }, { previousAppServer: previous?.appServer });
     const reportRetirement = (error: unknown) => {
       logError("codex-server", `previous process retirement failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
     };
@@ -44,7 +48,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Restart the Codex app-server process and rebuild its bridge.",
   lifecycle: "handoff",
   provides: ["codexAppServer"],
-  requires: [],
+  requires: ["codexLifecycle"],
   safeAll: false,
   destructive: true,
   scope: "harness:codex",

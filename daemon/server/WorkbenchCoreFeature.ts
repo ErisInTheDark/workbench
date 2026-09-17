@@ -7,15 +7,14 @@ import type { ReloadableNodeInstance } from "./ReloadableNode";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 
 export const WORKBENCH_CORE_FEATURE_KEYS = [
-  "bridgeRequest",
   "browseSessionCleanup",
-  "codexHealth",
   "daemonRequests",
   "gitArc",
   "harnesses",
   "modules",
   "projectCatalog",
   "projectSnapshot",
+  "providerObservations",
   "questionnaires",
   "subagents",
   "stats",
@@ -30,7 +29,6 @@ interface WorkbenchCoreFeatureOptions {
   captureReloadState?(): unknown;
   dispose(reportPhase: (phase: string) => void): Promise<void> | void;
   registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
-  observeProviderNotification(notification: DaemonProviderNotification): Promise<void> | void;
   start(reportPhase: (phase: string) => void): Promise<void> | void;
 }
 
@@ -55,10 +53,6 @@ export default class WorkbenchCoreFeature implements ReloadableNodeInstance<Daem
 
   async dispose(reportPhase: (phase: string) => void = () => undefined) {
     await this.options.dispose(reportPhase);
-  }
-
-  async observeProviderNotification(notification: DaemonProviderNotification) {
-    await this.options.observeProviderNotification(notification);
   }
 
   async start(reportPhase: (phase: string) => void = () => undefined) {

@@ -1,5 +1,5 @@
 /*
  * Exports:
- * - mergeThreadItem: compatibility export for the shared Codex thread-item merge owner. Keywords: codex, transcript, item merge.
+ * - mergeThreadItem: expose the shared item merge at the native recorder boundary.
  */
-export { mergeThreadItem } from "workbench-shared/codex/thread-item-normalization";
+export { mergeThreadItem } from "workbench-shared/workbench/thread/thread-item-normalization";

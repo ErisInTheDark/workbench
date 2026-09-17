@@ -8,12 +8,12 @@
  */
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
-import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
+import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type WorkbenchHarnessController from "./WorkbenchHarnessController";
+import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -24,9 +24,8 @@ import WorkbenchThreadStateStore, {
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema, type NativeThreadId, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, TurnReferenceSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 
@@ -75,7 +74,6 @@ export interface WorkbenchThreadStateFeatureContext {
     pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>): Promise<unknown>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
-  harnesses: Pick<WorkbenchHarnessController, "resumeThread">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   log?: (message: string) => void;

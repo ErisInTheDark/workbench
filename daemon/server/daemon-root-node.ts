@@ -18,7 +18,7 @@ const graph = (() => {
     const graph = defineReloadableNodeGraph<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>([
       require("./WorkbenchTurnLifecycleNode").default,
       require("./WorkbenchDatabaseNode").default,
-      require("./CodexAppServerNode").default,
+      require("./CodexLifecycleNode").default,
     ]);
     const repoRoot = path.resolve(__dirname, "../..");
     const observations = completeReloadSourceGeneration(generation)

@@ -7,10 +7,9 @@
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
-import { getCurrentInProgressTurn } from "../../codex/thread-state.ts";
+import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
+import type { Turn } from "./workbench-thread-turn.ts";
+import { getCurrentInProgressTurn } from "./thread-runtime-state.ts";
 import type { ThreadPayload, WorkbenchUserInputResponse } from "../../types.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";

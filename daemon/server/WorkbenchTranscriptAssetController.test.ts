@@ -64,6 +64,9 @@ test("transcript assets enforce the allowlist and serve immutable typed bytes", 
       : null,
   });
   try {
+    const canonical = await request(controller, `/daemon/transcript-assets/${threadId}/${asset}`);
+    assert.equal(canonical.statusCode, 200);
+    assert.deepEqual([...canonical.body], [1, 2, 3]);
     const valid = await request(controller, `/daemon/transcript-assets/codex/${threadId}/${asset}`);
     assert.equal(valid.statusCode, 200);
     assert.equal(valid.headers["Content-Type"], "image/png");
@@ -114,6 +117,9 @@ test("canonical asset requests retain native URLs without exposing another threa
     readTranscriptAsset: async (input) => store.read(input),
   });
   try {
+    const canonical = await request(controller, saved.assetUrl.replace(/^\/api\//u, "/daemon/"));
+    assert.equal(canonical.statusCode, 200);
+    assert.deepEqual([...canonical.body], [4, 5, 6]);
     for (const reference of [owner.threadId, "native-owner", encoded]) {
       const response = await request(controller, `/daemon/transcript-assets/codex/${reference}/${asset}`);
       assert.equal(response.statusCode, 200);

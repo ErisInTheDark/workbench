@@ -1,10 +1,10 @@
 /*
- * No production exports. Node tests protect active-thread detection without transcript turns. Keywords: thread status, active, cleanup, test.
+ * No production exports. Protect active-thread detection without transcript turns.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isThreadStatusActive } from "./thread-state.ts";
+import { isThreadStatusActive } from "./thread-runtime-state.ts";
 
 test("detects structured active status with and without active flags", () => {
   assert.equal(isThreadStatusActive({ type: "active", activeFlags: [] }), true);

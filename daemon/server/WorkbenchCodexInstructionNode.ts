@@ -15,7 +15,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   create: (context, build) => {
     const settings = new WorkbenchServerSettings(build.get("database"));
     const codexInstructions = new WorkbenchCodexInstructionAdapter(
-      context.codexBridgeUrl,
+      context.webSocketUrl,
       context.legacyMigrationProjectRoot,
       () => settings.readLocalCapabilities(),
     );

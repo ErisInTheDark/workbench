@@ -2,9 +2,10 @@
  * Exports:
  * - default CodexSqliteTranscriptReader: read canonical pages, derive stale-turn settlement, and resolve stored file changes.
  */
+import type { CodexThreadContextReadResponse } from "workbench-shared/codex/thread-context";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
+
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
@@ -118,7 +119,7 @@ export default class CodexSqliteTranscriptReader {
     return snapshot ? this.project(metadata, snapshot) : null;
   }
 
-  project(metadata: Thread, snapshot: WorkbenchTranscriptSnapshot): WorkbenchThreadContextReadResponse {
+  project(metadata: Thread, snapshot: WorkbenchTranscriptSnapshot): CodexThreadContextReadResponse {
     const { turns, turnHistory, ...entries } = this.content(snapshot);
     return {
       ...entries,
@@ -156,8 +157,8 @@ export default class CodexSqliteTranscriptReader {
     const projected = projectWorkbenchTranscript(snapshot);
     if (!projected.success) throw new Error("Stored SQL transcript could not be projected.");
     const projection = projected.data;
-    const questionnaireEntries: WorkbenchThreadContextReadResponse["questionnaireEntries"] = [];
-    const steerEntries: WorkbenchThreadContextReadResponse["steerEntries"] = [];
+    const questionnaireEntries: CodexThreadContextReadResponse["questionnaireEntries"] = [];
+    const steerEntries: CodexThreadContextReadResponse["steerEntries"] = [];
     const roots = new Map(snapshot.rows.threadItems.map(root => [root.public_id ?? root.source_id, root]));
     const inputs = new Map(snapshot.rows.threadItemUserMessages.map(row => [row.item_id, row]));
     const turns = projection.turns.map(turn => {
@@ -182,7 +183,7 @@ export default class CodexSqliteTranscriptReader {
           const payload = value && typeof value === "object" && !Array.isArray(value) ? value : { value };
           if (item.nativeType === "workbenchSteer" && Array.isArray(payload.input)) {
             // Audio steers retain the typed entry as opaque JSON until the input schema supports them.
-            const entry = payload as unknown as WorkbenchThreadContextReadResponse["steerEntries"][number];
+            const entry = payload as unknown as CodexThreadContextReadResponse["steerEntries"][number];
             steerEntries.push({ ...entry, itemId: item.id, threadId: snapshot.thread.id, turnId: turn.id });
             continue;
           }

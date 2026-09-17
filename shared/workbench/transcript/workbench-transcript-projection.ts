@@ -1,10 +1,14 @@
 /*
  * WorkbenchProjectedTranscriptTurn/WorkbenchTranscriptProjection: canonical transcript values reconstructed from relational rows.
- * WorkbenchTranscriptProjectionResult: complete hydration-bounded projection or one bounded relational-integrity failure. Keywords: transcript, projection, validation.
- * projectWorkbenchTranscript: reconstruct turns, Browse facts, item timing, and display segments from canonical item projection. Keywords: transcript, browser, canonical, parity.
- * Re-exports: shared canonical item projection values from the lower database transcript owner. Keywords: transcript, projection, item, database.
+ * WorkbenchTranscriptProjectionResult: hydration-bounded projection or relational-integrity failure.
+ * projectWorkbenchTranscript: reconstruct turns, Browse facts, timing and display segments.
+ * projectWorkbenchTranscriptItems: project canonical item rows.
+ * WorkbenchProjectedInteractionItem/WorkbenchProjectedGenericItem/WorkbenchProjectedTranscriptItem: projected item variants.
+ * WorkbenchTranscriptItemProjectionResult/WorkbenchTranscriptItemProjectionRow: item projection output and rows.
+ * WorkbenchTranscriptProjectionIssue: bounded projection failure.
  */
 import type { Turn } from "../thread/workbench-thread-turn.ts";
+import { createTranscriptAssetAddress, parseTranscriptAssetAddress } from "./transcript-asset-address.ts";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchThreadTurnHistoryEntry,
@@ -99,14 +103,15 @@ function browseEntries(
       const root = itemRootsById.get(entry.item_id);
       if (!root) return fail("invalidReference", "threadBrowseEntries", String(entry.item_id));
       const asset = entry.asset_digest ? assetsByDigest.get(entry.asset_digest) : null;
+      const address = asset ? parseTranscriptAssetAddress(asset.storage_key) : null;
       if (entry.asset_digest && !asset) {
         return fail("invalidReference", "threadBrowseEntries", entry.entry_key);
       }
       return {
         action: entry.action,
         actionIndex: entry.action_index,
-        assetUrl: asset && snapshot.thread.identity_origin === "workbench"
-          ? asset.storage_key.replace(/^\/api\/transcript-assets\/codex\/[^/]+\//u, `/api/transcript-assets/codex/${encodeURIComponent(snapshot.thread.id)}/`)
+        assetUrl: address?.surface === "api" && snapshot.thread.identity_origin === "workbench"
+          ? createTranscriptAssetAddress(snapshot.thread.id, address.assetName)
           : asset?.storage_key ?? null,
         commandItemId: root.public_id ?? root.source_id,
         detailKind: entry.detail_kind,

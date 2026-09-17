@@ -110,9 +110,14 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
-    const verifyTranscript = async () => {
-      const pending = await runtime.daemon.questionnaires.pending();
-      assert.ok(Array.isArray(pending.data), "WB actions must reach the current provider definition after startup or replacement");
+    const verifyTranscript = async (nativeAvailable = true) => {
+      if (nativeAvailable) {
+        const pending = await runtime.daemon.questionnaires.pending();
+        assert.ok(Array.isArray(pending.data), "WB actions must reach the current provider definition after startup or replacement");
+      } else {
+        await assert.rejects(runtime.daemon.questionnaires.pending(), /Lifecycle injected native unavailability/u,
+          "Provider operations must fail individually while shared SQL remains available");
+      }
       assert.equal(await fs.readFile(retainedFile, "utf8"), retainedContents, "Reload must preserve legacy evidence");
       assert.deepEqual((await fs.readdir(legacyRoot, { recursive: true })).filter(file => /\.(?:json|jsonl|ndjson)$/u.test(file)),
         [path.basename(retainedFile)], "SQL reads and reload must not create legacy transcript files");
@@ -130,6 +135,9 @@ test("real application survives reload expiry, migrated candidate failure, retry
       const response = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/daemon/transcript-assets/"), runtime.origin), { signal: t.signal });
       assert.equal(response.status, 200);
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), transcript.bytes);
+      const retainedAsset = await fetch(new URL(image.url.replace("/api/transcript-assets/", "/daemon/transcript-assets/codex/"), runtime.origin), { signal: t.signal });
+      assert.equal(retainedAsset.status, 200);
+      assert.deepEqual(Buffer.from(await retainedAsset.arrayBuffer()), transcript.bytes);
       for (const retired of ["runtime/composer-profiles.json", "runtime/turn-recovery-handoff.json"]) {
         await assert.rejects(fs.stat(path.join(runtime.project, ".workbench", retired)), { code: "ENOENT" });
       }
@@ -161,6 +169,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       } finally { await runtime.transcripts.unsubscribe({ subscriptionId }); }
     };
     await installLifecycleProbe(runtime.project);
+    await writeLifecycleFault(runtime.project, { nativeInitialization: true });
     const daemonStart = performance.now();
     await runtime.start();
     let transcriptReady = false;
@@ -180,12 +189,33 @@ test("real application survives reload expiry, migrated candidate failure, retry
       console.log(output.split(/\r?\n/u).filter(line => line.startsWith("[startup] ")).join("\n"));
     }
     await assets();
+    await assert.rejects(runtime.request("initialize", {}), /Workbench method not found/u);
+    const retiredIngress = await fetch(new URL("/daemon/bridge-request", runtime.origin), { method: "POST", signal: t.signal });
+    assert.equal(retiredIngress.status, 404);
+    await verifyTranscript(false);
+    assert.ok(runtime.output.includes("[lifecycle] native-unavailable server:codex"),
+      "Cold startup must exercise unavailable native readiness, not merely omit native work");
+    const recoveredOffset = runtime.output.length;
+    await writeLifecycleFault(runtime.project, {});
+    await runtime.until(() => runtime.output.slice(recoveredOffset).includes("[codex-recovery] Recovered Codex after:"),
+      AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]));
     await verifyTranscript();
     const ids = runtime.processIds;
     assert.ok(ids.app && ids.daemon);
     const registration = await appState();
     assert.ok(registration.daemonRegistrationId);
     console.log("cold entrypoints, SQLite, compiled assets and ingress passed");
+
+    await reloadServer(["harness:codex"]);
+    await verifyTranscript();
+    await writeLifecycleFault(runtime.project, { fail: "server:codex" });
+    await reloadServer(["server:codex/lifecycle"], true);
+    await verifyTranscript();
+    await writeLifecycleFault(runtime.project, {});
+    await reloadServer(["server:codex/lifecycle"]);
+    await verifyTranscript();
+    assert.deepEqual(runtime.processIds, ids);
+    console.log("native unavailability, child replacement and lifecycle rollback preserve WB reads");
 
     await reloadServer(["server:database"]);
     await reloadApp(["client:database"]);
