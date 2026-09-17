@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchAppStateRepositoryOptions: app-state database path and clock seams.
+ * - WorkbenchAppStateRepositoryOptions: app-state data root, database path, and clock seams.
  * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, transactions, and local registration.
  */
 import { randomUUID } from "node:crypto";
@@ -27,16 +27,16 @@ import {
 } from "workbench-shared/state/workbench-app-state-schema";
 import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
-import resolveWorkbenchRuntimeRoot from "../workbench-runtime-root.ts";
 import { WorkbenchProjectRemapSchema, type WorkbenchProjectRemap } from "workbench-shared/state/workbench-client-state";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 export interface WorkbenchAppStateRepositoryOptions {
+  dataRootPath?: string;
   databasePath?: string;
   now?: () => number;
-  repositoryRootPath?: string;
 }
 
 export default class WorkbenchAppStateRepository {
@@ -49,8 +49,8 @@ export default class WorkbenchAppStateRepository {
   readonly #backups = new Set<Promise<void>>();
 
   constructor(options: WorkbenchAppStateRepositoryOptions = {}) {
-    const runtimeRoot = resolveWorkbenchRuntimeRoot(options.repositoryRootPath);
-    this.databasePath = path.resolve(options.databasePath ?? path.join(runtimeRoot, "app-state.sqlite3"));
+    const dataRootPath = options.dataRootPath ?? resolveWorkbenchDataRoot();
+    this.databasePath = path.resolve(options.databasePath ?? path.join(dataRootPath, "app", "app-state.sqlite3"));
     this.#now = options.now ?? Date.now;
   }
 

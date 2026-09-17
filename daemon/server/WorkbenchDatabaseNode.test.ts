@@ -41,8 +41,9 @@ async function exists(filePath: string) {
 
 test("the database node proves readiness before exposing transcript work and closes its worker on disposal", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-"));
+  const dataRootPath = join(directory, "data");
   const instance = WorkbenchDatabaseNode.create(
-    { legacyMigrationProjectRoot: directory } as DaemonProcessContext,
+    { dataRootPath, legacyMigrationProjectRoot: directory } as DaemonProcessContext,
     {
       get: () => {
         throw new Error("The database root has no registration requirements");
@@ -61,6 +62,8 @@ test("the database node proves readiness before exposing transcript work and clo
     await instance.start();
     database.assertReady();
     assert.equal(transcript.failure, null);
+    assert.equal(await exists(join(dataRootPath, "daemon", "workbench.sqlite3")), true);
+    assert.equal(await exists(join(directory, ".workbench", "workbench.sqlite3")), false);
 
     await instance.dispose();
     assert.equal(database.state, "closed");
@@ -74,7 +77,7 @@ test("the database node proves readiness before exposing transcript work and clo
 test("database retirement still closes its worker when transcript disposal fails", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-close-"));
   const instance = WorkbenchDatabaseNode.create(
-    { legacyMigrationProjectRoot: directory } as DaemonProcessContext,
+    { dataRootPath: join(directory, "data"), legacyMigrationProjectRoot: directory } as DaemonProcessContext,
     {
       get: () => { throw new Error("No dependencies"); },
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },

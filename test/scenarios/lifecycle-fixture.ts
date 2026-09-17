@@ -16,8 +16,8 @@ import WorkbenchTranscriptRepository from "../../daemon/server/database/transcri
 import externalizeCodexTranscriptInlineImages from "../../daemon/server/codex-transcript-image-assets";
 import WorkbenchTranscriptAssetStore from "../../daemon/server/database/transcript/WorkbenchTranscriptAssetStore";
 
-export async function seedLifecycleTranscript(project: string, projectId: ProjectId) {
-  const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });
+export async function seedLifecycleTranscript(project: string, databasePath: string, projectId: ProjectId) {
+  const database = new Database(databasePath, { fileMustExist: true });
   database.pragma("foreign_keys = ON");
   try {
     const threads = new WorkbenchThreadIdentityRepository(database);

@@ -87,6 +87,7 @@ export default new ReloadableNode<
     "shared/workbench/database/schema/**",
     "shared/workbench/search/**",
     "shared/workbench/settings/**",
+    "shared/workbench-data-root.ts",
     "daemon/server/database/**",
     "shared/database/**",
     "daemon/server/lib/project.ts",
@@ -103,7 +104,7 @@ export default new ReloadableNode<
       TranscriptIdentityController,
       TranscriptController,
     } = loadDatabaseControllers();
-    const databasePath = join(context.legacyMigrationProjectRoot, ".workbench", "workbench.sqlite3");
+    const databasePath = join(context.dataRootPath, "daemon", "workbench.sqlite3");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
     const { discoverProjectIdentities } = require("./lib/project") as typeof import("./lib/project");
     const database = new DatabaseController({

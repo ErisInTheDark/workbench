@@ -1,19 +1,18 @@
 /*
  * Keywords: app, installation, singleton, lease, lifecycle.
  * Exports:
- * - WorkbenchAppLaunchLeaseOptions: machine-scoped SQLite lease configuration. Keywords: app, singleton, SQLite, lifecycle.
+ * - WorkbenchAppLaunchLeaseOptions: machine-scoped SQLite data root and database path seams. Keywords: app, singleton, SQLite, lifecycle.
  * - default WorkbenchAppLaunchLease: hold one OS-released exclusive app process lease. Keywords: app, process, lease, controller.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import Database from "better-sqlite3";
-
-import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 export interface WorkbenchAppLaunchLeaseOptions {
+  dataRootPath?: string;
   databasePath?: string;
-  repositoryRootPath?: string;
 }
 
 function isLockContention(error: unknown) {
@@ -34,9 +33,9 @@ export default class WorkbenchAppLaunchLease {
   }
 
   static async acquire(options: WorkbenchAppLaunchLeaseOptions = {}) {
-    const runtimeRoot = resolveWorkbenchRuntimeRoot(options.repositoryRootPath);
+    const dataRootPath = options.dataRootPath ?? resolveWorkbenchDataRoot();
     const databasePath = path.resolve(
-      options.databasePath ?? path.join(runtimeRoot, "app-launch.sqlite3"),
+      options.databasePath ?? path.join(dataRootPath, "app", "app-launch.sqlite3"),
     );
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
 

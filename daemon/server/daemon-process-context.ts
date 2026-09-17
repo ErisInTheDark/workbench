@@ -26,6 +26,7 @@ export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 export interface DaemonProcessContext {
+  dataRootPath: string;
   daemonPackageRoot: string;
   webSocketUrl: string;
   isShuttingDown(): boolean;

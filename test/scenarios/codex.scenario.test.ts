@@ -22,6 +22,7 @@ import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionSt
 import type { WorkbenchTranscriptProjection } from "../../shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadItem } from "../../shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchThreadStateOpenResult } from "../../shared/workbench/thread/thread-state";
+import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 
 function passphrase() {
   const words = [
@@ -38,7 +39,11 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   timeout: 1_200_000,
 }, async (t) => {
   const source = path.resolve(process.cwd(), "..");
-  const sourceDatabase = new Database(path.join(source, ".workbench/workbench.sqlite3"), { readonly: true, fileMustExist: true });
+  const sourceDatabasePath = path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3");
+  const sourceDatabase = new Database(sourceDatabasePath, {
+    readonly: true,
+    fileMustExist: true,
+  });
   const profiles = new WorkbenchComposerProfileStore({
     query: async <Row extends WorkbenchDatabaseRow>(statement: Parameters<typeof compileWorkbenchDatabaseStatement>[1]) => {
       const compiled = compileWorkbenchDatabaseStatement(
@@ -63,9 +68,13 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = `{"retained":"${randomUUID()}"}`;
   try {
-    const captured = await captureThreadStateMigrationSource(source, runtime.root);
+    const captured = await captureThreadStateMigrationSource(sourceDatabasePath, runtime.root);
     await verifyThreadStateMigrationSource(captured);
-    await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
+    await installThreadStateMigrationSource(
+      captured,
+      path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"),
+      runtime.root,
+    );
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     const gateProof = `gate-${randomUUID()}`;
@@ -99,7 +108,7 @@ await new Promise((resolve, reject) => {
     console.log("scenario WB thread", threadId);
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
     assert.equal(path.resolve(started.thread.cwd), runtime.project);
-    const database = new Database(path.join(runtime.project, ".workbench/workbench.sqlite3"), { readonly: true });
+    const database = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), { readonly: true });
     try {
       assert.deepEqual(database.pragma("foreign_key_check"), []);
       assert.equal(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'workbench_thread_state_projects'").get(), undefined);

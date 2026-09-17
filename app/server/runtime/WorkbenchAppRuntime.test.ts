@@ -173,7 +173,8 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database", "client:state"]);
-  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:database", "client:process", "client:state"]);
+  assert.deepEqual(owners("shared/workbench-data-root.ts"), ["client:database", "client:process", "client:state"]);
+  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:process"]);
   assert.equal(owners("shared/reload/ReloadableNodeHost.ts").includes("client:process"), true);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tray/src/main.rs"), ["client:process"]);

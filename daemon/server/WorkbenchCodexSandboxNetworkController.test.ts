@@ -34,7 +34,7 @@ after(async () => {
 
 function createDatabaseNode(directory: string) {
   return WorkbenchDatabaseNode.create(
-    { legacyMigrationProjectRoot: directory } as DaemonProcessContext,
+    { dataRootPath: join(directory, "data"), legacyMigrationProjectRoot: directory } as DaemonProcessContext,
     {
       get: () => {
         throw new Error("The database root has no registration requirements");

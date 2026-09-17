@@ -60,6 +60,7 @@ export default class IsolatedWorkbench {
     private readonly fixtures: string,
     readonly root: string,
     readonly project: string,
+    readonly dataRootPath: string,
     readonly origin: string,
     readonly signal: AbortSignal,
     private readonly codexIdentity: boolean,
@@ -164,7 +165,15 @@ export default class IsolatedWorkbench {
         throw error;
       }
     }
-    return new IsolatedWorkbench(fixtures, root, project, `http://127.0.0.1:${port}`, signal, codexIdentity);
+    return new IsolatedWorkbench(
+      fixtures,
+      root,
+      project,
+      path.join(root, "data", "inthedark", "wb"),
+      `http://127.0.0.1:${port}`,
+      signal,
+      codexIdentity,
+    );
   }
 
   async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
@@ -236,6 +245,7 @@ export default class IsolatedWorkbench {
     const env: NodeJS.ProcessEnv = {
       ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
+      WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
       WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),

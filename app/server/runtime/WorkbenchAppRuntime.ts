@@ -147,6 +147,7 @@ export default class WorkbenchAppRuntime {
           "app/server/runtime/WorkbenchAppRuntime.ts",
           "shared/http/HttpServer.ts",
           "shared/process/WorkbenchProcessLogger.ts",
+          "shared/workbench-data-root.ts",
           "shared/package.json",
           "shared/reload/reloadable-node-loader.ts",
           "shared/reload/ReloadableNode.ts",

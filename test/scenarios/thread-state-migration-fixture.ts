@@ -16,10 +16,10 @@ import { tableForeignKeys } from "../../shared/database/schema/schema-definition
 import databaseReleases from "../../shared/workbench/database/schema/releases";
 import WorkbenchProjectIdentityMigration from "../../daemon/server/database/project/WorkbenchProjectIdentityMigration";
 
-export async function captureThreadStateMigrationSource(sourceRoot: string, privateRoot: string) {
+export async function captureThreadStateMigrationSource(sourceDatabasePath: string, privateRoot: string) {
   const directory = await fs.mkdtemp(path.join(privateRoot, "thread-state-source-"));
   const databasePath = path.join(directory, "workbench.sqlite3");
-  const database = new Database(path.join(sourceRoot, ".workbench", "workbench.sqlite3"), {
+  const database = new Database(sourceDatabasePath, {
     readonly: true, fileMustExist: true,
   });
   try {
@@ -97,10 +97,10 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
 
 export async function installThreadStateMigrationSource(
   source: Awaited<ReturnType<typeof captureThreadStateMigrationSource>>,
-  project: string,
+  target: string,
   privateRoot: string,
 ) {
-  const target = path.join(project, ".workbench", "workbench.sqlite3");
+  await fs.mkdir(path.dirname(target), { recursive: true });
   const captured = new Database(source.databasePath, { readonly: true, fileMustExist: true });
   try { await captured.backup(target); }
   finally { captured.close(); }

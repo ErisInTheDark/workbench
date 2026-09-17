@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
+import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import {
   insertRow,
   selectRows,
@@ -20,7 +21,8 @@ import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workb
 
 async function temporaryDatabase(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database]") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text =>
+    text.startsWith(DATABASE_LOG_PREFIX) || text.startsWith("[database] restored schema "));
   context.after(() => fs.rm(directory, { force: true, recursive: true }));
   return path.join(directory, "state.sqlite3");
 }
@@ -191,26 +193,22 @@ for (const rejectCheckpoint of [false, true]) {
   });
 }
 
-test("installation roots keep app state independent and durable", async context => {
+test("repositories sharing one data root reopen the same app state", async context => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-state-"));
-  const firstOptions = { repositoryRootPath: path.join(directory, "first"), workbenchLibraryRoot: path.join(directory, "legacy-library") };
-  const secondOptions = { ...firstOptions, repositoryRootPath: path.join(directory, "second") };
-  const first = new WorkbenchAppStateRepository(firstOptions);
-  const second = new WorkbenchAppStateRepository(secondOptions);
-  const reopened = new WorkbenchAppStateRepository(firstOptions);
+  const dataRootPath = path.join(directory, "data");
+  const first = new WorkbenchAppStateRepository({ dataRootPath });
+  let second: WorkbenchAppStateRepository | null = null;
   try {
     const firstId = await first.start();
-    const secondId = await second.start();
-    assert.notEqual(firstId, secondId);
     first.executeTransaction([insertRow(appStateTables.globalPreferences, {
       key: "theme", text_value: "dark", deleted: 0, revision: 1,
     })]);
-    assert.deepEqual(second.query(selectRows(appStateTables.globalPreferences)), []);
     await first.close();
-    assert.equal(await reopened.start(), firstId);
-    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "dark");
+    second = new WorkbenchAppStateRepository({ dataRootPath });
+    assert.equal(await second.start(), firstId);
+    assert.equal(second.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "dark");
   } finally {
-    await Promise.all([first.close(), second.close(), reopened.close()]);
+    await Promise.all([first.close(), second?.close()]);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });

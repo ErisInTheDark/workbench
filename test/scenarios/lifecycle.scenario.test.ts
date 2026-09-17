@@ -19,6 +19,7 @@ import type { WorkbenchProjectsPayload } from "../../shared/types";
 import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/workbench-transcript-projection";
 import type { TranscriptStreamUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
+import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -37,8 +38,8 @@ test("real application survives reload expiry, migrated candidate failure, retry
 }, async (t) => {
   const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, { codexIdentity: false });
   console.log(`lifecycle fixture: ${runtime.root}`);
-  const appDatabase = path.join(runtime.project, ".workbench/app/app-state.sqlite3");
-  const serverDatabase = path.join(runtime.project, ".workbench/workbench.sqlite3");
+  const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
+  const serverDatabase = path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3");
   const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = '{"retained":"lifecycle cutover evidence"}';
@@ -104,9 +105,12 @@ test("real application survives reload expiry, migrated candidate failure, retry
     else clean(dirt);
   };
   try {
-    const captured = await captureThreadStateMigrationSource(path.resolve(process.cwd(), ".."), runtime.root);
+    const captured = await captureThreadStateMigrationSource(
+      path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3"),
+      runtime.root,
+    );
     await verifyThreadStateMigrationSource(captured);
-    const capturedCounts = await installThreadStateMigrationSource(captured, runtime.project, runtime.root);
+    const capturedCounts = await installThreadStateMigrationSource(captured, serverDatabase, runtime.root);
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
@@ -180,7 +184,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const fixtureProject = catalog.data.find(project => path.resolve(project.rootPath) === runtime.project);
     assert.ok(fixtureProject);
-    const transcript = await seedLifecycleTranscript(runtime.project, fixtureProject.id);
+    const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, fixtureProject.id);
     const appStart = performance.now();
     await runtime.startApp();
     const appStartupMs = Math.round(performance.now() - appStart);

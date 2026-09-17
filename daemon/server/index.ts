@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { WebSocketServer } from "ws";
 
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
     DaemonReloadResponse,
@@ -30,6 +31,7 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
 const PROJECT_ROOT = path.resolve(DAEMON_PACKAGE_ROOT, "..");
+const WORKBENCH_DATA_ROOT = resolveWorkbenchDataRoot();
 const WORKBENCH_SOCKET_URL = process.env.CODEX_APP_SERVER_URL ?? "ws://0.0.0.0:4500";
 const DAEMON_RELOAD_PATH = "/daemon/reload";
 const DAEMON_BROWSE_PATH = "/daemon/browse";
@@ -209,6 +211,7 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
 
 function createDaemonFeatureContext(): DaemonProcessContext {
   return {
+    dataRootPath: WORKBENCH_DATA_ROOT,
     daemonPackageRoot: DAEMON_PACKAGE_ROOT,
     isShuttingDown: () => shuttingDown,
     webSocketUrl: WORKBENCH_SOCKET_URL,
