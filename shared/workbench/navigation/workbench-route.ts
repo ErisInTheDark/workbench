@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WorkbenchRouteView/WorkbenchSettingsScope/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
- * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
+ * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 const RouteProjectIdSchema = z.string().brand<"ProjectId">();
 
-export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "mosaic" | "invalid";
+export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "mosaic" | "invalid";
 export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
@@ -81,6 +81,10 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
     threadTarget: null,
     view: "project",
   };
+}
+
+export function createGitRoute(projectId: string): WorkbenchRoute {
+  return { ...createProjectRoute(projectId), view: "git" };
 }
 
 export function createFileRoute(projectId: string, filePath: string): WorkbenchRoute {
@@ -396,6 +400,11 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
       return createSettingsRoute(projectId, settingsScope);
     }
+    if (mode === "git") {
+      return projectId && !valueSegments.value.length
+        ? createGitRoute(projectId)
+        : createInvalidWorkbenchRoute("Git routes require one project and no extra segments.", projectId);
+    }
     if (mode === "stats") {
       return valueSegments.value.length
         ? createInvalidWorkbenchRoute(`Unexpected stats route value: ${value}`, projectId)
@@ -488,6 +497,7 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
   if (route.view === "settings") {
     return `${markedPath}/settings/${route.settingsScope}`;
   }
+  if (route.view === "git") return `${markedPath}/git`;
   if (route.view === "stats") {
     return `${markedPath}/stats`;
   }

@@ -12,6 +12,7 @@ import type {
 } from "./workbench-daemon-requests.ts";
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
+import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import {
   GitCheckpointCompareResultSchema,
@@ -63,6 +64,10 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     return workbenchThreadActions[method as keyof typeof workbenchThreadActions].result;
   }
   switch (method) {
+    case "git/working-tree/read": return WorkingTreeReadSchema;
+    case "git/working-tree/diff": return WorkingTreeDiffSchema;
+    case "git/working-tree/preview": return WorkingTreePreviewSchema;
+    case "git/working-tree/mutate": return WorkingTreeResultSchema;
     case "models/list": return z.object({ data: z.array(WorkbenchModelOptionSchema) });
     case "account/limits/read": return WorkbenchAccountLimitsSchema;
     case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
@@ -226,6 +231,12 @@ class WorkbenchDaemonClient {
   };
 
   readonly git = {
+    workingTree: {
+      read: (params: WorkbenchDaemonParams<"git/working-tree/read">) => this.request("git/working-tree/read", params),
+      diff: (params: WorkbenchDaemonParams<"git/working-tree/diff">) => this.request("git/working-tree/diff", params),
+      preview: (params: WorkbenchDaemonParams<"git/working-tree/preview">) => this.request("git/working-tree/preview", params),
+      mutate: (params: WorkbenchDaemonParams<"git/working-tree/mutate">) => this.request("git/working-tree/mutate", params),
+    },
     arc: {
       compare: (params: WorkbenchDaemonParams<"git/arc/compare">) => this.requestGitArc("git/arc/compare", params),
       release: (params: WorkbenchDaemonParams<"git/arc/release">) => this.requestGitArc("git/arc/release", params),

@@ -40,6 +40,8 @@ import type WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCata
 import { WorkbenchSandboxNetworkUpdateSchema } from "workbench-shared/workbench/provider/provider-settings";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
+import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import { WorkingTreeReadRequestSchema, WorkingTreeFileRequestSchema, WorkingTreeMutationSchema } from "workbench-shared/workbench/git/working-tree-contracts";
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
@@ -59,6 +61,7 @@ export interface WorkbenchBrowseSessionPort {
 }
 
 const METHODS = new Set([
+  "git/working-tree/read", "git/working-tree/diff", "git/working-tree/preview", "git/working-tree/mutate",
   ...Object.keys(workbenchThreadActions),
   "models/context/read",
   "models/list", "account/limits/read",
@@ -200,6 +203,7 @@ export default class WorkbenchDaemonRequestController {
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
+    workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "diff" | "preview" | "mutate">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
@@ -234,6 +238,23 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "git/working-tree/read": {
+          if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
+          result = await this.owners.workingTree.read(WorkingTreeReadRequestSchema.parse(params).projectId);
+          break;
+        }
+        case "git/working-tree/diff":
+        case "git/working-tree/preview": {
+          if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
+          const input = WorkingTreeFileRequestSchema.parse(params);
+          result = request.method.endsWith("/diff") ? await this.owners.workingTree.diff(input) : await this.owners.workingTree.preview(input);
+          break;
+        }
+        case "git/working-tree/mutate": {
+          if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
+          result = await this.owners.workingTree.mutate(WorkingTreeMutationSchema.parse(params));
+          break;
+        }
         case "models/list":
         case "account/limits/read": {
           const key = installedProviderKeys.find(candidate => candidate === params.provider);

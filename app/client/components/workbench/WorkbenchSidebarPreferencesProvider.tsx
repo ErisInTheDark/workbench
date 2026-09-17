@@ -1,7 +1,6 @@
 /*
- * Keywords: sidebar, preferences, persistence, transient disclosure, pagination.
  * Exports:
- * - default WorkbenchSidebarPreferencesProvider: compose persisted preferences and own memory-only settled disclosure state behind focused intents. Keywords: sidebar, preferences, global, project, home, persistence, provider.
+ * - default WorkbenchSidebarPreferencesProvider: compose persisted preferences and memory-only Git/settled disclosure state.
  */
 "use client";
 
@@ -42,6 +41,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   const controller = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const [displayState, setDisplayState] = useState<WorkbenchSidebarDisplayState>({
+    gitOpen: true,
     settledThreadItemLimit: 50,
     settledThreadsOpen: false,
   });
@@ -76,8 +76,11 @@ export default function WorkbenchSidebarPreferencesProvider({
   }, [controller, preferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
     (key, open) => {
-      if (key === "settledThreadsOpen") {
+      if (key === "gitOpen") {
+        setDisplayState(previous => ({ ...previous, gitOpen: open }));
+      } else if (key === "settledThreadsOpen") {
         setDisplayState(previous => previous.settledThreadsOpen === open ? previous : {
+          ...previous,
           settledThreadsOpen: open,
           settledThreadItemLimit: open ? 50 : previous.settledThreadItemLimit,
         });

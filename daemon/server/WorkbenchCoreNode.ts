@@ -31,6 +31,9 @@ import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
+import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
@@ -283,7 +286,24 @@ function createWorkbenchCoreFeature(
     profiles: threadState, state: threadState.controller,
     warn: message => logThreadStateWarning(message),
   });
+  const workingTree = new WorkbenchWorkingTreeController({
+    resolveProject: projectId => projectCatalog.resolveProjectById(projectId),
+    resolveIdentity: async input => {
+      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(input.repositoryRoot, { endpointName: "Working tree" });
+      return await threadIdentity.resolveGitArcThreadIdentity({
+        ...input, harness: WorkbenchHarnessSchema.parse(input.harness), projectId: resolved.project.id,
+      });
+    },
+    readOwner: async (threadId, harness) => {
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      if (!identity) return null;
+      const entry = await threadState.controller.getThreadEntry(identity.projectId, WorkbenchHarnessSchema.parse(harness), identity.threadId);
+      return entry ? { id: identity.threadId, projectId: identity.projectId, entry } : null;
+    },
+    transitions: worktreeGitTransitions,
+  });
   const daemonRequests = new WorkbenchDaemonRequestController({
+    workingTree,
     providers,
     threadActions,
     agents: new WorkbenchAgentSkillCatalogController(
@@ -343,6 +363,8 @@ function createWorkbenchCoreFeature(
     },
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
+      reportPhase("working-tree disposal");
+      await workingTree.dispose();
       reportPhase("codex health disposal");
       codexHealth.dispose();
       reportPhase("browse session cleanup disposal");
@@ -426,6 +448,10 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, im
   scope: "server:core",
   sources: [
     "daemon/server/WorkbenchCoreNode.ts",
+    "daemon/server/WorkbenchWorkingTreeController.ts",
+    "daemon/server/WorkbenchDaemonRequestController.ts",
+    "shared/workbench/daemon/workbench-daemon-requests.ts",
+    "shared/workbench/daemon/WorkbenchDaemonClient.ts",
     "daemon/server/WorkbenchComposerProfileStore.ts",
     "shared/workbench/state/composer-profile-state.ts",
     "daemon/server/lib/codex/codex-home.ts",

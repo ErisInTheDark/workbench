@@ -1,15 +1,15 @@
 /*
- * Keywords: sidebar, preferences, transient display state, disclosure, pagination.
  * Exports:
- * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume combined global and active-project sidebar preferences. Keywords: sidebar, preferences, global, project, context, hook.
- * - WorkbenchSidebarDisplayState: memory-only settled disclosure and pagination.
- * - WorkbenchSidebarDisclosurePreferenceKey/WorkbenchSidebarPreferencesValue: describe disclosure keys and persistent or transient intent methods. Keywords: sidebar, disclosure, settings, types.
+ * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume global and active-project sidebar preferences.
+ * - WorkbenchSidebarDisplayState: memory-only git/settled disclosure and pagination.
+ * - WorkbenchSidebarDisclosurePreferenceKey/WorkbenchSidebarPreferencesValue: describe disclosure keys and persistent or transient intents.
  */
 import { createContext, useContext } from "react";
 
 import type { WorkbenchSidebarPreferences } from "../../workbench/state/workbench-settings";
 
 export type WorkbenchSidebarDisclosurePreferenceKey =
+  | "gitOpen"
   | "browseSessionsOpen"
   | "explorerOpen"
   | "pinnedThreadsOpen"
@@ -18,6 +18,7 @@ export type WorkbenchSidebarDisclosurePreferenceKey =
   | "threadsOpen";
 
 export interface WorkbenchSidebarDisplayState {
+  gitOpen: boolean;
   settledThreadItemLimit: number;
   settledThreadsOpen: boolean;
 }

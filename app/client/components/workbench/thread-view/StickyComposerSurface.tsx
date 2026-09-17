@@ -23,6 +23,7 @@ export default function StickyComposerSurface({
   collapsedContent,
   collapsedLabel,
   collapsedPreviewKind,
+  getViewport,
   onCollapsedChange,
 }: {
   children: ReactNode;
@@ -32,6 +33,7 @@ export default function StickyComposerSurface({
   collapsedContent: ReactNode;
   collapsedLabel: string;
   collapsedPreviewKind?: string;
+  getViewport?: () => HTMLDivElement | null;
   onCollapsedChange(collapsed: boolean): void;
 }) {
   const flowReserverRef = useRef<HTMLDivElement>(null);
@@ -51,7 +53,7 @@ export default function StickyComposerSurface({
     const flowReserver = flowReserverRef.current;
     const originMarker = originMarkerRef.current;
     const shell = shellRef.current;
-    const viewport = threadScrollViewport.getViewport();
+    const viewport = getViewport ? getViewport() : threadScrollViewport.getViewport();
     if (!flowReserver || !originMarker || !shell || !viewport) return;
 
     const syncFlowReserver = () => {
@@ -86,7 +88,7 @@ export default function StickyComposerSurface({
       flowReserver.style.height = "";
       delete shell.dataset.stickyComposerStuck;
     };
-  }, [threadScrollViewport]);
+  }, [getViewport, threadScrollViewport]);
 
   return (
     <>

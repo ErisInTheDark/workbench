@@ -1,6 +1,8 @@
 /**
  * Exports:
- * - getPreferredMobilePane: choose the preferred mobile pane from viewport state and route state. Keywords: responsive, mobile, explorer, editor, route.
+ * - getPreferredMobilePane: choose the visible pane from viewport and route state.
+ * - MOBILE_MEDIA_QUERY: shared mobile viewport breakpoint.
+ * - MobilePane: sidebar or content pane.
  */
 
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -14,5 +16,5 @@ export function getPreferredMobilePane (isMobileViewport: boolean, route: Workbe
     return "editor";
   }
 
-  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "stats" || route.view === "mosaic" ? "editor" : "explorer";
+  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "stats" || route.view === "mosaic" || route.view === "git" ? "editor" : "explorer";
 }

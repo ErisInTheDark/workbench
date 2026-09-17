@@ -41,6 +41,7 @@ import {
     createProjectRoute,
     createSettingsRoute,
     createStatsRoute,
+    createGitRoute,
     createThreadRoute,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
@@ -104,6 +105,9 @@ import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/p
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
+import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
+import WorkbenchGitSidebar from "./workbench/git/WorkbenchGitSidebar";
+import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
@@ -640,7 +644,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     if (route.view === "settings") {
       return createSettingsRoute(route.projectId, route.settingsScope);
     }
-    if (route.view === "stats") {
+    if (route.view === "stats" || route.view === "git") {
       return route.projectId ? createProjectRoute(route.projectId) : createHomeRoute();
     }
     if (route.view === "project") {
@@ -1354,8 +1358,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
   const showStatsView = route.view === "stats";
+  const showGitView = route.view === "git";
   const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id || "";
-  const showFullBleedMainView = showMosaicView;
+  const showFullBleedMainView = showMosaicView || showGitView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
     const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
@@ -1381,8 +1386,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -2050,6 +2055,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   return (
     <WorkbenchClientProvider client={workbenchClient}>
     <WorkbenchDaemonClientContext.Provider value={controls?.daemon ?? null}>
+    <WorkbenchWorkingTreeProvider projectId={activeProjectId}>
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
       <WorkbenchSidebarPreferencesProvider
         projectId={explorer.currentProjectId || route.projectId}
@@ -2234,6 +2240,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </WorkbenchSidebarSectionDisclosure>
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
+                <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
+                  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  navigateToRoute(createGitRoute(activeProjectId));
+                }} />
 
                   {activeProjectId ? <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
@@ -2445,7 +2456,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               </header>
 
               <section
-                className={`relative ${isDirectThreadSurface ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
+                className={`
+                  relative ${isDirectThreadSurface || showGitView ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}
+                  ${showFullBleedMainView ? "min-h-0 overflow-hidden" : ""}
+                `}
                 aria-busy={isSelectionPending}
               >
                 {showThreadView && !shouldRenderMainLayout ? (
@@ -2499,6 +2513,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     scope={settingsScope}
                   />
                 ) : null}
+                {showGitView && !shouldRenderMainLayout ? <WorkbenchWorkingTreeView /> : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
                     availableProjectId={activeProjectId || null}
@@ -3061,6 +3076,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         }}
       </WorkbenchSidebarPreferencesProvider>
     </WorkbenchComposerProfileProvider>
+    </WorkbenchWorkingTreeProvider>
     </WorkbenchDaemonClientContext.Provider>
     </WorkbenchClientProvider>
   );

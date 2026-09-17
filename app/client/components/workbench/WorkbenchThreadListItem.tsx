@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access.
+ * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status, optional action slot, navigation and context menu.
  * Local helpers derive pinned-draft targets and render bounded tooltip details.
  */
 "use client";
@@ -131,6 +131,7 @@ function ThreadTooltipContent({
 }
 
 export default function WorkbenchThreadListItem({
+  action: actionOverride,
   anchorRef,
   attentionLabel = "",
   className = "",
@@ -151,6 +152,7 @@ export default function WorkbenchThreadListItem({
   onKeyDown,
   onPointerDown,
   project,
+  presentation = "row",
   projectId,
   role,
   selected = false,
@@ -161,6 +163,7 @@ export default function WorkbenchThreadListItem({
   tabIndex,
   tooltipDetails,
 }: {
+  action?: ReactNode;
   anchorRef?: Ref<HTMLAnchorElement>;
   attentionLabel?: string;
   className?: string;
@@ -181,6 +184,7 @@ export default function WorkbenchThreadListItem({
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
   project?: WorkbenchProjectOption;
+  presentation?: "row" | "disclosure-summary";
   projectId: ProjectId;
   role?: "tab" | "option";
   selected?: boolean;
@@ -252,7 +256,7 @@ export default function WorkbenchThreadListItem({
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
   const compact = compactOverride ?? (group === "settled" || archived);
   const actionReplacesPriority = showActions && Boolean(action);
-  const actionButton = showActions && actionDisplay ? (
+  const actionButton = actionOverride ?? (showActions && actionDisplay ? (
     <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={`
       pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-fg/muted focus-visible:flex focus-visible:text-text
       ${isDragActive ? "" : "hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"}
@@ -266,7 +270,7 @@ export default function WorkbenchThreadListItem({
       <actionDisplay.Icon className="size-4" />
       {action === "discard" ? null : <span>{actionDisplay.label}</span>}
     </button>
-  ) : null;
+  ) : null);
   const contextMenuButton = contextMenu ? (
     <button
       type="button"
@@ -283,8 +287,9 @@ export default function WorkbenchThreadListItem({
       <MoreVerticalIcon size={20} />
     </button>
   ) : null;
+  const Container = presentation === "disclosure-summary" ? "div" : "li";
   return (
-    <li
+    <Container
       className={`
         group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0
         ${dimmed ? `opacity-50 ${isDragActive ? "" : "hover:opacity-100 has-[:focus-visible]:opacity-100"}` : ""}
@@ -296,7 +301,7 @@ export default function WorkbenchThreadListItem({
       <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg>
-      <ContextMenuCapability menu={contextMenu}>
+      {presentation === "row" ? <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
           content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
           enabled={showTooltip && !isDragActive}
@@ -326,7 +331,7 @@ export default function WorkbenchThreadListItem({
             onPointerDown={onPointerDown}
           />
         </WorkbenchTooltip>
-      </ContextMenuCapability>
+      </ContextMenuCapability> : null}
       {dragTargets}
       {contextMenuButton}
       {compact ? (
@@ -378,6 +383,6 @@ export default function WorkbenchThreadListItem({
           title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>}
         />
       )}
-    </li>
+    </Container>
   );
 }
