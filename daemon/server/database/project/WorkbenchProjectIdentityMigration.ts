@@ -4,6 +4,8 @@
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { formatDatabaseLog } from "workbench-shared/database/database-log-format";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import { tableForeignKeys } from "workbench-shared/database/schema/schema-definition";
@@ -38,7 +40,10 @@ export default class WorkbenchProjectIdentityMigration {
       const backupPath = await preserveWorkbenchDatabaseBackup(this.database, path.join(path.dirname(this.database.name), "backups", path.basename(this.database.name)));
       await beforeConversion?.(backupPath);
     }
-    this.database.transaction(() => {
+    const startedAt = performance.now();
+    const label = path.basename(this.database.name);
+    if (!this.database.memory) console.info(formatDatabaseLog("project conversion", "pending", label));
+    const counts = this.database.transaction(() => {
       this.database.pragma("defer_foreign_keys = ON");
       // Backup/checkpoint admission yields. Re-read ownership under the write
       // transaction so newly populated shadow state cannot be discarded.
@@ -65,7 +70,10 @@ export default class WorkbenchProjectIdentityMigration {
         SELECT identity_key FROM workbench_projects WHERE id = project_id AND kind = 'git'
       ) WHERE identity_key IS NULL AND project_id IN (SELECT id FROM workbench_projects WHERE kind = 'git')`).run();
       if ((this.database.pragma("foreign_key_check") as object[]).length) throw new Error("Project conversion left invalid ownership.");
+      return { converted: legacy.length - merges.filter(merge => legacy.some(project => project.id === merge.source)).length, consolidated: merges.length };
     }).immediate();
+    if (!this.database.memory) console.info(formatDatabaseLog("project conversion", "ok",
+      `${label}, ${counts.converted} converted, ${counts.consolidated} consolidated`, performance.now() - startedAt));
   }
 
   private roots(id: string) {

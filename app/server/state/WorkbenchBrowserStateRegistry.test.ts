@@ -14,6 +14,7 @@ import { appStateSchema } from "workbench-shared/state/workbench-app-state-schem
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
@@ -120,7 +121,7 @@ async function fixture(context: TestContext) {
 
 test("opening an existing browser database backs it up before upgrading", async (context) => {
   const { directory, registry } = await fixture(context);
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const browserDirectory = path.join(directory, "browser-state");
   await fs.mkdir(browserDirectory);
   const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);

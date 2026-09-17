@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
+import { DATABASE_LOG_PREFIX } from "./database-log-format.ts";
 import { defineTable, integer, text } from "./schema/schema-definition.ts";
 import {
   applyWorkbenchDatabaseSchema, createTable, defineSubsystemHistory, defineTableHistory,
@@ -44,7 +45,7 @@ const day = 86_400_000;
 
 async function fixture(context: TestContext, targetVersion = 1) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-migration-backup-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const database = new Database(path.join(directory, "source.sqlite3"));
   context.after(async () => {
     if (database.open) database.close();
@@ -97,6 +98,62 @@ test("same-version startup does not inspect retained backups", async context => 
   });
   await migrateWorkbenchDatabase(database, schema);
   assert.equal(backupReads, 0, "A current schema must not scan backup history");
+});
+
+test("retention verifies only a replacement checkpoint needed to discard expired duplicates", async context => {
+  const { database, backups } = await fixture(context, 2);
+  await fs.mkdir(backups, { recursive: true });
+  const now = Date.now();
+  const history: string[] = [];
+  for (let index = 0; index < 6; index++) {
+    const file = path.join(backups, `${randomUUID()}.sqlite3`);
+    const backup = new Database(file);
+    applyWorkbenchDatabaseSchema(backup, schema, { targetVersion: 1 });
+    backup.close();
+    const time = new Date(now - 10 * day + index);
+    await fs.utimes(file, time, time);
+    history.push(file);
+  }
+  const checked: string[] = [];
+  const pragma = Database.prototype.pragma;
+  context.mock.method(Database.prototype, "pragma", function (this: Database.Database, ...args: Parameters<typeof pragma>) {
+    if (args[0] === "quick_check" && history.includes(this.name)) checked.push(this.name);
+    return pragma.apply(this, args);
+  });
+  await migrateWorkbenchDatabase(database, retentionSchema, { now: () => now });
+  assert.deepEqual(checked, [history.at(-1)], "only the surviving checkpoint for the pruned schema needs content verification");
+  assert.equal((await completedBackups(backups)).length, 5);
+});
+
+test("retention does not scan recent backup contents and keeps duplicates if their replacement is corrupt", async context => {
+  const { database, backups } = await fixture(context);
+  const older = await preserveWorkbenchDatabaseBackup(database, backups);
+  const replacement = await preserveWorkbenchDatabaseBackup(database, backups);
+  const pragma = Database.prototype.pragma;
+  const checked: string[] = [];
+  context.mock.method(Database.prototype, "pragma", function (this: Database.Database, ...args: Parameters<typeof pragma>) {
+    if (args[0] === "quick_check" && [older, replacement].includes(this.name)) {
+      checked.push(this.name);
+      if (this.name === replacement) return [{ quick_check: "injected corrupt checkpoint" }];
+    }
+    return pragma.apply(this, args);
+  });
+  const warnings = context.mock.method(console, "warn", () => {});
+  await migrateWorkbenchDatabase(database, schema);
+  assert.deepEqual(checked, [], "recent retained backups must not trigger content scans");
+  const expiredAt = Date.now() - 10 * day;
+  for (const name of await completedBackups(backups)) {
+    const file = path.join(backups, name);
+    if (file !== older && file !== replacement) await fs.utimes(file, new Date(expiredAt), new Date(expiredAt));
+  }
+  await fs.utimes(older, new Date(expiredAt + 1_000), new Date(expiredAt + 1_000));
+  await fs.utimes(replacement, new Date(expiredAt + 2_000), new Date(expiredAt + 2_000));
+  for (let index = 0; index < 4; index++) await preserveWorkbenchDatabaseBackup(database, backups);
+  await migrateWorkbenchDatabase(database, retentionSchema);
+  assert.deepEqual(checked, [replacement]);
+  assert.ok(warnings.mock.calls.length > 0);
+  assert.ok((await fs.stat(older)).isFile());
+  assert.ok((await fs.stat(replacement)).isFile());
 });
 
 test("explicit same-version backups capture WAL data without migrating or changing the source", async context => {

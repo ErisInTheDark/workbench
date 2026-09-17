@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
+import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 
 import Database from "better-sqlite3";
 
@@ -82,7 +83,7 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
 
 test("prepared project reconciliation precedes worker readiness and retains its pre-upgrade backup", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-project-startup-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const old = new Database(databasePath);
   installWorkbenchDatabaseSchema(old, { targetVersion: 33 });
@@ -130,7 +131,7 @@ test("prepared project reconciliation precedes worker readiness and retains its 
 
 test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.projectOwnership.version;
   const old = new Database(databasePath);
@@ -154,7 +155,7 @@ test("worker migration waits for its owner to retain the rollback checkpoint", a
 
 test("worker startup retains its old-schema backup even when closed during opening", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.projectOwnership.version;
   const old = new Database(databasePath);
@@ -220,7 +221,8 @@ test("project preparation coalesces with startup and closes through caller-owned
 for (const rejectCheckpoint of [false, true]) {
   test(`worker startup recovers a newer database before readiness (reject checkpoint: ${rejectCheckpoint})`, async context => {
     const directory = await mkdtemp(join(tmpdir(), "workbench-worker-recovery-"));
-    captureTestOutput(context, process.stdout, text => text.startsWith("[database]") && text.includes(directory));
+    captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX)
+      || (text.startsWith("[database]") && text.includes(directory)));
     const databasePath = join(directory, "workbench.sqlite3");
     const backups = join(directory, "backups", "workbench.sqlite3");
     const initial = new WorkbenchDatabaseController({ databasePath });
@@ -262,7 +264,7 @@ for (const rejectCheckpoint of [false, true]) {
 
 test("database lifecycle reuses retained state across cold workers", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const controller = new WorkbenchDatabaseController({ databasePath });
   let reopened: WorkbenchDatabaseController | null = null;

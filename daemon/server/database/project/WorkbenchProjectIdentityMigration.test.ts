@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { captureTestOutput } from "../../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
+import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import { ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
@@ -146,7 +147,7 @@ test("conflicting shadow receipts and independently owned current keys preserve 
 test("state added while the backup is retained prevents destructive split consolidation", async context => {
   context.mock.method(console, "warn", () => undefined);
   const directory = await mkdtemp(path.join(tmpdir(), "project-conversion-drift-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database] preserved schema ") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const { database, discovery } = fixture(path.join(directory, "workbench.sqlite3"));
   try {
     await new WorkbenchProjectIdentityMigration(database).run(discovery, () => {

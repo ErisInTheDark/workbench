@@ -9,7 +9,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import Database from "better-sqlite3";
+import { formatDatabaseLog } from "./database-log-format.ts";
 import {
   applyWorkbenchDatabaseSchema, readWorkbenchDatabaseMigrationRange, type WorkbenchDatabaseSchema,
 } from "./schema/schema-history.ts";
@@ -56,27 +58,31 @@ function boundedMessage(error: unknown) {
 }
 
 export async function preserveWorkbenchDatabaseBackup(database: Database.Database, directory: string) {
+  const startedAt = performance.now();
   const installedVersion = database.pragma("user_version", { simple: true }) as number;
   const id = randomUUID();
   const temporaryPath = path.join(directory, `${id}.partial`);
   const backupPath = path.join(directory, `${id}.sqlite3`);
   try {
+    console.info(formatDatabaseLog("backup", "pending", `${path.basename(database.name)}, schema: ${installedVersion}`));
     await fs.mkdir(directory, { recursive: true });
     const reservation = await fs.open(temporaryPath, "wx", 0o600);
     await reservation.close();
-    await database.backup(temporaryPath);
-    const backup = new Database(temporaryPath, { readonly: true, fileMustExist: true });
-    try {
-      const integrity = backup.pragma("quick_check") as { quick_check: string }[];
-      if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok") {
-        throw new Error("Backup integrity verification failed");
-      }
-      if (backup.pragma("user_version", { simple: true }) !== installedVersion) {
-        throw new Error("Backup schema version differs from the pre-upgrade database");
-      }
-    } finally {
-      backup.close();
-    }
+    let reportedAt = startedAt;
+    await database.backup(temporaryPath, {
+      progress: ({ totalPages, remainingPages }) => {
+        const now = performance.now();
+        if (now - reportedAt >= 5_000) {
+          console.info(formatDatabaseLog("backup", "copying",
+            `${path.basename(database.name)}, ${Math.round((totalPages - remainingPages) / totalPages * 100)}%, ${totalPages - remainingPages}/${totalPages} pages`,
+            now - startedAt));
+          reportedAt = now;
+        }
+        // Keep the driver's default page batch; this callback only observes.
+        return 100;
+      },
+    });
+    verifyBackup(temporaryPath, installedVersion, path.basename(database.name));
     const file = await fs.open(temporaryPath, "r+");
     try { await file.sync(); }
     finally { await file.close(); }
@@ -90,32 +96,77 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
         }
       }
     }
-    console.info(`[database] preserved schema ${installedVersion} backup ${boundedMessage(backupPath)}`);
+    console.info(formatDatabaseLog("backup", "ok",
+      `${path.basename(database.name)}, schema: ${installedVersion}, checkpoint: ${id.slice(0, 8)}`, performance.now() - startedAt));
     return backupPath;
   } catch (error) {
     throw new Error(`Database migration backup failed at ${boundedMessage(temporaryPath)}: ${boundedMessage(error)}`, { cause: error });
   }
 }
 
-async function pruneBackups(directory: string, now: number) {
+function verifyBackup(filePath: string, version: number, databaseName = path.basename(path.dirname(filePath))) {
+  const startedAt = performance.now();
+  const detail = `${databaseName}, schema: ${version}, checkpoint: ${path.basename(filePath).slice(0, 8)}`;
+  console.info(formatDatabaseLog("verify", "pending", detail));
+  const backup = new Database(filePath, { readonly: true, fileMustExist: true });
   try {
-    const backups = await readWorkbenchDatabaseBackups(directory);
-    const retainedVersions = new Set<number>();
-    for (const [index, backup] of backups.entries()) {
+    const integrity = backup.pragma("quick_check") as { quick_check: string }[];
+    if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok") {
+      throw new Error("Checkpoint integrity verification failed.");
+    }
+    if (backup.pragma("user_version", { simple: true }) !== version) {
+      throw new Error("Checkpoint schema changed since inventory.");
+    }
+  } catch (error) {
+    throw new Error(`Database checkpoint verification failed at ${boundedMessage(filePath)}: ${boundedMessage(error)}`, { cause: error });
+  } finally { backup.close(); }
+  console.info(formatDatabaseLog("verify", "ok", detail, performance.now() - startedAt));
+}
+
+async function pruneBackups(directory: string, now: number) {
+  const startedAt = performance.now();
+  try {
+    const backups = await readBackupInventory(directory);
+    if (!backups.length) return;
+    const retainedVersions = new Map<number, typeof backups[number]>();
+    const expired = backups.filter((backup, index) => {
       const firstForVersion = !retainedVersions.has(backup.version);
-      retainedVersions.add(backup.version);
-      if (index < 5 || firstForVersion) continue;
-      if (now - backup.modifiedAt <= retentionAgeMs) continue;
+      if (firstForVersion) retainedVersions.set(backup.version, backup);
+      return index >= 5 && !firstForVersion && now - backup.modifiedAt > retentionAgeMs;
+    });
+    const databaseName = path.basename(directory);
+    if (expired.length) console.info(formatDatabaseLog("retention", "pending",
+      `${databaseName}, ${backups.length} checkpoints, ${expired.length} expired duplicates`));
+    // Only a checkpoint replacing deleted history needs content verification.
+    // Validate every replacement before the first deletion, failing closed.
+    for (const version of new Set(expired.map(backup => backup.version))) {
+      const retained = retainedVersions.get(version)!;
+      verifyBackup(retained.filePath, retained.version);
+    }
+    let removed = 0;
+    for (const backup of expired) {
+      const retained = retainedVersions.get(backup.version)!;
+      const survivor = await fs.lstat(retained.filePath);
+      if (!survivor.isFile() || survivor.mtimeMs !== retained.modifiedAt) throw new Error("Retained checkpoint changed during cleanup.");
       const current = await fs.lstat(backup.filePath);
       if (!current.isFile() || current.mtimeMs !== backup.modifiedAt) continue;
       await fs.unlink(backup.filePath);
+      removed++;
     }
+    console.info(formatDatabaseLog("retention", "ok",
+      `${databaseName}, ${backups.length} checkpoints, ${removed} removed`, performance.now() - startedAt));
   } catch (error) {
     console.warn(`[database] migration backup cleanup retained extra files in ${boundedMessage(directory)}: ${boundedMessage(error)}`);
   }
 }
 
 export async function readWorkbenchDatabaseBackups(directory: string) {
+  const backups = await readBackupInventory(directory);
+  for (const backup of backups) verifyBackup(backup.filePath, backup.version);
+  return backups;
+}
+
+async function readBackupInventory(directory: string) {
   let entries;
   try { entries = await fs.readdir(directory, { withFileTypes: true }); }
   catch (error) {
@@ -131,10 +182,6 @@ export async function readWorkbenchDatabaseBackups(directory: string) {
     let backup: Database.Database | undefined;
     try {
       backup = new Database(filePath, { readonly: true, fileMustExist: true });
-      const integrity = backup.pragma("quick_check") as { quick_check: string }[];
-      if (integrity.length !== 1 || integrity[0]?.quick_check !== "ok") {
-        throw new Error("Checkpoint integrity verification failed.");
-      }
       const version = backup.pragma("user_version", { simple: true }) as number;
       backups.push({ filePath, modifiedAt: stat.mtimeMs, version });
     } catch (error) {
@@ -158,6 +205,11 @@ export default async function migrateWorkbenchDatabase(
     const backupPath = await preserveWorkbenchDatabaseBackup(database, directory);
     await options.beforeMigration?.(backupPath);
   }
+  const reportUpgrade = directory && installedVersion > 0 && installedVersion < targetVersion;
+  const startedAt = performance.now();
+  const detail = `${path.basename(database.name)}, ${installedVersion} -> ${targetVersion}`;
+  if (reportUpgrade) console.info(formatDatabaseLog("migrate", "pending", detail));
   applyWorkbenchDatabaseSchema(database, schema, options);
+  if (reportUpgrade) console.info(formatDatabaseLog("migrate", "ok", detail, performance.now() - startedAt));
   if (directory && installedVersion < targetVersion) await pruneBackups(directory, (options.now ?? Date.now)());
 }

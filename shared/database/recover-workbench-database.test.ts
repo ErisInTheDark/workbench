@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import Database from "better-sqlite3";
+import { DATABASE_LOG_PREFIX } from "./database-log-format.ts";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 import { defineTable, integer, text } from "./schema/schema-definition.ts";
 import {
@@ -29,7 +30,8 @@ const newSchema = defineWorkbenchDatabaseSchema({
 
 async function fixture(context: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-recovery-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith("[database]") && text.includes(directory));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX)
+    || (text.startsWith("[database]") && text.includes(directory)));
   const databasePath = path.join(directory, "state.sqlite3");
   const backups = path.join(directory, "backups", "state.sqlite3");
   const database = new Database(databasePath);
