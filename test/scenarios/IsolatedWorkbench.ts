@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
+ * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,14 +12,37 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
-import { createSpawnOptions } from "../daemon/server/process-helpers";
-import WorkbenchSocketClient from "../shared/workbench/WorkbenchSocketClient";
-import { isWorkbenchRpcFailure } from "../shared/workbench/workbench-rpc";
-import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../shared/workbench/daemon/WorkbenchDaemonClient";
-import WorkbenchTranscriptClient from "../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
-import type { WorkbenchComposerProfile } from "../shared/types";
+import { createSpawnOptions } from "../../daemon/server/process-helpers";
+import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient";
+import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
+import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
+import type { WorkbenchComposerProfile } from "../../shared/types";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
+
+function validateWorkspace(fixtures: string, root: string) {
+  const resolvedFixtures = path.resolve(fixtures);
+  const resolvedRoot = path.resolve(root);
+  assert.equal(path.dirname(resolvedRoot), resolvedFixtures, "Scenario workspace must be a direct child of its fixture root");
+  assert.match(path.basename(resolvedRoot), /^wb-scenario-/u, "Scenario workspace must have an owned prefix");
+  return resolvedRoot;
+}
+
+async function removeIsolatedWorkbenchIdentity(fixtures: string, root: string, codexIdentity: boolean) {
+  root = validateWorkspace(fixtures, root);
+  await fs.rm(path.join(root, "codex", "auth.json"), { force: true });
+  if (codexIdentity && process.platform === "win32") {
+    await fs.rm(path.join(root, "codex", ".sandbox-secrets"), { force: true });
+    await fs.rm(path.join(root, "codex", ".sandbox", "setup_marker.json"), { force: true });
+  }
+  return root;
+}
+
+export async function removeIsolatedWorkbenchWorkspace(fixtures: string, root: string, codexIdentity: boolean) {
+  root = await removeIsolatedWorkbenchIdentity(fixtures, root, codexIdentity);
+  await fs.rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+}
 
 export default class IsolatedWorkbench {
   readonly events: Message[] = [];
@@ -32,7 +56,14 @@ export default class IsolatedWorkbench {
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
   private closed = false;
-  private constructor(readonly root: string, readonly project: string, readonly origin: string, readonly signal: AbortSignal, private readonly codexIdentity: boolean) {}
+  private constructor(
+    private readonly fixtures: string,
+    readonly root: string,
+    readonly project: string,
+    readonly origin: string,
+    readonly signal: AbortSignal,
+    private readonly codexIdentity: boolean,
+  ) {}
 
   get processIds() { return { daemon: this.child?.pid, app: this.appChild?.pid }; }
   get output() { return this.log; }
@@ -43,7 +74,7 @@ export default class IsolatedWorkbench {
   }
 
   async waitForAppExit() {
-    assert.ok(this.appChild, "Diagnostic app must have been started");
+    assert.ok(this.appChild, "Scenario app must have been started");
     const child = this.appChild;
     if (child.exitCode === null && child.signalCode === null) {
       await once(child, "exit", { signal: this.signal });
@@ -52,14 +83,33 @@ export default class IsolatedWorkbench {
   }
 
   get transcripts() {
-    assert.ok(this.transcriptClient, "Diagnostic transcript client must be connected");
+    assert.ok(this.transcriptClient, "Scenario transcript client must be connected");
     return this.transcriptClient;
   }
 
   static async create(source: string, signal: AbortSignal, options = { codexIdentity: true }) {
-    const fixtures = path.join(source, ".workbench", "diagnostics");
+    const fixtures = path.join(source, ".workbench", "test-runs");
     await fs.mkdir(fixtures, { recursive: true });
-    const root = await fs.mkdtemp(path.join(fixtures, "wb-live-"));
+    const root = await fs.mkdtemp(path.join(fixtures, "wb-scenario-"));
+    try {
+      return await this.initialise(source, fixtures, root, signal, options.codexIdentity);
+    } catch (error) {
+      try {
+        await removeIsolatedWorkbenchWorkspace(fixtures, root, options.codexIdentity);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `Scenario setup and cleanup failed; retained workspace: ${root}`);
+      }
+      throw error;
+    }
+  }
+
+  private static async initialise(
+    source: string,
+    fixtures: string,
+    root: string,
+    signal: AbortSignal,
+    codexIdentity: boolean,
+  ) {
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
     const ignored = new Set(["node_modules", ".workbench", ".git", ".next", "dist", "target", ".env.local"]);
@@ -71,7 +121,7 @@ export default class IsolatedWorkbench {
     await fs.copyFile(path.join(source, "package.json"), path.join(project, "package.json"));
     await fs.copyFile(path.join(source, ".gitignore"), path.join(project, ".gitignore"));
     await fs.mkdir(path.join(project, ".workbench"), { recursive: true });
-    await fs.copyFile(path.join(source, "diagnostics/isolated-shutdown.mjs"), path.join(project, ".workbench/isolated-shutdown.mjs"));
+    await fs.copyFile(path.join(source, "test/scenarios/isolated-shutdown.mjs"), path.join(project, ".workbench/isolated-shutdown.mjs"));
     await fs.symlink(path.join(source, "node_modules"), path.join(project, "node_modules"), "junction");
     for (const directory of ["daemon", "app", "shared"]) {
       const dependencies = path.join(source, directory, "node_modules");
@@ -85,10 +135,10 @@ export default class IsolatedWorkbench {
     // Only this newly allocated fixture receives Git writes. No workspace arc
     // tool can initialise an unregistered, empty test repository.
     await this.command("git", ["init", "-q"], project, process.env, signal);
-    await this.command("git", ["config", "user.name", "Workbench diagnostic"], project, process.env, signal);
-    await this.command("git", ["config", "user.email", "diagnostic@localhost"], project, process.env, signal);
-    await this.command("git", ["-c", "user.name=Workbench diagnostic", "-c", "user.email=diagnostic@localhost",
-      "commit", "--allow-empty", "-qm", "isolated diagnostic fixture"], project, process.env, signal);
+    await this.command("git", ["config", "user.name", "Workbench scenario"], project, process.env, signal);
+    await this.command("git", ["config", "user.email", "scenario@localhost"], project, process.env, signal);
+    await this.command("git", ["-c", "user.name=Workbench scenario", "-c", "user.email=scenario@localhost",
+      "commit", "--allow-empty", "-qm", "isolated scenario fixture"], project, process.env, signal);
     const listener = net.createServer();
     listener.listen(0, "127.0.0.1");
     await once(listener, "listening", { signal });
@@ -96,7 +146,7 @@ export default class IsolatedWorkbench {
     assert.ok(address && typeof address !== "string");
     const port = address.port;
     await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
-    if (options.codexIdentity && process.platform === "win32") {
+    if (codexIdentity && process.platform === "win32") {
       // Convex-lab's sharing boundary: reuse the existing Windows identity, not
       // its sessions or the whole .sandbox directory. Never initialise another.
       const main = path.join(os.homedir(), ".codex");
@@ -114,7 +164,7 @@ export default class IsolatedWorkbench {
         throw error;
       }
     }
-    return new IsolatedWorkbench(root, project, `http://127.0.0.1:${port}`, signal, options.codexIdentity);
+    return new IsolatedWorkbench(fixtures, root, project, `http://127.0.0.1:${port}`, signal, codexIdentity);
   }
 
   async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
@@ -125,7 +175,7 @@ export default class IsolatedWorkbench {
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(library, { recursive: true });
     await fs.mkdir(path.join(this.root, "user"), { recursive: true });
-    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The diagnostic passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
+    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
     if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
     await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
@@ -157,7 +207,7 @@ export default class IsolatedWorkbench {
         onNotification: (listener) => client.onWorkbenchNotification(listener),
         request: (method, params) => this.request(method, params),
       },
-      reportConformance: (report) => console.error("Diagnostic transcript conformance failure", report),
+      reportConformance: (report) => console.error("Scenario transcript conformance failure", report),
     });
     client.onNotification((message) => {
       this.events.push(message as Message);
@@ -278,47 +328,44 @@ export default class IsolatedWorkbench {
   }
 
   private async stopChild(child: ChildProcess) {
-      try {
-        if (child.exitCode === null && child.signalCode === null) {
-          const signal = AbortSignal.timeout(45_000);
-          const exited = once(child, "exit", { signal }).then(
-            () => null,
-            (error: Error) => error,
-          );
-          const sendError = child.connected
-            ? await new Promise<Error | null>((resolve) => {
-              child.send({ type: "workbench-diagnostic-close" }, error => resolve(error ?? null));
-            })
-            : new Error("Diagnostic shutdown channel disconnected before exit");
-          const exitError = await exited;
-          // A failed startup can close IPC before its exit event reaches us.
-          // Confirmed exit completes cleanup; otherwise retain both failures.
-          if (exitError) throw sendError
-            ? new AggregateError([sendError, exitError], "Diagnostic shutdown did not complete")
-            : exitError;
-        }
-      } finally {
-        child.stdin?.destroy();
-        child.stdout?.destroy();
-        child.stderr?.destroy();
+    try {
+      if (child.exitCode === null && child.signalCode === null) {
+        const signal = AbortSignal.timeout(45_000);
+        const exited = once(child, "exit", { signal }).then(
+          () => null,
+          (error: Error) => error,
+        );
+        const sendError = child.connected
+          ? await new Promise<Error | null>((resolve) => {
+            child.send({ type: "workbench-scenario-close" }, error => resolve(error ?? null));
+          })
+          : new Error("Scenario shutdown channel disconnected before exit");
+        const exitError = await exited;
+        // A failed startup can close IPC before its exit event reaches us.
+        // Confirmed exit completes cleanup; otherwise retain both failures.
+        if (exitError) throw sendError
+          ? new AggregateError([sendError, exitError], "Scenario shutdown did not complete")
+          : exitError;
       }
+    } finally {
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
   }
 
   async close() {
     try {
       await this.stop();
-    } finally {
-      await fs.writeFile(path.join(this.root, "daemon.log"), this.log);
-      const auth = path.resolve(this.root, "codex", "auth.json");
-      assert.ok(auth.startsWith(`${path.resolve(this.root)}${path.sep}`));
-      await fs.rm(auth, { force: true });
-      if (this.codexIdentity && process.platform === "win32") {
-        // Unlink these exact fixture entries. Recursive removal could reach the
-        // shared sandbox identity and must never be used here.
-        await fs.unlink(path.join(this.root, "codex", ".sandbox-secrets"));
-        await fs.unlink(path.join(this.root, "codex", ".sandbox", "setup_marker.json"));
+    } catch (error) {
+      try {
+        await removeIsolatedWorkbenchIdentity(this.fixtures, this.root, this.codexIdentity);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `Scenario shutdown failed; retained workspace: ${this.root}`);
       }
+      throw new AggregateError([error], `Scenario shutdown failed; retained workspace: ${this.root}`);
     }
+    await removeIsolatedWorkbenchWorkspace(this.fixtures, this.root, this.codexIdentity);
   }
 
   static async command(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal) {

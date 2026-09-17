@@ -9,12 +9,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
-import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
-import WorkbenchThreadStateIntegrity from "../daemon/server/database/thread-state/WorkbenchThreadStateIntegrity";
-import migrateWorkbenchDatabase from "../shared/database/workbench-database-migration";
-import { tableForeignKeys } from "../shared/database/schema/schema-definition";
-import databaseReleases from "../shared/workbench/database/schema/releases";
-import WorkbenchProjectIdentityMigration from "../daemon/server/database/project/WorkbenchProjectIdentityMigration";
+import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
+import WorkbenchThreadStateIntegrity from "../../daemon/server/database/thread-state/WorkbenchThreadStateIntegrity";
+import migrateWorkbenchDatabase from "../../shared/database/workbench-database-migration";
+import { tableForeignKeys } from "../../shared/database/schema/schema-definition";
+import databaseReleases from "../../shared/workbench/database/schema/releases";
+import WorkbenchProjectIdentityMigration from "../../daemon/server/database/project/WorkbenchProjectIdentityMigration";
 
 export async function captureThreadStateMigrationSource(sourceRoot: string, privateRoot: string) {
   const directory = await fs.mkdtemp(path.join(privateRoot, "thread-state-source-"));
@@ -24,7 +24,7 @@ export async function captureThreadStateMigrationSource(sourceRoot: string, priv
   });
   try {
     const version = database.pragma("user_version", { simple: true }) as number;
-    assert.ok(version >= 33, "Diagnostic source must be a current migrated database");
+    assert.ok(version >= 33, "Scenario source must be a current migrated database");
     await database.backup(databasePath);
   } finally { database.close(); }
   return { databasePath };

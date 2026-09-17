@@ -8,6 +8,7 @@ import path from "node:path";
 const ROOTS = ["app", "daemon", "package", "shared", "test"];
 const EXCLUDED = new Set([".next", "build", "coverage", "dist", "generated", "node_modules", ".git", ".workbench", "target", "gen"]);
 const TEST = /\.test\.tsx?$/u;
+const OPT_IN_SCENARIO = /\.scenario\.test\.tsx?$/u;
 
 export default class ProjectTestCatalog {
   readonly tests: string[];
@@ -46,11 +47,17 @@ export default class ProjectTestCatalog {
     const explicitStandaloneTests: string[] = [];
     const walk = async (candidate: string): Promise<void> => {
       const info = await stat(candidate);
-      if (info.isFile()) { files.add(candidate); return; }
+      if (info.isFile()) {
+        if (!OPT_IN_SCENARIO.test(candidate)) files.add(candidate);
+        return;
+      }
       if (!info.isDirectory() || EXCLUDED.has(path.basename(candidate))) return;
       const entries = await readdir(candidate, { withFileTypes: true });
       await Promise.all(entries.map(async entry => {
-        if (entry.isFile()) files.add(path.join(candidate, entry.name));
+        if (entry.isFile()) {
+          const file = path.join(candidate, entry.name);
+          if (!OPT_IN_SCENARIO.test(file)) files.add(file);
+        }
         else if (entry.isDirectory() && !EXCLUDED.has(entry.name)) await walk(path.join(candidate, entry.name));
       }));
     };
@@ -63,7 +70,7 @@ export default class ProjectTestCatalog {
       const candidate = path.resolve(root, input);
       if (files.has(candidate) || candidate === root) continue;
       const info = await stat(candidate);
-      // Explicit diagnostics are opt-in; neighbouring non-tests remain available as ownership context.
+      // Explicit scenarios are opt-in; neighbouring non-tests remain available as ownership context.
       if (info.isFile()) {
         files.add(candidate);
         if (TEST.test(candidate)) explicitStandaloneTests.push(candidate);

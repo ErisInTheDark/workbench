@@ -9,12 +9,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { NativeThreadIdSchema, NativeTurnIdSchema, type ProjectId } from "../shared/workbench/identity";
-import WorkbenchThreadIdentityRepository from "../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
-import WorkbenchTranscriptIdentityRepository from "../daemon/server/database/transcript/WorkbenchTranscriptIdentityRepository";
-import WorkbenchTranscriptRepository from "../daemon/server/database/transcript/WorkbenchTranscriptRepository";
-import externalizeCodexTranscriptInlineImages from "../daemon/server/codex-transcript-image-assets";
-import WorkbenchTranscriptAssetStore from "../daemon/server/database/transcript/WorkbenchTranscriptAssetStore";
+import { NativeThreadIdSchema, NativeTurnIdSchema, type ProjectId } from "../../shared/workbench/identity";
+import WorkbenchThreadIdentityRepository from "../../daemon/server/database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchTranscriptIdentityRepository from "../../daemon/server/database/transcript/WorkbenchTranscriptIdentityRepository";
+import WorkbenchTranscriptRepository from "../../daemon/server/database/transcript/WorkbenchTranscriptRepository";
+import externalizeCodexTranscriptInlineImages from "../../daemon/server/codex-transcript-image-assets";
+import WorkbenchTranscriptAssetStore from "../../daemon/server/database/transcript/WorkbenchTranscriptAssetStore";
 
 export async function seedLifecycleTranscript(project: string, projectId: ProjectId) {
   const database = new Database(path.join(project, ".workbench/workbench.sqlite3"), { fileMustExist: true });

@@ -21,21 +21,27 @@ test("matches batteries to source owners without including unrelated neighbours"
   assert.deepEqual(catalog.select(["Foo.test.ts", "Foo.test.ts"]), [file("Foo.test.ts")]);
 });
 
-test("explicit standalone diagnostics do not discover or validate sibling tests", async () => {
+test("scenario tests require exact selection without hiding ordinary sibling tests", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "workbench-test-catalog-"));
   try {
-    const diagnostics = path.join(root, "diagnostics");
-    await mkdir(diagnostics);
-    const requested = path.join(diagnostics, "workbench-lifecycle.test.ts");
+    const scenarios = path.join(root, "test", "scenarios");
+    await mkdir(scenarios, { recursive: true });
+    const requested = path.join(scenarios, "lifecycle.scenario.test.ts");
+    const ordinary = path.join(scenarios, "IsolatedWorkbench.test.ts");
     await Promise.all([
       writeFile(requested, ""),
-      writeFile(path.join(diagnostics, "workbench-codex.test.ts"), ""),
-      writeFile(path.join(diagnostics, "lifecycle-fixture.ts"), ""),
+      writeFile(path.join(scenarios, "codex.scenario.test.ts"), ""),
+      writeFile(path.join(scenarios, "lifecycle-fixture.ts"), ""),
+      writeFile(path.join(scenarios, "IsolatedWorkbench.ts"), ""),
+      writeFile(ordinary, ""),
     ]);
-    const catalog = await ProjectTestCatalog.read(root, ["diagnostics/workbench-lifecycle.test.ts"]);
+    const defaultCatalog = await ProjectTestCatalog.read(root);
+    assert.doesNotThrow(() => defaultCatalog.validate());
+    assert.deepEqual(defaultCatalog.select(), [ordinary]);
+    const catalog = await ProjectTestCatalog.read(root, ["test/scenarios/lifecycle.scenario.test.ts"]);
     assert.doesNotThrow(() => catalog.validate());
-    assert.deepEqual(catalog.select(["diagnostics/workbench-lifecycle.test.ts"]), [requested]);
-    assert.equal(catalog.tests.some(file => file.endsWith("workbench-codex.test.ts")), false);
+    assert.deepEqual(catalog.select(["test/scenarios/lifecycle.scenario.test.ts"]), [requested]);
+    assert.equal(catalog.tests.some(file => file.endsWith("codex.scenario.test.ts")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

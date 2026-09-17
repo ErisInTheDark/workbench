@@ -1,7 +1,4 @@
-/*
- * Keywords: diagnostic, IPC, cross-platform shutdown.
- * No exports. Translate fixture-owned IPC into the entrypoint's real shutdown intent.
- */
+/* No exports. Translate fixture-owned IPC into the entrypoint's real shutdown intent. */
 let requested = false;
 let delivered = false;
 function deliver() {
@@ -14,7 +11,7 @@ function requestClose() {
   deliver();
 }
 process.on("message", message => {
-  if (message?.type === "workbench-diagnostic-close") requestClose();
+  if (message?.type === "workbench-scenario-close") requestClose();
 });
 process.on("disconnect", requestClose);
 process.on("newListener", event => {

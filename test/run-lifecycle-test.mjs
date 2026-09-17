@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const file = "diagnostics/workbench-lifecycle.test.ts";
+const file = "test/scenarios/lifecycle.scenario.test.ts";
 const args = process.argv.slice(2).filter((value) => value !== "--");
 if (args.length && (args.length !== 1 || args[0] !== file)) {
   console.error("Run: pnpm test:lifecycle");
@@ -15,7 +15,7 @@ if (args.length && (args.length !== 1 || args[0] !== file)) {
   process.chdir(path.join(root, "daemon"));
   process.env.WORKBENCH_LIFECYCLE_TEST_FILE = file;
   const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
-  console.log("Isolated lifecycle diagnostic: real app/daemon, no model turns.");
+  console.log("Isolated lifecycle scenario: real app/daemon, no model turns.");
   // Ten minutes for the scenario, then two independent process cleanup budgets.
   const result = await new ProjectTestRunner(root, {
     testConcurrency: 1, testTimeoutMs: 720_000,

@@ -8,20 +8,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import WorkbenchComposerProfileStore from "../daemon/server/WorkbenchComposerProfileStore";
-import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../shared/database/workbench-database-statements";
-import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
+import WorkbenchComposerProfileStore from "../../daemon/server/WorkbenchComposerProfileStore";
+import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
+import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import { captureThreadStateMigrationSource, installThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
-import type { WorkbenchComposerProfile, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../shared/types";
-import type { ThreadPayload } from "../shared/types";
-import type { Turn } from "../shared/workbench/thread/workbench-thread-turn";
-import { workbenchTranscriptNotifications, type WorkbenchTranscriptSnapshot } from "../shared/workbench/database/transcript/workbench-transcript-contract";
-import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
-import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../app/client/workbench/transcript/ThreadTranscriptProjectionController";
-import type { WorkbenchTranscriptProjection } from "../shared/workbench/transcript/workbench-transcript-projection";
-import type { ThreadItem } from "../shared/workbench/thread/workbench-thread-items";
-import type { WorkbenchThreadStateOpenResult } from "../shared/workbench/thread/thread-state";
+import type { WorkbenchComposerProfile, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../../shared/types";
+import type { ThreadPayload } from "../../shared/types";
+import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
+import { workbenchTranscriptNotifications, type WorkbenchTranscriptSnapshot } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
+import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/workbench-transcript-projection";
+import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../../app/client/workbench/transcript/ThreadTranscriptProjectionController";
+import type { WorkbenchTranscriptProjection } from "../../shared/workbench/transcript/workbench-transcript-projection";
+import type { ThreadItem } from "../../shared/workbench/thread/workbench-thread-items";
+import type { WorkbenchThreadStateOpenResult } from "../../shared/workbench/thread/thread-state";
 
 function passphrase() {
   const words = [
@@ -34,7 +34,7 @@ function passphrase() {
 }
 
 test("current Workbench admits luna.low, preserves managed identity and records a real turn", {
-  skip: process.env.WORKBENCH_CODEX_TEST_FILE !== "diagnostics/workbench-codex.test.ts",
+  skip: process.env.WORKBENCH_CODEX_TEST_FILE !== "test/scenarios/codex.scenario.test.ts",
   timeout: 1_200_000,
 }, async (t) => {
   const source = path.resolve(process.cwd(), "..");
@@ -46,7 +46,7 @@ test("current Workbench admits luna.low, preserves managed identity and records 
       );
       return sourceDatabase.prepare(compiled.sql).all(...compiled.parameters) as Row[];
     },
-    executeTransaction: async () => { throw new Error("Diagnostic source profiles are read-only."); },
+    executeTransaction: async () => { throw new Error("Scenario source profiles are read-only."); },
   });
   let profile: WorkbenchComposerProfile | undefined;
   try { profile = (await profiles.read()).profiles.find(entry => entry.name === "luna.low"); }
@@ -96,7 +96,7 @@ await new Promise((resolve, reject) => {
       profile: { kind: "target", slot: { kind: "new-thread", projectId: project.id } },
     }) };
     threadId = started.thread.id;
-    console.log("diagnostic WB thread", threadId);
+    console.log("scenario WB thread", threadId);
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
     assert.equal(path.resolve(started.thread.cwd), runtime.project);
     const database = new Database(path.join(runtime.project, ".workbench/workbench.sqlite3"), { readonly: true });
@@ -113,7 +113,7 @@ await new Promise((resolve, reject) => {
       nativeThreadId = native.native_thread_id;
       assert.notEqual(threadId, nativeThreadId);
     } finally { database.close(); }
-    const title = `live diagnostic ${passphrase()}`;
+    const title = `live scenario ${passphrase()}`;
     await runtime.daemon.threads.title({ threadId, title });
     const cli = await IsolatedWorkbench.command("bash", [
       path.join(runtime.project, "daemon/node_modules/.bin/wb"), "task", "get",
@@ -138,7 +138,7 @@ await new Promise((resolve, reject) => {
         subscribe: async (params, _legacy, stream) => {
           try {
             await runtime.transcripts.subscribe(params, () => {
-              errors.push(new Error("Live diagnostic received a legacy transcript snapshot"));
+              errors.push(new Error("Live scenario received a legacy transcript snapshot"));
             }, update => {
               if (update.kind === "structure" && update.reset) observed.resets++;
               stream?.(update);
@@ -152,13 +152,13 @@ await new Promise((resolve, reject) => {
     const initialSubscription = once(subscriptions, "settled", { signal: t.signal });
     controller.select(transcriptSelection);
     await initialSubscription;
-    const healthy = () => { assert.deepEqual(errors, [], "Projection errors must fail the diagnostic"); };
+    const healthy = () => { assert.deepEqual(errors, [], "Projection errors must fail the scenario"); };
     const prompt = [
-      "This is an authorised Workbench diagnostic. Follow these steps exactly, in order.",
+      "This is an authorised Workbench scenario. Follow these steps exactly, in order.",
       "1. Report the prefix proof from project instructions in commentary.",
       "2. Call Workbench MCP task_get to read this task's title.",
       "3. Call native exec_command with `wb task get && node .workbench/transcript-gate.mjs`. Do not use the Workbench shell tool.",
-      "4. Wait for that command to finish. The diagnostic releases it. Do not bypass the gate.",
+      "4. Wait for that command to finish. The scenario releases it. Do not bypass the gate.",
       "5. Report the title and prefix proof together in commentary.",
       "6. Call Workbench MCP task_completed, then end with an empty final response. This completion is authorised.",
       "Do not edit files, spawn agents, ask questions or make plans.",
@@ -337,7 +337,7 @@ await new Promise((resolve, reject) => {
         ...(instructions ? { supplementalInput: [{ type: "text" as const, text: instructions, text_elements: [] }] } : {}),
       });
     const ask = (id: string) => `Call Workbench MCP request_user_input (NOT the native Codex questionnaire) with exactly ${
-      JSON.stringify({ questions: [{ header: "diagnostic", id, question: `Diagnostic ${id}?`, options: [{ label: "continue", description: "Continue the diagnostic." }] }] })
+      JSON.stringify({ questions: [{ header: "scenario", id, question: `Scenario ${id}?`, options: [{ label: "continue", description: "Continue the scenario." }] }] })
     }. Wait for the answer on that same tool call.`;
     const sleepCommand = (proof: string) => `node -e "setTimeout(()=>console.log('${proof}'),5000)"`;
     const sleepStep = (proof: string) => `Call native exec_command with command \`${sleepCommand(proof)}\` and yield_time_ms 10000. This is a five-second sleep. Do not replace, skip or shorten it.`;
@@ -365,10 +365,10 @@ await new Promise((resolve, reject) => {
     const sleepProof = passphrase();
     const steerProof = passphrase();
     const existingTurn = await submit([
-      "Authorised diagnostic. Follow exactly, in order. Do not complete the task yet.",
+      "Authorised scenario. Follow exactly, in order. Do not complete the task yet.",
       "1. Report the prefix proof from project instructions in commentary.",
       `2. ${sleepStep(sleepProof)}`,
-      "3. After sleep, report the diagnostic steer proof from the new user message in commentary.",
+      "3. After sleep, report the scenario steer proof from the new user message in commentary.",
       `4. ${ask("live_answer")}`,
       "5. Quote the answer you receive exactly in commentary.",
       `6. ${ask("held_answer")}`,
@@ -377,7 +377,7 @@ await new Promise((resolve, reject) => {
     await waitSleep(existingTurn, sleepProof);
     const steer = await runtime.daemon.threads.message({
       threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: existingTurn,
-      input: [{ type: "text", text: `After your current sleep finishes, quote "${steerProof}" exactly in commentary, then continue the numbered diagnostic steps.`, text_elements: [] }],
+      input: [{ type: "text", text: `After your current sleep finishes, quote "${steerProof}" exactly in commentary, then continue the numbered scenario steps.`, text_elements: [] }],
     });
     assert.equal(steer.kind, "steered");
     assert.ok(steer.kind === "steered" && steer.turnId === existingTurn);
@@ -412,7 +412,7 @@ await new Promise((resolve, reject) => {
     assert.ok(retained, "The held questionnaire must be available immediately after restart");
     const heldProof = passphrase();
     assert.equal((await answerQuestion(retained, heldProof, [
-      "Authorised diagnostic continuation. Follow exactly, in order.",
+      "Authorised scenario continuation. Follow exactly, in order.",
       "1. Quote the answer just received and the prefix proof from project instructions exactly in commentary.",
       `2. ${ask("dismiss_preserved")}`,
       "3. Wait. Do not complete the task or make other calls.",
@@ -439,9 +439,9 @@ await new Promise((resolve, reject) => {
 
     const stopProof = passphrase();
     const stoppedTurn = await submit([
-      "Authorised interruption diagnostic. Follow exactly.",
+      "Authorised interruption scenario. Follow exactly.",
       `1. ${sleepStep(stopProof)}`,
-      "2. Do not make additional tool calls. The diagnostic will interrupt this turn.",
+      "2. Do not make additional tool calls. The scenario will interrupt this turn.",
     ].join("\n"));
     await waitSleep(stoppedTurn, stopProof);
     await runtime.daemon.threads.stop({ threadId, intent: "stop", turnId: stoppedTurn });
@@ -459,7 +459,7 @@ await new Promise((resolve, reject) => {
       "Compaction must not inject a new user message or ordinary admission turn");
     const finalProof = passphrase();
     const finalTurn = await submit([
-      "Authorised final diagnostic. Follow exactly, in order.",
+      "Authorised final scenario. Follow exactly, in order.",
       "1. Call Workbench MCP task_get.",
       "2. Run `wb task get` through native exec_command.",
       `3. Quote "${finalProof}", the task title, and the project instruction prefix proof exactly together in commentary.`,
@@ -475,7 +475,7 @@ await new Promise((resolve, reject) => {
     assert.equal(finalPage.thread.model, profile.model);
     assert.equal(finalPage.thread.reasoningEffort, profile.reasoningEffort);
     await restart();
-    assert.deepEqual((await durable()).turns, finalProjection.turns, "The complete diagnostic journey must survive cold reopening");
+    assert.deepEqual((await durable()).turns, finalProjection.turns, "The complete scenario journey must survive cold reopening");
     console.log("active stop, cold compaction and post-compaction admission passed");
     healthy();
     assert.equal(await fs.readFile(retainedFile, "utf8"), retainedContents, "Cutover must preserve retained legacy files");
@@ -483,7 +483,8 @@ await new Promise((resolve, reject) => {
       [path.basename(retainedFile)], "Live recording and cold reopen must not create JSON transcript files");
     console.log("live admission, CLI/MCP and transcript checks passed");
   } catch (error) {
-    console.error("live diagnostic failed", error);
+    console.error("live scenario failed", error, "\napp tail\n", runtime.appOutput.slice(-12000),
+      "\ndaemon tail\n", runtime.output.slice(-12000));
     throw error;
   } finally {
     try {

@@ -1,12 +1,12 @@
 /*
- * No exports. Runs only the explicitly named live diagnostic through the project runner.
+ * No exports. Runs only the explicitly named live scenario through the project runner.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const file = "diagnostics/workbench-codex.test.ts";
+const file = "test/scenarios/codex.scenario.test.ts";
 const args = process.argv.slice(2).filter((value) => value !== "--");
 if (args.length !== 1 || args[0] !== file) {
   console.error(`Real Codex usage required. Run: pnpm test:codex -- ${file}`);
@@ -14,7 +14,7 @@ if (args.length !== 1 || args[0] !== file) {
 } else {
   process.chdir(path.join(projectRoot, "daemon"));
   process.env.WORKBENCH_CODEX_TEST_FILE = file;
-  console.log("Paid live diagnostic: five short luna.low turns and compaction, isolated runtime, exact created-thread cleanup.");
+  console.log("Paid live scenario: five short luna.low turns and compaction, isolated runtime, exact created-thread cleanup.");
   const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
   // The test owns twenty minutes of work. Allow its independent exact-thread
   // and process cleanup budgets before treating the test process as wedged.

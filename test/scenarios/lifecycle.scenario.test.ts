@@ -13,12 +13,12 @@ import {
   WORKBENCH_RELOAD_METHOD, WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD, WorkbenchDaemonReloadDirtEnvelopeSchema,
   type DaemonReloadResponse,
-} from "../shared/workbench/daemon-reload";
-import type { WorkbenchReloadDirtSnapshot } from "../shared/reload/workbench-reload";
-import type { WorkbenchProjectsPayload } from "../shared/types";
-import { projectWorkbenchTranscript } from "../shared/workbench/transcript/workbench-transcript-projection";
-import type { TranscriptStreamUpdate } from "../shared/workbench/transcript/thread-transcript-stream";
-import { workbenchDatabaseSchema } from "../daemon/server/database/workbench-database-schema";
+} from "../../shared/workbench/daemon-reload";
+import type { WorkbenchReloadDirtSnapshot } from "../../shared/reload/workbench-reload";
+import type { WorkbenchProjectsPayload } from "../../shared/types";
+import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/workbench-transcript-projection";
+import type { TranscriptStreamUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
+import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -32,7 +32,7 @@ function inspectDatabase(file: string, table?: string) {
 }
 
 test("real application survives reload expiry, migrated candidate failure, retry and cold reopening", {
-  skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "diagnostics/workbench-lifecycle.test.ts",
+  skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "test/scenarios/lifecycle.scenario.test.ts",
   timeout: 600_000,
 }, async (t) => {
   const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, { codexIdentity: false });
@@ -175,7 +175,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     let transcriptReady = false;
     const stopAvailability = runtime.transcripts.onAvailabilityChange(available => { transcriptReady = available; });
     stopAvailability();
-    assert.ok(transcriptReady, "Diagnostic startup must include transcript protocol readiness, not just an open socket");
+    assert.ok(transcriptReady, "Scenario startup must include transcript protocol readiness, not just an open socket");
     const daemonStartupMs = Math.round(performance.now() - daemonStart);
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const fixtureProject = catalog.data.find(project => path.resolve(project.rootPath) === runtime.project);
@@ -184,7 +184,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const appStart = performance.now();
     await runtime.startApp();
     const appStartupMs = Math.round(performance.now() - appStart);
-    console.log(`cold startup to diagnostic readiness: daemon ${daemonStartupMs}ms, app ${appStartupMs}ms`);
+    console.log(`cold startup to scenario readiness: daemon ${daemonStartupMs}ms, app ${appStartupMs}ms`);
     for (const output of [runtime.output, runtime.appOutput]) {
       console.log(output.split(/\r?\n/u).filter(line => line.startsWith("[startup] ")).join("\n"));
     }
