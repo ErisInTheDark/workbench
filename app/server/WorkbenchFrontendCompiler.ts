@@ -256,7 +256,10 @@ export default class WorkbenchFrontendCompiler {
           WORKBENCH_DISABLE_REACT_SCAN: this.environment.WORKBENCH_DISABLE_REACT_SCAN,
         }),
       },
-      entryPoints: [path.join(this.appDirectoryPath, "browser-entry.tsx")],
+      entryPoints: {
+        app: path.join(this.appDirectoryPath, "browser-entry.tsx"),
+        "voice-capture": path.join(this.appDirectoryPath, "workbench", "voice", "voice-capture-worklet.ts"),
+      },
       format: "esm",
       jsx: "automatic",
       loader: {
@@ -267,7 +270,7 @@ export default class WorkbenchFrontendCompiler {
         ".svg": "file",
       },
       logLevel: "silent",
-      outfile: path.join(this.outputDirectoryPath, "assets", "app.js"),
+      outdir: path.join(this.outputDirectoryPath, "assets"),
       platform: "browser",
       plugins: [this.esbuildLifecyclePlugin()],
       sourcemap: "linked",

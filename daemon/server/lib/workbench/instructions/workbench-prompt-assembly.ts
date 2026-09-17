@@ -268,13 +268,15 @@ export async function ensureWorkbenchPromptFiles() {
 export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptContext = {}): Promise<WorkbenchPromptInstructions> {
   await ensureWorkbenchPromptFiles();
 
+  const voice = context.role === "voice-to-text";
+  if (voice) context = { ...context, workflowIds: ["voice-to-text"] };
   const instructionFiles = createLibraryInstructionFileGeneration();
   const [agentDefinition, projectSkills, instructionPacks] = await Promise.all([
     readSelectedAgentDefinition(context, instructionFiles),
-    listProjectSkillDefinitionsForPrompt(context),
+    voice ? Promise.resolve([]) : listProjectSkillDefinitionsForPrompt(context),
     listWorkbenchLibraryInstructions(),
   ]);
-  const skillManifest = context.skillCatalogPresentation === "references"
+  const skillManifest = voice ? null : context.skillCatalogPresentation === "references"
     ? await buildWorkbenchSkillCatalog(projectSkills)
     : await buildWorkbenchSkillBodyCatalog(projectSkills);
   const slots: Record<string, string> = {
@@ -283,13 +285,14 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     "subagent.identity": buildSubagentIdentity(context),
     "workflow.content": buildWorkflowContent(context, instructionFiles),
     "workspace.roots.list": formatWorkspaceRoots(context.roots),
+    "voice.instruction-packs": voice ? buildInstructionPackSections(instructionPacks) ?? "" : "",
   };
 
   const renderedBaseInstructions = trimRenderedInstructionContent(
     instructionFiles.renderWithSources(AGENTS_FILE_NAME, slots),
   );
   const baseInstructions = renderedBaseInstructions.content;
-  const developerInstructions = joinInstructionSections([
+  const developerInstructions = voice ? null : joinInstructionSections([
     buildProjectInstructionSection(buildProjectInstructionContent(context)),
     buildInstructionPackSections(instructionPacks),
   ]);

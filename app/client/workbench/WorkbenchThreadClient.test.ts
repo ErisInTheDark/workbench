@@ -16,6 +16,7 @@ import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/
 import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
+import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
 import type {
   WorkbenchThreadSidebarEntry,
@@ -400,6 +401,20 @@ function questionnaireEntry(
     turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   };
 }
+
+test("voice document events traverse the shared socket and mounted daemon adapter", async () => withClient(async (client, socket) => {
+  const daemon = new WorkbenchDaemonClient({
+    request: (method, params) => client.requestWorkbench(method, params),
+    onNotification: listener => client.onWorkbenchNotification(listener),
+  });
+  const texts: string[] = [];
+  const unsubscribe = daemon.onVoiceEvent(event => {
+    if (event.type === "document") texts.push(event.text);
+  });
+  socket.notify("voice/event", { type: "document", sessionId: "9d59d847-6d43-4616-8df7-f516abc8e19d", revision: 1, text: "edited" });
+  assert.deepEqual(texts, ["edited"]);
+  unsubscribe();
+}));
 
 test("normal message admission stays independent until transcript capability is advertised", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "idle", "completed");

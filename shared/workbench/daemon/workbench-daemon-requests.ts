@@ -121,6 +121,14 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
 
 export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
+  "voice/configuration/read": { params: object; result: import("../voice/voice-session-contract").VoiceConfiguration };
+  "voice/configuration/write": { params: import("../voice/voice-session-contract").VoiceConfiguration; result: { ok: true } };
+  "voice/agents": { params: object; result: { data: import("../../types").WorkbenchAgentOption[] } };
+  "voice/prepare": { params: object; result: { ok: true } };
+  "voice/start": { params: import("../voice/voice-session-contract").VoiceStart; result: { ok: true } };
+  "voice/audio": { params: import("../voice/voice-session-contract").VoiceAudio; result: { ok: true } };
+  "voice/finish": { params: { sessionId: string }; result: { ok: true } };
+  "voice/cancel": { params: { sessionId: string }; result: { ok: true } };
   "git/working-tree/read": { params: { projectId: string; preferCached?: boolean }; result: import("../git/working-tree-contracts").WorkingTreeRead };
   "git/working-tree/diff": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreeDiff };
   "git/working-tree/preview": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreePreview };

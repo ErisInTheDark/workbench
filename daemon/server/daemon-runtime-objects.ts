@@ -176,6 +176,12 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  voiceSettings: import("./voice/VoiceSettingsStore").default;
+  voice: {
+    controller: import("./voice/WorkbenchVoiceController").default;
+    settings: import("./voice/VoiceSettingsStore").default;
+    agents(): Promise<import("workbench-shared/types").WorkbenchAgentOption[]>;
+  };
   providerObservations: {
     observe(
       harness: WorkbenchHarness,

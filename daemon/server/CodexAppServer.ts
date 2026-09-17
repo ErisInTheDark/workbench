@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - CodexAppServerOptions: inject app-server callbacks and testable child lifecycle boundaries. Keywords: codex, app-server, options.
- * - getCodexAppServerArgs: define managed Codex feature policy and app-server stdio arguments. Keywords: codex, app-server, args, policy.
- * - default CodexAppServer: stable owner for the Codex app-server stdio process. Keywords: codex, app-server, stdio, lifecycle.
+ * - CodexAppServerOptions: process callbacks, launch policy and testable lifecycle.
+ * - getCodexAppServerArgs: managed Codex feature policy and stdio arguments.
+ * - default CodexAppServer: native stdio process and retirement owner.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
@@ -16,6 +16,7 @@ import {
 } from "./process-helpers";
 
 export type CodexAppServerOptions = {
+  args?: readonly string[];
   createChild?: () => ChildProcess;
   log?: (name: string, message: string) => void;
   logError?: (name: string, message: string) => void;
@@ -71,16 +72,18 @@ export default class CodexAppServer {
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
+  private readonly args: readonly string[];
   private previousAppServer: CodexAppServer | undefined;
   private readonly terminateChildAsync: (child: ChildProcess) => Promise<void>;
 
-  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, previousAppServer, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
+  constructor({ args, createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, previousAppServer, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
     this.log = lifecycleLog ?? log;
     this.logError = lifecycleLogError ?? logError;
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
+    this.args = args ?? getCodexAppServerArgs();
     this.previousAppServer = previousAppServer;
     this.terminateChildAsync = terminateChildAsync ?? (async (child) => await killProcessTreeAsync(child.pid));
   }
@@ -135,7 +138,7 @@ export default class CodexAppServer {
   private createStdioChild() {
     const spawnDescriptor = getSpawnDescriptor({
       command: "codex",
-      args: getCodexAppServerArgs(),
+      args: [...this.args],
     });
 
     return spawn(spawnDescriptor.command, spawnDescriptor.args, {

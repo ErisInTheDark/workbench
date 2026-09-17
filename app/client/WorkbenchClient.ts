@@ -58,6 +58,8 @@ import WorkbenchNavigationController from "./workbench/WorkbenchNavigationContro
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchDaemonRuntimeClient from "./workbench/WorkbenchDaemonRuntimeClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchVoiceClient from "./workbench/voice/WorkbenchVoiceClient";
+import frontendJavaScriptGeneration from "workbench-shared/frontend-generation";
 import ThreadIdentityController from "./workbench/thread/ThreadIdentityController";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
@@ -78,6 +80,7 @@ type MountedWorkbenchControls = WorkbenchControls & {
 };
 
 export interface MountedWorkbenchClient {
+  voice?: WorkbenchVoiceClient;
   getThreadController: ReturnType<typeof WorkbenchThreadClient>["getThreadController"];
   controls: WorkbenchControls;
   dispose: () => void;
@@ -311,10 +314,13 @@ export async function WorkbenchClient(
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const daemon = new WorkbenchDaemonClient({
+    onDisconnect: listener => threadClient.onDisconnect(listener),
     onNotification: (listener) => threadClient.onWorkbenchNotification(listener),
     onReconnect: (listener) => threadClient.onReconnect(listener),
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
+  const voice = new WorkbenchVoiceClient(daemon, `/assets/voice-capture.js?v=${frontendJavaScriptGeneration}`);
+  coordinatorLifecycle.addUnsubscribe(() => voice.dispose());
   const threadIdentity = new ThreadIdentityController(async (request) => {
     const { data } = await daemon.threads.resolveIdentity(request);
     if (data) workbenchBindings.clientStateController?.rememberThreadIdentityAlias(data.projectId, request.threadId, data.threadId);
@@ -1172,6 +1178,7 @@ export async function WorkbenchClient(
   }
   connectionRecovery.start();
   return {
+    voice,
     controls,
     dispose: () => {
       threadSidebarClient.bestEffortFlush();

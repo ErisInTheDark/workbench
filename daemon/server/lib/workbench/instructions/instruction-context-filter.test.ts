@@ -39,6 +39,22 @@ test("selectors are conjunctive and control lines never escape", () => {
   assert.equal(filter(value).output, "before\nkept\nafter");
 });
 
+test("trusted voice role excludes agent guidance and composes with other selectors", () => {
+  const source = "<role:agent>\nordinary\n</role:agent>\n<role:voice-to-text>\n<harness:codex>\nvoice\n</harness:codex>\n</role:voice-to-text>";
+  const warnings: WorkbenchInstructionFilterWarning[] = [];
+  const context = {
+    available: new Set<string>(), field: "pack", harness: "codex" as const,
+    model: null, shell: "pwsh" as const,
+    onWarning: (warning: WorkbenchInstructionFilterWarning) => warnings.push(warning),
+    role: "voice-to-text" as const,
+  };
+  assert.equal(filterWorkbenchInstructionContent(source, context), "voice");
+  assert.equal(filter(source).output, "ordinary");
+  assert.deepEqual(warnings, []);
+  const example = "```md\n<role:agent>\nliteral\n</role:agent>\n```";
+  assert.equal(filterWorkbenchInstructionContent(example, context), example);
+});
+
 test("model selectors require the exact configured model", () => {
   const value = "<model:gpt-6-astra>\nastra only\n</model:gpt-6-astra>";
   assert.equal(filter(value).output, "astra only");

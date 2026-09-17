@@ -28,15 +28,15 @@ function quietLogger() {
 function compilerTools() {
   let onStart: () => void | Promise<void> = () => {};
   let onEnd: (result: esbuild.BuildResult) => void | Promise<void> = () => {};
-  let outputPath = "";
+  let outputPaths: string[] = [];
   let watches = 0;
   let disposals = 0;
   const context = {
     async rebuild() {
       await onStart();
-      const result = { errors: [], warnings: [], metafile: undefined, mangleCache: undefined, outputFiles: [{
+      const result = { errors: [], warnings: [], metafile: undefined, mangleCache: undefined, outputFiles: outputPaths.map(outputPath => ({
         path: outputPath, contents: Buffer.from("fresh javascript"), hash: "", text: "fresh javascript",
-      }] };
+      })) };
       await onEnd(result);
       return result;
     },
@@ -50,7 +50,7 @@ function compilerTools() {
     get watches() { return watches; },
     get disposals() { return disposals; },
     async createContext(options: esbuild.BuildOptions) {
-      outputPath = options.outfile!;
+      outputPaths = options.outfile ? [options.outfile] : Object.keys(options.entryPoints ?? {}).map(name => path.join(options.outdir!, `${name}.js`));
       const build: Pick<esbuild.PluginBuild, "onStart" | "onEnd" | "onResolve" | "onLoad"> = {
         onStart(callback) { onStart = callback as typeof onStart; },
         onEnd(callback) { onEnd = callback as typeof onEnd; },

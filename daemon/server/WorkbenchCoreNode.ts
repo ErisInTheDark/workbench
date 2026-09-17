@@ -26,6 +26,7 @@ import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
+import VoiceSettingsStore from "./voice/VoiceSettingsStore";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
@@ -53,6 +54,7 @@ import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
+import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 function createModules(): DaemonReloadableModules {
@@ -97,6 +99,7 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
   });
   const profileStore = new WorkbenchComposerProfileStore(database);
+  const voiceSettings = new VoiceSettingsStore(database, profileStore);
   const logThreadStateWarning = (message: string) => {
     console.warn("[thread-state-ws]", message.slice(0, 500));
   };
@@ -306,6 +309,7 @@ function createWorkbenchCoreFeature(
     },
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
+    voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
     providerObservations: {
       observe: async (harness, facts) => {
@@ -348,6 +352,7 @@ function createWorkbenchCoreFeature(
       reportPhase("thread-state disposal");
       await threadState.dispose();
       reportPhase("composer profile disposal");
+      await voiceSettings.dispose();
       await profileStore.dispose();
       reportPhase("search disposal");
       await search.dispose();
@@ -374,7 +379,7 @@ function createWorkbenchCoreFeature(
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>({
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing }) => createWorkbenchCoreFeature(
     context,
     run,

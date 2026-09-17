@@ -7,6 +7,7 @@ import type { ReloadableNodeInstance } from "./ReloadableNode";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 
 export const WORKBENCH_CORE_FEATURE_KEYS = [
+  "voiceSettings",
   "browseSessionCleanup",
   "daemonRequests",
   "gitArc",

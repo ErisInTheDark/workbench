@@ -33,6 +33,9 @@ import {
   type WorkbenchEventStreamHealth,
 } from "workbench-shared/workbench/websocket-stream";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import { z } from "zod";
+import { VoiceAudioSchema, VoiceConfigurationSchema, VoiceStartSchema } from "workbench-shared/workbench/voice/voice-session-contract";
+import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import {
   mapNativeThreadStateSnapshot, mapNativeThreadStateResult,
   mapWorkbenchThreadStateRequest,
@@ -119,6 +122,7 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 }
 
 export interface WorkbenchWebSocketRequestControllerOptions {
+  voice?: DaemonRuntimeObjects["voice"];
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
@@ -178,6 +182,7 @@ function readResponseErrorMessage(message: unknown) {
 }
 
 export default class WorkbenchWebSocketRequestController {
+  private readonly voice: DaemonRuntimeObjects["voice"] | undefined;
   private lifecycle: "active" | "suspended" | "disposed" = "active";
   private get detached() { return this.lifecycle !== "active"; }
   private generation = new AbortController();
@@ -207,6 +212,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
+    voice,
     clearTimeout: cancel = clearTimeout,
     daemonRequests = {
       accepts: () => false,
@@ -225,6 +231,7 @@ export default class WorkbenchWebSocketRequestController {
     transcript,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
+    this.voice = voice;
     this.cancel = cancel;
     this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
@@ -316,7 +323,7 @@ export default class WorkbenchWebSocketRequestController {
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
-    const workbenchRequest = daemonRequest || method.startsWith("workbench/thread-state/")
+    const workbenchRequest = daemonRequest || method.startsWith("voice/") || method.startsWith("workbench/thread-state/")
       || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
     const harness = workbenchRequest ? "workbench" : "unknown";
@@ -337,6 +344,38 @@ export default class WorkbenchWebSocketRequestController {
     signal.throwIfAborted();
 
     if (workbenchRequest && isRequest) {
+      if (method.startsWith("voice/")) {
+        try {
+          if (!this.voice) throw new Error("Voice support is unavailable or reloading.");
+          let result: object = { ok: true };
+          const params = message.params;
+          const session = () => z.object({ sessionId: z.string().uuid() }).strict().parse(params).sessionId;
+          switch (method) {
+            case "voice/configuration/read": result = await this.voice.settings.read(); break;
+            case "voice/configuration/write": {
+              const configuration = VoiceConfigurationSchema.parse(params);
+              await this.voice.settings.write(configuration);
+              if (!configuration.selection) await this.voice.controller.clear();
+              break;
+            }
+            case "voice/agents": result = { data: await this.voice.agents() }; break;
+            case "voice/prepare": await this.voice.controller.prepare(); break;
+            case "voice/start": await this.voice.controller.start(connectionId, VoiceStartSchema.parse(params), event => {
+              void this.sendJsonToClient(client, { method: "voice/event", params: event })
+                .catch(error => this.reportSendFailure({ method: "voice/event" }, error));
+            }); break;
+            case "voice/audio": await this.voice.controller.audio(connectionId, VoiceAudioSchema.parse(params)); break;
+            case "voice/finish": await this.voice.controller.finish(connectionId, session()); break;
+            case "voice/cancel": await this.voice.controller.cancel(connectionId, session()); break;
+            default: throw new Error("Unknown voice request.");
+          }
+          await this.sendJsonToClient(client, { id: requestId, result });
+        } catch (error) {
+          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000,
+            message: error instanceof z.ZodError ? "Invalid voice request." : error instanceof Error ? error.message.slice(0, 512) : "Voice request failed." } });
+        }
+        return;
+      }
       if (daemonRequest) {
         if (method === "stats/import/start") this.statsObservers.set(connectionId, { client, connectionId });
         await this.sendJsonToClient(client, await this.daemonRequests.handle(message, connectionId));
@@ -526,7 +565,12 @@ export default class WorkbenchWebSocketRequestController {
     this.reloadDirtObservers.delete(connectionId);
     this.statsObservers.delete(connectionId);
     this.unsubscribeTranscriptConnection(connectionId);
-    await this.threadState.disconnect(connectionId);
+    const cleanup = await Promise.allSettled([
+      this.voice?.controller.disconnect(connectionId),
+      this.threadState.disconnect(connectionId),
+    ]);
+    const failures = cleanup.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "WebSocket connection cleanup failed.");
   }
 
   readEventStreamHealth(): WorkbenchEventStreamHealth {

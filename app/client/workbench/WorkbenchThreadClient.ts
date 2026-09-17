@@ -159,8 +159,9 @@ interface WorkbenchThreadClient {
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
+  onDisconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: {
-    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
+    method: "voice/event" | "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) => () => void;
   refreshCurrentThread: () => Promise<ThreadPayload | null>;
@@ -565,12 +566,13 @@ function WorkbenchThreadClient(
   let selectedObservation: ReturnType<ThreadObservationController["acquire"]> | null = null;
 
   function onWorkbenchNotification(listener: (notification: {
-    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
+    method: "voice/event" | "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) {
     return socket.onWorkbenchNotification((notification) => {
       if (
         notification.method === "workbench/thread-state/reset"
+        || notification.method === "voice/event"
         || notification.method === "workbench/thread-state/updated"
         || notification.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
         || notification.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD
@@ -4904,6 +4906,7 @@ function WorkbenchThreadClient(
     listModels,
     openThread,
     onReconnect,
+    onDisconnect: listener => socket.onConnectionClose(listener),
     onWorkbenchNotification,
     refreshCurrentThread,
     requestWorkbench,

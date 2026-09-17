@@ -9,6 +9,7 @@ import { conformWorkbenchTranscriptSnapshot, type WorkbenchTranscriptSnapshot } 
 import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
+import WorkbenchVoiceController from "./voice/WorkbenchVoiceController";
 
 class FakeClock {
   nowMs = 0;
@@ -62,9 +63,11 @@ function createController(options: {
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
   materialize?: (threadId: string, turnIds: string[]) => Promise<void>;
+  voice?: WorkbenchWebSocketRequestControllerOptions["voice"];
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
+    voice: options.voice,
     clearTimeout: options.clock.clearTimeout,
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
@@ -97,6 +100,43 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("voice RPC binds events and audio admission to the initiating connection", async () => {
+  let audio = 0;
+  let cancelled = 0;
+  const disconnected: string[] = [];
+  const voice = new WorkbenchVoiceController({
+    recognizer: { async prepare() {}, async dispose() {}, async send(request) { if (request.type === "audio") audio++; } },
+    async resolveSettings() { return { harness: "codex", model: "luna", reasoningEffort: "none", agentPath: null, agentSource: null, serviceTier: null }; },
+    instructions: async () => "voice",
+    provider: () => ({ async prepare() {}, async start() {}, async input() {}, async finish() {}, async cancel() { cancelled++; } }),
+  });
+  const { controller } = createController({
+    clock: new FakeClock(), onDisconnect: connection => disconnected.push(connection),
+    voice: {
+      controller: voice, agents: async () => [],
+      settings: {} as NonNullable<WorkbenchWebSocketRequestControllerOptions["voice"]>["settings"],
+    },
+  });
+  const received: { owner: string; method?: string; error?: object }[] = [];
+  const client = (owner: string) => createClient((data, callback) => {
+    received.push({ ...JSON.parse(String(data)), owner });
+    callback?.();
+  });
+  const first = client("first");
+  const second = client("second");
+  const sessionId = "9d59d847-6d43-4616-8df7-f516abc8e19d";
+  try {
+    await controller.handleMessage(first, "first", frame("voice/start", 1, { params: { sessionId, text: "" } }), false);
+    await controller.handleMessage(second, "second", frame("voice/audio", 2, { params: { sessionId, sequence: 0, pcm: "AAAA" } }), false);
+    assert.equal(audio, 0);
+    assert.equal(received.some(message => message.owner === "second" && message.error), true);
+    assert.ok(received.filter(message => message.method === "voice/event").every(message => message.owner === "first"));
+    await controller.disconnect(first, "first");
+    assert.equal(cancelled, 1);
+    assert.deepEqual(disconnected, ["first"]);
+  } finally { controller.dispose(); await voice.dispose(); }
+});
 
 for (const kind of ["event", "response"] as const) {
   test(`a late ${kind} send failure settles through the current graph owner`, async () => {

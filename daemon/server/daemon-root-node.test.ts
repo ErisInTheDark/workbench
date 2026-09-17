@@ -87,6 +87,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:mcp",
     "server:topology",
     "server:turns",
+    "server:voice",
     "server:websocket",
   ]);
   assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
@@ -95,7 +96,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/lifecycle", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex/instructions")!], ["server:database"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
-  assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns", "server:voice"]);
+  assert.deepEqual([...parents.get("server:voice")!].sort(), ["server:codex/def", "server:core"]);
   assert.deepEqual([...parents.get("server:instructions")!], ["server:database"]);
   assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
@@ -137,7 +139,7 @@ test("provider configuration reload owns its definition without acquiring the ha
   const { parents } = flattenParents(graph.roots);
   assert.deepEqual([...parents.get("server:codex/configuration")!], ["server:database"]);
   const { dependantClosure } = readReloadNodeSourceState();
-  assert.deepEqual(dependantClosure(["server:codex/def"]), ["server:codex/def"]);
+  assert.deepEqual(new Set(dependantClosure(["server:codex/def"])), new Set(["server:codex/def", "server:voice", "server:websocket"]));
   const configurationClosure = dependantClosure(["server:codex/configuration"]);
   assert.equal(configurationClosure.includes("server:codex/def"), true);
   assert.equal(configurationClosure.includes("harness:codex"), false);

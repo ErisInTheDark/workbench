@@ -5,11 +5,15 @@
 import ReloadableNode from "./ReloadableNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
+import CodexSingleFileController from "./CodexSingleFileController";
+import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
+import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [],
+  children: [WorkbenchVoiceNode],
   create: (_context, { get }) => {
+    const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime());
     const local = get("codexConfiguration");
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
@@ -19,6 +23,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     });
     return {
       registrations: { codexProvider: {
+        singleFile,
         threads,
         tools: get("codexTools"),
         recovery: get("codexRecovery"),
@@ -49,7 +54,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         },
       } },
       start: () => undefined,
-      dispose: () => undefined,
+      dispose: () => singleFile.dispose(),
     };
   },
   description: "Reload the Codex provider definition.",
@@ -58,5 +63,10 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   requires: ["codexConfiguration", "codexSandboxNetwork", "codexThreadOperations", "codexNativeConfiguration", "codexTools", "codexRecovery"],
   safeAll: true,
   scope: "server:codex/def",
-  sources: "daemon/server/CodexProvider.ts",
+  sources: [
+    "daemon/server/CodexProvider.ts",
+    "daemon/server/CodexSingleFileController.ts",
+    "daemon/server/CodexSingleFileRuntime.ts",
+    "shared/workbench/provider/provider-single-file.ts",
+  ].join("\n"),
 });

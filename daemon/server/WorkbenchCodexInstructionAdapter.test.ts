@@ -38,6 +38,45 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
+test("voice assembly keeps the selected agent and role packs in one resolved prompt", async () => {
+  const { buildWorkbenchPromptInstructions, filterWorkbenchInstructionContent } = await import("./lib/workbench/instructions/workbench-prompt-assembly");
+  const { default: buildWorkbenchOwnedPromptFields } = await import("./codex-owned-prompt");
+  await buildWorkbenchPromptInstructions();
+  const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
+  const agent = path.join(testWorkbenchLibraryRoot, "agents", "voice-fixture.md");
+  const pack = path.join(testWorkbenchLibraryRoot, "instructions", "voice-fixture.md");
+  await fs.writeFile(override, [
+    "<role:agent>\nordinary-only-policy\n</role:agent>",
+    "{agent.prompt}",
+    "<role:voice-to-text>\n{voice.instruction-packs}\n</role:voice-to-text>",
+    "{workflow.content}",
+  ].join("\n"));
+  await fs.writeFile(agent, "selected-agent-fixture");
+  await fs.writeFile(pack, "<role:agent>\nordinary-pack-fixture\n</role:agent>\n<role:voice-to-text>\nvoice-pack-fixture\n</role:voice-to-text>");
+  try {
+    const prompt = await buildWorkbenchPromptInstructions({
+      role: "voice-to-text", harness: "codex", agentPath: "library:agents/voice-fixture.md",
+      workflowIds: ["default"],
+    });
+    const resolved = filterWorkbenchInstructionContent(prompt.baseInstructions, {
+      role: "voice-to-text", harness: "codex", model: "model", shell: "pwsh", available: new Set(),
+      field: "voice fixture", onWarning: warning => { throw new Error(warning.message); },
+    });
+    assert.match(resolved ?? "", /selected-agent-fixture/);
+    assert.match(resolved ?? "", /voice-pack-fixture/);
+    assert.doesNotMatch(resolved ?? "", /ordinary-(?:only-policy|pack-fixture)/);
+    assert.equal(prompt.developerInstructions, null);
+    const fields = buildWorkbenchOwnedPromptFields(resolved, "");
+    assert.equal(fields.baseInstructions, resolved);
+    assert.equal(fields.developerInstructions, "");
+    assert.equal(fields.config.project_doc_max_bytes, 0);
+    assert.equal(fields.config.developer_instructions, "");
+    assert.equal(fields.config.instructions, "");
+  } finally {
+    await Promise.all([override, agent, pack].map(file => fs.rm(file)));
+  }
+});
+
 test("configured creation, resume and fork retain installed mechanics in the final packet", async () => {
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", process.cwd());
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");

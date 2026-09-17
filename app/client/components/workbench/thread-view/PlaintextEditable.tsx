@@ -16,6 +16,7 @@ import {
 } from "../../../workbench/thread/inline-mention-highlights";
 import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../workbench/thread/inline-mention-styles";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
+import VoiceInputControl, { useVoiceInput } from "../voice/VoiceInputControl";
 
 export interface PlaintextEditableHandle { focus(offset?: number): void }
 
@@ -230,17 +231,18 @@ export default function PlaintextEditable ({
   spellCheck?: boolean;
   value: string;
 }) {
+  const voice = useVoiceInput(value, onChange, !disabled && !readOnly);
   const elementRef = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => ({
     focus(offset) {
       const element = elementRef.current;
-      if (!element || disabled || readOnly) return;
+      if (!element || disabled || readOnly || voice.locked) return;
       // Use canonical plaintext so an offset also works after browser-created multiline nodes.
       element.textContent = value;
       element.focus();
       restoreEditableCaretOffset(element, Math.max(0, offset ?? value.length));
     },
-  }), [disabled, readOnly, value]);
+  }), [disabled, readOnly, value, voice.locked]);
   const containerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const [caretOffset, setCaretOffset] = useState<number | null>(null);
@@ -253,6 +255,18 @@ export default function PlaintextEditable ({
       : []
   ), [caretOffset, disabled, mentionSources, readOnly, value]);
   const activeSuggestion = suggestions[activeSuggestionIndex] ?? suggestions[0] ?? null;
+
+  useLayoutEffect(() => {
+    if (!voice.locked) return;
+    const form = elementRef.current?.closest("form");
+    if (!form) return;
+    const preventSubmit = (event: Event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    form.addEventListener("submit", preventSubmit, true);
+    return () => form.removeEventListener("submit", preventSubmit, true);
+  }, [voice.locked]);
 
   useEffect(() => {
     setSuggestionsPortalHost(document.body);
@@ -323,6 +337,7 @@ export default function PlaintextEditable ({
   };
 
   const acceptSuggestion = (suggestion: InlineMentionSuggestion) => {
+    if (voice.locked) return;
     const nextValue = `${value.slice(0, suggestion.start)}${suggestion.replacementText}${value.slice(suggestion.end)}`;
     const nextCaretOffset = suggestion.start + suggestion.replacementText.length;
     const element = elementRef.current;
@@ -333,7 +348,7 @@ export default function PlaintextEditable ({
     onChange?.(nextValue);
   };
 
-  const suggestionsPopup = suggestions.length ? (
+  const suggestionsPopup = !voice.locked && suggestions.length ? (
     <div
       className={joinClasses(
         "fixed z-[80]",
@@ -355,6 +370,7 @@ export default function PlaintextEditable ({
   return (
     <>
       <div ref={containerRef} className="relative">
+        <VoiceInputControl voice={{ ...voice, begin: () => { if (!isComposingRef.current) voice.begin(); } }} />
         <div
           aria-hidden="true"
           className={joinClasses(
@@ -364,6 +380,7 @@ export default function PlaintextEditable ({
             "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
             "[&_*]:!text-transparent",
             highlights.length === 0 && "hidden",
+            voice.visible && "pr-9",
           )}
         >
           {renderHighlightContent(value, highlights)}
@@ -374,9 +391,9 @@ export default function PlaintextEditable ({
           aria-disabled={disabled || undefined}
           aria-label={ariaLabel}
           aria-multiline="true"
-          aria-readonly={readOnly || undefined}
-          className={joinClasses(className, "relative z-10")}
-          contentEditable={readOnly || disabled ? false : "plaintext-only"}
+          aria-readonly={readOnly || voice.locked || undefined}
+          className={joinClasses(className, "relative z-10", voice.visible && "pr-9")}
+          contentEditable={readOnly || disabled || voice.locked ? false : "plaintext-only"}
           data-empty={value ? "false" : "true"}
           data-placeholder={placeholder ?? ""}
           role="textbox"
@@ -394,6 +411,7 @@ export default function PlaintextEditable ({
             onCompositionStart?.(event);
           }}
           onInput={(event) => {
+            if (voice.locked) { event.currentTarget.textContent = value; return; }
             const nextValue = normalizePlaintextEditableValue(event.currentTarget.innerText);
             if (!nextValue) {
               event.currentTarget.replaceChildren();
@@ -404,6 +422,12 @@ export default function PlaintextEditable ({
             onChange?.(nextValue);
           }}
           onKeyDown={(event) => {
+            if (voice.locked) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.key === "Escape") voice.cancel();
+              return;
+            }
             if (activeSuggestion && !event.nativeEvent.isComposing) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
@@ -429,7 +453,7 @@ export default function PlaintextEditable ({
 
             onKeyDown?.(event);
           }}
-          onPaste={onPaste}
+          onPaste={event => { if (voice.locked) { event.preventDefault(); return; } onPaste?.(event); }}
           onClick={updateCaretOffset}
           onKeyUp={updateCaretOffset}
         />

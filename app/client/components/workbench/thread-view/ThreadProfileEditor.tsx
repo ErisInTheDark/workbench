@@ -8,7 +8,8 @@
 "use client";
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
+import type { WorkbenchComposerSettings } from "workbench-shared/types";
+import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "../../../workbench/state/composer-profile-target";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import ChevronIcon from "../ChevronIcon";
@@ -79,9 +80,9 @@ export default function ThreadProfileEditor ({
     }
   };
   const model = state.models.find((entry) => entry.id === settings.model);
-  const efforts = model?.supportedReasoningEfforts ?? [];
+  const efforts = slot.kind === "voice" ? [...new Set(["none", ...model?.supportedReasoningEfforts ?? []])] : model?.supportedReasoningEfforts ?? [];
   const capability = model?.contextWindow;
-  const showsEffort = Boolean(model?.supportsReasoningEffort && efforts.length);
+  const showsEffort = slot.kind === "voice" || Boolean(model?.supportsReasoningEffort && efforts.length);
   const showsFastMode = Boolean(model?.supportsFastMode);
   const update = (changes: Partial<WorkbenchComposerSettings>) => {
     if (profile) void profiles.controller.updateProfile(profile.id, changes);
@@ -144,7 +145,7 @@ export default function ThreadProfileEditor ({
       style={{ gridTemplateRows: rows.map(row => row === state.activeSection ? "minmax(0,1fr)" : "auto").join(" ") }}
     >
       {block("profile", "Profile", profile?.name || (profile ? profile.model : "Custom"), <ThreadProfilePicker
-        agents={state.agents} currentSettings={settings} models={state.models} projectId={slot.projectId} slot={slot}
+        agents={state.agents} currentSettings={settings} models={state.models} projectId={slot.kind === "voice" ? null : slot.projectId} slot={slot}
       />)}
       {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
         {!profile && canToggleHarness && slot.kind !== "thread"
@@ -164,7 +165,7 @@ export default function ThreadProfileEditor ({
           onToggleFavourite={(id) => { void toggleFavourite(id); }}
           onSelectModel={(selected) => update({
             model: selected.id,
-            reasoningEffort: selected.supportsReasoningEffort ? selected.defaultReasoningEffort ?? selected.supportedReasoningEfforts[0] ?? null : null,
+            reasoningEffort: slot.kind === "voice" ? "none" : selected.supportsReasoningEffort ? selected.defaultReasoningEffort ?? selected.supportedReasoningEfforts[0] ?? null : null,
             serviceTier: selected.supportsFastMode ? settings.serviceTier : null,
             contextWindowTokens: selected.contextWindow?.defaultTokens ?? null,
           })}

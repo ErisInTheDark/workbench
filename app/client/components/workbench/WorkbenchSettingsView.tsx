@@ -26,6 +26,7 @@ import {
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import WorkbenchAppPortSetting from "./WorkbenchAppPortSetting";
+import VoiceSettings from "./voice/VoiceSettings";
 import { ReloadIcon } from "./workbench-icons";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";
@@ -356,6 +357,7 @@ export default function WorkbenchSettingsView({
               <>
                 {SETTINGS_ORDER.map(renderGlobalSettingRow)}
                 <WorkbenchAppPortSetting />
+                <VoiceSettings />
                 <WorkbenchReactDevelopmentModeSetting />
                 <section className="space-y-3 rounded-[0.85rem] py-1">
                   <div className="min-w-0">

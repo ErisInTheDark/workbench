@@ -1,6 +1,20 @@
 # native voice recognition
 
-Private Rust process for streaming English recognition. No network listener or external ASR service. Workbench browser/transformer integration is separate and not implemented here yet.
+Private Rust process for streaming English recognition, connected to Workbench's controlled text editors. No native network listener or external ASR service.
+
+## workbench integration
+
+Build on the daemon machine, then select a global profile or Custom in Settings > Voice input. This reuses the composer profile picker/editor. The selected provider must support single-file editing (currently Codex) and the profile must explicitly select reasoning effort `none`. The selected agent supplies custom instructions. Named profile edits apply to the next session; deletion retains the saved Custom fallback. Disable clears selection and cancels active voice.
+
+Hold an editor's microphone button to dictate; release to flush and finish. Keyboard Space/Enter also hold, Escape cancels. Preparing, listening and finishing keep the controlled field locked. The transformer edits a private scratch document with native tools; speech never appends directly. Already-applied edits remain after cancellation. Independent parent changes, disconnect and unmount cancel and fence late updates.
+
+Browser microphone capture requires a secure origin (HTTPS or localhost). Audio travels through the existing daemon WebSocket, including private Tailscale connections. The browser and daemon need not share a device. Audio stays on those private machines, in memory; transcript and current document text reach the selected LLM provider. A cloud transformer therefore exposes **text**, not audio. Native diagnostic output is not forwarded as transcript logs.
+
+One active voice session per daemon avoids queued stale audio. Capture resamples continuously to 16 kHz mono and sends 100 ms PCM16 frames. More than one second of queued audio fails visibly instead of dropping samples or accumulating latency. Model loading has no arbitrary deadline. Prepare warms reusable recognition and provider processes.
+
+The transformer starts one ephemeral native thread/turn immediately, receives revisioned transcript snapshots as steers, and waits with `wait_for_transcript` between updates. Release sends an explicit final packet only after ASR drain. Completion waits for actual file reads before unlocking. Premature model completion resumes the same document/thread in the background; repeated no-progress completion parks until new input rather than spinning paid turns.
+
+Tool access is restricted to the owned scratch file, with no escalation, tool network or inherited MCP servers. Resolved role-filtered `AGENTS.md` is the sole instruction payload. Unsupported permission configuration fails closed.
 
 ## dependencies
 
@@ -23,7 +37,7 @@ node scripts/build-voice.mjs --test
 pnpm typecheck
 ````
 
-Build/test modes prepare dependencies automatically. Downloads/builds live in `.workbench/native-voice/`; Cargo outputs live in `app/voice/target/`. Extraction uses CMake's archive support. Incomplete extraction fails visibly and is retained for inspection. No automatic cleanup or toolchain installation.
+Build/test modes prepare dependencies automatically. Downloads/builds live in `.workbench/native-voice/`; Cargo outputs live in `app/voice/target/`. Successful build publishes `.workbench/native-voice/runtime.json` with matching executable/model paths and machine identity. The daemon reads this descriptor; missing assets produce a setup error, never automatic downloads. Extraction uses CMake's archive support. Incomplete extraction fails visibly and is retained for inspection. No automatic cleanup or toolchain installation.
 
 The build owner supplies `SHERPA_ONNX_LIB_DIR` to the official sys crate, copies runtime libraries beside normal and test executables, and sets executable-relative library lookup on macOS/Linux. Deploy those libraries with the executable, not the executable alone. A stock top-1-only library is rejected during startup.
 
@@ -69,3 +83,9 @@ Alignment normalises surviving sequence scores, combines support for identical t
 Alternative offsets are UTF-16 positions in the combined text. `inlineText` renders bracket alternatives for a transformer. The transformer, not speech recognition, owns the final editable document.
 
 Windows, macOS and Linux are deployment targets. Runtime performance and packaging must be validated per target; model file size is not a RAM estimate.
+
+## validation and reloads
+
+From the repository root, `wb test` exercises TypeScript owners and `pnpm typecheck` checks all project targets. `node scripts/build-voice.mjs --test` adds native fixture validation. Browser/microphone and paid transformer checks are separate, explicitly authorised validation; unit tests do not establish microphone-to-document latency or cross-platform permission enforcement.
+
+Changes require user-owned scoped reloads of daemon database/core/provider/instructions and app compiler. Reload cancels active voice sessions. No full-process restart is intended.

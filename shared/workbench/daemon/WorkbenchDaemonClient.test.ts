@@ -10,6 +10,29 @@ import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
+test("voice events reject malformed remote data without logging document contents", async context => {
+  const diagnostics: string[] = [];
+  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
+  let notify!: (notification: { method: string; params: unknown }) => void;
+  const client = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({}) as TResponse,
+    onNotification: listener => { notify = listener; return () => {}; },
+  });
+  const events: string[] = [];
+  client.onVoiceEvent(event => events.push(event.type));
+  notify({ method: "voice/event", params: {
+    type: "document", sessionId: "9d59d847-6d43-4616-8df7-f516abc8e19d",
+    revision: "private-transcript-marker", text: "private-document-marker",
+  } });
+  assert.deepEqual(events, []);
+  assert.equal(diagnostics.length, 1);
+  assert.ok(diagnostics.every(message => message.length < 1200 && !message.includes("private-")));
+  notify({ method: "voice/event", params: {
+    type: "document", sessionId: "9d59d847-6d43-4616-8df7-f516abc8e19d", revision: 1, text: "valid",
+  } });
+  assert.deepEqual(events, ["document"]);
+});
+
 test("questionnaire history retains an answer before the first provider item", async () => {
   const entry = {
     threadId: "thread", turnId: "turn", itemId: "question", requestKey: "request",

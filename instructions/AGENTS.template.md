@@ -44,6 +44,7 @@ Stock runtime slots:
 - `{workflow.content}`
 - `{skills.catalog}`
 - `{workspace.roots.list}`
+- `{voice.instruction-packs}` (voice-role packs inside resolved AGENTS only)
 - caller-supplied workflow values
 
 Unknown slots stay visible so mistakes are easy to notice.
@@ -64,9 +65,9 @@ Keep workflow-specific process in workflow files instead of AGENTS.md.
 
 ## Control-Flow Selectors
 
-Workbench instruction sources can wrap conditional content in standalone `<harness:codex|copilot|opencode>`, `<model:model-id>`, `<shell:pwsh|bash>`, or `<available:mechanic-id>` blocks. Model selectors match the exact configured model ID. Workbench filters the final assembled payload immediately before the owning harness sends it. Selector control lines are not sent to the agent.
+Workbench sources and packs support standalone `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>` blocks. Close with the identical axis/value. Roles default to agent; model IDs match exactly. Final-payload filtering removes controls before delivery.
 
-Use selectors only when content depends on the actual harness, model, shell, or emitted Workbench mechanic. Different selector axes can nest and all must match.
+Use selectors only for role, harness, model, shell or available-mechanic differences. Nested selectors must all match. Keep ordinary policy/mechanics inside role:agent; retain selected agent and workflow for both roles.
 
 Lines inside Markdown code fences are examples, not active selectors.
 

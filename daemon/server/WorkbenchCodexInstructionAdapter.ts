@@ -6,6 +6,7 @@
  * - default WorkbenchCodexInstructionAdapter: adapt model-filtered thread instructions, skills, settings and project-local MCP config into Codex requests.
  */
 import path from "node:path";
+import buildWorkbenchOwnedPromptFields from "./codex-owned-prompt";
 import type { WorkbenchComposerSettings, WorkbenchProjectRoot, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import { contextCompactionThreshold } from "workbench-shared/workbench/thread/thread-profile";
 
@@ -59,16 +60,11 @@ function buildWorkbenchManagedThreadConfig(params: Record<string, unknown>, over
 }
 
 function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, promptInstructions: WorkbenchPromptInstructions) {
+  const fields = buildWorkbenchOwnedPromptFields(promptInstructions.baseInstructions, promptInstructions.developerInstructions);
   return {
     ...params,
-    baseInstructions: promptInstructions.baseInstructions,
-    developerInstructions: promptInstructions.developerInstructions,
-    config: buildWorkbenchManagedThreadConfig(params, {
-      developer_instructions: "",
-      instructions: "",
-      project_doc_max_bytes: 0,
-    }),
-    personality: "none",
+    ...fields,
+    config: buildWorkbenchManagedThreadConfig(params, fields.config),
   };
 }
 

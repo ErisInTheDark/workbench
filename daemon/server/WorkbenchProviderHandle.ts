@@ -84,6 +84,21 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     }, `${this.key}: recovery.refresh`),
   };
 
+  private singleFileOperation<T>(operation: (owner: NonNullable<WorkbenchProvider["singleFile"]>) => Promise<T>) {
+    return this.run(providerRegistrations[this.key], provider => {
+      if (!provider.singleFile) throw new Error(`Provider ${this.key} does not support single-file editing.`);
+      return operation(provider.singleFile);
+    }, `${this.key}: singleFile`);
+  }
+
+  readonly singleFile: NonNullable<WorkbenchProvider["singleFile"]> = {
+    prepare: () => this.singleFileOperation(owner => owner.prepare()),
+    start: input => this.singleFileOperation(owner => owner.start(input)),
+    input: (sessionId, input) => this.singleFileOperation(owner => owner.input(sessionId, input)),
+    finish: sessionId => this.singleFileOperation(owner => owner.finish(sessionId)),
+    cancel: sessionId => this.singleFileOperation(owner => owner.cancel(sessionId)),
+  };
+
   private interaction<T>(operation: (interactions: NonNullable<WorkbenchProvider["interactions"]>) => Promise<T>, label: string) {
     return this.run(providerRegistrations[this.key], provider => {
       if (!provider.interactions) throw new Error(`Provider ${this.key} does not support interactive requests.`);

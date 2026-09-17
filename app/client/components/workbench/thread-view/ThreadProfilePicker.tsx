@@ -5,7 +5,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
+import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
+import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "../../../workbench/state/composer-profile-target";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import { BinIcon, SparkleIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";
@@ -72,12 +73,12 @@ function ProfileDescriptionEditable({ description = "", onCommit }: { descriptio
 export default function ThreadProfilePicker({ agents, currentSettings, models, projectId, slot }: {
   agents: WorkbenchAgentOption[]; currentSettings: WorkbenchComposerSettings;
   models: WorkbenchModelOption[];
-  projectId: string; slot: WorkbenchComposerProfileSlot;
+  projectId: string | null; slot: WorkbenchComposerProfileSlot;
 }) {
   const { controller, snapshot } = useWorkbenchComposerProfiles();
   const selection = controller.getSelection(slot);
   const selectedProfile = selection.kind === "profile" ? controller.getProfile(selection.profileId) : null;
-  const visible = controller.getVisibleProfiles(projectId, slot.kind !== "new-thread" ? slot.harness : null);
+  const visible = controller.getVisibleProfiles(projectId, slot.kind === "draft" || slot.kind === "thread" ? slot.harness : null);
   const profiles = orderComposerProfiles(selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible, "newest");
   const globals = profiles.filter(({ scope }) => scope.kind === "global");
   const projects = profiles.filter(({ scope }) => scope.kind === "project");
@@ -96,7 +97,7 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
       onClick={() => controller.selectProfile(slot, profile.id)}
       labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
       actions={<>
-          <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} />
+          {projectId ? <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} /> : null}
           <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></WorkbenchIconButton>
       </>}
       description={!active ? profile.description : undefined}
@@ -109,11 +110,11 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
     <div role="group" aria-label="Composer profiles" className="mt-1 grid gap-2">
       <WorkbenchOptionCard density="tight" isChecked={selection.kind === "custom"} label="Custom" onClick={() => { void controller.selectCustom(slot, currentSettings); }} />
       <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Global</p>{globals.map(renderProfile)}
-      <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Project</p>{projects.map(renderProfile)}
+      {projectId ? <><p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Project</p>{projects.map(renderProfile)}</> : null}
     </div>
     <div className="mt-4 flex items-center justify-end gap-2 text-[0.78em] text-fg/muted">
       <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className="inline-flex items-center gap-2 rounded-md px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] disabled:cursor-not-allowed disabled:opacity-40" onClick={() => {
-        void controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }).then((profile) => {
+        void controller.createProfile({ ...currentSettings, name: "", scope: projectId ? { kind: "project", projectId } : { kind: "global" } }).then((profile) => {
           if (profile) controller.selectProfile(slot, profile.id);
         });
       }}><SparkleIcon size={16} /><span>New</span></button>

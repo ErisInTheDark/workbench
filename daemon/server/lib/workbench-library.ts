@@ -85,15 +85,6 @@ You are an example Workbench agent.
 Focus on one bounded responsibility, state assumptions clearly, and return concrete findings or edits that match the user's requested scope.
 `;
 
-const instructionTemplate = `# Example Instruction Pack
-
-Apply these instructions whenever this file is active.
-
-- Prefer direct, concrete language.
-- Use project-local conventions before inventing new ones.
-- When a decision affects future work, name the tradeoff and the chosen default.
-`;
-
 interface WorkbenchInstructionPack {
   content: string;
   name: string;
@@ -247,9 +238,6 @@ export async function ensureWorkbenchLibrary() {
     await writeFileIfMissing("agents/example.template.md", agentTemplate);
   }
 
-  if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "instructions"))) {
-    await writeFileIfMissing("instructions/example-instruction-pack.template.md", instructionTemplate);
-  }
 }
 
 function createSkillSummary(skill: WorkbenchSkillDefinition): WorkbenchSkillSummary {

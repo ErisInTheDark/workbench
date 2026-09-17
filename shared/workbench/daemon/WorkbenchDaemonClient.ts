@@ -12,6 +12,7 @@ import type {
 } from "./workbench-daemon-requests.ts";
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
+import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
 import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import {
@@ -44,6 +45,7 @@ export interface WorkbenchDaemonTransport {
   request<TResponse>(method: string, params: object): Promise<TResponse>;
   onNotification?(listener: (notification: { method: string; params: unknown }) => void): () => void;
   onReconnect?(listener: () => void): () => void;
+  onDisconnect?(listener: () => void): () => void;
 }
 
 export class WorkbenchDaemonRequestError extends Error {
@@ -64,6 +66,16 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     return workbenchThreadActions[method as keyof typeof workbenchThreadActions].result;
   }
   switch (method) {
+    case "voice/configuration/read": return VoiceConfigurationSchema;
+    case "voice/agents": return z.object({ data: z.array(z.object({
+      name: z.string(), path: z.string(), description: z.string(), source: z.literal("library"), sourceLabel: z.string(),
+    }).passthrough()) });
+    case "voice/configuration/write":
+    case "voice/prepare":
+    case "voice/start":
+    case "voice/audio":
+    case "voice/finish":
+    case "voice/cancel": return z.object({ ok: z.literal(true) }).strict();
     case "git/working-tree/read": return WorkingTreeReadSchema;
     case "git/working-tree/diff": return WorkingTreeDiffSchema;
     case "git/working-tree/preview": return WorkingTreePreviewSchema;
@@ -127,6 +139,35 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
 
 class WorkbenchDaemonClient {
   constructor(private readonly transport: WorkbenchDaemonTransport) {}
+
+  readonly voice = {
+    configuration: {
+      read: () => this.request("voice/configuration/read", {}),
+      write: (params: WorkbenchDaemonParams<"voice/configuration/write">) => this.request("voice/configuration/write", params),
+    },
+    agents: () => this.request("voice/agents", {}),
+    prepare: () => this.request("voice/prepare", {}),
+    start: (params: WorkbenchDaemonParams<"voice/start">) => this.request("voice/start", params),
+    audio: (params: WorkbenchDaemonParams<"voice/audio">) => this.request("voice/audio", params),
+    finish: (sessionId: string) => this.request("voice/finish", { sessionId }),
+    cancel: (sessionId: string) => this.request("voice/cancel", { sessionId }),
+  };
+
+  onVoiceEvent(listener: (event: VoiceSessionEvent) => void) {
+    return this.transport.onNotification?.(notification => {
+      if (notification.method !== "voice/event") return;
+      const parsed = VoiceSessionEventSchema.safeParse(notification.params);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected voice event", parsed.error);
+        return;
+      }
+      listener(parsed.data);
+    }) ?? (() => undefined);
+  }
+
+  onDisconnect(listener: () => void) {
+    return this.transport.onDisconnect?.(listener) ?? (() => undefined);
+  }
 
   readonly models = {
     list: (provider: string) => this.request("models/list", { provider }),

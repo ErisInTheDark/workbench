@@ -195,4 +195,11 @@ if (args.has("--pin") || args.has("--prepare")) {
     "--manifest-path", path.join(voice, "Cargo.toml"), "--features", "native", "--locked",
     ...(args.has("--test") ? ["--", "--nocapture"] : ["--release"]),
   ], { env: nativeEnv });
+  if (!args.has("--test")) {
+    const executable = path.join(profile, process.platform === "win32" ? "workbench-voice.exe" : "workbench-voice");
+    await fs.access(executable);
+    await fs.writeFile(path.join(cache, "runtime.json"), `${JSON.stringify({
+      version: 1, platform: process.platform, arch: process.arch, executable, modelDirectory,
+    }, null, 2)}\n`);
+  }
 }

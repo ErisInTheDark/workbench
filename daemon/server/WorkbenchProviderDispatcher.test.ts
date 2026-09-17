@@ -20,6 +20,7 @@ function fixture() {
   let generation = 0;
   let failStart = false;
   let read: WorkbenchProvider["configuration"]["modelContext"]["read"] | undefined;
+  let singleFile: WorkbenchProvider["singleFile"];
   const disposed: number[] = [];
   const started = deferred();
   const releaseStart = deferred();
@@ -34,6 +35,7 @@ function fixture() {
         const currentRead = read;
         return {
           registrations: { codexProvider: {
+            singleFile,
             threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
             configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
             read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
@@ -65,8 +67,28 @@ function fixture() {
     fail: () => { failStart = true; },
     hold: () => { holdStart = true; },
     setRead: (value: typeof read) => { read = value; },
+    setSingleFile: (value: typeof singleFile) => { singleFile = value; },
   };
 }
+
+test("optional single-file calls reject unsupported owners and follow replacement capabilities", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const capability = f.providers.get("codex").singleFile;
+    await assert.rejects(capability.prepare(), /does not support single-file/);
+    let prepared = 0;
+    f.setSingleFile({
+      async prepare() { prepared++; }, async start() {}, async input() {}, async finish() {}, async cancel() {},
+    });
+    await f.host.reload(["server:codex/def"]);
+    await capability.prepare();
+    assert.equal(prepared, 1);
+    f.setSingleFile(undefined);
+    await f.host.reload(["server:codex/def"]);
+    await assert.rejects(capability.prepare(), /does not support single-file/);
+  } finally { await f.host.dispose(); }
+});
 
 test("saved provider handles resolve replacements and survive failed candidates", async () => {
   const f = fixture();

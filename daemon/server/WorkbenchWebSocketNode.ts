@@ -14,6 +14,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState").controller;
     const controller = new WorkbenchWebSocketRequestController({
+      voice: build.get("voice"),
       harnesses: build.get("harnesses"),
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
@@ -31,7 +32,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         void controller.resumeAfterFailedReload().catch((error: unknown) => controller.reportSendFailure({ method: "WebSocket startup" }, error));
       },
       beginHandoff: () => ({
-        waitForIdle: async () => {},
+        waitForIdle: () => build.get("voice").controller.clear(),
         expire: () => controller.suspend(),
         detach: () => controller.detachForReload(),
         resume: () => controller.resumeAfterFailedReload(),
@@ -46,7 +47,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript"],
+  requires: ["voice", "daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript"],
   safeAll: true,
   scope: "server:websocket",
   sources: [

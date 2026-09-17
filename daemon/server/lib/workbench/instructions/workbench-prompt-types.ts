@@ -8,6 +8,7 @@ import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/ty
 import type { InstructionSourceSpan } from "./instruction-file-generation";
 
 export interface WorkbenchPromptContext {
+  readonly role?: "agent" | "voice-to-text";
   readonly agentPath?: string | null;
   readonly cwd?: string | null;
   readonly harness?: WorkbenchHarness | null;

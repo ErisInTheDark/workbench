@@ -27,6 +27,7 @@ export type WorkbenchClientNotification = WorkbenchTranscriptNotification;
 type WorkbenchIncomingMessage = WorkbenchRpcResponse<unknown> | WorkbenchClientNotification;
 type WorkbenchNotification = {
   method:
+    | "voice/event"
     | "workbench/thread-state/reset"
     | "workbench/thread-state/updated"
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
@@ -263,6 +264,7 @@ export default class WorkbenchSocketClient {
 
     const workbenchMessage = parsed as unknown as { method?: string };
     if (workbenchMessage.method === "workbench/thread-state/updated"
+      || workbenchMessage.method === "voice/event"
       || workbenchMessage.method === "workbench/thread-state/reset"
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || Object.values(workbenchTranscriptNotifications).some(notification => notification.method === workbenchMessage.method)
