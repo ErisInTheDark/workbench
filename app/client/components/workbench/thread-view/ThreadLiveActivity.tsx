@@ -66,11 +66,12 @@ export default function ThreadLiveActivity({
     : activity?.kind === "reasoning"
       ? { body: activity.body, title: activity.title }
       : null;
+  const activityTitle = reasoningDisplay?.title ?? activity?.title ?? "";
 
   const title = (
     <span className="inline-flex items-center gap-2">
       <LoaderIcon className="shrink-0" />
-      <span className="thread-thinking-text -mt-0.5">{reasoningDisplay?.title ?? activity?.title}</span>
+      <span className="thread-live-status-enter thread-thinking-text -mt-0.5" key={activityTitle}>{activityTitle}</span>
     </span>
   );
 

@@ -939,6 +939,44 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-file-change-total-tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
+  .thread-item-enter,
+  .thread-file-change-enter,
+  .thread-live-status-enter {
+    --thread-enter-duration: 220ms;
+    --thread-enter-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    height: auto;
+    interpolate-size: allow-keywords;
+    opacity: 1;
+    overflow: visible;
+    transform: translateY(0);
+    transition:
+      height var(--thread-enter-duration) var(--thread-enter-ease),
+      opacity var(--thread-enter-duration) var(--thread-enter-ease),
+      transform var(--thread-enter-duration) var(--thread-enter-ease),
+      overflow 0s linear var(--thread-enter-duration);
+    transition-behavior: allow-discrete;
+  }
+
+  .thread-item-enter,
+  .thread-file-change-enter {
+    display: block;
+  }
+
+  .thread-live-status-enter {
+    display: inline-block;
+  }
+
+  @starting-style {
+    .thread-item-enter,
+    .thread-file-change-enter,
+    .thread-live-status-enter {
+      height: 0;
+      opacity: 0;
+      overflow: clip;
+      transform: translateY(0.35rem);
+    }
+  }
+
   .workbench-spinning-border-host {
     position: absolute;
     inset: 0;
@@ -1125,6 +1163,15 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
     .thread-file-change-total-tick {
       animation: none;
+    }
+
+    .thread-item-enter,
+    .thread-file-change-enter,
+    .thread-live-status-enter {
+      opacity: 1;
+      overflow: visible;
+      transform: none;
+      transition: none;
     }
 
     .workbench-skeleton,

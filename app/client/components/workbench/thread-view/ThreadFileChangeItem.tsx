@@ -332,6 +332,7 @@ export function ThreadFileChangeList ({
 }
 
 function ThreadFileChangeRows ({
+  animateEntries = false,
   changes,
   plainInset = true,
   projectFilePaths,
@@ -339,6 +340,7 @@ function ThreadFileChangeRows ({
   projectRootPath,
   workspaceRoots,
 }: {
+  animateEntries?: boolean;
   changes: ThreadFileChangeListChange[];
   plainInset?: boolean;
   projectFilePaths?: readonly string[];
@@ -382,7 +384,7 @@ function ThreadFileChangeRows ({
     return change.detailsAvailable ? (
       <ThreadDisclosure
         key={key}
-        className="py-0.5"
+        className={animateEntries ? "thread-file-change-enter py-0.5" : "py-0.5"}
         contentClassName="mt-2 pl-6"
         summary={summary}
         summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
@@ -392,13 +394,13 @@ function ThreadFileChangeRows ({
     ) : change.staticMarker ? (
       <ThreadDisclosureStaticRow
         key={key}
-        className="!py-0.5"
+        className={animateEntries ? "thread-file-change-enter !py-0.5" : "!py-0.5"}
         markerClassName={change.danger ? "text-danger" : undefined}
         summary={summary}
         summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
       />
     ) : (
-      <div key={key} className={`py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
+      <div key={key} className={`${animateEntries ? "thread-file-change-enter " : ""}py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
         {summary}
       </div>
     );
@@ -461,12 +463,14 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
 }
 
 export default function ThreadFileChangeItem ({
+  animateEntries = false,
   items,
   projectFilePaths,
   projectId,
   projectRootPath,
   workspaceRoots,
 }: {
+  animateEntries?: boolean;
   items: FileChangeItem[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -479,6 +483,7 @@ export default function ThreadFileChangeItem ({
       {items.map((item) => (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
+            animateEntries={animateEntries}
             changes={item.changes.map((change, sourceChangeIndex) => {
               const analysis = item.status !== "completed" && item.workbenchFailureKind !== "unclaimed" ? change.workbenchAnalysis : undefined;
               return {
