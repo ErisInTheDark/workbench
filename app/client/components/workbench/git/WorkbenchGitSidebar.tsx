@@ -3,7 +3,7 @@
 import type { MouseEvent } from "react";
 import { createGitRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import { GitArcClaimIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon } from "../workbench-icons";
+import { GitGraphIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon } from "../workbench-icons";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
 import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclosure";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
@@ -20,7 +20,7 @@ export default function WorkbenchGitSidebar({ active, onNavigate }: { active: bo
     : snapshot.status === "unavailable" ? "Git unavailable"
     : dirty ? "Uncommitted changes" : "No changes";
   return <section className="shrink-0 pb-5">
-    <WorkbenchSidebarSectionDisclosure icon={GitArcClaimIcon} preferenceKey="gitOpen" title="Git">
+    <WorkbenchSidebarSectionDisclosure icon={GitGraphIcon} preferenceKey="gitOpen" title="Git">
       <a href={projectHref(createGitRoute(state.projectId))} onClick={onNavigate} aria-current={active ? "page" : undefined} className={`
         ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
         ${active ? `${workbenchOptionSelectedClassName} text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}

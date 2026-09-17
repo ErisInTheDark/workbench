@@ -121,7 +121,7 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
 
 export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
-  "git/working-tree/read": { params: { projectId: string }; result: import("../git/working-tree-contracts").WorkingTreeRead };
+  "git/working-tree/read": { params: { projectId: string; preferCached?: boolean }; result: import("../git/working-tree-contracts").WorkingTreeRead };
   "git/working-tree/diff": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreeDiff };
   "git/working-tree/preview": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreePreview };
   "git/working-tree/mutate": { params: import("../git/working-tree-contracts").WorkingTreeMutation; result: import("../git/working-tree-contracts").WorkingTreeResult };

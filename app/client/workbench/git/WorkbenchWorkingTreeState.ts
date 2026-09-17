@@ -5,13 +5,16 @@
  */
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeResult, WorkingTreeSelection } from "workbench-shared/workbench/git/working-tree-contracts";
+import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection } from "workbench-shared/workbench/git/working-tree-contracts";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
+import WorkingTreeContentCache from "./WorkingTreeContentCache";
 
 export interface WorkingTreeDraft { mode: "commit" | "amend" | "stash"; title: string; description: string; targetCommit: string | null }
 export interface WorkingTreeStateSnapshot {
   data: WorkingTreeRead;
   status: "idle" | "loading" | "ready" | "error" | "unavailable";
+  initialising: boolean;
+  refreshing: boolean;
   error: string;
   operationError: string;
   rootId: string;
@@ -30,27 +33,37 @@ const blankDraft = (): WorkingTreeDraft => ({ mode: "commit", title: "", descrip
 
 export default class WorkbenchWorkingTreeState {
   private snapshot: WorkingTreeStateSnapshot = {
-    data: { repositories: [], errors: [] }, status: "idle", error: "", operationError: "", rootId: "", path: "",
+    data: { repositories: [], errors: [] }, status: "idle", initialising: true, refreshing: false, error: "", operationError: "", rootId: "", path: "",
     diff: null, preview: null, contentStatus: "idle", contentError: "", selections: [],
     draft: blankDraft(), busy: false, result: null,
   };
   private readonly listeners = new Set<() => void>();
   private readonly drafts = new Map<string, WorkingTreeDraft>();
+  private readonly reviews = new Map<string, { repository: WorkingTreeRepository; selections: WorkingTreeSelection[] }>();
+  private readonly content: WorkingTreeContentCache | null;
   private refreshWork: { lifetime: object; promise: Promise<void> } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private visible = false;
   private lifetime: object | null = {};
   private contentRequest: object | null = null;
   private previewWork: { token: object; promise: Promise<void> } | null = null;
-  constructor(readonly projectId: string, private readonly port: Port) {}
+  constructor(readonly projectId: string, private readonly port: Port | null) {
+    this.content = port ? new WorkingTreeContentCache(port) : null;
+  }
   readonly getSnapshot = () => this.snapshot;
   readonly subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   get repository() { return this.snapshot.data.repositories.find(repository => repository.rootId === this.snapshot.rootId) ?? null; }
   get file() { return this.repository?.files.find(file => file.path === this.snapshot.path) ?? null; }
+  get mutationBlocked() {
+    return !this.port || this.snapshot.busy || this.snapshot.refreshing || this.snapshot.initialising || this.snapshot.status !== "ready"
+      || this.snapshot.data.errors.some(error => error.rootId === this.snapshot.rootId);
+  }
 
   private publish(change: Partial<WorkingTreeStateSnapshot>) {
     if (!this.lifetime) return;
-    this.snapshot = { ...this.snapshot, ...change };
+    const review = this.reviews.get(change.rootId ?? this.snapshot.rootId);
+    if (review && change.selections) review.selections = change.selections;
+    this.snapshot = { ...this.snapshot, ...change, selections: review?.selections ?? change.selections ?? [] };
     this.listeners.forEach(listener => listener());
   }
 
@@ -71,12 +84,15 @@ export default class WorkbenchWorkingTreeState {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.contentRequest = null;
+    this.content?.clear();
+    this.previewWork = null;
     this.listeners.clear();
   }
 
   async refresh() {
     const lifetime = this.lifetime;
-    if (!lifetime || !this.projectId || this.snapshot.busy) return;
+    const port = this.port;
+    if (!lifetime || !port || !this.projectId || this.snapshot.busy) return;
     if (this.refreshWork) {
       const existing = this.refreshWork;
       await existing.promise;
@@ -85,24 +101,18 @@ export default class WorkbenchWorkingTreeState {
     }
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
-    this.publish({ status: this.snapshot.status === "idle" ? "loading" : this.snapshot.status });
+    const preferCached = this.snapshot.status === "idle";
+    this.publish({ refreshing: true, status: preferCached ? "loading" : this.snapshot.status });
     const work = async () => {
       try {
-        const data = await this.port.read({ projectId: this.projectId });
+        const data = await port.read({ projectId: this.projectId, preferCached });
         if (this.lifetime !== lifetime || this.snapshot.busy) return;
-        const oldRepository = this.repository;
-        const oldFile = this.file;
-        const repository = data.repositories.find(repository => repository.rootId === this.snapshot.rootId) ?? data.repositories[0];
-        const sameHead = oldRepository?.head === repository?.head && oldRepository?.rootId === repository?.rootId;
-        const selections = sameHead ? this.snapshot.selections.filter(selection =>
-          repository?.files.some(file => file.path === selection.path && file.identity === selection.identity && !file.ownerIds.length),
-        ) : [];
-        const file = repository?.files.find(file => file.path === this.snapshot.path) ?? repository?.files[0];
-        this.publish({
-          data, rootId: repository?.rootId ?? "", path: file?.path ?? "", selections,
-          status: "ready", error: data.errors.map(error => error.message).join("\n"),
-        });
-        if (file?.identity !== oldFile?.identity || repository?.rootId !== oldRepository?.rootId) await this.loadContent();
+        const content = this.acceptRead(data);
+        if (data.cacheHit) {
+          const fresh = await port.read({ projectId: this.projectId });
+          if (this.lifetime !== lifetime) return;
+          await this.acceptRead(fresh);
+        } else await content;
       } catch (error) {
         if (this.lifetime !== lifetime || this.snapshot.busy) return;
         this.publish({
@@ -115,17 +125,55 @@ export default class WorkbenchWorkingTreeState {
     };
     const promise = work().finally(() => {
       this.refreshWork = null;
+      if (this.lifetime === lifetime) this.publish({ refreshing: false });
       if (this.visible && this.lifetime === lifetime && !this.snapshot.busy) this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, 5_000);
     });
     this.refreshWork = { lifetime, promise };
     await promise;
   }
 
+  private acceptRead(incoming: WorkingTreeRead) {
+    const data: WorkingTreeRead = {
+      ...incoming,
+      repositories: [...incoming.repositories, ...this.snapshot.data.repositories.filter(repository =>
+        incoming.errors.some(error => error.rootId === repository.rootId)
+        && !incoming.repositories.some(fresh => fresh.rootId === repository.rootId),
+      )],
+    };
+    const oldRepository = this.repository;
+    const oldFile = this.file;
+    const repository = data.repositories.find(repository => repository.rootId === this.snapshot.rootId) ?? data.repositories[0];
+    for (const repository of data.repositories) {
+      const previous = this.reviews.get(repository.rootId);
+      const sameHead = previous?.repository.head === repository.head && previous.repository.cwd === repository.cwd;
+      const selections = sameHead ? previous.selections.filter(selection =>
+        repository.files.some(file => file.path === selection.path && file.identity === selection.identity && !file.ownerIds.length),
+      ) : [];
+      for (const file of repository.files) {
+        if (file.ownerIds.length) continue;
+        const oldFile = previous?.repository.files.find(old => old.path === file.path);
+        if (!previous || (sameHead && (!oldFile || oldFile.ownerIds.length))) {
+          selections.push({ path: file.path, identity: file.identity, lineIds: null });
+        }
+      }
+      this.reviews.set(repository.rootId, { repository, selections });
+    }
+    const file = repository?.files.find(file => file.path === this.snapshot.path)
+      ?? repository?.files.find(file => !file.ownerIds.length) ?? repository?.files[0];
+    this.publish({
+      data, rootId: repository?.rootId ?? "", path: file?.path ?? "",
+      status: data.errors.length && !repository ? "error" : "ready",
+      error: data.errors.map(error => error.message).join("\n"),
+    });
+    return file?.identity !== oldFile?.identity || repository?.rootId !== oldRepository?.rootId || this.snapshot.initialising
+      ? this.loadContent() : Promise.resolve();
+  }
+
   selectRoot(rootId: string) {
     if (this.snapshot.busy || rootId === this.snapshot.rootId) return;
     this.drafts.set(this.snapshot.rootId, this.snapshot.draft);
     const repository = this.snapshot.data.repositories.find(repository => repository.rootId === rootId);
-    this.publish({ rootId, path: repository?.files[0]?.path ?? "", selections: [], draft: this.drafts.get(rootId) ?? blankDraft(), result: null });
+    this.publish({ rootId, path: (repository?.files.find(file => !file.ownerIds.length) ?? repository?.files[0])?.path ?? "", draft: this.drafts.get(rootId) ?? blankDraft(), result: null });
     void this.loadContent();
   }
 
@@ -136,30 +184,42 @@ export default class WorkbenchWorkingTreeState {
   }
 
   async loadContent() {
-    if (!this.lifetime) return;
+    if (!this.lifetime || !this.content) return;
     const file = this.file;
     const token = {};
     this.contentRequest = token;
-    this.publish({ diff: null, preview: null, contentError: "", contentStatus: file ? "loading" : "idle" });
-    if (!file) return;
+    if (!file || !this.repository) {
+      this.publish({ diff: null, preview: null, contentError: "", contentStatus: "idle", initialising: false });
+      return;
+    }
     const request = { projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity };
+    const cwd = this.repository.cwd;
+    const cached = this.content.peekDiff(request, cwd);
+    this.publish({
+      diff: cached, preview: this.content.peekPreview(request, cwd), contentError: "",
+      contentStatus: cached ? "ready" : "loading",
+    });
+    if (cached) { this.publish({ initialising: false }); return; }
     try {
-      const diff = await this.port.diff(request);
+      const diff = await this.content.readDiff(request, cwd);
       if (this.contentRequest !== token || !this.lifetime) return;
       this.publish({ diff, contentStatus: "ready" });
     } catch (error) {
       if (this.contentRequest === token) this.publish({ contentStatus: "error", contentError: error instanceof Error ? error.message : "Unable to load diff." });
+    } finally {
+      if (this.contentRequest === token) this.publish({ initialising: false });
     }
   }
 
   async loadPreview() {
     const file = this.file;
     const token = this.contentRequest;
-    if (!this.lifetime || !token || !file || this.snapshot.preview?.identity === file.identity) return;
+    const content = this.content;
+    if (!this.lifetime || !content || !token || !file || this.snapshot.preview?.identity === file.identity) return;
     if (this.previewWork?.token === token) return await this.previewWork.promise;
     const work = async () => {
       try {
-        const preview = await this.port.preview({ projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity });
+        const preview = await content.readPreview({ projectId: this.projectId, rootId: this.snapshot.rootId, path: file.path, identity: file.identity }, this.repository!.cwd);
         if (this.contentRequest === token) this.publish({ preview });
       } catch (error) {
         if (this.contentRequest === token) this.publish({ contentError: error instanceof Error ? error.message : "Unable to load preview." });
@@ -224,7 +284,7 @@ export default class WorkbenchWorkingTreeState {
 
   async submit(mode: "commit" | "amend" | "stash" | "discard" = this.snapshot.draft.mode, scope?: Pick<WorkingTreeMutation, "rootId" | "expectedHead" | "selections">) {
     const repository = this.repository;
-    if (!repository || this.snapshot.busy || this.snapshot.status !== "ready") return;
+    if (!repository || !this.port || this.mutationBlocked) return;
     if (mode === "amend" && this.snapshot.draft.targetCommit !== repository.head) {
       this.publish({ operationError: "HEAD changed. Review the new HEAD before amending." });
       return;
@@ -242,8 +302,6 @@ export default class WorkbenchWorkingTreeState {
     } catch (error) {
       this.publish({ operationError: `${error instanceof Error ? error.message : "Git operation failed."} Inspect the refreshed tree before retrying.` });
     } finally {
-      // Drain a pre-mutation read before admitting the required fresh inspection.
-      await this.refreshWork?.promise;
       this.publish({ busy: false });
       await this.refresh();
     }

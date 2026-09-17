@@ -7,9 +7,10 @@ import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
+import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
-import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
+import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon, OpenThreadIcon } from "../workbench-icons";
 
 type ActionScope = Pick<WorkingTreeMutation, "rootId" | "expectedHead" | "selections">;
 const STATUS_ICONS = { A: FileAddIcon, D: FileDeleteIcon, R: FileMoveIcon, M: FileUpdateIcon, T: FileUpdateIcon };
@@ -62,7 +63,7 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
       rootId: repository.rootId, expectedHead: repository.head,
       selections: selected.map(file => ({ path: file.path, identity: file.identity, lineIds: null })),
     };
-    const disabled = snapshot.busy || snapshot.status !== "ready" || Boolean(repository.blockedReason) || selected.some(file => file.ownerIds.length > 0);
+    const disabled = state.mutationBlocked || Boolean(repository.blockedReason) || selected.some(file => file.ownerIds.length > 0);
     menu.openContextMenu({ x: event.clientX, y: event.clientY, menu: {
       id: "working-tree-files", label: "Selected file actions",
       items: [
@@ -81,9 +82,8 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
       flex min-w-0 items-center gap-1 rounded-lg px-1 py-1
       ${active || selectedRows.includes(file.path) ? "bg-accent-soft" : "hover:bg-accent-soft/40"}
     `} onContextMenu={event => context(file, event)}>
-      <input type="checkbox" className="m-2 size-4 shrink-0 accent-accent"
-        aria-label={`Include ${file.path}`} disabled={locked || snapshot.busy}
-        checked={included.has(file.path)} ref={element => { if (element) element.indeterminate = partial; }}
+      <WorkbenchCheckbox className="shrink-0" label={<span className="sr-only">Include {file.path}</span>} disabled={locked || snapshot.busy}
+        checked={included.has(file.path)} indeterminate={partial}
         onChange={() => state.toggleFile(file.path)} />
       <button type="button" data-git-file={file.path}
         aria-current={active ? "true" : undefined}
@@ -117,13 +117,12 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
   return <div ref={list} className="flex min-h-0 flex-1 flex-col">
     <input aria-label="Filter changed files" placeholder="Filter files" value={filter} onChange={event => setFilter(event.target.value)}
       className="mx-2 mb-2 rounded-lg bg-transparent px-2 py-2 text-sm outline-none focus:bg-accent-soft" />
-    <label className="mb-2 flex items-center gap-2 px-3 text-sm">
-      <input type="checkbox" className="size-4 accent-accent" disabled={snapshot.busy || !repository?.files.some(file => !file.ownerIds.length)}
+    <div className="mb-2 px-1">
+      <WorkbenchCheckbox label="All unclaimed files" disabled={snapshot.busy || !repository?.files.some(file => !file.ownerIds.length)}
         checked={Boolean(repository?.files.some(file => !file.ownerIds.length)) && repository!.files.filter(file => !file.ownerIds.length).every(file => included.has(file.path)) && snapshot.selections.every(selection => selection.lineIds === null)}
-        ref={element => { if (element) element.indeterminate = snapshot.selections.length > 0 && (!element.checked || snapshot.selections.some(selection => selection.lineIds !== null)); }}
-        onChange={event => state.selectAll(event.target.checked)} />
-      All unclaimed files
-    </label>
+        indeterminate={snapshot.selections.length > 0 && (snapshot.selections.length !== repository?.files.filter(file => !file.ownerIds.length).length || snapshot.selections.some(selection => selection.lineIds !== null))}
+        onChange={checked => state.selectAll(checked)} />
+    </div>
     <div className="explorer-scrollbar min-h-0 flex-1 overflow-y-auto">
       {unclaimed.map(row)}
       {!unclaimed.length ? <p className="px-3 text-sm text-fg/muted">No unclaimed files{filter ? " match this filter" : ""}.</p> : null}
@@ -134,12 +133,11 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
         return <ThreadDisclosure key={id} summaryClassName="py-1" summary={owner ? (
           <WorkbenchThreadListItem entry={owner.entry} projectId={ProjectIdSchema.parse(owner.projectId)}
             compact={false} presentation="disclosure-summary" href={undefined} showTooltip={false}
-            action={href ? <a className="pointer-events-auto relative z-20 rounded-lg px-2 py-1 text-xs text-fg/muted hover:bg-accent-soft hover:text-text" href={href}
-              onClick={event => {
+            action={href ? { Icon: OpenThreadIcon, label: "Open", href, onClick: event => {
                 if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();
                 window.history.pushState({ workbench: true }, "", href);
-              }}>Open</a> : undefined} />
+              } } : undefined} />
         ) : <span className="text-sm text-fg/muted">Claimed thread unavailable</span>}>
           {files.filter(file => file.ownerIds.includes(id)).map(row)}
         </ThreadDisclosure>;
@@ -151,7 +149,7 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
         <p className="text-sm">This removes all reviewed changes in {discard?.selections.length ?? 0} selected files. It cannot be undone here.</p>
         <div className="flex justify-end gap-3">
           <button className="rounded-lg px-3 py-2 hover:bg-accent-soft" autoFocus>Cancel</button>
-          <button className="rounded-lg px-3 py-2 text-danger hover:bg-accent-soft"
+          <button className="rounded-lg px-3 py-2 text-danger hover:bg-accent-soft disabled:opacity-45" disabled={state.mutationBlocked}
             onClick={() => { if (discard) void state.submit("discard", discard); }}>Discard changes</button>
         </div>
       </form>

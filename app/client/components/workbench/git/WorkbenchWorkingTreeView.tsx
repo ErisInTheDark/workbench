@@ -1,42 +1,45 @@
-/* Exports: default WorkbenchWorkingTreeView: compose repository selection, file navigation and sticky diff review. */
+/* Exports: default WorkbenchWorkingTreeView: compose file navigation and sticky diff review beneath the shell header. */
 "use client";
 import { useCallback, useRef, useState, type CSSProperties } from "react";
-import { createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchGitFileList from "./WorkbenchGitFileList";
 import WorkbenchGitDiffView from "./WorkbenchGitDiffView";
 import WorkbenchGitComposer from "./WorkbenchGitComposer";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
+import PrimaryButton from "../PrimaryButton";
+import { BackArrowIcon, OpenThreadIcon } from "../workbench-icons";
 
 export default function WorkbenchWorkingTreeView() {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
-  const projectHref = useWorkbenchProjectNavigation();
   const [filesWidth, setFilesWidth] = useState(280);
   const [mobileDiff, setMobileDiff] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const split = useRef<HTMLDivElement>(null);
   const getViewport = useCallback(() => viewport.current, []);
+  if (!snapshot.data.repositories.length && (snapshot.status === "error" || snapshot.status === "unavailable")) {
+    return <div className="flex h-full min-h-0 flex-col items-start gap-3 py-4">
+      <p role="alert" className="whitespace-pre-line text-sm text-danger">{snapshot.error}</p>
+      <PrimaryButton disabled={snapshot.refreshing} onClick={() => { void state.refresh(); }}>Retry working tree</PrimaryButton>
+    </div>;
+  }
+  if (snapshot.initialising) return <div aria-label="Loading working tree" aria-busy="true"
+    className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[280px_minmax(0,1fr)]">
+    <div aria-hidden="true" className="space-y-5 py-3">
+      <div className="h-5 w-32 rounded workbench-skeleton" />
+      {Array.from({ length: 7 }, (_, index) => <div key={index} className="space-y-2">
+        <div className="h-4 w-4/5 rounded workbench-skeleton" />
+        <div className="ml-6 h-3 w-1/2 rounded workbench-skeleton" />
+      </div>)}
+    </div>
+    <div aria-hidden="true" className="hidden min-h-0 flex-col gap-5 py-3 md:flex">
+      <div className="h-5 w-2/5 rounded workbench-skeleton" />
+      <div className="min-h-0 flex-1 space-y-3 overflow-hidden">
+        {Array.from({ length: 14 }, (_, index) => <div key={index} className="h-4 w-4/5 rounded workbench-skeleton" />)}
+      </div>
+      <div className="h-24 shrink-0 rounded-2xl workbench-skeleton" />
+    </div>
+  </div>;
   return <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-    <header className="flex flex-wrap items-center gap-3 px-3 py-3">
-      <a className="rounded-lg px-2 py-1 text-sm hover:bg-accent-soft md:hidden" href={projectHref(createProjectRoute(state.projectId))}
-        onClick={event => {
-          if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-          event.preventDefault();
-          window.history.pushState({ workbench: true }, "", event.currentTarget.href);
-        }}>Back to project</a>
-      <h1 className="mr-auto text-base font-semibold">Working tree</h1>
-      {!mobileDiff ? <button type="button" className="rounded-lg px-2 py-1 text-sm text-accent hover:bg-accent-soft md:hidden"
-        onClick={() => setMobileDiff(true)}>Review changes</button> : null}
-      {snapshot.data.repositories.length > 1 ? <select aria-label="Git repository" value={snapshot.rootId} disabled={snapshot.busy}
-        className="max-w-64 rounded-lg bg-bg px-2 py-1 text-sm" onChange={event => state.selectRoot(event.target.value)}>
-        {snapshot.data.repositories.map(repository => <option key={repository.rootId} value={repository.rootId}>{repository.label}</option>)}
-      </select> : null}
-      <span className="text-xs text-fg/muted">{state.repository?.branch ?? (state.repository?.head ? "Detached HEAD" : "")}</span>
-      <button type="button" className="rounded-lg px-2 py-1 text-sm text-fg/muted hover:bg-accent-soft" disabled={snapshot.busy}
-        onClick={() => { void state.refresh(); }}>Refresh</button>
-    </header>
-    {snapshot.status === "loading" || snapshot.status === "idle" ? <p className="px-3 text-sm text-fg/muted">Checking working-tree changes...</p> : null}
     {snapshot.error ? <p role="alert" className="whitespace-pre-line px-3 text-sm text-danger">{snapshot.error}</p> : null}
     {snapshot.operationError ? <p role="alert" className="px-3 text-sm text-danger">{snapshot.operationError}</p> : null}
     {snapshot.result ? <div role="status" className="px-3 text-sm text-fg/muted">
@@ -51,6 +54,9 @@ export default function WorkbenchWorkingTreeView() {
         min-h-0 min-w-0 flex-col pb-3 md:flex
         ${mobileDiff ? "hidden" : "flex"}
       `}>
+        <PrimaryButton className="mb-2 self-end md:hidden" onClick={() => setMobileDiff(true)}>
+          Review changes <OpenThreadIcon size={16} />
+        </PrimaryButton>
         <WorkbenchGitFileList onSelect={() => setMobileDiff(true)} />
       </aside>
       <div role="separator" aria-label="Resize changed files" aria-orientation="vertical" aria-valuenow={filesWidth}
@@ -73,7 +79,7 @@ export default function WorkbenchWorkingTreeView() {
         explorer-scrollbar min-h-0 min-w-0 overflow-y-auto px-2 pb-3 md:block
         ${mobileDiff ? "block" : "hidden"}
       `}>
-        <button type="button" className="rounded-lg px-2 py-2 text-sm hover:bg-accent-soft md:hidden" onClick={() => setMobileDiff(false)}>Back to files</button>
+        <PrimaryButton className="mb-2 md:hidden" onClick={() => setMobileDiff(false)}><BackArrowIcon size={16} />Back to files</PrimaryButton>
         <div className="grid min-h-full min-w-0 grid-cols-1 grid-rows-[1fr_auto]">
           <div className="col-start-1 row-start-1 min-w-0"><WorkbenchGitDiffView /></div>
           <WorkbenchGitComposer getViewport={getViewport} />

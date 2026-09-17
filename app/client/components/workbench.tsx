@@ -106,6 +106,8 @@ import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
+import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositoryControl";
+import WorkbenchGitRefreshButton from "./workbench/git/WorkbenchGitRefreshButton";
 import WorkbenchGitSidebar from "./workbench/git/WorkbenchGitSidebar";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
@@ -1360,7 +1362,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
   const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id || "";
-  const showFullBleedMainView = showMosaicView || showGitView;
+  const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
     const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
@@ -2203,6 +2205,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     projects={explorer.projects}
                   />
                   {activeProjectId && currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
+                  <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
+                    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    navigateToRoute(createGitRoute(activeProjectId));
+                  }} />
                   <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
@@ -2240,11 +2247,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </WorkbenchSidebarSectionDisclosure>
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
-                <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
-                  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  navigateToRoute(createGitRoute(activeProjectId));
-                }} />
 
                   {activeProjectId ? <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
@@ -2341,7 +2343,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
             <main
               ref={mainPaneRef}
-              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${isDirectThreadSurface
+              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
+                ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
+                : isDirectThreadSurface
                 ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
                 : showFullBleedMainView
                   ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
@@ -2372,7 +2376,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
                 />
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                  <div className="order-2 min-w-0 w-full flex-1 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
+                  <div className="order-2 min-w-0 w-full flex-1 md:order-1" hidden={!showGitView && Boolean(currentThread?.isDraft)}>
                     {showThreadView && threadShellSource && !isThreadShellTitleLoading ? (
                       <ThreadShellTitleInput
                         key={`${threadShellSource.harness}:${threadShellSource.id}`}
@@ -2391,10 +2395,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                           {isThreadShellTitleLoading ? (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : showSettingsView ? "Settings" : "Select a file"}
+                          ) : showGitView ? "Working tree" : showSettingsView ? "Settings" : "Select a file"}
                         </p>
                         <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
-                          {showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
+                          {showGitView ? <WorkbenchGitRepositoryControl /> : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
                     )}
@@ -2415,6 +2419,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <span className="sr-only">Back to file explorer</span>
                     </WorkbenchIconButton>
                     <div className="flex items-center gap-1.5">
+                      {showGitView ? <WorkbenchGitRefreshButton /> : null}
                       <WorkbenchZoomButton
                         ref={zoomButtonRef}
                         label="Editor text size"
@@ -2426,7 +2431,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         onChange={updateEditorFontSize}
                       />
                     </div>
-                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView}>
+                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView}>
                       <WorkbenchIconButton
                         id="save-file"
                         ref={saveFileButtonRef}
@@ -2458,7 +2463,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <section
                 className={`
                   relative ${isDirectThreadSurface || showGitView ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}
-                  ${showFullBleedMainView ? "min-h-0 overflow-hidden" : ""}
+                  ${showFullBleedMainView || showGitView ? "min-h-0 overflow-hidden" : ""}
                 `}
                 aria-busy={isSelectionPending}
               >

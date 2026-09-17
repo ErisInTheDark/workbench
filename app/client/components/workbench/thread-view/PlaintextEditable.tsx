@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - default PlaintextEditable: contenteditable plaintext input with autofocus, overlays, and optional mention suggestions. Keywords: composer, questionnaire, focus, mentions, autocomplete.
- * - Local helpers: caret measurement/restoration, highlight rendering, and mention popup rendering. Keywords: contenteditable, caret, highlights.
+ * - default PlaintextEditable: plaintext input with autofocus, overlays and mention suggestions.
+ * - PlaintextEditableHandle: focus the editor at a model-text offset.
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -16,6 +16,8 @@ import {
 } from "../../../workbench/thread/inline-mention-highlights";
 import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../workbench/thread/inline-mention-styles";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
+
+export interface PlaintextEditableHandle { focus(offset?: number): void }
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -204,6 +206,7 @@ export default function PlaintextEditable ({
   mentionSources = null,
   mentionSuggestionsPlacement = "above",
   readOnly = false,
+  ref,
   spellCheck = false,
   value,
 }: {
@@ -223,10 +226,21 @@ export default function PlaintextEditable ({
   mentionSources?: InlineMentionHighlightSources | null;
   mentionSuggestionsPlacement?: "above" | "below";
   readOnly?: boolean;
+  ref?: Ref<PlaintextEditableHandle>;
   spellCheck?: boolean;
   value: string;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
+  useImperativeHandle(ref, () => ({
+    focus(offset) {
+      const element = elementRef.current;
+      if (!element || disabled || readOnly) return;
+      // Use canonical plaintext so an offset also works after browser-created multiline nodes.
+      element.textContent = value;
+      element.focus();
+      restoreEditableCaretOffset(element, Math.max(0, offset ?? value.length));
+    },
+  }), [disabled, readOnly, value]);
   const containerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const [caretOffset, setCaretOffset] = useState<number | null>(null);

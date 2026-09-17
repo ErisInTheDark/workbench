@@ -27,13 +27,15 @@ export const WorkingTreeRepositorySchema = z.object({
 export const WorkingTreeReadSchema = z.object({
   repositories: z.array(WorkingTreeRepositorySchema),
   errors: z.array(z.object({ rootId: z.string(), message: z.string() })),
+  cacheHit: z.boolean().optional(),
 });
-export const WorkingTreeReadRequestSchema = z.object({ projectId: z.string().min(1) });
-export const WorkingTreeFileRequestSchema = WorkingTreeReadRequestSchema.extend({
+const projectRequest = z.object({ projectId: z.string().min(1) });
+export const WorkingTreeReadRequestSchema = projectRequest.extend({ preferCached: z.boolean().default(false) });
+export const WorkingTreeFileRequestSchema = projectRequest.extend({
   rootId: z.string(), path: filePath, identity: z.string(),
 });
 const selectionSchema = z.object({ path: filePath, identity: z.string(), lineIds: z.array(z.string()).nullable() });
-export const WorkingTreeMutationSchema = WorkingTreeReadRequestSchema.extend({
+export const WorkingTreeMutationSchema = projectRequest.extend({
   rootId: z.string(), expectedHead: oid.nullable(),
   mode: z.enum(["commit", "amend", "stash", "discard"]),
   targetCommit: oid.nullable(), title: z.string().max(10_000), description: z.string().max(100_000),

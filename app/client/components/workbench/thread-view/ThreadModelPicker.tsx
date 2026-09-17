@@ -9,6 +9,7 @@ import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/ty
 import { StarIcon, StarOffIcon } from "../workbench-icons";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchIconButton from "../WorkbenchIconButton";
+import WorkbenchTag from "../WorkbenchTag";
 import ThreadDisclosure from "./ThreadDisclosure";
 
 function formatContextWindow (tokens: number | null) {
@@ -101,7 +102,7 @@ export default function ThreadModelPicker ({
 					label={<span className="grid gap-1">
 						<span>{model.displayName}</span>
 						{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
-							{featureList.map((feature, index) => <span key={index} className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--model-feature-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-2 py-0.5 text-xs font-medium [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--model-feature-fg-bg))]">{feature}</span>)}
+							{featureList.map((feature, index) => <WorkbenchTag key={index}>{feature}</WorkbenchTag>)}
 						</span> : null}
 					</span>}
 					actions={<WorkbenchIconButton

@@ -47,7 +47,10 @@
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
  * - CompactIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
- * - GitArcIcon and Git arc action/claim-state glyphs: Git arc status and action glyphs.
+ * - GitArcIcon: select the glyph for a Git arc action.
+ * - GitArcClaimIcon/GitArcCleanClaimIcon/GitArcDirtyClaimIcon/GitArcPlannedClaimIcon: live and planned claim glyphs.
+ * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
+ * - GitGraphIcon: sidebar Git section graph glyph.
  */
 import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -55,6 +58,13 @@ import type { GitArcCommandAction } from "../../workbench/thread/command-matcher
 
 export type { IconProps } from "./OutlinedIcon";
 export { default as LoaderIcon } from "./LoaderIcon";
+
+export function GitGraphIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <circle cx="5" cy="6" r="3" /><path d="M5 9v6" /><circle cx="5" cy="18" r="3" />
+    <path d="M12 3v18" /><circle cx="19" cy="6" r="3" /><path d="M16 15.7A9 9 0 0 0 19 9" />
+  </OutlinedIcon>;
+}
 
 export function ShellProcessingIcon(props: IconProps) {
   return <OutlinedIcon {...props}>

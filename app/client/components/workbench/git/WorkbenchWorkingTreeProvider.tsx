@@ -6,7 +6,7 @@
 "use client";
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import WorkbenchWorkingTreeState from "../../../workbench/git/WorkbenchWorkingTreeState";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import WorkbenchDaemonClientContext from "../WorkbenchDaemonClientContext";
 
 const Context = createContext<WorkbenchWorkingTreeState | null>(null);
 export function useWorkingTree() {
@@ -19,9 +19,10 @@ export function useWorkingTreeSnapshot() {
   return useSyncExternalStore(state.subscribe, state.getSnapshot, state.getSnapshot);
 }
 export default function WorkbenchWorkingTreeProvider({ projectId, children }: { projectId: string; children: ReactNode }) {
-  const daemon = useWorkbenchDaemonClient();
-  const state = useMemo(() => new WorkbenchWorkingTreeState(projectId, daemon.git.workingTree), [daemon, projectId]);
+  const daemon = useContext(WorkbenchDaemonClientContext);
+  const state = useMemo(() => new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null), [daemon, projectId]);
   useEffect(() => {
+    if (!daemon) return;
     state.activate();
     const visibility = () => state.setVisible(!document.hidden);
     const focus = () => { if (!document.hidden) void state.refresh(); };

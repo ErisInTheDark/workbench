@@ -7,6 +7,7 @@ import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadSidebarEntrySchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext from "./WorkbenchContextMenuContext";
+import { OpenThreadIcon } from "./workbench-icons";
 
 test("disclosure summaries leave navigation exclusively to the supplied action", () => {
   const entry = WorkbenchThreadSidebarEntrySchema.parse({
@@ -16,7 +17,7 @@ test("disclosure summaries leave navigation exclusively to the supplied action",
   });
   const props = {
     projectId: ProjectIdSchema.parse("project"), entry, href: "/thread", showTooltip: false,
-    action: createElement("a", { href: "/open" }, "Open"),
+    action: { Icon: OpenThreadIcon, label: "Open", href: "/open" },
   };
   const render = (presentation: "row" | "disclosure-summary") => renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,

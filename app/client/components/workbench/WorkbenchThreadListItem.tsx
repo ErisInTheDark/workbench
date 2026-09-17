@@ -163,7 +163,7 @@ export default function WorkbenchThreadListItem({
   tabIndex,
   tooltipDetails,
 }: {
-  action?: ReactNode;
+  action?: { Icon: ThreadStatusIcon; label: string; href: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void };
   anchorRef?: Ref<HTMLAnchorElement>;
   attentionLabel?: string;
   className?: string;
@@ -255,22 +255,33 @@ export default function WorkbenchThreadListItem({
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
   const compact = compactOverride ?? (group === "settled" || archived);
-  const actionReplacesPriority = showActions && Boolean(action);
-  const actionButton = actionOverride ?? (showActions && actionDisplay ? (
-    <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={`
+  const actionReplacesPriority = Boolean(actionOverride) || (showActions && Boolean(action));
+  const visibleAction = actionOverride ?? (showActions ? actionDisplay : null);
+  const actionClassName = `
       pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-fg/muted focus-visible:flex focus-visible:text-text
       ${isDragActive ? "" : "hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"}
       ${compact ? "col-start-3 self-center" : "col-start-2 self-start"}
-      ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}
-    `} onClick={(event) => {
+      ${!actionOverride && action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}
+    `;
+  const actionContent = visibleAction ? <>
+    <visibleAction.Icon className="size-4" />
+    {!actionOverride && action === "discard" ? null : <span>{visibleAction.label}</span>}
+  </> : null;
+  const actionButton = actionOverride ? (
+    <a href={actionOverride.href} aria-label={actionOverride.label} title={actionOverride.label}
+      className={actionClassName} onPointerDown={event => event.stopPropagation()} onClick={event => {
+        event.stopPropagation();
+        actionOverride.onClick?.(event);
+      }}>{actionContent}</a>
+  ) : showActions && actionDisplay ? (
+    <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={actionClassName} onClick={(event) => {
       event.stopPropagation();
       const selectedAction = event.shiftKey && shiftAction ? shiftAction : baseAction;
       if (selectedAction) onAction?.(selectedAction);
     }} onPointerDown={(event) => event.stopPropagation()}>
-      <actionDisplay.Icon className="size-4" />
-      {action === "discard" ? null : <span>{actionDisplay.label}</span>}
+      {actionContent}
     </button>
-  ) : null);
+  ) : null;
   const contextMenuButton = contextMenu ? (
     <button
       type="button"

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchCheckboxMarker: render the shared square checked or unchecked Workbench marker. Keywords: checkbox, marker, checked, workbench.
- * - default WorkbenchCheckbox: render a controlled native checkbox with Workbench presentation. Keywords: checkbox, input, accessibility, workbench.
+ * - WorkbenchCheckboxMarker: render checked, unchecked or masked mixed selection.
+ * - default WorkbenchCheckbox: render a controlled native checkbox with Workbench presentation.
  */
 "use client";
 
@@ -15,22 +15,27 @@ export function WorkbenchCheckboxMarker({
   checked,
   className,
   disabled = false,
+  indeterminate = false,
 }: {
   checked: boolean;
   className?: string;
   disabled?: boolean;
+  indeterminate?: boolean;
 }) {
   return (
     <span
       aria-hidden="true"
       className={joinClasses(
         "inline-flex size-4 shrink-0 items-center justify-center rounded-[0.28rem] border transition",
-        checked
+        checked || indeterminate
           ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
           : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
         disabled && "opacity-45",
         className,
       )}
+      style={indeterminate ? {
+        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, 25% 44%, 25% 56%, 75% 56%, 75% 44%, 25% 44%, 0% 0%)",
+      } : undefined}
     >
     </span>
   );
@@ -40,12 +45,14 @@ export default function WorkbenchCheckbox({
   checked,
   className,
   disabled = false,
+  indeterminate = false,
   label,
   onChange,
 }: {
   checked: boolean;
   className?: string;
   disabled?: boolean;
+  indeterminate?: boolean;
   label: ReactNode;
   onChange: (checked: boolean) => void;
 }) {
@@ -59,6 +66,8 @@ export default function WorkbenchCheckbox({
     )}>
       <input
         checked={checked}
+        aria-checked={indeterminate ? "mixed" : checked}
+        ref={element => { if (element) element.indeterminate = indeterminate; }}
         className="peer sr-only"
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
@@ -66,6 +75,7 @@ export default function WorkbenchCheckbox({
       />
       <WorkbenchCheckboxMarker
         checked={checked}
+        indeterminate={indeterminate}
         disabled={disabled}
         className="peer-focus-visible:ring-2 peer-focus-visible:ring-accent-soft"
       />

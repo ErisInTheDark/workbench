@@ -240,7 +240,8 @@ export default class WorkbenchDaemonRequestController {
       switch (request.method) {
         case "git/working-tree/read": {
           if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
-          result = await this.owners.workingTree.read(WorkingTreeReadRequestSchema.parse(params).projectId);
+          const input = WorkingTreeReadRequestSchema.parse(params);
+          result = await this.owners.workingTree.read(input.projectId, input.preferCached);
           break;
         }
         case "git/working-tree/diff":

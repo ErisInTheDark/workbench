@@ -85,30 +85,77 @@ test("effect reactivation fences retired reads and starts a fresh single reader"
   state.dispose();
 });
 
-test("a read admitted before mutation cannot replace the post-mutation inspection", async () => {
+test("refresh retains review state and blocks every mutation until its fresh result arrives", async () => {
   const data = repositoryData();
   let resolveRead!: (data: WorkingTreeRead) => void;
-  let resolveMutation!: () => void;
+  let mutations = 0;
   let readCount = 0;
   const state = new WorkbenchWorkingTreeState("project", {
     read: async () => ++readCount === 2 ? await new Promise(resolve => { resolveRead = resolve; }) : structuredClone(data),
     diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
     preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
     mutate: async () => {
-      await new Promise<void>(resolve => { resolveMutation = resolve; });
+      mutations++;
       return { status: "complete", commit: null, stash: null, message: "", warnings: [] };
     },
   });
   await state.refresh();
   state.setMode("amend");
   const oldRead = state.refresh();
-  const mutation = state.submit();
+  assert.equal(state.getSnapshot().refreshing, true);
+  assert.equal(state.repository?.head, data.repositories[0]!.head);
+  for (const mode of ["commit", "amend", "stash", "discard"] as const) await state.submit(mode);
+  assert.equal(mutations, 0);
   data.repositories[0]!.head = "c".repeat(40);
-  resolveMutation();
-  resolveRead({ repositories: [], errors: [] });
-  await Promise.all([oldRead, mutation]);
+  resolveRead(structuredClone(data));
+  await oldRead;
   assert.equal(state.repository?.head, "c".repeat(40));
+  assert.equal(state.getSnapshot().refreshing, false);
+  state.reviewHead();
+  await state.submit();
+  assert.equal(mutations, 1);
   assert.equal(readCount, 3);
+  state.dispose();
+});
+
+test("opening uses cached review while a fresh scan runs and a failed refresh preserves it", async () => {
+  const data = repositoryData();
+  let finish!: (data: WorkingTreeRead) => void;
+  let fail!: (error: Error) => void;
+  let entered!: () => void;
+  const freshStarted = new Promise<void>(resolve => { entered = resolve; });
+  const requests: { preferCached?: boolean }[] = [];
+  const state = new WorkbenchWorkingTreeState("project", {
+    read: request => {
+      requests.push(request);
+      if (request.preferCached) return Promise.resolve({ ...structuredClone(data), cacheHit: true });
+      entered();
+      return new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    },
+    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
+    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
+    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
+  });
+  const opening = state.refresh();
+  assert.equal(requests[0]?.preferCached, true);
+  await freshStarted;
+  assert.equal(state.repository?.head, data.repositories[0]!.head);
+  assert.equal(state.getSnapshot().initialising, false);
+  assert.equal(state.getSnapshot().refreshing, true);
+  finish(structuredClone(data));
+  await opening;
+  state.setDraft({ title: "keep this draft" });
+  const refresh = state.refresh();
+  fail(new Error("scan unavailable"));
+  await refresh;
+  assert.equal(state.repository?.head, data.repositories[0]!.head);
+  assert.equal(state.getSnapshot().draft.title, "keep this draft");
+  assert.equal(state.getSnapshot().refreshing, false);
+  assert.equal(state.getSnapshot().status, "error");
+  const recovery = state.refresh();
+  finish(structuredClone(data));
+  await recovery;
+  assert.equal(state.getSnapshot().status, "ready");
   state.dispose();
 });
 
@@ -132,7 +179,6 @@ test("refreshes coalesce and changed/claimed files lose selection without accept
   finish(structuredClone(data));
   await Promise.all([first, duplicate]);
   assert.equal(reads, 1);
-  state.toggleFile("a");
   assert.equal(state.getSnapshot().selections.length, 1);
   const next = state.refresh();
   data.repositories[0]!.files[0]!.ownerIds = ["thread"];
@@ -170,5 +216,81 @@ test("preview readers coalesce and a later file cannot receive an old preview", 
   await Promise.all([first, second]);
   assert.equal(finish.length, 1);
   assert.equal(state.getSnapshot().preview, null);
+  state.dispose();
+});
+
+test("initial unclaimed files are included, exclusions survive refresh and root switches", async () => {
+  const data = repositoryData();
+  const root = data.repositories[0]!;
+  root.files = ["a", "b", "claimed"].map(path => ({
+    path, oldPath: null, identity: path, status: "M", baseBlob: null, blob: null,
+    mode: "100644", baseMode: "100644", partial: true, binary: false, additions: 1, deletions: 1,
+    ownerIds: path === "claimed" ? ["owner"] : [],
+  }));
+  data.repositories.push({ ...structuredClone(root), rootId: "other", cwd: "/other" });
+  const state = new WorkbenchWorkingTreeState("project", {
+    read: async () => structuredClone(data),
+    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
+    preview: async request => ({ identity: request.identity, before: null, after: "", encoding: "text", mime: "text/plain", unavailable: null }),
+    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
+  });
+  await state.refresh();
+  assert.deepEqual(state.getSnapshot().selections.map(file => file.path), ["a", "b"]);
+  state.toggleFile("a");
+  await state.refresh();
+  assert.deepEqual(state.getSnapshot().selections.map(file => file.path), ["b"]);
+  state.selectRoot("other");
+  assert.deepEqual(state.getSnapshot().selections.map(file => file.path), ["a", "b"]);
+  state.selectRoot("r");
+  assert.deepEqual(state.getSnapshot().selections.map(file => file.path), ["b"]);
+  root.files.push({ ...root.files[0]!, path: "new", identity: "new" });
+  root.files[1]!.identity = "edited";
+  await state.refresh();
+  assert.deepEqual(state.getSnapshot().selections.map(file => file.path), ["new"]);
+  state.dispose();
+});
+
+test("revisiting an unchanged file immediately reuses content while changed identities load anew", async () => {
+  const data = repositoryData();
+  data.repositories[0]!.files = ["a", "b"].map(path => ({
+    path, oldPath: null, identity: path, status: "M", baseBlob: null, blob: null,
+    mode: "100644", baseMode: "100644", partial: true, binary: false, additions: 1, deletions: 1, ownerIds: [],
+  }));
+  let calls = 0;
+  const state = new WorkbenchWorkingTreeState("project", {
+    read: async () => structuredClone(data),
+    diff: async request => { calls++; return { identity: request.identity, patch: request.path, unavailable: null }; },
+    preview: async request => ({ identity: request.identity, before: null, after: "", encoding: "text", mime: "text/plain", unavailable: null }),
+    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
+  });
+  await state.refresh();
+  state.selectFile("b");
+  await state.loadContent();
+  state.selectFile("a");
+  assert.equal(state.getSnapshot().contentStatus, "ready");
+  assert.equal(state.getSnapshot().diff?.patch, "a");
+  assert.equal(calls, 2);
+  data.repositories[0]!.files[0]!.identity = "changed";
+  await state.refresh();
+  assert.equal(calls, 3);
+  assert.equal(state.getSnapshot().diff?.identity, "changed");
+  assert.equal(state.getSnapshot().selections.some(selection => selection.path === "a"), false);
+  state.dispose();
+});
+
+test("a failed root scan keeps its prior review but cannot authorise mutations", async () => {
+  let data = repositoryData();
+  const state = new WorkbenchWorkingTreeState("project", {
+    read: async () => structuredClone(data),
+    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
+    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
+    mutate: async () => { throw new Error("must remain blocked"); },
+  });
+  await state.refresh();
+  data = { repositories: [], errors: [{ rootId: "r", message: "repository unavailable" }] };
+  await state.refresh();
+  assert.equal(state.repository?.head, "a".repeat(40));
+  assert.equal(state.mutationBlocked, true);
+  assert.match(state.getSnapshot().error, /repository unavailable/);
   state.dispose();
 });

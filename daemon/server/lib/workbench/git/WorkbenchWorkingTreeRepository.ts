@@ -9,6 +9,7 @@ import type {
   WorkingTreeRepository, WorkingTreeResult,
 } from "workbench-shared/workbench/git/working-tree-contracts";
 import { buildSelectedContent, describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
+import { WORKING_TREE_STASH_MESSAGE } from "workbench-shared/workbench/git/working-tree-message";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 
@@ -212,8 +213,8 @@ export default class WorkbenchWorkingTreeRepository {
     await verify();
     if (request.mode === "stash") {
       const indexCommit = await this.git.createCommitFromTree(base, [snapshot.head!], "index for selected stash");
-      const stash = await this.git.createCommitFromTree(tree, [snapshot.head!, indexCommit], message || "Selected Workbench changes");
-      await this.git.run(["stash", "store", "-m", message || "Selected Workbench changes", stash]);
+      const stash = await this.git.createCommitFromTree(tree, [snapshot.head!, indexCommit], message || WORKING_TREE_STASH_MESSAGE);
+      await this.git.run(["stash", "store", "-m", message || WORKING_TREE_STASH_MESSAGE, stash]);
       result.stash = stash;
     }
     try {
