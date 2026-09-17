@@ -17,10 +17,10 @@ import {
 } from "react";
 
 import {
-  getInitialThreadScrollTop,
   didThreadScrollReattach,
-  isThreadScrollAtEnd,
+  getInitialThreadScrollTop,
   getPreservedThreadScrollTop,
+  isThreadScrollAtEnd,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
   resolveThreadTouchScrollDirection,
@@ -48,7 +48,7 @@ interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps
 }
 
 const THREAD_SCROLL_DOWN_KEYS = new Set(["ArrowDown", "End", "PageDown"]);
-const THREAD_SCROLL_NEAR_END_DISTANCE_REM = 30;
+const THREAD_SCROLL_NEAR_END_DISTANCE_REM = 6;
 const THREAD_SCROLL_UP_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
 const THREAD_SCROLL_VIEWPORT_STYLE: CSSProperties & {
   "--thread-scroll-near-end-distance": string;
@@ -76,7 +76,7 @@ function readScrollMetrics (viewport: HTMLDivElement): ThreadScrollMetrics {
   };
 }
 
-function isInteractiveScrollKeyTarget(target: EventTarget | null) {
+function isInteractiveScrollKeyTarget (target: EventTarget | null) {
   return target instanceof HTMLElement
     && Boolean(target.closest("a,button,input,select,textarea,[contenteditable='true']"));
 }
@@ -150,7 +150,7 @@ function ActiveThreadScrollViewport ({
     getViewport: () => viewportRef.current,
     observeContent: (element, listener) => {
       const root = viewportRef.current;
-      if (!root) return () => {};
+      if (!root) return () => { };
       visibility.current ??= new ThreadViewportVisibilityController({
         intersection: callback => new IntersectionObserver(callback, { root }),
         resize: callback => new ResizeObserver(callback),
@@ -163,7 +163,7 @@ function ActiveThreadScrollViewport ({
     },
     preserveOffscreenLayout: () => {
       const viewport = viewportRef.current;
-      if (!viewport) return () => {};
+      if (!viewport) return () => { };
       const previousMetrics = readScrollMetrics(viewport);
       return () => {
         if (viewportRef.current !== viewport) return;
@@ -300,7 +300,7 @@ function ActiveThreadScrollViewport ({
   );
 }
 
-export function ThreadScrollViewportEnd() {
+export function ThreadScrollViewportEnd () {
   const viewport = useThreadScrollViewportContext();
   return <div ref={viewport.setEndTarget} data-thread-scroll-end="true" className="h-px shrink-0" aria-hidden="true" />;
 }
