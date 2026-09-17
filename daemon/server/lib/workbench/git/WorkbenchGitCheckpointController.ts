@@ -123,6 +123,7 @@ export interface GitCheckpointCreateResult {
 
 export interface GitArcReleaseResult extends GitCheckpointCreateResult {
   releasedClaims: string[];
+  unchanged?: boolean;
 }
 
 type GitArcContinuationResult = GitCheckpointCreateResult;
@@ -340,16 +341,22 @@ export default class WorkbenchGitCheckpointController {
     return { active, checkpoint, harness, lifecycle, registry, repository };
   }
 
-  private async assertClaimPathsClean(repository: WorkbenchGitRepository, paths: string[]) {
+  private async partitionArcReleaseClaims(
+    repository: WorkbenchGitRepository,
+    paths: string[],
+  ) {
     const head = await repository.headOrNull();
     const dirtyPaths = await repository.listWorktreeChangedPaths(head, paths);
-    if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths, "Arc release");
+    return {
+      cleanClaims: paths.filter(claim => !dirtyPaths.some(path => gitArcPathsOverlap(claim, path))),
+      dirtyClaims: paths.filter(claim => dirtyPaths.some(path => gitArcPathsOverlap(claim, path))),
+    };
   }
 
   async assertArcReleasable(input: ControllerInput): Promise<void> {
     await GitObjectReadSession.run(async () => {
       const { lifecycle, repository } = await this.requireReleasableArc(input);
-      await this.assertClaimPathsClean(repository, lifecycle.claimedPaths);
+      await this.partitionArcReleaseClaims(repository, lifecycle.claimedPaths);
     });
   }
 
@@ -563,11 +570,52 @@ export default class WorkbenchGitCheckpointController {
   async releaseArc({ cwd, disown, harness: rawHarness, threadId }: ControllerInput & { disown: boolean }): Promise<GitArcReleaseResult> {
     return await GitObjectReadSession.run(async () => {
       const releasable = await this.requireReleasableArc({ cwd, harness: rawHarness, threadId });
-      if (!disown) await this.assertClaimPathsClean(releasable.repository, releasable.lifecycle.claimedPaths);
-      return await this.finishArcRelease({
-        ...releasable,
-        threadId,
-      });
+      if (disown) return await this.finishArcRelease({ ...releasable, threadId });
+      const { cleanClaims, dirtyClaims } = await this.partitionArcReleaseClaims(
+        releasable.repository,
+        releasable.lifecycle.claimedPaths,
+      );
+      if (!dirtyClaims.length) return await this.finishArcRelease({ ...releasable, threadId });
+      if (!cleanClaims.length) {
+        return {
+          checkpointCommit: releasable.checkpoint.checkpointCommit,
+          checkpointRef: releasable.checkpoint.checkpointRef,
+          intentName: releasable.lifecycle.intentName ?? null,
+          kind: "arc",
+          phase: releasable.active.phase === "plan" ? "plan" : "active",
+          releasedClaims: [],
+          repoRoot: releasable.repository.root,
+          scopePaths: dirtyClaims,
+          unchanged: true,
+        };
+      }
+      if (releasable.active.phase !== "plan") {
+        const { kind: _kind, removedClaims, ...result } = await this.lifecycle.claims({
+          cwd: releasable.repository.root,
+          harness: releasable.harness,
+          threadId,
+          inherit: true,
+          removePaths: cleanClaims,
+        });
+        return { ...result, kind: "arc", releasedClaims: removedClaims };
+      }
+      const retainedArc = releasable.active.retainedArc;
+      if (!retainedArc) throw new Error("The inactive Git arc plan does not retain an active arc.");
+      const registryMutation = await releasable.registry.prepareSet({
+        ...releasable.active,
+        retainedArc: { ...retainedArc, claimedPaths: dirtyClaims },
+      }, releasable.active.checkpointCommit);
+      await releasable.repository.updateRefs(registryMutation.updates);
+      return {
+        checkpointCommit: releasable.checkpoint.checkpointCommit,
+        checkpointRef: releasable.checkpoint.checkpointRef,
+        intentName: releasable.lifecycle.intentName ?? null,
+        kind: "arc",
+        phase: "plan",
+        releasedClaims: cleanClaims,
+        repoRoot: releasable.repository.root,
+        scopePaths: dirtyClaims,
+      };
     });
   }
 

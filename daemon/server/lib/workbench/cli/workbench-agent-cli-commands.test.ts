@@ -1525,6 +1525,28 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   }, { action: "arcRelease", disown: true });
   assert.deepEqual(parseGitArcReceipt(releaseResponse.stdout)?.removedClaims, ["src/dirty.ts"]);
   assert.equal(parseGitArcReceipt(releaseResponse.stdout)?.claimedPathCount, 0);
+  assert.doesNotMatch(releaseResponse.stdout, /remain claimed|Set disown/u);
+  const cleanReleaseResponse = adapt("git-arc-release", {
+    checkpointCommit: planRef,
+    intentName: "Release clean work",
+    phase: "resolved",
+    releasedClaims: ["src/clean.ts"],
+    scopePaths: [],
+  }, { action: "arcRelease", disown: false });
+  assert.doesNotMatch(cleanReleaseResponse.stdout, /remain claimed|Set disown/u);
+  const partialReleaseResponse = adapt("git-arc-release", {
+    checkpointCommit: planRef,
+    intentName: "Release clean work",
+    phase: "plan",
+    releasedClaims: ["src/clean.ts"],
+    scopePaths: ["src/dirty.ts", "odd\nname.ts"],
+  }, { action: "arcRelease", disown: false });
+  assert.match(
+    partialReleaseResponse.stdout,
+    /These dirty paths remain claimed:\nsrc\/dirty\.ts\n"odd\\nname\.ts"\nSet disown to also release dirty claims\./u,
+  );
+  assert.deepEqual(parseGitArcReceipt(partialReleaseResponse.stdout)?.removedClaims, ["src/clean.ts"]);
+  assert.equal(parseGitArcReceipt(partialReleaseResponse.stdout)?.plannedPathCount, undefined);
   const waitResponse = adapt("git-arc-wait", {
     acquiredClaims: ["api:src/api.ts", "web:src/web.ts"],
     changes: [],

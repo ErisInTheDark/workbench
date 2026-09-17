@@ -234,22 +234,26 @@ class FakeLocalGitArcController {
   }
 
   async assertArcReleasable(input: { cwd: string }) {
-    if (this.dirtyRoots.has(input.cwd)) throw new Error(`Arc release paths must be clean against HEAD: ${input.cwd}`);
+    if (!this.states.has(input.cwd)) throw new Error("This thread does not own any live Git arc claims.");
   }
 
   async releaseArc(input: { cwd: string; disown: boolean }) {
-    if (!input.disown) await this.assertArcReleasable(input);
     const state = this.states.get(input.cwd);
     if (!state) throw new Error("This thread does not own any live Git arc claims.");
-    this.states.delete(input.cwd);
+    const retainedClaims = input.disown || !this.dirtyRoots.has(input.cwd) ? [] : state.claimedPaths;
+    const releasedClaims = state.claimedPaths.filter(path => !retainedClaims.includes(path));
+    if (retainedClaims.length) this.states.set(input.cwd, { ...state, claimedPaths: retainedClaims });
+    else this.states.delete(input.cwd);
     return {
       checkpointCommit: state.checkpointCommit,
       checkpointRef: `refs/${state.checkpointCommit}`,
       intentName: state.intentName,
       kind: "arc",
-      releasedClaims: state.claimedPaths,
+      phase: retainedClaims.length ? "active" : "resolved",
+      releasedClaims,
       repoRoot: input.cwd,
-      scopePaths: [],
+      scopePaths: retainedClaims,
+      ...(releasedClaims.length ? {} : { unchanged: true }),
     };
   }
 
@@ -668,14 +672,16 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   ]);
 
   local.dirtyRoots.add(webRoot);
-  await assert.rejects(controller.execute(project, {
+  const partial = await controller.execute(project, {
     action: "arcRelease", disown: false, ...identity,
-  }), /web failed before any member changed.*clean against HEAD/u);
-  assert.ok(await controller.findLifecycleState(project, "codex", identity.threadId));
+  }) as { releasedClaims: string[]; scopePaths: string[] };
+  assert.deepEqual(partial.releasedClaims, ["api:one.txt"]);
+  assert.deepEqual(partial.scopePaths, ["web:two.txt"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", identity.threadId))?.claimedPaths, ["web:two.txt"]);
   const released = await controller.execute(project, {
     action: "arcRelease", disown: true, ...identity,
   }) as { releasedClaims: string[] };
-  assert.deepEqual(released.releasedClaims, ["api:one.txt", "web:two.txt"]);
+  assert.deepEqual(released.releasedClaims, ["web:two.txt"]);
   assert.equal(await controller.findLifecycleState(project, "codex", identity.threadId), null);
   assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), false);
 });

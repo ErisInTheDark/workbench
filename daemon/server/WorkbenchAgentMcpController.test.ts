@@ -381,7 +381,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const release = inventory.tools.find(({ name }) => name === "git_arc_release");
     assert.ok(release);
     assert.deepEqual(Object.keys(release.inputSchema.properties ?? {}), ["disown"]);
-    assert.match(release.description ?? "", /Dirty claims are rejected unless disown is true/u);
+    assert.match(release.description ?? "", /Release clean claims owned by this thread/u);
     const releaseDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_release");
     assert.ok(releaseDefinition);
     assert.deepEqual(await releaseDefinition.buildRequestFromJson({}, {

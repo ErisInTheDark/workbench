@@ -26,10 +26,13 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   const phase = payload.phase === "resolved" ? "resolved"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
   const fullScope = action === "scope";
-  const claimedPaths = action === "compare" || action === "diff"
+  const claimedPaths = action === "release" ? paths(payload, "scopePaths")
+    : action === "compare" || action === "diff"
     ? sources.flatMap(member => member.phase === "resolved" ? [] : paths(member, "scopePaths"))
     : phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
-  const plannedPaths = phase === "plan" ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths") : undefined;
+  const plannedPaths = phase === "plan" && action !== "release"
+    ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths")
+    : undefined;
   const additions = action === "start" ? paths(payload, "acquiredClaims")
     : Array.isArray(payload.addedClaims) ? paths(payload, "addedClaims") : paths(payload, "additionalClaims");
   const removals = action === "start" ? paths(payload, "releasedClaims")
@@ -125,6 +128,13 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   if (action === "restore") {
     const restored = paths(payload, "restoredPaths");
     lines.push(`restored ${restored.length}`, ...restored.map(escapeGitArcValue));
+  }
+  if (action === "release" && request.body?.disown !== true && claimedPaths.length) {
+    lines.push(
+      "These dirty paths remain claimed:",
+      ...claimedPaths.map(escapeGitArcValue),
+      "Set disown to also release dirty claims.",
+    );
   }
   return lines.join("\n");
 }

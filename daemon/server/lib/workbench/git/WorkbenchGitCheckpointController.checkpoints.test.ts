@@ -371,10 +371,6 @@ checkpointTest("dirty disown preserves inactive plans and proposals remain commi
   const indexBefore = await git(repoRoot, ["show", ":selected.txt"]);
   const worktreeBefore = await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8");
 
-  await assert.rejects(
-    releaseGitArc({ cwd: repoRoot, disown: false, threadId }),
-    /Arc release paths must be clean against HEAD: selected\.txt/u,
-  );
   assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId }))?.checkpointCommit, futurePlanCheckpoint);
 
   const disowned = await releaseGitArc({ cwd: repoRoot, disown: true, threadId });

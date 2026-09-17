@@ -1331,6 +1331,7 @@ controllerTest("claims", "combined claims and inactive plan edits preserve dirty
   });
   assert.match(historical.diff, /\+keep this work/u);
   await checkActivePlanEditing(fixture);
+  await checkActiveCleanRelease(repository, source);
 });
 
 async function checkActivePlanEditing({ repository, source }: ControllerBranch<"claims">) {
@@ -1462,7 +1463,63 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   assert.equal(registryEntry?.retainedArc?.phase, "resolved");
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, []);
   assert.notEqual(registryEntry?.checkpointCommit, replacement.checkpointCommit);
+  await checkRetainedCleanRelease(repository, source);
 });
+
+async function checkRetainedCleanRelease(repository: WorkbenchGitRepository, source: string) {
+  const controller = new WorkbenchGitCheckpointController();
+  const threadId = "retained-release-thread";
+  const cleanPath = "retained-release-clean.txt";
+  const dirtyPath = "retained-release-dirty.txt";
+  await fs.writeFile(path.join(source, cleanPath), "initial clean path\n");
+  await fs.writeFile(path.join(source, dirtyPath), "initial dirty path\n");
+  await repository.run(["add", "--", cleanPath, dirtyPath]);
+  await repository.run(["commit", "-m", "add retained release fixtures"]);
+  await controller.createAndStartPlan({
+    cwd: source, harness: "codex", intentName: "retain mixed claims", paths: [cleanPath, dirtyPath], threadId,
+  });
+  await fs.writeFile(path.join(source, cleanPath), "dirty then clean\n");
+  await fs.writeFile(path.join(source, dirtyPath), "dirty retained path\n");
+  const nextPlan = await controller.createPlan({
+    cwd: source, harness: "codex", intentName: "keep the next plan", paths: [cleanPath, dirtyPath], threadId,
+  });
+  await repository.run(["restore", "--", cleanPath]);
+
+  const released = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
+  assert.deepEqual(released.releasedClaims, [cleanPath]);
+  assert.deepEqual(released.scopePaths, [dirtyPath]);
+  assert.equal(released.phase, "plan");
+  const registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId });
+  assert.equal(registryEntry?.checkpointCommit, nextPlan.checkpointCommit);
+  assert.equal(registryEntry?.phase, "plan");
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, [dirtyPath]);
+}
+
+async function checkActiveCleanRelease(repository: WorkbenchGitRepository, source: string) {
+  const controller = new WorkbenchGitCheckpointController();
+  const threadId = "clean-release-thread";
+  const dirtyPath = "release-dirty.txt";
+  const cleanPath = "release-clean.txt";
+  await fs.writeFile(path.join(source, dirtyPath), "initial dirty path\n");
+  await fs.writeFile(path.join(source, cleanPath), "initial clean path\n");
+  await repository.run(["add", "--", dirtyPath, cleanPath]);
+  await repository.run(["commit", "-m", "add release fixtures"]);
+  await controller.createAndStartPlan({
+    cwd: source, harness: "codex", intentName: "release clean claims", paths: [cleanPath, dirtyPath], threadId,
+  });
+  await fs.writeFile(path.join(source, dirtyPath), "changed dirty path\n");
+
+  const partial = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
+  assert.deepEqual(partial.releasedClaims, [cleanPath]);
+  assert.deepEqual(partial.scopePaths, [dirtyPath]);
+  assert.equal(partial.phase, "active");
+  assert.deepEqual((await controller.findLifecycleState({ cwd: source, harness: "codex", threadId }))?.claimedPaths, [dirtyPath]);
+
+  const unchanged = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
+  assert.deepEqual(unchanged.releasedClaims, []);
+  assert.deepEqual(unchanged.scopePaths, [dirtyPath]);
+  assert.equal(unchanged.unchanged, true);
+}
 
 
 controllerTest("remote", "remote boundaries reject published amendments, unavailable refreshes and detached HEAD", async (fixture) => {

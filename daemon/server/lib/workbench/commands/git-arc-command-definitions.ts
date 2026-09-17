@@ -128,7 +128,7 @@ const move = defineWorkbenchAgentCommand({
 });
 
 const release = defineWorkbenchAgentCommand({
-  description: "Release every live claim owned by this thread without changing Git or workspace content. Dirty claims are rejected unless disown is true.",
+  description: "Release clean claims owned by this thread without changing Git or workspace content.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "release"],
