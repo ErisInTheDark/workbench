@@ -1,0 +1,1 @@
+- Prefer putting product behaviour in the reload graph. Keep non-reloadable process shells limited to bootstrapping, stable ingress, reload/restart control, and shutdown.
