@@ -8,6 +8,7 @@ import LoaderAnimationController from "./LoaderAnimationController";
 import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 
 const spokes = ["M12 2v4", "m16.2 7.8 2.9-2.9", "M18 12h4", "m16.2 16.2 2.9 2.9", "M12 18v4", "m4.9 19.1 2.9-2.9", "M2 12h4", "m4.9 4.9 2.9 2.9"];
+const midpoints = ["12px 4px", "17.65px 6.35px", "20px 12px", "17.65px 17.65px", "12px 20px", "6.35px 17.65px", "4px 12px", "6.35px 6.35px"];
 
 export default function LoaderIcon(props: IconProps) {
   const group = useRef<SVGGElement>(null);
@@ -23,8 +24,9 @@ export default function LoaderIcon(props: IconProps) {
       if (reducedMotion.matches) return;
       controller = new LoaderAnimationController((target, frames, options) => {
         const node = target === "spin" ? element
-          : typeof target === "object" ? element.children[target.rotation]!
-          : paths[target === "traveller" ? 8 : target]!;
+          : typeof target === "object" ? ("rotation" in target ? element.children[target.rotation]! : paths[target.selfRotation]!)
+          : target === "traveller" ? paths[8]!
+          : element.children[target]!.firstElementChild!;
         return node.animate(frames, options);
       });
       controller.start();
@@ -41,9 +43,11 @@ export default function LoaderIcon(props: IconProps) {
     {/* Keep rotation coordinates independent of the outer bounce clearance. */}
     <svg x={0} y={0} width={24} height={24} viewBox="0 0 24 24" overflow="visible">
       <g ref={group} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
-        {spokes.map(path => (
+        {spokes.map((path, index) => (
           <g key={path} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
-            <path d={path} />
+            <g>
+              <path d={path} style={{ transformBox: "view-box", transformOrigin: midpoints[index] }} />
+            </g>
           </g>
         ))}
         <path d={spokes[0]} style={{ opacity: 0, transformBox: "view-box", transformOrigin: "12px 12px" }} />

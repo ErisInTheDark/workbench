@@ -3,7 +3,7 @@
  * - LoaderAnimator: browser animation boundary for loader targets.
  * - default LoaderAnimationController: owns loader motion sequencing and disposal.
  */
-export type LoaderAnimator = (target: "spin" | "traveller" | number | { rotation: number }, frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "finished" | "cancel">;
+export type LoaderAnimator = (target: "spin" | "traveller" | number | { rotation: number } | { selfRotation: number }, frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "finished" | "cancel">;
 
 type Track = { target: Exclude<Parameters<LoaderAnimator>[0], "spin">; frames: Keyframe[]; easing?: string };
 const ease = "cubic-bezier(.4,0,.2,1)";
@@ -29,6 +29,7 @@ function foldTracks(duration: number, times: (index: number) => number[]): Track
 }
 
 const motions = [
+  // circular fold
   {
     weight: 10,
     duration: 2160,
@@ -37,8 +38,9 @@ const motions = [
       return [start, start + 550, start + 1080, start + 1630];
     }),
   },
+  // circular bounce
   {
-    weight: 20,
+    weight: 25,
     duration: 2100,
     tracks: (): Track[] => directions.map(([x, y], target) => {
       const start = bounceStarts[target]!;
@@ -52,6 +54,7 @@ const motions = [
       ] };
     }),
   },
+  // circular collection
   {
     weight: 10,
     duration: 4800,
@@ -73,16 +76,18 @@ const motions = [
       ] },
     ],
   },
+  // even-odd circular fold
   {
-    weight: 30,
+    weight: 40,
     duration: 4020,
     tracks: () => foldTracks(4020, i => {
       const start = Math.floor(i / 2) * 140 + (i % 2 ? 1440 : 0);
       return [start, start + 720, start + 1440, start + 2160];
     }),
   },
+  // wind up
   {
-    weight: 20,
+    weight: 15,
     duration: 2800,
     tracks: (): Track[] => directions.flatMap(([x, y], index): Track[] => [
       { target: { rotation: index }, frames: [
@@ -98,8 +103,9 @@ const motions = [
       ] },
     ]),
   },
+  // even-odd spin
   {
-    weight: 20,
+    weight: 15,
     duration: 2400,
     tracks: (): Track[] => directions.flatMap(([x, y], index): Track[] => [
       { target: { rotation: index }, easing: "cubic-bezier(.42,0,.58,1)", frames: [
@@ -113,6 +119,7 @@ const motions = [
       ] },
     ]),
   },
+  // even-odd push
   {
     weight: 20,
     duration: 2000,
@@ -131,12 +138,39 @@ const motions = [
       ],
     })),
   },
+  // even-odd opposing self-spin
+  {
+    weight: 5,
+    duration: 2400,
+    tracks: (): Track[] => directions.flatMap(([x, y], index): Track[] => {
+      const travel = index % 2 ? -1.6 : 3.0;
+      // Normalise the rounded diagonal directions for the approved radial distance.
+      const length = Math.hypot(x!, y!);
+      const displaced = `translate(${x! / length * travel}px,${y! / length * travel}px)`;
+      return [
+        { target: { rotation: index }, easing: "cubic-bezier(.42,0,.58,1)", frames: [
+          { transform: "rotate(0deg)" },
+          { transform: `rotate(${index % 2 ? 360 : -360}deg)` },
+        ] },
+        { target: index, frames: [
+          { transform: "translate(0px,0px)", offset: 0, easing: "cubic-bezier(.4,0,.6,1)" },
+          { transform: displaced, offset: .32 },
+          { transform: displaced, offset: .68, easing: "cubic-bezier(.4,0,.6,1)" },
+          { transform: "translate(0px,0px)", offset: 1 },
+        ] },
+        { target: { selfRotation: index }, easing: "cubic-bezier(.42,0,.58,1)", frames: [
+          { transform: "rotate(0deg)" },
+          { transform: `rotate(${index % 2 ? -1440 : 1440}deg)` },
+        ] },
+      ];
+    }),
+  },
 ];
 
 export default class LoaderAnimationController {
   private state: "idle" | "running" | "disposed" | "failed" = "idle";
   private animations: Array<ReturnType<LoaderAnimator>> = [];
-  private previous: number | null = null;
+  private previous: number[] = [];
 
   constructor(private readonly animate: LoaderAnimator, private readonly random = Math.random, private readonly warn = () => console.warn("Loader animation failed.")) {}
 
@@ -166,13 +200,14 @@ export default class LoaderAnimationController {
 
   private next() {
     if (this.state !== "running") return;
-    const choices = motions.map((_, index) => index).filter(index => index !== this.previous);
+    const choices = motions.map((_, index) => index).filter(index => !this.previous.includes(index));
     let ticket = this.random() * choices.reduce((total, index) => total + motions[index]!.weight, 0);
     const index = choices.find(index => {
       ticket -= motions[index]!.weight;
       return ticket < 0;
     })!;
-    this.previous = index;
+    this.previous.push(index);
+    if (this.previous.length > 4) this.previous.shift();
     const motion = motions[index]!;
     const batch = motion.tracks().map(track => this.own(track.target, track.frames, {
       duration: motion.duration, fill: "both", easing: track.easing ?? "linear",
