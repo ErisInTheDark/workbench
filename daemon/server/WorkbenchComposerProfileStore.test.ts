@@ -3,6 +3,7 @@
  * - No production exports; tests cover durable composer-profile mutation semantics.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +17,7 @@ import { insertRow, selectRows } from "workbench-shared/database/workbench-datab
 
 test("project profile mutations preserve canonical scope through retained aliases", async context => {
   const { create, database } = await fixture(context);
-  const projectId = "remote://example.test/profiles";
+  const projectId = testProjectIds.project;
   await database.executeTransaction([
     insertRow(projectTables.projects, { id: projectId }),
     insertRow(projectTables.aliases, { alias: "old-profiles", project_id: projectId }),
@@ -28,7 +29,7 @@ test("project profile mutations preserve canonical scope through retained aliase
   await store.mutate({ kind: "upsert", profile: { ...imported, name: "edited" } }, async value => {
     assert.deepEqual(value.scope, { kind: "project", projectId });
   });
-  const independent = "local://C:/profile-only";
+  const independent = testProjectIds.other;
   await store.mutate({ kind: "upsert", profile: { ...profile("independent", 1), scope: { kind: "project", projectId: independent } } });
   assert.equal((await database.query(selectRows(projectTables.projects, { where: { id: independent } }))).length, 1);
   assert.deepEqual((await create().read()).profiles.find(value => value.id === "imported")?.scope, { kind: "project", projectId });

@@ -5,6 +5,7 @@
  * - PendingTurnIdSchema/PendingTurnId: temporary turn identity before provider admission.
  * - ThreadReferenceSchema/ThreadReference, TurnReferenceSchema/TurnReference, ItemReferenceSchema/ItemReference: unresolved boundary references.
  * - ProjectIdSchema/ProjectId, DraftIdSchema/DraftId, FolderIdSchema/FolderId: distinct Workbench entity identities.
+ * - ProjectIdentityKeySchema/ProjectIdentityKey: derived repository or workspace identity, not a durable owner.
  * - ThreadDisplayKeySchema/ThreadDisplayKey, ProjectThreadDisplayKeySchema/ProjectThreadDisplayKey, ThreadDocumentKeySchema/ThreadDocumentKey: distinct encoded key spaces.
  * - NativeThreadKeySchema/NativeThreadKey, NativeTurnKeySchema/NativeTurnKey, NativeThreadReferenceKeySchema/NativeThreadReferenceKey: provider execution lookup keys.
  * - TranscriptIdentityKeySchema/TranscriptIdentityKey: canonical-item and source-alias lookup keys.
@@ -38,6 +39,8 @@ export type ItemReference = z.infer<typeof ItemReferenceSchema>;
 
 export const ProjectIdSchema = z.string().trim().min(1).brand<"ProjectId">();
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
+export const ProjectIdentityKeySchema = z.string().regex(/^(?:workbench-library|(?:remote|local|workspace):\/\/.+)$/u).brand<"ProjectIdentityKey">();
+export type ProjectIdentityKey = z.infer<typeof ProjectIdentityKeySchema>;
 export const DraftIdSchema = z.string().min(1).brand<"DraftId">();
 export type DraftId = z.infer<typeof DraftIdSchema>;
 export const FolderIdSchema = z.string().min(1).brand<"FolderId">();

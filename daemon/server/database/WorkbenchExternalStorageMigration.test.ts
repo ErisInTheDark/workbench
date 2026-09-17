@@ -8,7 +8,8 @@ import Database from "better-sqlite3";
 import WorkbenchExternalStorageMigration from "./WorkbenchExternalStorageMigration.ts";
 import { installWorkbenchDatabaseSchema } from "./workbench-database-schema.ts";
 import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThreadIdentityRepository.ts";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { createHash } from "node:crypto";
 import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAssetStore.ts";
 import { encodeTranscriptPathSegment } from "../codex-transcript-normalizers.ts";
@@ -29,7 +30,7 @@ test("image conversion validates bytes atomically and preserves deduplicated nat
     for (const nativeThreadId of ["first", "second"]) {
       identities.observe({
         native: { harness: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse(nativeThreadId) },
-        projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/project",
+        projectId: testProjectIds.project, projectRoot: "/project",
         title: nativeThreadId, createdAt: 1, updatedAt: 1, activityAt: 1,
       });
       const address = encodeTranscriptPathSegment(nativeThreadId);
@@ -70,7 +71,7 @@ test("capture-gap import retains owned obligations without reviving orphaned his
     installWorkbenchDatabaseSchema(database);
     const thread = new WorkbenchThreadIdentityRepository(database).observe({
       native: { harness: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse("native") },
-      projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/project",
+      projectId: testProjectIds.project, projectRoot: "/project",
       title: "retained", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const markerPath = path.join(root, "workbench-transcript-capture-gap.json");

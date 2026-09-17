@@ -10,14 +10,15 @@ import WorkbenchClaimStatsRepository from "./WorkbenchClaimStatsRepository.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
     "native": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native"),
   },
   ProjectId: {
-    "empty": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///empty"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "empty": testProjectIds.other,
+    "project": testProjectIds.project,
   },
 };
 
@@ -37,7 +38,7 @@ test("rename projection merges before counting and pagination without rewriting 
       ["two", ["old"], now, "root", projectId],
       ["expired", ["old"], now - 8 * day, "root", projectId],
       ["other-root", ["old"], now, "other", projectId],
-      ["other-project", ["old"], now, "root", "local:///other"],
+      ["other-project", ["old"], now, "root", testProjectIds.otherProject],
     ] as const) writer.recordClaimSnapshot({
       projectId: project, threadId, harness: "codex", observedAt, roots: [{ rootId, paths: [...paths] }],
     });
@@ -57,7 +58,7 @@ test("rename projection merges before counting and pagination without rewriting 
     assert.deepEqual(repository.hotspots(projectId, now - 7 * day, now, renames)[0], {
       projectId, rootId: "root", path: "current", threadCount: 2,
     });
-    assert.equal(repository.hotspots("local:///other", now - 7 * day, now, renames)[0]?.path, "old");
+    assert.equal(repository.hotspots(testProjectIds.otherProject, now - 7 * day, now, renames)[0]?.path, "old");
     assert.equal(repository.hotspots(null, now - 7 * day, now, renames)[0]?.threadCount, 2);
     assert.equal(repository.read({ ...request, range: "all", file: { rootId: "root", path: "current" } }, now, renames).rows.length, 3);
     assert.equal(repository.read(request, now).pages, 2);
@@ -129,7 +130,7 @@ test("claim queries isolate roots and projects, preserve historical days, and pa
       observedAt: now, roots: [{ rootId: "root", paths: [`file-${String(index).padStart(2, "0")}`, "shared"] }],
     });
     for (const [projectId, rootId, observedAt] of [
-      ["local:///other", "root", now], [fixtureIdentityValues.ProjectId.project, "secondary", now], [fixtureIdentityValues.ProjectId.project, "root", now - 8 * day],
+      [testProjectIds.otherProject, "root", now], [fixtureIdentityValues.ProjectId.project, "secondary", now], [fixtureIdentityValues.ProjectId.project, "root", now - 8 * day],
     ] as const) writer.recordClaimSnapshot({
       projectId, threadId: "outside", harness: "codex", observedAt, roots: [{ rootId, paths: ["shared"] }],
     });

@@ -8,7 +8,8 @@ import WorkbenchTranscriptIdentityRepository from "./database/transcript/Workben
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import CodexProviderObservations, { admitCodexTranscriptObservations } from "./CodexProviderObservations";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 test("one provider ingress publishes admitted references without rewriting content or native recovery input", async () => {
@@ -33,7 +34,7 @@ test("one provider ingress publishes admitted references without rewriting conte
     await threads.start();
     const native = { harness: "codex", nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("native-thread") };
     const thread = await threads.observe({
-      native, projectId: ProjectIdSchema.parse("local:///repo"), projectRoot: "/repo",
+      native, projectId: testProjectIds.repo, projectRoot: "/repo",
       title: "Thread", createdAt: 1, updatedAt: 1, activityAt: 1,
     });
     const nativeTurnId = NativeTurnIdSchema.parse("native-turn");

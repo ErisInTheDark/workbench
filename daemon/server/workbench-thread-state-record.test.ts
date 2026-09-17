@@ -39,20 +39,37 @@ test("internal MCP freshness and Git retention timing never leak into the sideba
   assert.deepEqual(projectWorkbenchThreadStateEntry(record), { ...entry, previousTitles: [] });
 });
 
-test("unobserved durable records remain internal until provider facts arrive", () => {
-  const record = parseWorkbenchThreadStateEntry({ ...entry, mcpGeneration: null, providerObserved: false });
-  assert.equal(projectWorkbenchThreadStateEntry(record), null);
+test("provider omission preserves saved top-level visibility and placement", () => {
+  for (const metadata of [
+    { archived: false, pinned: false, snoozed: false },
+    { archived: false, pinned: true, snoozed: false },
+    { archived: false, pinned: false, snoozed: true },
+    { archived: true, pinned: false, snoozed: false },
+  ]) {
+    const record = parseWorkbenchThreadStateEntry({ ...entry, metadata, providerObserved: false });
+    const projected = projectWorkbenchThreadStateEntry(record);
+    assert.ok(projected?.entryKind === "thread");
+    assert.deepEqual(projected.metadata, metadata);
+    assert.deepEqual(projected.lifecycle, entry.lifecycle);
+  }
+  const settled = parseWorkbenchThreadStateEntry({
+    ...entry, providerObserved: false,
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+  });
+  assert.ok(projectWorkbenchThreadStateEntry(settled));
 });
 
-test("settled and archived saved rows remain visible when omitted by provider listings", () => {
-  for (const archived of [false, true]) {
-    const record = parseWorkbenchThreadStateEntry({
-      ...entry, providerObserved: false,
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: !archived },
-      metadata: { archived, pinned: false, snoozed: false },
-    });
-    assert.ok(projectWorkbenchThreadStateEntry(record));
-  }
+test("subagent visibility still requires provider observation", () => {
+  const { metadata: _metadata, ...common } = entry;
+  const record = parseWorkbenchThreadStateEntry({
+    ...common, entryKind: "subagent", providerObserved: false,
+    createdAt: 1, updatedAt: 10, cwd: "C:/project", directSubagentIndex: 0,
+    name: "lily", parentThreadId: "parent", pinned: false,
+    profileId: "profile", profileName: "profile", projectId: "project",
+  });
+  assert.ok(record.entryKind === "subagent");
+  assert.equal(projectWorkbenchThreadStateEntry(record), null);
+  assert.ok(projectWorkbenchThreadStateEntry({ ...record, providerObserved: true }));
 });
 
 test("stored-record conformance preserves lifecycle truth when an optional projection is invalid", () => {

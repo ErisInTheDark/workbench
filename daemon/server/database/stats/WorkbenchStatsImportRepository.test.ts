@@ -2,6 +2,7 @@
  * No production exports. Tests protect resumable usage imports, fenced claim queues and deduplicated claim facts.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
@@ -16,7 +17,7 @@ test("claim discovery admits future providers independently of thread admission 
     const repository = new WorkbenchStatsImportRepository(database);
     const discovery = {
       checkpointCommit: "a".repeat(40), checkpointRef: "refs/worktree/agents/future-provider/thread/checkpoints/one",
-      harness: "future-provider", observedAt: Date.UTC(2026, 8, 4), projectId: "local:///project",
+      harness: "future-provider", observedAt: Date.UTC(2026, 8, 4), projectId: testProjectIds.project,
       repositoryRoot: "C:/project", rootId: "root", threadId: "thread", workspaceRoot: "C:/project",
     };
     repository.addClaimDiscoveries("run", [discovery, discovery], 1);
@@ -40,10 +41,10 @@ test("usage and claim imports resume safely and isolate failed work", () => {
   installWorkbenchDatabaseSchema(database);
   database.exec(`
     INSERT INTO workbench_harnesses(id) VALUES ('codex');
-    INSERT INTO workbench_projects(id) VALUES ('local:///project');
+    INSERT INTO workbench_projects(id) VALUES ('${testProjectIds.project}');
     INSERT INTO workbench_threads
       (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at, next_turn_index)
-    VALUES ('thread', 'local:///project', 'C:/project', 'thread', 0, 1, 1, 20, 0);
+    VALUES ('thread', '${testProjectIds.project}', 'C:/project', 'thread', 0, 1, 1, 20, 0);
     INSERT INTO workbench_pending_import_threads (thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
     VALUES ('thread', 'codex', 'C:/project', 'provider-thread', 1, 20);
   `);
@@ -63,7 +64,7 @@ test("usage and claim imports resume safely and isolate failed work", () => {
       checkpointRef: "refs/worktree/agents/codex/thread/checkpoints/one",
       harness: "codex",
       observedAt: Date.UTC(2026, 8, 4),
-      projectId: "local:///project",
+      projectId: testProjectIds.project,
       repositoryRoot: "C:/project",
       rootId: "root",
       threadId: "thread",
@@ -135,11 +136,11 @@ test("usage import version changes discard stale token facts and requeue complet
   installWorkbenchDatabaseSchema(database);
   database.exec(`
     INSERT INTO workbench_harnesses (id) VALUES ('codex');
-    INSERT INTO workbench_projects(id) VALUES ('local:///project');
+    INSERT INTO workbench_projects(id) VALUES ('${testProjectIds.project}');
     INSERT INTO workbench_threads
       (id, project_id, project_root, title, transcript_content_version,
        created_at, updated_at, activity_at, next_turn_index)
-    VALUES ('thread', 'local:///project', 'C:/project', 'thread', 1, 1, 1, 1, 1);
+    VALUES ('thread', '${testProjectIds.project}', 'C:/project', 'thread', 1, 1, 1, 1, 1);
     INSERT INTO thread_turns
       (id, thread_id, turn_index, harness_id, native_location, native_thread_id, native_turn_id,
        state, created_at, started_at, ended_at, duration_ms)
@@ -154,7 +155,7 @@ test("usage import version changes discard stale token facts and requeue complet
     INSERT INTO thread_usage_imports
       (project_id, harness_id, provider_thread_id, state, run_id, attempt_count, discovered_at,
        source_activity_at, started_at, settled_at, updated_at, error_text, completed_data_version)
-    VALUES ('local:///project', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL, 1);
+    VALUES ('${testProjectIds.project}', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL, 1);
   `);
   try {
     const repository = new WorkbenchStatsImportRepository(database);

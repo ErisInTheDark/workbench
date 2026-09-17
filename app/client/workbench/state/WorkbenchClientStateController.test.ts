@@ -6,6 +6,26 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
+
+test("conversion flattens retained project aliases while preserving drafts and later edits", async () => {
+  const state = new WorkbenchClientStateController({ mode: "memory" });
+  const old = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const projectId = testProjectIds.project;
+  const identity = { kind: "composerDraft" as const, daemonRegistrationId: "memory", projectId: "old/path", threadId: "native" };
+  const value = { text: "retained", attachments: [], updatedAt: 1 };
+  try {
+    await state.put({ ...identity, value });
+    state.rememberThreadIdentityAlias(identity.projectId, "native", "wb");
+    await state.adoptProjectAliases([{ alias: identity.projectId, projectId: old }]);
+    const conversion = [{ alias: identity.projectId, projectId }, { alias: old, projectId }];
+    await state.adoptProjectAliases(conversion);
+    await state.adoptProjectAliases(conversion);
+    assert.deepEqual(state.records("composerDraft"), [{ ...identity, projectId, threadId: "wb", value }]);
+    await state.put({ ...identity, value: { ...value, text: "late edit" } });
+    assert.deepEqual(state.records("composerDraft"), [{ ...identity, projectId, threadId: "wb", value: { ...value, text: "late edit" } }]);
+  } finally { state.dispose(); }
+});
 
 test("project and thread delimiters cannot alias independent drafts", async () => {
   const state = new WorkbenchClientStateController({ mode: "memory" });

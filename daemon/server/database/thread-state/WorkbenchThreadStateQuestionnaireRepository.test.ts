@@ -9,6 +9,7 @@ import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThrea
 import WorkbenchTranscriptIdentityRepository from "../transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadStateQuestionnaireRepository, { type WorkbenchThreadQuestionnaires } from "./WorkbenchThreadStateQuestionnaireRepository";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -18,7 +19,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 

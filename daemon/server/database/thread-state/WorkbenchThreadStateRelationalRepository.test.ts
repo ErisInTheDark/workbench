@@ -8,18 +8,20 @@ import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/
 import type { WorkbenchThreadDraft, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadStateRelationalRepository from "./WorkbenchThreadStateRelationalRepository";
 import { parseProjectDocument } from "./workbench-thread-state-document-source";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   DraftId: {
     "f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f": fixtureIdentitySchemas.DraftIdSchema.parse("f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"),
   },
   ProjectId: {
-    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "other": testProjectIds.other,
+    "project": testProjectIds.project,
   },
 };
 
@@ -41,7 +43,7 @@ function seedIdentities(database: Database.Database, projectId: keyof typeof fix
 test("draft-only writes require admitted parents and retained addresses share profiles and layouts", () => {
   const database = openDatabase();
   const repository = new WorkbenchThreadStateRelationalRepository(database);
-  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/draft-only");
+  const projectId = testProjectIds.independent;
   const legacy = fixtureIdentitySchemas.ProjectIdSchema.parse("old-drafts");
   const draft: WorkbenchThreadDraft = {
     draftId: fixtureIdentityValues.DraftId["f8b1c9b1-9b70-43af-a3e7-8c9e7d7ee83f"], projectId,
@@ -135,7 +137,7 @@ test("lifecycle upgrade preserves existing facts and permits thread-owned turnle
     const before = database.prepare("SELECT * FROM workbench_thread_lifecycle").all();
     const selection = { selection: "threads" as const, threadIds: [threadId] };
     const saved = repository.readRecords(selection);
-    installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.threadOwnedLifecycle.version });
     assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_lifecycle").all(), before);
     assert.deepEqual(repository.readRecords(selection), saved);
     for (const lifecycle of [

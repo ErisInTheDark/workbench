@@ -6,16 +6,16 @@
  * - normalizeRelativePath: normalise transport paths.
  * - safeResolve/safeResolveProjectPath: validate project-relative paths.
  * - isPathWithinRoot: check absolute path containment.
- * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: discover and resolve selectable projects.
+ * - resolveDiscoveredProject/resolveProjectRootFromProjects: resolve durably admitted catalogue projects.
  * - discoverProjectIdentities: prepare structural projects and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
  * - buildTree/buildProjectTree: build visible explorer trees.
- * - getProjectSnapshot/getProjectSnapshotFromResolvedProject: assemble tree, roots and Git changes.
+ * - getProjectSnapshotFromResolvedProject: assemble tree, roots and Git changes.
  * - resolveExternalFileLinkRoot: locate a file link's Git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified paths.
- * - listProjectSkills/listProjectSkillDefinitions/listProjectSkillDefinitionsFromRoot: discover project skills.
- * - listUserInvocableAgents/listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover and read project agents.
+ * - listProjectSkillDefinitionsFromRoot: discover project skills.
+ * - listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinitionFromRoot: discover and read project agents.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -23,7 +23,8 @@ import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
 import { getGitChanges, readGitProjectMetadata, resolveGitDirectory } from "./git";
-import { localProjectId, remoteProjectId, workspaceProjectId } from "./workbench/project/project-identity";
+import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
+import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
 import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
 import {
@@ -40,7 +41,7 @@ export const projectRoot = path.resolve(appRoot, "..");
 export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.trim() || path.dirname(projectRoot));
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
-const reportedDuplicateProjectOrigins = new Set<ProjectId>();
+const reportedDuplicateProjectOrigins = new Set<ProjectIdentityKey>();
 const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
 
@@ -556,9 +557,12 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   let entries;
   try {
     entries = await fs.readdir(currentDir, { withFileTypes: true });
-  } catch {
-    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code?.slice(0, 40) ?? "unavailable";
+    console.warn(`[projects] directory discovery incomplete (${code})`);
+    return false;
   }
+  let complete = true;
 
   const workspaceFiles = entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(WORKSPACE_FILE_EXTENSION))
@@ -568,12 +572,12 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
     const workspaceProject = await createWorkspaceProjectOption(path.join(currentDir, entry.name));
     if (workspaceProject) {
       projects.push(workspaceProject);
-    }
+    } else complete = false;
   }
 
   if (await hasGitMarker(currentDir)) {
     projects.push(await createProjectOption(currentDir));
-    return;
+    return complete;
   }
 
   const directories: typeof entries = [];
@@ -591,8 +595,9 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   directories.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
 
   for (const entry of directories) {
-    await walkProjects(path.join(currentDir, entry.name), projects, signal);
+    if (!await walkProjects(path.join(currentDir, entry.name), projects, signal)) complete = false;
   }
+  return complete;
 }
 
 function filterIndirectGitProjectDuplicates(
@@ -627,7 +632,7 @@ function filterIndirectGitProjectDuplicates(
 async function discoverProjectOptions(signal?: AbortSignal) {
   const projects: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
-  await walkProjects(projectsRoot, projects, signal);
+  const complete = await walkProjects(projectsRoot, projects, signal);
   const canonicalProjectsRoot = await resolveCanonicalPath(projectsRoot);
   const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
   const discoveredProjects = filterIndirectGitProjectDuplicates(projects, canonicalProjectsRoot)
@@ -644,34 +649,33 @@ async function discoverProjectOptions(signal?: AbortSignal) {
   return {
     data: [libraryProject, ...discoveredProjects],
     addresses: [libraryProject, ...projects],
+    complete,
   };
 }
 
-export async function discoverProjects() {
-  return (await discoverProjectIdentities()).data;
-}
-
 export async function discoverProjectIdentities(signal?: AbortSignal): Promise<WorkbenchProjectDiscovery> {
-  const { data: candidates, addresses } = await discoverProjectOptions(signal);
+  const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(signal);
+  let complete = walkedCompletely;
   const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
     .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
-  const classifications = new Map<string, { projectId: ProjectId; excluded: boolean }>();
-  const origins = new Map<ProjectId, string[]>();
+  const classifications = new Map<string, { identityKey: ProjectIdentityKey; excluded: boolean }>();
+  const origins = new Map<ProjectIdentityKey, string[]>();
   const remaining = roots.entries();
   await Promise.all(Array.from({ length: Math.min(8, roots.size) }, async () => {
     for (const [key, rootPath] of remaining) {
       signal?.throwIfAborted();
       try {
         const metadata = await readGitProjectMetadata(rootPath, signal);
-        const projectId = metadata?.origin ? remoteProjectId(metadata.origin) : localProjectId(rootPath);
-        classifications.set(key, { projectId, excluded: metadata?.linkedWorktree ?? false });
+        const identityKey = metadata?.origin ? remoteProjectKey(metadata.origin) : localProjectKey(rootPath);
+        classifications.set(key, { identityKey, excluded: metadata?.linkedWorktree ?? false });
         if (metadata?.origin && !metadata.linkedWorktree) {
-          const locations = origins.get(projectId) ?? [];
+          const locations = origins.get(identityKey) ?? [];
           locations.push(key);
-          origins.set(projectId, locations);
+          origins.set(identityKey, locations);
         }
       } catch (error) {
         signal?.throwIfAborted();
+        complete = false;
         const code = error && typeof error === "object" && "code" in error ? String(error.code).slice(0, 40) : "invalid metadata";
         console.warn(`[projects] identity unavailable for ${rootPath} (${code})`);
       }
@@ -686,37 +690,44 @@ export async function discoverProjectIdentities(signal?: AbortSignal): Promise<W
       .replace(/[\r\n\t]/gu, " ").slice(0, 300) || ".").sort();
     console.warn(`[projects] skipped checkouts sharing one origin: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` (+${paths.length - 10} more)` : ""}`);
   }
-  const data: WorkbenchProjectOption[] = [];
+  const data: WorkbenchProjectDiscovery["data"] = [];
   const aliases: WorkbenchProjectDiscovery["aliases"] = [];
-  const candidateIdentities = new Map<WorkbenchProjectOption, ProjectId>();
+  const candidateIdentities = new Map<WorkbenchProjectOption, ProjectIdentityKey>();
+  const observedKeys = new Set([...classifications.values()].map(item => item.identityKey));
   for (const candidate of candidates) {
     if (candidate.kind === "workbench-library") {
-      data.push(candidate);
+      const { id: _address, ...metadata } = candidate;
+      const identityKey = ProjectIdentityKeySchema.parse("workbench-library");
+      data.push({ ...metadata, identityKey, roots: candidate.roots.map(root => ({ ...root, identityKey })) });
+      observedKeys.add(identityKey);
       continue;
     }
     const members = candidate.roots.map(root => classifications.get(normalizePathForComparison(root.rootPath)));
     if (members.some(member => !member)) continue;
     const excluded = members.some(member => member!.excluded);
-    const id = excluded
-      ? localProjectId(candidate.workspacePath ?? candidate.rootPath)
-      : candidate.kind === "workspace"
-        ? workspaceProjectId(members.map(member => member!.projectId))
-        : members[0]!.projectId;
-    if (candidate.id !== id) aliases.push({ alias: candidate.id, projectId: id });
-    candidateIdentities.set(candidate, id);
-    if (!excluded) data.push({ ...candidate, id });
+    const identityKey = candidate.kind === "workspace"
+      ? workspaceProjectKey(members.map(member => member!.identityKey))
+      : members[0]!.identityKey;
+    observedKeys.add(identityKey);
+    if (excluded) continue;
+    if (candidate.id !== String(identityKey)) aliases.push({ alias: candidate.id, identityKey });
+    candidateIdentities.set(candidate, identityKey);
+    const { id: _address, ...metadata } = candidate;
+    data.push({ ...metadata, identityKey, roots: candidate.roots.map((root, index) => ({ ...root, identityKey: members[index]!.identityKey })) });
   }
   for (const address of addresses) {
     if (address.kind !== "git" || candidates.includes(address)) continue;
     const retained = candidates.find(candidate => candidate.kind !== "workspace"
       && normalizePathForComparison(candidate.rootPath) === normalizePathForComparison(address.rootPath));
     if (!retained) continue;
-    const id = retained.kind === "workbench-library" ? retained.id : candidateIdentities.get(retained);
-    if (id && address.id !== id) aliases.push({ alias: address.id, projectId: id });
+    const identityKey = retained.kind === "workbench-library" ? ProjectIdentityKeySchema.parse("workbench-library") : candidateIdentities.get(retained);
+    if (identityKey && address.id !== String(identityKey)) aliases.push({ alias: address.id, identityKey });
   }
   return {
     data,
     aliases,
+    observedKeys: [...observedKeys],
+    complete,
     excludedRootPaths: [...roots].filter(([key]) => !classifications.has(key) || classifications.get(key)!.excluded)
       .map(([, rootPath]) => rootPath),
     rootPath: projectsRoot,
@@ -730,14 +741,6 @@ function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOpti
     || normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot)
   ));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
-}
-
-export async function getDefaultProjectId() {
-  return getDefaultProjectIdFromProjects(await discoverProjects());
-}
-
-export async function resolveProjectRoot(projectId?: string | null): Promise<ResolvedProject> {
-  return await resolveProjectRootFromProjects(await discoverProjects(), projectId);
 }
 
 export async function resolveProjectRootFromProjects(
@@ -1101,10 +1104,6 @@ async function getProjectChanges(project: ResolvedProject) {
   )));
 }
 
-export async function getProjectSnapshot(projectId?: string | null) {
-  return await getProjectSnapshotFromResolvedProject(await resolveProjectRoot(projectId));
-}
-
 export async function getProjectSnapshotFromResolvedProject(resolvedProject: ResolvedProject) {
   const [tree, changes] = await Promise.all([
     resolvedProject.kind === "workspace" ? buildWorkspaceTree(resolvedProject) : buildProjectTree(resolvedProject.root),
@@ -1123,57 +1122,6 @@ export async function getProjectSnapshotFromResolvedProject(resolvedProject: Res
     changes,
     workbenchStorageRootPath: normalizeRelativePath(projectRoot),
   } satisfies ProjectSnapshot;
-}
-
-export async function listProjectSkills(projectId?: string | null): Promise<WorkbenchSkillSummary[]> {
-  const resolvedProject = await resolveProjectRoot(projectId);
-  if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
-    return [];
-  }
-
-  let entries;
-  try {
-    entries = await fs.readdir(getProjectSkillDirectoryPath(resolvedProject.root), { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-
-    throw error;
-  }
-
-  const skills: WorkbenchSkillSummary[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const relativePath = createProjectSkillRelativePath(entry.name);
-    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
-    const content = await readTextFile(absolutePath);
-    if (!content) {
-      continue;
-    }
-
-    const frontmatter = parseFrontmatterBlock(content);
-    skills.push({
-      description: frontmatter?.get("description") ?? "",
-      name: frontmatter?.get("name") ?? entry.name,
-      path: normalizeRelativePath(absolutePath),
-      relativePath,
-    });
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
-}
-
-export async function listProjectSkillDefinitions(projectId?: string | null): Promise<WorkbenchSkillDefinition[]> {
-  const resolvedProject = await resolveProjectRoot(projectId);
-  if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
-    return [];
-  }
-
-  return await listProjectSkillDefinitionsFromRoot(resolvedProject.root);
 }
 
 export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Promise<WorkbenchSkillDefinition[]> {
@@ -1212,10 +1160,6 @@ export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Prom
   }
 
   return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
-}
-
-export async function listUserInvocableAgents(projectId?: string | null) {
-  return await listUserInvocableAgentsFromResolvedProject(await resolveProjectRoot(projectId));
 }
 
 export async function listUserInvocableAgentsFromResolvedProject(resolvedProject: ResolvedProject) {
@@ -1257,15 +1201,6 @@ export async function listUserInvocableAgentsFromResolvedProject(resolvedProject
   }
 
   return [...libraryAgents, ...projectAgents.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))];
-}
-
-export async function readUserInvocableAgentDefinition(relativePath: string, projectId?: string | null): Promise<WorkbenchAgentDefinition> {
-  if (relativePath.startsWith("library:")) {
-    return await readWorkbenchLibraryAgentDefinition(relativePath);
-  }
-
-  const resolvedProject = await resolveProjectRoot(projectId);
-  return await readUserInvocableAgentDefinitionFromRoot(relativePath, resolvedProject.root);
 }
 
 export async function readUserInvocableAgentDefinitionFromRoot(relativePath: string, rootDir: string): Promise<WorkbenchAgentDefinition> {

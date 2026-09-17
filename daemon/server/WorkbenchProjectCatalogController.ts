@@ -481,8 +481,9 @@ export default class WorkbenchProjectCatalogController {
       const discovery = await this.discoverIdentities(this.cancellation.signal);
       this.cancellation.signal.throwIfAborted();
       if (this.catalogGeneration !== generation && this.catalog) return this.catalog;
-      let records = await this.persistence.reconcileProjectCatalog(discovery.data);
-      const aliases = await this.persistence.readProjectAliases();
+      const reconciled = await this.persistence.reconcileProjectCatalog(discovery);
+      let records = reconciled.catalog;
+      const aliases = reconciled.aliases;
       // A database reply can precede an icon settlement but arrive at publication after it.
       records = records.map(record => {
         const current = this.catalog?.records?.find(item => item.project.id === record.project.id);
@@ -497,7 +498,7 @@ export default class WorkbenchProjectCatalogController {
         aliases,
         rootPath: normalizeRelativePath(this.projectsRootPath),
       };
-      const catalog = { data, payload, serialized: JSON.stringify(payload), records, excludedRootPaths: discovery.excludedRootPaths };
+      const catalog = { data, payload, serialized: JSON.stringify(payload), records, excludedRootPaths: reconciled.excludedRootPaths };
       if (!this.disposed && this.catalogGeneration === generation) {
         if (this.catalog && (!sameResolutionInputs(this.catalog.data, data)
           || (this.catalog.excludedRootPaths?.length ?? 0) !== (catalog.excludedRootPaths?.length ?? 0)

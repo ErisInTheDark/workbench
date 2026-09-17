@@ -25,6 +25,7 @@ import type {
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 type StoredSteerEntry = Extract<WorkbenchTranscriptAtomicObservation, { kind: "steer" }>["entry"];
 
@@ -40,7 +41,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "other": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("other"),
@@ -177,13 +178,13 @@ function providerTurnScope(
 
 test("transcript settlement resolves retained project aliases and admits independent parents", () => {
   const { database, repository } = createRepository();
-  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/transcript");
+  const projectId = testProjectIds.project;
   try {
     database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
     database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run("project", projectId);
     repository.settle([{ ...threadObservation(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }]);
     assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = 'thread'").pluck().get(), projectId);
-    const independent = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/transcript");
+    const independent = testProjectIds.independent;
     repository.settle([{ ...threadObservation("independent"), projectId: independent }]);
     assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(independent));
   } finally { database.close(); }

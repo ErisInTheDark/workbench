@@ -2,6 +2,7 @@
  * Exports: none. Tests protect SQLite-only model attribution precedence and repair.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 
 import Database from "better-sqlite3";
@@ -13,14 +14,14 @@ function databaseWithUsage() {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
-  database.prepare("INSERT INTO workbench_projects (id) VALUES ('local:///project')").run();
+  database.prepare("INSERT INTO workbench_projects (id) VALUES (?)").run(testProjectIds.project);
   database.prepare("INSERT INTO workbench_harnesses (id) VALUES ('codex')").run();
   database.prepare(`
     INSERT INTO workbench_threads (
       id, project_id, project_root, title, archived, pinned, snoozed,
       transcript_content_version, next_turn_index, created_at, updated_at, activity_at
-    ) VALUES ('thread', 'local:///project', 'C:/project', 'thread', 0, 0, 0, 0, 2, 1, 1, 1)
-  `).run();
+    ) VALUES ('thread', ?, 'C:/project', 'thread', 0, 0, 0, 0, 2, 1, 1, 1)
+  `).run(testProjectIds.project);
   for (const [id, index] of [["known", 0], ["missing", 1]] as const) {
     database.prepare(`
       INSERT INTO thread_turns (
@@ -70,8 +71,8 @@ test("model attribution falls through thread, project, and provider SQLite evide
     database.prepare(`
       INSERT INTO workbench_project_thread_profiles (
         project_id, selection_kind, profile_id, harness_id, model
-      ) VALUES ('local:///project', 'custom', NULL, 'codex', 'project-model')
-    `).run();
+      ) VALUES (?, 'custom', NULL, 'codex', 'project-model')
+    `).run(testProjectIds.project);
     const repository = new WorkbenchStatsAttributionRepository(database);
     repository.repair(10);
     const attribution = () => database.prepare(`

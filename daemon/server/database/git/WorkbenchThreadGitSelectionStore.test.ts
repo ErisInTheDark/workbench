@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import Database from "better-sqlite3";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchThreadGitSelectionStore from "./WorkbenchThreadGitSelectionStore";
@@ -20,7 +21,7 @@ async function fixture(context: TestContext) {
   const identities = new WorkbenchThreadIdentityRepository(database);
   for (const native of ["one", "two"]) identities.observe({
     native: { harness: "codex", nativeLocation: root, nativeThreadId: NativeThreadIdSchema.parse(native) },
-    projectId: ProjectIdSchema.parse("local:///fixture"), projectRoot: root,
+    projectId: testProjectIds.fixture, projectRoot: root,
     title: native, createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   let now = 1_000_000;

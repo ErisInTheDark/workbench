@@ -20,6 +20,7 @@ import { parseProjectDocument } from "./database/thread-state/workbench-thread-s
 
 import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 function normalizeProviderSidebarEntry(harness: Parameters<typeof normalizeSidebarEntry>[0], value: unknown) {
   return normalizeSidebarEntry(harness, value, {
@@ -159,8 +160,8 @@ const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
 
 test("retained project requests share one observation and move drafts between canonical owners", async () => {
   const persistence = new MemoryThreadStatePersistence();
-  const source = ProjectIdSchema.parse("remote://example.test/source");
-  const destination = ProjectIdSchema.parse("remote://example.test/destination");
+  const source = testProjectIds.project;
+  const destination = testProjectIds.other;
   const observations: string[] = [];
   const stopped: string[] = [];
   const controller = new WorkbenchThreadStateController({
@@ -1288,7 +1289,7 @@ test("a failed cross-priority pinned move restores the loaded project state", as
 });
 
 test("project, pinned, and home thread state persist authoritatively in SQLite across controller restart", async () => {
-  const projectId = ProjectIdSchema.parse("local:///project");
+  const projectId = testProjectIds.project;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-authority-"));
   await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, ".workbench", "workbench.sqlite3") });
@@ -1708,7 +1709,7 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("incomplete provider snapshots retain unseen rows until an authoritative snapshot arrives", async () => {
+test("provider omission retains saved threads through partial, complete, and reopened snapshots", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-"));
   const oldEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
@@ -1719,41 +1720,67 @@ test("incomplete provider snapshots retain unseen rows until an authoritative sn
     title: "Old",
   };
   const newEntry = { ...oldEntry, activityAt: 2, identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("new") }, title: "New" };
-  let reconciliation = 0;
-  let incompleteInstalled = false;
-  let releaseFinal = () => undefined;
-  const finalGate = new Promise<void>((resolve) => { releaseFinal = resolve; });
+  const initialInstalled = Promise.withResolvers<void>();
+  const incompleteInstalled = Promise.withResolvers<void>();
+  const completeInstalled = Promise.withResolvers<void>();
+  const finalGate = Promise.withResolvers<void>();
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      reconciliation += 1;
-      if (reconciliation === 1) {
-        await acceptProviderSnapshot("codex", [oldEntry], { complete: true });
-        return [];
-      }
-      await acceptProviderSnapshot("codex", [newEntry], { complete: false });
-      incompleteInstalled = true;
-      await finalGate;
-      await acceptProviderSnapshot("codex", [newEntry], { complete: true });
+      await acceptProviderSnapshot("codex", [oldEntry], { complete: true });
+      initialInstalled.resolve();
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
-  await waitFor(() => reconciliation === 1, "Initial provider snapshot was not installed.");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const refreshing = controller.refresh(fixtureProjectIds["project"]);
-  await waitFor(() => incompleteInstalled, "Incomplete provider snapshot was not installed.");
-  const incomplete = await controller.getSnapshot(fixtureProjectIds["project"]);
-  assert.deepEqual(incomplete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
-  releaseFinal();
-  await refreshing;
-  const complete = await controller.getSnapshot(fixtureProjectIds["project"]);
-  assert.deepEqual(complete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId), ["new"]);
-  await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  try {
+    await controller.open("observer", fixtureProjectIds["project"]);
+    await initialInstalled.promise;
+    await controller.dispose();
+    const refreshing = new WorkbenchThreadStateController({
+      getProjectCatalog: projectCatalog,
+      projectState: projectState(),
+      publish: () => undefined,
+      reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+        await acceptProviderSnapshot("codex", [newEntry], { complete: false });
+        incompleteInstalled.resolve();
+        await finalGate.promise;
+        await acceptProviderSnapshot("codex", [newEntry], { complete: true });
+        completeInstalled.resolve();
+        return [];
+      },
+      storageRoot: root,
+    });
+    try {
+      await refreshing.open("observer", fixtureProjectIds["project"]);
+      await incompleteInstalled.promise;
+      const incomplete = await refreshing.getSnapshot(fixtureProjectIds["project"]);
+      assert.deepEqual(incomplete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
+      finalGate.resolve();
+      await completeInstalled.promise;
+      const complete = await refreshing.getSnapshot(fixtureProjectIds["project"]);
+      assert.deepEqual(complete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
+    } finally {
+      finalGate.resolve();
+      await refreshing.dispose();
+    }
+    const reopened = new WorkbenchThreadStateController({
+      getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+      reconcileProject: async () => [], storageRoot: root,
+    });
+    try {
+      const snapshot = await reopened.getSnapshot(fixtureProjectIds["project"]);
+      assert.deepEqual(snapshot.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
+    } finally {
+      await reopened.dispose();
+    }
+  } finally {
+    finalGate.resolve();
+    await controller.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
 });
 
 test("concurrent first opens share one project initialization and observation", async () => {
@@ -2885,7 +2912,7 @@ test("draft priority survives autosave and controller restart without a storage 
   await reopened.dispose();
 });
 
-test("accepted intent survives provider discovery lag and releases after its lifecycle advances", async () => {
+test("accepted intent survives provider discovery lag and remains visible after its lifecycle advances", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
   const published: WorkbenchThreadSidebarEntry[] = [];
   const publishedSnapshots: WorkbenchThreadStateSnapshot[] = [];
@@ -2987,7 +3014,9 @@ test("accepted intent survives provider discovery lag and releases after its lif
   assert.deepEqual(completedLifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.refresh(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal((await controller.getSnapshot(fixtureProjectIds["project"])).entries.some((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider"), false);
+  const retained = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
+  assert.ok(retained && retained.entryKind !== "draft");
+  assert.deepEqual(retained.lifecycle, completedLifecycle);
   await controller.dispose();
 });
 

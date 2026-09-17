@@ -13,6 +13,7 @@ import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThrea
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -22,7 +23,7 @@ const fixtureIdentityValues = {
     "first": fixtureIdentitySchemas.NativeTurnIdSchema.parse("first"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchTurnId: {
     "first": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("first"),

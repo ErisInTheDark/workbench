@@ -8,13 +8,63 @@ import type http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import Database from "better-sqlite3";
+import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
+import WorkbenchProjectRepository from "./database/project/WorkbenchProjectRepository";
 
 import type { ResolvedProject } from "./lib/project";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
-import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence } from "./database/project/workbench-project-persistence";
+import type { WorkbenchProjectCacheRecord, WorkbenchProjectDiscovery, WorkbenchProjectPersistence, WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
+
+function discoveryForProjects(projects: WorkbenchProjectOption[], excludedRootPaths: string[] = []): WorkbenchProjectDiscovery {
+  const data = projects.map(({ id: _id, ...project }) => {
+    const identityKey = fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(`local://${project.rootPath}`);
+    return { ...project, identityKey, roots: project.roots.map(root => ({ ...root, identityKey })) };
+  });
+  return { data, aliases: [], excludedRootPaths, rootPath: "C:/projects", complete: true, observedKeys: data.map(item => item.identityKey) };
+}
+
+function reconciledProjects(catalog: WorkbenchProjectCacheRecord[], excludedRootPaths: string[] = []): WorkbenchProjectStartup {
+  return { catalog, aliases: [], excludedRootPaths, rootPath: "C:/projects" };
+}
+
+test("catalogue admission and reopening publish one owner across remote changes", async () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  let owner: string | undefined;
+  try {
+    for (const address of ["remote://example.test/old/repo", "remote://example.test/new/repo", "remote://example.test/old/repo"]) {
+      const repository = new WorkbenchProjectRepository(database);
+      const discovery = discoveryForProjects([createProject("fixture", "C:/projects/repo")]);
+      const identityKey = fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(address);
+      discovery.data[0]!.identityKey = identityKey;
+      discovery.data[0]!.roots[0]!.identityKey = identityKey;
+      discovery.observedKeys = [identityKey];
+      const controller = new WorkbenchProjectCatalogController({
+        persistence: {
+          reconcileProjectCatalog: async value => repository.reconcile(value),
+          readProjectAliases: async () => repository.readAliases(),
+          resolveProjectIdentity: async value => repository.resolve(value),
+          settleProjectIcon: async value => repository.settleIcon(value),
+        },
+        discoverProjectIdentities: async () => discovery,
+        createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+      });
+      try {
+        await controller.ensureLoaded();
+        const snapshot = controller.getCurrentSnapshot();
+        owner ??= snapshot.data[0]!.id;
+        assert.equal(snapshot.data[0]!.id, owner);
+        assert.equal(snapshot.aliases?.find(alias => alias.alias === address)?.projectId, owner);
+      } finally { await controller.dispose(); }
+    }
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 1);
+  } finally { database.close(); }
+});
 
 test("prepared startup waits for parent readiness and warm replacement retains icon freshness without discovery", async () => {
   const project = createProject("local://C:/projects/ready", "C:/projects/ready");
@@ -63,7 +113,7 @@ test("icon observations keep stale data, coalesce work, and retain successful ab
   const scan = deferred<null>();
   let scans = 0;
   const persistence: WorkbenchProjectPersistence = {
-    reconcileProjectCatalog: async () => [record],
+    reconcileProjectCatalog: async () => reconciledProjects([record]),
     readProjectAliases: async () => [],
     resolveProjectIdentity: async () => project.id,
     settleProjectIcon: async settlement => {
@@ -76,7 +126,7 @@ test("icon observations keep stale data, coalesce work, and retain successful ab
     persistence,
     initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     now: () => now,
-    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" }),
+    discoverProjectIdentities: async () => discoveryForProjects([project]),
     discoverIcon: () => { scans += 1; return scan.promise; },
     createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
   });
@@ -108,7 +158,7 @@ test("every disposal caller waits for icon settlement and unexpected settlement 
   const controller = new WorkbenchProjectCatalogController({
     initialProjects: { catalog: [{ project, sourceKey: "first", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
-      reconcileProjectCatalog: async () => [],
+      reconcileProjectCatalog: async () => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: () => { entered.resolve(); return settlement.promise; },
@@ -138,12 +188,12 @@ test("structural refresh cannot replace a newer settled icon with its earlier da
   const controller = new WorkbenchProjectCatalogController({
     initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
-      reconcileProjectCatalog: async () => { reconciled.resolve(); return [record]; },
-      readProjectAliases: () => aliases.promise,
+      reconcileProjectCatalog: async () => { reconciled.resolve(); await aliases.promise; return reconciledProjects([record]); },
+      readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
     },
-    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" }),
+    discoverProjectIdentities: async () => discoveryForProjects([project]),
     discoverIcon: async () => ({ rootId: project.roots[0].id, path: "fresh.png" }),
     createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
   });
@@ -163,12 +213,12 @@ test("structural refresh cannot replace a newer settled icon with its earlier da
 
 test("invalidated structural discovery cannot reconcile stale roots into durable storage", async () => {
   const project = createProject("local://C:/projects/icon", "C:/projects/icon");
-  const discovery = deferred<{ data: WorkbenchProjectOption[]; aliases: []; excludedRootPaths: string[]; rootPath: string }>();
+  const discovery = deferred<WorkbenchProjectDiscovery>();
   let reconciliations = 0;
   const controller = new WorkbenchProjectCatalogController({
     initialProjects: { catalog: [{ project, sourceKey: "current", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
-      reconcileProjectCatalog: async () => { reconciliations += 1; return []; },
+      reconcileProjectCatalog: async () => { reconciliations += 1; return reconciledProjects([]); },
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
@@ -180,12 +230,12 @@ test("invalidated structural discovery cannot reconcile stale roots into durable
     controller.invalidate();
     await controller.readCatalog();
     controller.invalidate();
-    discovery.resolve({ data: [], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" });
+    discovery.resolve(discoveryForProjects([]));
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(reconciliations, 0);
     assert.equal(controller.getCurrentSnapshot().data[0].id, project.id);
   } finally {
-    discovery.resolve({ data: [], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" });
+    discovery.resolve(discoveryForProjects([]));
     await controller.dispose();
   }
 });
@@ -200,12 +250,12 @@ test("changed exclusion evidence retires cached CWD authority even when selectab
     initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     now: () => now,
     persistence: {
-      reconcileProjectCatalog: async () => [record],
+      reconcileProjectCatalog: async () => reconciledProjects([record], [excluded]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
     },
-    discoverProjectIdentities: async () => ({ data: [project], aliases: [], excludedRootPaths: [excluded], rootPath: "C:/projects" }),
+    discoverProjectIdentities: async () => discoveryForProjects([project], [excluded]),
     resolveProjectFromCatalog: async (projects, cwd, options) => {
       resolverCalls += 1;
       if (options?.excludedRootPaths?.includes(excluded)) throw new Error("Excluded checkout.");
@@ -265,12 +315,14 @@ function createProject(id: string, rootPath = `C:/projects/${id}`): WorkbenchPro
 }
 
 function catalogFixture(read: () => Promise<WorkbenchProjectOption[]>) {
+  let projects: WorkbenchProjectOption[] = [];
   return {
-    discoverProjectIdentities: async () => ({
-      data: await read(), aliases: [], excludedRootPaths: [], rootPath: "C:/projects",
-    }),
+    discoverProjectIdentities: async () => {
+      projects = await read();
+      return discoveryForProjects(projects);
+    },
     persistence: {
-      reconcileProjectCatalog: async projects => projects.map(project => ({ project, sourceKey: project.rootPath, checkedAt: null })),
+      reconcileProjectCatalog: async () => reconciledProjects(projects.map(project => ({ project, sourceKey: project.rootPath, checkedAt: null }))),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async projectId => fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
       settleProjectIcon: async () => true,

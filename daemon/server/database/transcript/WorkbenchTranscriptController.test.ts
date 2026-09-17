@@ -15,6 +15,7 @@ import type {
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { TranscriptPatchUpdate, TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
 const fixtureIdentityValues = {
@@ -26,7 +27,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "provider-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider-thread"),

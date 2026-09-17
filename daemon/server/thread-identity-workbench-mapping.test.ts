@@ -13,6 +13,7 @@ import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnaps
 import { createWorkbenchQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
 import { admitNativeTranscriptObservations } from "./thread-identity-transcript-mapping";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -22,8 +23,8 @@ const fixtureIdentityValues = {
     "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
   },
   ProjectId: {
-    "foreign": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///foreign"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "foreign": testProjectIds.foreign,
+    "project": testProjectIds.project,
   },
 };
 

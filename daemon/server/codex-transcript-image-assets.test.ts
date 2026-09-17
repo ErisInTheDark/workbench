@@ -8,7 +8,8 @@ import path from "node:path";
 import { test } from "node:test";
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 test("image admission preserves bytes and URLs without creating a JSON recorder", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wb-assets-"));
@@ -16,7 +17,7 @@ test("image admission preserves bytes and URLs without creating a JSON recorder"
   try {
     await database.observeThreadIdentities([{
       native: { harness: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse("thread") },
-      projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/project", title: "image",
+      projectId: testProjectIds.project, projectRoot: "/project", title: "image",
       createdAt: 1, updatedAt: 1, activityAt: 1,
     }]);
     const bytes = Buffer.from("test image bytes");

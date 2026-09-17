@@ -8,10 +8,11 @@ import WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import { parseWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 
@@ -89,7 +90,7 @@ test("complete cold serving isolates projects and retains settled cross-harness 
   const parentId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("7b6a28d5-0aad-4bed-8997-4d3cec747e68");
   const childId = "17cbfbd0-4b9e-41e0-925e-6e5edb833904";
   const foreignId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("f5efad70-c326-4947-b0ce-6b389d04cab3");
-  for (const [projectId, id] of [[fixtureIdentityValues.ProjectId.project, parentId], [fixtureIdentityValues.ProjectId.project, childId], ["local:///other", foreignId]]) {
+  for (const [projectId, id] of [[fixtureIdentityValues.ProjectId.project, parentId], [fixtureIdentityValues.ProjectId.project, childId], [testProjectIds.other, foreignId]]) {
     database.admitThread(projectId!, id!);
   }
   await database.commitThreadState({ records: [

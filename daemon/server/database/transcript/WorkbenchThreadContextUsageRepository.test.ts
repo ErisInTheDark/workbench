@@ -8,10 +8,11 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),

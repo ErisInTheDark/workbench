@@ -12,6 +12,7 @@ import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { insertRow } from "workbench-shared/database/workbench-database-statements";
 import { projectTables } from "./database/workbench-database-schema";
 
@@ -20,8 +21,8 @@ const fixtureIdentityValues = {
     "00000000-0000-4000-8000-000000000001": fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
   },
   ProjectId: {
-    "first": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///first"),
-    "second": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///second"),
+    "first": testProjectIds.first,
+    "second": testProjectIds.second,
   },
 };
 
@@ -31,9 +32,9 @@ test("consumer objects retain thread facts, title replacement and project isolat
   const database = new WorkbenchDatabaseController({ databasePath });
   let reopened: WorkbenchDatabaseController | null = null;
   try {
-    const identities = await database.observeThreadIdentities(["first", "second"].map(projectId => ({
+    const identities = await database.observeThreadIdentities((["first", "second"] as const).map(projectId => ({
       native: { harness: "codex" as const, nativeLocation: join(directory, projectId), nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(projectId) },
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(`local:///${projectId}`), projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
+      projectId: fixtureIdentityValues.ProjectId[projectId], projectRoot: join(directory, projectId), title: projectId, createdAt: 1, updatedAt: 1, activityAt: 1,
     })));
     const store = new WorkbenchThreadStateStore(database);
     const records = identities.map((identity): WorkbenchThreadStateRecord => ({

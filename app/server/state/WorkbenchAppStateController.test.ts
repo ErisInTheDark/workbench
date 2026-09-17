@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
@@ -41,6 +42,33 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
     change.change === "upsert" ? [change.record] : []
   ));
 }
+
+test("UUID conversion flattens saved aliases without resurrecting deleted drafts across restart", async context => {
+  const fixture = await controllerFixture(context);
+  const old = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const projectId = testProjectIds.project;
+  const identity = { kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old/path", threadId: "live" };
+  const value = { text: "retained", attachments: [{ id: "image", url: "attachment" }], updatedAt: 1 };
+  try {
+    for (const threadId of ["live", "deleted"]) {
+      await fixture.controller.mutate({ action: "put", record: { ...identity, threadId, value } });
+    }
+    await fixture.controller.remapProjects({ daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: identity.projectId, projectId: old }] });
+    await fixture.controller.mutate({ action: "delete", identity: { ...identity, threadId: "deleted" } });
+    const request = { daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: identity.projectId, projectId }, { alias: old, projectId }] };
+    await fixture.controller.remapProjects(request);
+    await fixture.controller.remapProjects(request);
+    assert.deepEqual(projectedRecords(fixture.controller.read()).filter(row => row.kind === "composerDraft"), [{ ...identity, projectId, value }]);
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    await restarted.mutate({ action: "put", record: { ...identity, value: { ...value, text: "late edit" } } });
+    assert.deepEqual(projectedRecords(restarted.read()).filter(row => row.kind === "composerDraft"), [
+      { ...identity, projectId, value: { ...value, text: "late edit" } },
+    ]);
+  } finally { await restarted.close(); }
+});
 
 test("project remapping preserves draft attachments and launch selection across restart and late old-address saves", async context => {
   const fixture = await controllerFixture(context);

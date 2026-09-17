@@ -15,6 +15,7 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -26,7 +27,7 @@ const fixtureIdentityValues = {
     "later": fixtureIdentitySchemas.NativeTurnIdSchema.parse("later"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 

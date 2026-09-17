@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
@@ -19,7 +20,7 @@ test("SQL reads select the exact window and retain answered interactions without
   const older = WorkbenchTurnIdSchema.parse("older");
   const newer = WorkbenchTurnIdSchema.parse("newer");
   const observations: WorkbenchTranscriptAtomicObservation[] = [{
-    kind: "thread", threadId, projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/repo",
+    kind: "thread", threadId, projectId: testProjectIds.project, projectRoot: "/repo",
     title: "reader", createdAt: 1, updatedAt: 5, activityAt: 5,
   }];
   for (const [index, turnId] of [older, newer].entries()) {

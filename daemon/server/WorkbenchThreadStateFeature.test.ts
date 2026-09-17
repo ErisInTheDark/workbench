@@ -16,6 +16,7 @@ import { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNot
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import CodexThreadOperations from "./CodexThreadOperations";
 import type WorkbenchProvider from "./WorkbenchProvider";
 
@@ -35,9 +36,9 @@ const fixtureIdentityValues = {
     "thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
-    "project-a": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project-a"),
-    "project-b": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project-b"),
+    "project": testProjectIds.project,
+    "project-a": testProjectIds.first,
+    "project-b": testProjectIds.second,
   },
   WorkbenchThreadId: {
     "child": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child"),

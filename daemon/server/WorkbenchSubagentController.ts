@@ -13,7 +13,7 @@ import type {
   WorkbenchSubagentSummary,
 } from "workbench-shared/types";
 import {
-  resolveAgentEndpointProjectFromCwd,
+  type AgentEndpointProjectResolver,
   type AgentEndpointProjectResolution,
 } from "./lib/workbench/project/agent-endpoint-project";
 import {
@@ -50,7 +50,7 @@ export interface WorkbenchSubagentControllerOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "knownThread">;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
-  resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
+  resolveProjectFromCwd: AgentEndpointProjectResolver;
   subagentStore: WorkbenchSubagentControllerStore;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -103,7 +103,7 @@ export default class WorkbenchSubagentController {
   private createQueue: Promise<void> = Promise.resolve();
   private readonly onRelationshipCommitted: WorkbenchSubagentControllerOptions["onRelationshipCommitted"];
   private readonly profileStore: WorkbenchSubagentControllerOptions["profileStore"];
-  private readonly resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
+  private readonly resolveProjectFromCwd: AgentEndpointProjectResolver;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
@@ -117,7 +117,7 @@ export default class WorkbenchSubagentController {
     identities,
     onRelationshipCommitted,
     profileStore,
-    resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
+    resolveProjectFromCwd,
     subagentStore,
     threadState,
   }: WorkbenchSubagentControllerOptions) {

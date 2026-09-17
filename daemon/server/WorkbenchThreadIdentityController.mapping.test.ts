@@ -41,6 +41,7 @@ import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "workb
 import { WorkbenchThreadSidebarEntrySchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -51,7 +52,7 @@ const fixtureIdentityValues = {
     "unobserved-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("unobserved-turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 

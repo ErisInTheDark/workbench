@@ -2,6 +2,7 @@
  * No exports. Tests exercise saved history and recovery through the real bridge node lifecycle.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -23,7 +24,7 @@ function deferred() {
 
 test("node serves saved history while refresh initialisation stalls and retires that refresh", async (t) => {
   const fixture = createThreadStateTestDatabase();
-  fixture.admitThread("local:///project", "saved-thread", "codex", "native-thread", "C:/repo");
+  fixture.admitThread(testProjectIds.project, "saved-thread", "codex", "native-thread", "C:/repo");
   const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
   assert.ok(identity);
   const nativeTurnId = NativeTurnIdSchema.parse("native-turn");
@@ -93,7 +94,7 @@ test("node serves saved history while refresh initialisation stalls and retires 
 
 test("managed steering interrupts only the mapped WB thread wait before returning", async () => {
   const fixture = createThreadStateTestDatabase();
-  fixture.admitThread("local:///project", "saved-thread", "codex", "native-thread", "C:/repo");
+  fixture.admitThread(testProjectIds.project, "saved-thread", "codex", "native-thread", "C:/repo");
   const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
   assert.ok(identity);
   const registry = getProcessWorkbenchAgentMcpRequestRegistry();

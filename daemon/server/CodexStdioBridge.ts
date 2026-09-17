@@ -42,7 +42,7 @@ import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-ser
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
 import type { WorkbenchApprovalCommandContext, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputQuestion, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
-import type { resolveAgentEndpointProjectFromCwd } from "./lib/workbench/project/agent-endpoint-project";
+import type { AgentEndpointProjectResolver } from "./lib/workbench/project/agent-endpoint-project";
 import {
   readWorkbenchFileChangeFailureMarker,
   type WorkbenchFileChangeFailureMarker,
@@ -167,7 +167,7 @@ export type CodexStdioBridgeOptions = {
   ) => Promise<readonly string[]>;
   readSqliteContextUsage?: (threadId: string) => Promise<ThreadContextUsageSnapshot | null>;
   restartingAppServer?: boolean;
-  resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
+  resolveProjectFromCwd: AgentEndpointProjectResolver;
   transcriptAssets?: Pick<import("./database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
   sqliteReader?: CodexSqliteTranscriptReader;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;

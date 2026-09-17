@@ -2,6 +2,7 @@
  * No production exports. Tests protect cold provider dispatch, identity mapping, and questionnaire waiter liveness.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,7 +24,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   storedPage?: WorkbenchThreadPageResult;
 } = {}) {
   const database = createThreadStateTestDatabase();
-  database.admitThread("local:///project", "wb-thread", "codex", "native-thread", "C:/project");
+  database.admitThread(testProjectIds.project, "wb-thread", "codex", "native-thread", "C:/project");
   const thread = await database.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("wb-thread") });
   assert.ok(thread);
   const native = {

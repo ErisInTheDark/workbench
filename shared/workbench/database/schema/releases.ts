@@ -50,6 +50,8 @@ const databaseReleases = Object.freeze({
   threadGitSelections: release(40, "e9b7b1d65acf1a29a4349d5fb399773413b7c0ab5c0b021a3577b458a92e3334"),
   retireLegacyImportReceipts: release(41, "611dab097b429ab8dc2e3733f4012bf2ac09d1d7c3c3259236d380d33cb9a391"),
   browseProjectOwnership: release(42, "1570bc51bcdc9ff050a5cb6d62d848624f552e65f29769179a49109b92ce200d"),
+  stableProjectPreparation: release(43, "a729a7ecd56b325dff985a5176b20393921160b83b1d89152cdcd9ea373df4f6"),
+  stableProjectOwnership: release(44, "9e16378a683e1f5aee559f31f70be27006ebf758710128f768ad25f958d2a448"),
 });
 
 export default databaseReleases;

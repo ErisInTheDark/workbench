@@ -42,6 +42,7 @@ import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcrip
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import CodexRecoveryController from "./CodexRecoveryController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -55,7 +56,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 

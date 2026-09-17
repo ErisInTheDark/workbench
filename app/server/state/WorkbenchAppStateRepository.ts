@@ -31,6 +31,7 @@ import resolveWorkbenchRuntimeRoot from "../workbench-runtime-root.ts";
 import { WorkbenchProjectRemapSchema, type WorkbenchProjectRemap } from "workbench-shared/state/workbench-client-state";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 
 export interface WorkbenchAppStateRepositoryOptions {
   databasePath?: string;
@@ -159,22 +160,9 @@ export default class WorkbenchAppStateRepository {
   ) {
     const request = WorkbenchProjectRemapSchema.parse(input);
     if (request.daemonRegistrationId !== this.daemonRegistrationId) throw new Error("Project remap belongs to another daemon registration.");
-    const existing = new Map(this.readProjectAliases().map(alias => [alias.alias, alias.projectId]));
-    const additions = new Map<string, WorkbenchProjectAlias>();
-    for (const alias of request.aliases) {
-      if (alias.alias === alias.projectId) continue;
-      if (alias.projectId !== "workbench-library" && !/^(?:remote|local|workspace):\/\/.+$/u.test(alias.projectId)) {
-        throw new Error("Project remap destination must be canonical.");
-      }
-      const prior = existing.get(alias.alias) ?? additions.get(alias.alias)?.projectId;
-      if (prior && prior !== alias.projectId) throw new Error("Project alias conflicts with retained ownership.");
-      if (!prior) additions.set(alias.alias, alias);
-    }
-    for (const alias of [...this.readProjectAliases(), ...additions.values()]) {
-      if (existing.has(alias.projectId) || additions.has(alias.projectId)) throw new Error("Project aliases cannot form chains.");
-    }
-    if (!additions.size) return this.currentVersion().revision;
-    const aliases = [...additions.values()];
+    const existing = this.readProjectAliases();
+    const { changes: aliases } = composeProjectAliases(existing, request.aliases);
+    if (!aliases.length) return this.currentVersion().revision;
     return this.commit(revision => {
       const mutations = build(aliases, revision);
       // Deleted parents have no children. Preserve their canonical tombstones too,
@@ -187,14 +175,19 @@ export default class WorkbenchAppStateRepository {
         for (const alias of aliases) {
           const parameters = names.flatMap<string | number>(name => name === "project_id" ? [alias.projectId] : name === "revision" ? [revision] : []);
           this.#requireDatabase().prepare(`INSERT INTO "${table.name}" (${columns})
-            SELECT ${values} FROM "${table.name}" WHERE daemon_registration_id = ? AND project_id = ? AND deleted = 1`)
+            SELECT ${values} FROM "${table.name}" WHERE daemon_registration_id = ? AND project_id = ? AND deleted = 1
+            ON CONFLICT DO NOTHING`)
             .run(...parameters, request.daemonRegistrationId, alias.alias);
         }
       }
       return [
-        ...aliases.map(alias => insertRow(appStateTables.projectAliases, {
-          daemon_registration_id: request.daemonRegistrationId, alias: alias.alias, project_id: alias.projectId,
-        })),
+        ...aliases.map(alias => existing.some(item => item.alias === alias.alias)
+          ? updateRows(appStateTables.projectAliases, { project_id: alias.projectId }, {
+            daemon_registration_id: request.daemonRegistrationId, alias: alias.alias,
+          })
+          : insertRow(appStateTables.projectAliases, {
+            daemon_registration_id: request.daemonRegistrationId, alias: alias.alias, project_id: alias.projectId,
+          })),
         ...mutations,
       ];
     });

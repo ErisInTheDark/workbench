@@ -1,5 +1,6 @@
 /* No production exports. Tests protect thread Git validation, response compatibility, and worktree-wide transition serialization. */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
@@ -9,7 +10,7 @@ import { createThreadStateTestDatabase } from "./workbench-thread-state-test-dat
 function threadGitIdentities() {
   const database = createThreadStateTestDatabase();
   for (const nativeId of ["thread-one", "thread-two", "thread-three"]) {
-    database.admitThread("local:///project", `wb:${nativeId}`, "codex", nativeId);
+    database.admitThread(testProjectIds.project, `wb:${nativeId}`, "codex", nativeId);
   }
   return database.identities.threads;
 }

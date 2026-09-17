@@ -49,7 +49,7 @@ import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workben
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchHarness, WorkbenchProjectOption, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
+import type { WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
@@ -396,11 +396,11 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.snapshot;
   }
 
-  async reconcileProjectCatalog(projects: readonly WorkbenchProjectOption[]) {
+  async reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery) {
     await this.start();
-    const response = await this.#request({ type: "reconcileProjectCatalog", projects });
+    const response = await this.#request({ type: "reconcileProjectCatalog", discovery });
     if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected project catalogue response: ${response.type}`);
-    return response.records;
+    return response.projects;
   }
 
   async readProjectAliases() {

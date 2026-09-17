@@ -11,6 +11,7 @@ import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepo
 import type { WorkbenchTranscriptAtomicObservation } from "../transcript/workbench-transcript-types.ts";
 import WorkbenchStatsRepository from "./WorkbenchStatsRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -22,7 +23,7 @@ const fixtureIdentityValues = {
     "two": fixtureIdentitySchemas.NativeTurnIdSchema.parse("two"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
@@ -51,7 +52,7 @@ test("live claims admit their provider without a thread and repeated snapshots d
     };
     repository.recordClaimSnapshot(snapshot);
     assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(snapshot.projectId));
-    const canonical = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/claims");
+    const canonical = testProjectIds.other;
     database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(canonical);
     database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('old-claims', ?)").run(canonical);
     repository.recordClaimSnapshot({ ...snapshot, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old-claims"), roots: [{ rootId: "root", paths: ["aliased.ts"] }] });

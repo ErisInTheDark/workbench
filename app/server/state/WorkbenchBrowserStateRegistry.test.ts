@@ -14,6 +14,7 @@ import { appStateSchema } from "workbench-shared/state/workbench-app-state-schem
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
@@ -33,18 +34,25 @@ test("project aliases reach open stores and dormant stores before their next rea
       value: { text: browser, updatedAt: 1, attachments: [] },
     } });
   }
+  const owner = await registry.readBrowser(BROWSER_A);
+  await registry.remapBrowserProjects(BROWSER_A, {
+    daemonRegistrationId: owner.daemonRegistrationId, aliases: [{ alias: "old", projectId }],
+  });
   await registry.close();
   const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
   reopened.start();
   try {
     const owner = await reopened.readBrowser(BROWSER_A);
     await reopened.remapBrowserProjects(BROWSER_A, {
-      daemonRegistrationId: owner.daemonRegistrationId, aliases: [{ alias: "old", projectId }],
+      daemonRegistrationId: owner.daemonRegistrationId, aliases: [
+        { alias: "old", projectId: testProjectIds.project },
+        { alias: projectId, projectId: testProjectIds.project },
+      ],
     });
     for (const browser of [BROWSER_A, BROWSER_B]) {
       const drafts = records(await reopened.readBrowser(browser)).filter(record => record.kind === "composerDraft");
       assert.equal(drafts.length, 1);
-      assert.equal(drafts[0]!.projectId, projectId);
+      assert.equal(drafts[0]!.projectId, testProjectIds.project);
       assert.equal(drafts[0]!.value.text, browser);
     }
   } finally { await reopened.close(); }

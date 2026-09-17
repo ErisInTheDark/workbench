@@ -41,6 +41,7 @@ import type {
   WorkbenchTranscriptObservation,
 } from "../../../database/transcript/workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -50,7 +51,7 @@ const fixtureIdentityValues = {
     "native-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("native-turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "thread-sqlite": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-sqlite"),

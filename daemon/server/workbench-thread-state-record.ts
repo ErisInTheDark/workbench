@@ -209,7 +209,8 @@ export function conformStoredWorkbenchThreadStateRecord(
 
 export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntry): WorkbenchThreadSidebarEntry | null {
   if (entry.entryKind === "draft") return entry;
-  if (!entry.providerObserved && !(entry.entryKind === "thread" && (entry.lifecycle.settled || entry.metadata.archived))) return null;
+  // Provider omission cannot hide Workbench-owned top-level records.
+  if (entry.entryKind === "subagent" && !entry.providerObserved) return null;
   const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
   return WorkbenchThreadSidebarEntrySchema.parse({
     ...projected, ...(entry.profile ? { profile: entry.profile } : {}),

@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { selectRows } from "workbench-shared/database/workbench-database-statements";
 import { evidenceTables } from "workbench-shared/workbench/database/schema/evidence-schema";
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
@@ -17,7 +18,7 @@ test("gaps survive reopen and reconciliation closes only its observed failures",
   const threadId = WorkbenchThreadIdSchema.parse("thread");
   try {
     await database.settleTranscript([{
-      kind: "thread", threadId, projectId: ProjectIdSchema.parse("local:///project"),
+      kind: "thread", threadId, projectId: testProjectIds.project,
       projectRoot: "/project", title: "retained", createdAt: 1, updatedAt: 1, activityAt: 1,
     }]);
     let gaps = new WorkbenchTranscriptCaptureGapController({ database });

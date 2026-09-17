@@ -16,6 +16,7 @@ import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 async function profileFixture(context: TestContext) {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
@@ -47,7 +48,7 @@ const childThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("chil
 function subagentFixture() {
   const database = createThreadStateTestDatabase();
   for (const id of [callerThreadId, childThreadId, "different-parent", "unrelated-thread"]) {
-    database.admitThread("local:///web/workbench", id);
+    database.admitThread(testProjectIds.workbench, id);
   }
   return {
     database,
@@ -180,7 +181,7 @@ function createProjectResolver(expectedCwd: string) {
     rootPath: cwd,
   };
   const project = {
-    id: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///web/workbench"),
+    id: testProjectIds.workbench,
     kind: "git" as const,
     root: cwd,
     rootPath: cwd,

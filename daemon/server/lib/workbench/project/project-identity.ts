@@ -1,15 +1,15 @@
 /*
  * Exports:
- * - remoteProjectId: derive repository identity from a supported origin URL.
- * - localProjectId: derive local identity from an absolute canonical path.
- * - workspaceProjectId: derive workspace identity from its distinct member identities.
+ * - remoteProjectKey: derive repository identity from a supported origin URL.
+ * - localProjectKey: derive local identity from an absolute canonical path.
+ * - workspaceProjectKey: derive workspace identity from its distinct member identities.
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { ProjectIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
+import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
 import { nativeLocationKey } from "../../../database/thread-identity/native-location-key.ts";
 
-export function remoteProjectId(origin: string): ProjectId {
+export function remoteProjectKey(origin: string): ProjectIdentityKey {
   const value = origin.trim();
   const scp = !value.includes("://") && /^(?:[^/@:\s]+@)?([^/:\s]+):([^:].*)$/u.exec(value);
   let url: URL;
@@ -23,7 +23,7 @@ export function remoteProjectId(origin: string): ProjectId {
   }
   if (url.protocol === "file:") {
     if (!url.pathname || url.username || url.password) throw new Error("Repository file origin is invalid.");
-    return ProjectIdSchema.parse(`remote://${url.href}`);
+    return ProjectIdentityKeySchema.parse(`remote://${url.href}`);
   }
   const repository = url.pathname.replace(/^\/+|\/+$/gu, "").replace(/\.git$/u, "");
   if (!url.hostname || !repository) throw new Error("Repository origin has no repository path.");
@@ -32,18 +32,18 @@ export function remoteProjectId(origin: string): ProjectId {
   const authority = url.port && url.port !== defaultPort
     ? `${url.protocol}//${url.hostname}:${url.port}`
     : url.hostname;
-  return ProjectIdSchema.parse(`remote://${authority}/${repository}`);
+  return ProjectIdentityKeySchema.parse(`remote://${authority}/${repository}`);
 }
 
-export function localProjectId(canonicalPath: string, platform: NodeJS.Platform = process.platform): ProjectId {
+export function localProjectKey(canonicalPath: string, platform: NodeJS.Platform = process.platform): ProjectIdentityKey {
   const paths = platform === "win32" ? path.win32 : path.posix;
   if (!paths.isAbsolute(canonicalPath)) throw new Error("Local project identity requires an absolute canonical path.");
-  return ProjectIdSchema.parse(`local://${nativeLocationKey(canonicalPath, platform).replaceAll("\\", "/")}`);
+  return ProjectIdentityKeySchema.parse(`local://${nativeLocationKey(canonicalPath, platform).replaceAll("\\", "/")}`);
 }
 
-export function workspaceProjectId(members: readonly ProjectId[]): ProjectId {
+export function workspaceProjectKey(members: readonly ProjectIdentityKey[]): ProjectIdentityKey {
   if (!members.length) throw new Error("Workspace identity requires at least one member.");
   const memberSet = [...new Set(members)].sort();
   const digest = createHash("sha256").update(JSON.stringify(memberSet)).digest("hex");
-  return ProjectIdSchema.parse(`workspace://${digest}`);
+  return ProjectIdentityKeySchema.parse(`workspace://${digest}`);
 }

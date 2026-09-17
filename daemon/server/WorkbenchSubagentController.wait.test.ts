@@ -3,6 +3,7 @@
  * - No production exports; Node tests cover multiplexed subagent wait ordering, immediate readiness, and shared questionnaire reads.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
@@ -114,7 +115,7 @@ class FakeProvider {
 
 test("multiplexed wait immediately prefers questionnaires, then inactive turns", async (context) => {
   const cwd = process.cwd();
-  const projectId = "local:///subagent-wait-project";
+  const projectId = testProjectIds.independent;
   const inactive = summary({ cwd, name: "Yuzu", projectId, threadId: inactiveThreadId });
   const waiting = summary({ cwd, name: "Momo", projectId, threadId: questionnaireThreadId });
   const database = createThreadStateTestDatabase();

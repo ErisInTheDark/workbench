@@ -2,6 +2,7 @@
  * Exports: none. Behaviour tests for stored-history queries.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
@@ -38,7 +39,7 @@ function fixture() {
   db.pragma("foreign_keys = ON");
   db.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
   for (const [index, id] of ["wb-one", "wb-two"].entries()) {
-    const projectId = `local:///project-${index}`;
+    const projectId = index === 0 ? testProjectIds.project : testProjectIds.other;
     db.prepare("INSERT INTO workbench_projects (id) VALUES (?)").run(projectId);
     db.prepare(`INSERT INTO workbench_threads(id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at, archived)
       VALUES (?, ?, ?, ?, 3, 1, 1, 1, 1)`).run(id, projectId, `/project-${index}`, id);
@@ -66,7 +67,7 @@ test("stored transcript queries isolate wb ids, include archived bodies and repo
     assert.equal(page.rows[0]?.threadId, "wb-one");
     assert.equal(page.coverage.materializedTurns, 1);
     assert.equal(read({ threads: ["wb-two"] }).coverage.materializedTurns, 0);
-    assert.equal(read({ threads: ["wb-one"], project: "local:///project-1" }).rows.length, 0);
+    assert.equal(read({ threads: ["wb-one"], project: testProjectIds.other }).rows.length, 0);
     assert.throws(() => read({ threads: ["native-0"] }), /thread/i);
     assert.equal(read({ queries: ["éCLAIR"] }).rows.length, 1);
     assert.equal(read({ queries: ["éCLAIR"], caseSensitive: true }).rows.length, 0);
@@ -157,7 +158,7 @@ test("item expansion honours intersecting project filters and packs small fields
       VALUES (10, 0, 'failed', 'run tool', '/work', 'output needle', 'error needle')`).run();
     const match = read({ queries: ["needle"], kinds: ["process"] }).rows[0]!;
     assert.ok(match);
-    assert.throws(() => read({ action: "show", queries: [], threads: ["wb-one"], item: match.id, project: "local:///project-1" }), /item|project/i);
+    assert.throws(() => read({ action: "show", queries: [], threads: ["wb-one"], item: match.id, project: testProjectIds.other }), /item|project/i);
     const shown = read({ action: "show", queries: [], threads: ["wb-one"], item: match.id });
     assert.equal(shown.nextCursor, null);
     assert.ok(shown.rows[0]?.fields.some(field => field.value === "output needle"));

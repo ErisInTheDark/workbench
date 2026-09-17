@@ -29,6 +29,8 @@ import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportReposito
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
 import WorkbenchProjectRepository from "./project/WorkbenchProjectRepository.ts";
+import WorkbenchProjectIdentityMigration from "./project/WorkbenchProjectIdentityMigration.ts";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchExternalStorageMigration from "./WorkbenchExternalStorageMigration.ts";
 import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAssetStore.ts";
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
@@ -162,7 +164,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     case "settleProjectIcon":
       if (!projectRepository) throw new Error("Workbench project repository is not initialized");
       if (request.type === "reconcileProjectCatalog") {
-        post({ id: request.id, type: "projectCatalog", records: projectRepository.reconcile(request.projects) });
+        post({ id: request.id, type: "projectCatalog", projects: projectRepository.reconcile(request.discovery) });
       } else if (request.type === "readProjectAliases") {
         post({ id: request.id, type: "projectAliases", aliases: projectRepository.readAliases() });
       } else if (request.type === "resolveProjectIdentity") {
@@ -529,11 +531,14 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
     try {
       if (database) throw new Error("Workbench database is already initialized");
       validateWorkbenchDatabaseReleases();
+      let checkpointRetained = false;
       const acknowledgeCheckpoint = async (backupPath: string) => {
+        if (checkpointRetained) return;
         if (request.acknowledgeMigration) await new Promise<void>((acknowledge) => {
           migrationAcknowledgement = { id: request.id, acknowledge };
           post({ id: request.id, type: "migrationCheckpoint", backupPath });
         });
+        checkpointRetained = true;
       };
       await recoverWorkbenchDatabase(request.databasePath, workbenchDatabaseSchema, acknowledgeCheckpoint);
       database = new Database(request.databasePath);
@@ -545,6 +550,14 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
         throw new Error("Workbench requires a current migrated database (schema 33 or later).");
       }
       let projects: WorkbenchProjectStartup | undefined;
+      if (installedVersion === 0) {
+        await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, { beforeMigration: acknowledgeCheckpoint });
+      } else if (installedVersion < databaseReleases.stableProjectPreparation.version) {
+        await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
+          beforeMigration: acknowledgeCheckpoint, targetVersion: databaseReleases.stableProjectPreparation.version,
+        });
+      }
+      await new WorkbenchProjectIdentityMigration(connection).run(request.projects?.discovery, acknowledgeCheckpoint);
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
         beforeMigration: acknowledgeCheckpoint,
       });
@@ -553,12 +566,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       if (request.projects) {
         const { discovery } = request.projects;
         const repository = new WorkbenchProjectRepository(connection);
-        projects = {
-          catalog: repository.reconcile(discovery.data),
-          aliases: repository.readAliases(),
-          rootPath: discovery.rootPath,
-          excludedRootPaths: discovery.excludedRootPaths,
-        };
+        projects = repository.reconcile(discovery);
       }
       initializeRepositories();
       post({ id: request.id, type: "ready", inventory: inventory(), projects });

@@ -1,8 +1,10 @@
 /* No production exports. Tests protect project/provider ownership and lossless upgrades. */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "./workbench-database-schema.ts";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
 function insertProfile(database: Database.Database, id: string, harness: string) {
   database.prepare(`
@@ -30,7 +32,7 @@ test("retiring stale projections preserves canonical state and foreign-key integ
       VALUES ('local:///retained', 'codex', 'native', 'stale');
     `);
     const before = database.prepare("SELECT * FROM workbench_threads").all();
-    installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.retireLegacyImportReceipts.version });
     assert.deepEqual(database.prepare("SELECT * FROM workbench_threads").all(), before);
     assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'workbench_thread_state_*'").all(), []);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
@@ -49,10 +51,26 @@ test("project overrides require a retained project owner", () => {
     }
     const insert = database.prepare("INSERT INTO codex_sandbox_network_project_overrides(project_id, enabled) VALUES (?, 1)");
     assert.throws(() => insert.run("local:///missing"), /FOREIGN KEY/);
-    admit.run("local:///retained");
-    insert.run("local:///retained");
-    assert.throws(() => database.prepare("DELETE FROM workbench_projects WHERE id = ?").run("local:///retained"), /FOREIGN KEY/);
+    const owner = testProjectIds.project;
+    admit.run(owner);
+    insert.run(owner);
+    assert.throws(() => database.prepare("DELETE FROM workbench_projects WHERE id = ?").run(owner), /FOREIGN KEY/);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("current identity keys are unique while historical owners may lack discovery metadata", () => {
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database);
+    const insert = database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)");
+    insert.run(testProjectIds.project, "remote://example.test/owner/repo");
+    assert.throws(() => insert.run(testProjectIds.other, "remote://example.test/owner/repo"), /UNIQUE/);
+    assert.throws(() => insert.run(testProjectIds.other, "not-an-identity"), /CHECK/);
+    insert.run(testProjectIds.other, null);
+    assert.throws(() => database.prepare(`UPDATE workbench_projects SET kind = 'git', name = 'repo',
+      relative_path = 'repo', icon_source_key = 'generation' WHERE id = ?`).run(testProjectIds.other), /CHECK/);
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 2);
   } finally { database.close(); }
 });
 

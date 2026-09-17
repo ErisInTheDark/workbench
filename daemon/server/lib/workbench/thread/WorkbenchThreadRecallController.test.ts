@@ -18,13 +18,14 @@ import type {
 import WorkbenchThreadRecallController from "./WorkbenchThreadRecallController";
 import { createSqliteWorkbenchThreadRecallRef, createWorkbenchThreadRecallCursor } from "./thread-context-recall.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
     "native-thread": fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "thread-one": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"),

@@ -10,8 +10,9 @@ import WorkbenchTranscriptLiveController from "./WorkbenchTranscriptLiveControll
 import WorkbenchTranscriptSubscriptionController from "./WorkbenchTranscriptSubscriptionController.ts";
 import type { WorkbenchTranscriptAtomicObservation } from "./workbench-transcript-types.ts";
 import {
-  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import {
   applyTranscriptLayoutPatch, applyTranscriptStructure, writeTranscriptText,
   type TranscriptLayout, type TranscriptPatchUpdate, type TranscriptStreamUpdate, type TranscriptTextUpdate,
@@ -26,7 +27,7 @@ function fixture() {
   const live = new WorkbenchTranscriptLiveController();
   repository.settle([
     {
-      kind: "thread", threadId: WorkbenchThreadIdSchema.parse("thread"), projectId: ProjectIdSchema.parse("local:///project"),
+      kind: "thread", threadId: WorkbenchThreadIdSchema.parse("thread"), projectId: testProjectIds.project,
       projectRoot: "/project", title: "", activityAt: 1, createdAt: 1, updatedAt: 1,
     },
     {

@@ -11,11 +11,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { appRoot, normalizeRelativePath, resolveProjectRoot, type ResolvedProject } from "../../project";
+import { appRoot, normalizeRelativePath, type ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTreeAsync, logError } from "../../../process-helpers";
 import {
-  resolveAgentEndpointProjectFromCwd,
   type AgentEndpointProjectResolution,
 } from "../project/agent-endpoint-project";
 import type { WorkbenchBrowseAgentCommand } from "./actions/browse-action-registry";
@@ -120,15 +119,15 @@ export default class WorkbenchBrowseRuntime {
     client = new WorkbenchBrowseDaemonClient(),
     profileStore,
     retireProcess = killProcessTreeAsync,
-    resolveProjectById = resolveProjectRoot,
-    resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
+    resolveProjectById,
+    resolveProjectFromCwd,
   }: {
     client?: WorkbenchBrowseDaemonTransport;
     profileStore?: WorkbenchBrowseRuntimeProfileStore;
     retireProcess?: WorkbenchBrowseProcessRetirer;
-    resolveProjectById?: WorkbenchBrowseProjectIdResolver;
-    resolveProjectFromCwd?: WorkbenchBrowseProjectResolver;
-  } = {}) {
+    resolveProjectById: WorkbenchBrowseProjectIdResolver;
+    resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
+  }) {
     this.client = client;
     this.profileStore = profileStore;
     this.retireProcess = retireProcess;

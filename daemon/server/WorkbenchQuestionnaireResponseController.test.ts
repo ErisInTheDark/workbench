@@ -16,15 +16,15 @@ import WorkbenchQuestionnaireResponseController, {
 import {
   NativeThreadIdSchema,
   NativeTurnIdSchema,
-  ProjectIdSchema,
   WorkbenchThreadIdSchema,
   WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type {
   WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 
-const projectId = ProjectIdSchema.parse("local:///project");
+const projectId = testProjectIds.project;
 const threadId = WorkbenchThreadIdSchema.parse("thread");
 const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
 const turnId = WorkbenchTurnIdSchema.parse("turn");

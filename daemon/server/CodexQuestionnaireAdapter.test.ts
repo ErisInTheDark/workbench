@@ -2,6 +2,7 @@
  * No production exports. Protect native questionnaire projection and delivery to the existing WB waiter.
  */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import CodexQuestionnaireAdapter from "./CodexQuestionnaireAdapter";
@@ -14,7 +15,7 @@ test("Codex questionnaire views translate identities without exposing another pr
   const nativeThreadId = NativeThreadIdSchema.parse("native-thread");
   const nativeTurnId = NativeTurnIdSchema.parse("native-turn");
   const records = await Promise.all(["codex", "another-provider"].map(async harness => {
-    database.admitThread("local:///project", `wb-${harness}`, harness, nativeThreadId, "C:/project");
+    database.admitThread(testProjectIds.project, `wb-${harness}`, harness, nativeThreadId, "C:/project");
     const thread = await identities.resolve({ threadId: ThreadReferenceSchema.parse(`wb-${harness}`) });
     assert.ok(thread);
     const turn = await identities.observeTurn({

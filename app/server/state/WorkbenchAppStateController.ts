@@ -116,32 +116,32 @@ export default class WorkbenchAppStateController {
     const operation = this.#mutationQueue.then(() => {
       const revision = this.#repository.remapProjects(request, (aliases, revision) => {
         const mapping = new Map(aliases.map(alias => [alias.alias, alias.projectId]));
-        const changes = projectWorkbenchClientStateRows(this.read().rows);
-        const identities = changes.map(change => change.change === "upsert" ? recordIdentity(change.record) : change.identity);
+        // The repository carries tombstones separately. They must not compete
+        // with live records when several old addresses converge on one owner.
+        const changes = projectWorkbenchClientStateRows(this.read().rows).filter(change => change.change === "upsert");
+        const identities = changes.map(change => recordIdentity(change.record));
         const moved: WorkbenchClientStateIdentity[] = [];
         const mutations: WorkbenchDatabaseMutation[] = [];
         for (const change of changes) {
-          if (change.change === "upsert" && change.record.kind === "lastLaunchTarget") {
+          if (change.record.kind === "lastLaunchTarget") {
             const projectId = mapping.get(change.record.projectId);
             if (projectId && change.record.daemonRegistrationId === request.daemonRegistrationId) {
               mutations.push(...this.#put({ ...change.record, projectId }, revision));
             }
             continue;
           }
-          const value = change.change === "upsert" ? change.record : change.identity;
+          const value = change.record;
           if (!("projectId" in value) || value.daemonRegistrationId !== request.daemonRegistrationId) continue;
           const projectId = mapping.get(value.projectId);
           if (!projectId) continue;
           const next = { ...value, projectId };
-          const identity = change.change === "upsert" ? recordIdentity(next as WorkbenchClientStateRecord) : next as WorkbenchClientStateIdentity;
+          const identity = recordIdentity(next as WorkbenchClientStateRecord);
           if (identities.some(existing => isDeepStrictEqual(existing, identity)) || moved.some(existing => isDeepStrictEqual(existing, identity))) {
             throw new Error("Project remap conflicts with existing saved state.");
           }
           moved.push(identity);
-          if (change.change === "upsert") {
-            mutations.push(...this.#put({ ...change.record, projectId } as WorkbenchClientStateRecord, revision));
-            mutations.push(...this.#delete(recordIdentity(change.record), revision));
-          }
+          mutations.push(...this.#put({ ...change.record, projectId } as WorkbenchClientStateRecord, revision));
+          mutations.push(...this.#delete(recordIdentity(change.record), revision));
         }
         return mutations;
       });

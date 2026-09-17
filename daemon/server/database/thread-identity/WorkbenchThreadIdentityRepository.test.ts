@@ -11,6 +11,7 @@ import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepo
 import WorkbenchThreadIdentityRepository from "./WorkbenchThreadIdentityRepository.ts";
 import type { WorkbenchThreadIdentityMetadata, WorkbenchTurnIdentityMetadata } from "./workbench-thread-identity-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -26,9 +27,9 @@ const fixtureIdentityValues = {
     "secondary-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("secondary-turn"),
   },
   ProjectId: {
-    "other": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other"),
-    "other-project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///other-project"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "other": testProjectIds.other,
+    "other-project": testProjectIds.otherProject,
+    "project": testProjectIds.project,
   },
   WorkbenchTurnId: {
     "existing-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("existing-turn"),
@@ -59,7 +60,7 @@ function setup() {
 
 test("observed and retained thread admission use canonical project aliases and create project parents", () => {
   const { database, identity } = setup();
-  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/project");
+  const projectId = testProjectIds.project;
   const legacyId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
   try {
     database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
@@ -72,7 +73,7 @@ test("observed and retained thread admission use canonical project aliases and c
       projectId: legacyId, projectRoot: "C:/project",
     });
     assert.equal(retained.projectId, projectId);
-    const independent = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/independent");
+    const independent = testProjectIds.independent;
     identity.observe({ ...metadata("independent"), projectId: independent, projectRoot: "C:/independent" });
     assert.ok(database.prepare("SELECT id FROM workbench_projects WHERE id = ?").get(independent));
   } finally { database.close(); }

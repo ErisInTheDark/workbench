@@ -9,7 +9,8 @@ import Database from "better-sqlite3";
 import WorkbenchThreadGitSelectionStore from "../../../database/git/WorkbenchThreadGitSelectionStore";
 import WorkbenchThreadIdentityRepository from "../../../database/thread-identity/WorkbenchThreadIdentityRepository";
 import { installWorkbenchDatabaseSchema } from "../../../database/workbench-database-schema";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
@@ -58,7 +59,7 @@ function selectionStore(context: TestContext, root: string, storage: string) {
   context.after(() => database.close());
   new WorkbenchThreadIdentityRepository(database).observe({
     native: { harness: "codex", nativeLocation: root, nativeThreadId: NativeThreadIdSchema.parse("thread-one") },
-    projectId: ProjectIdSchema.parse("local:///fixture"), projectRoot: root,
+    projectId: testProjectIds.fixture, projectRoot: root,
     title: "thread-one", createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const store = new WorkbenchThreadGitSelectionStore(database, storage);

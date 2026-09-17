@@ -10,6 +10,7 @@ import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepo
 import type { WorkbenchTranscriptObservation } from "../transcript/workbench-transcript-types";
 import WorkbenchSearchRepository from "./WorkbenchSearchRepository";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 function seedSearchThread(
   transcript: WorkbenchTranscriptRepository,
@@ -38,7 +39,7 @@ function seedSearchThread(
       {
         kind: "thread",
         threadId,
-        projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+        projectId: testProjectIds.project,
         projectRoot: "C:/project",
         title,
         createdAt: activityAt,
@@ -149,18 +150,18 @@ test("search ranks recent settled narrative, repeated terms, and match-centred e
 
     const repository = new WorkbenchSearchRepository(database, { now: () => now });
     const results = repository.search({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      projectId: testProjectIds.project,
       query: "loader loading animation",
     }).results;
 
     assert.deepEqual(results.map(({ title }) => title), ["Recent visual repair", "Old visual note"]);
     assert.match(results[0]?.detail ?? "", /^You: \.\.\..*loader animation/u);
     assert.deepEqual(repository.search({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      projectId: testProjectIds.project,
       query: "\"Archived unrelated work\"",
     }).results, []);
     assert.deepEqual(repository.search({
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+      projectId: testProjectIds.project,
       query: "freshnesssignal",
     }).results.map(({ title }) => title), ["Recent freshness result", "Stale freshness result"]);
   } finally {
@@ -183,7 +184,7 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
       const turnId = `search-turn-${index}`;
       const title = `Project maintenance ${index}`;
       const catalog = {
-        kind: "thread" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"), projectRoot: "C:/project",
+        kind: "thread" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId: testProjectIds.project, projectRoot: "C:/project",
         title, createdAt: 1, updatedAt: index + 1, activityAt: index + 1,
       };
       if (index >= 42) {
@@ -213,14 +214,14 @@ test("search stays below 500ms per query on a multi-megabyte relational corpus",
     }
     transcript.settle(observations);
     const repository = new WorkbenchSearchRepository(database);
-    repository.replaceProjects(Array.from({ length: 102 }, (_, index) => ({ id: `local:///project-${index}`, name: `Project ${index}`, rootPath: `C:/project-${index}` })));
-    repository.replaceProjectFiles("local:///project", Array.from({ length: 1200 }, (_, index) => `src/components/component-${index}.tsx`));
+    repository.replaceProjects(Array.from({ length: 102 }, (_, index) => ({ id: `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`, name: `Project ${index}`, rootPath: `C:/project-${index}` })));
+    repository.replaceProjectFiles(testProjectIds.project, Array.from({ length: 1200 }, (_, index) => `src/components/component-${index}.tsx`));
     assert.ok(corpusCharacters >= 2_373_411);
 
     const measurements = [];
     for (const query of ["", "a", "quartzzeppeln", "quartzzeppelin state", '"exact phrase"', "maintenance -quartzzeppelin", "asdlfkajsdlfkjasdlfkjasdf"]) {
       const startedAt = performance.now();
-      const response = repository.search({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"), query });
+      const response = repository.search({ projectId: testProjectIds.project, query });
       const elapsedMs = performance.now() - startedAt;
       measurements.push({ query, elapsedMs });
       if (query === "asdlfkajsdlfkjasdlfkjasdf") assert.deepEqual(response.results, []);

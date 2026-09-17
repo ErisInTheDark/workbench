@@ -1,6 +1,5 @@
-/* No production exports. Protect native request routing and canonical response identity. */
 /*
- * No exports. Tests protect canonical references, durable alias convergence, projection timing and body-free live projection.
+ * No exports. Protect native request routing, canonical references, durable aliases and body-free live projection.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -14,6 +13,7 @@ import { admitProviderThreadItems } from "./CodexProviderIdentity";
 import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./CodexPublicIdentity";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -24,7 +24,7 @@ const fixtureIdentityValues = {
     "unobserved-turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("unobserved-turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
 };
 

@@ -8,34 +8,29 @@
 import databaseReleases from "./releases.ts";
 import {
   check, defineTable, enumText, evolveTable, foreignKey, integer, literal, primaryKey, sql, text, unique,
-  type SelectRow, type TableDefinition,
+  type ColumnReferences, type SelectRow, type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
 import {
   copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
   type TableHistory,
 } from "../../../database/schema/schema-history.ts";
 
-function defineProjects(canonicalIdentity: boolean) {
-  return defineTable("workbench_projects", {
-    id: text().primaryKey(),
-    kind: enumText("historical", "git", "workspace", "workbench-library").notNull().default("historical"),
-    name: text(),
-    relative_path: text(),
-    workspace_path: text(),
-    last_commit_time_ms: integer(),
-    icon_source_key: text(),
-    icon_root_id: text(),
-    icon_path: text(),
-    icon_checked_at: integer().nonNegative(),
-  }, table => ({
-    constraints: [
-      ...(canonicalIdentity ? [check(sql`
-      ${table.id} = ${literal("workbench-library")}
-      OR ${table.id} GLOB ${literal("remote://?*")}
-      OR ${table.id} GLOB ${literal("local://?*")}
-      OR ${table.id} GLOB ${literal("workspace://?*")}
-    `)] : []),
-      check(sql`
+const projectColumns = {
+  id: text().primaryKey(),
+  kind: enumText("historical", "git", "workspace", "workbench-library").notNull().default("historical"),
+  name: text(),
+  relative_path: text(),
+  workspace_path: text(),
+  last_commit_time_ms: integer(),
+  icon_source_key: text(),
+  icon_root_id: text(),
+  icon_path: text(),
+  icon_checked_at: integer().nonNegative(),
+};
+
+function projectConstraints(table: ColumnReferences<typeof projectColumns>) {
+  return [
+    check(sql`
       (${table.kind} = ${literal("historical")} AND ${table.name} IS NULL AND ${table.relative_path} IS NULL
         AND ${table.workspace_path} IS NULL AND ${table.icon_source_key} IS NULL
         AND ${table.icon_checked_at} IS NULL AND ${table.icon_root_id} IS NULL AND ${table.icon_path} IS NULL)
@@ -44,16 +39,52 @@ function defineProjects(canonicalIdentity: boolean) {
         AND ((${table.kind} = ${literal("workspace")} AND ${table.workspace_path} IS NOT NULL)
           OR (${table.kind} <> ${literal("workspace")} AND ${table.workspace_path} IS NULL)))
     `),
-      check(sql`
+    check(sql`
       (${table.icon_root_id} IS NULL AND ${table.icon_path} IS NULL)
       OR (${table.icon_root_id} IS NOT NULL AND ${table.icon_path} IS NOT NULL AND ${table.icon_checked_at} IS NOT NULL)
     `),
-      foreignKey([table.id, table.icon_root_id], { table: "workbench_project_roots", columns: ["project_id", "root_id"] }),
+    foreignKey([table.id, table.icon_root_id], { table: "workbench_project_roots", columns: ["project_id", "root_id"] }),
+  ];
+}
+
+function defineProjects(canonicalIdentity: boolean) {
+  return defineTable("workbench_projects", projectColumns, table => ({
+    constraints: [
+      ...(canonicalIdentity ? [check(sql`
+      ${table.id} = ${literal("workbench-library")}
+      OR ${table.id} GLOB ${literal("remote://?*")}
+      OR ${table.id} GLOB ${literal("local://?*")}
+      OR ${table.id} GLOB ${literal("workspace://?*")}
+    `)] : []),
+      ...projectConstraints(table),
     ],
   }));
 }
 const projects = defineProjects(false);
 const canonicalProjects = defineProjects(true);
+const preparingProjects = defineTable("workbench_projects", {
+  ...projectColumns,
+  identity_key: text(),
+}, table => ({
+  constraints: [...projectConstraints(table), unique([table.identity_key])],
+}));
+const stableProjects = defineTable("workbench_projects", preparingProjects.columns, table => ({
+  constraints: [
+    ...projectConstraints(table),
+    unique([table.identity_key]),
+    check(sql`${table.id} = ${literal("workbench-library")} OR (
+      length(${table.id}) = 36 AND substr(${table.id}, 9, 1) = '-' AND substr(${table.id}, 14, 1) = '-'
+      AND substr(${table.id}, 19, 1) = '-' AND substr(${table.id}, 24, 1) = '-'
+      AND length(replace(${table.id}, '-', '')) = 32
+      AND replace(${table.id}, '-', '') NOT GLOB '*[^0-9a-f]*'
+    )`),
+    check(sql`${table.kind} = ${literal("historical")} OR ${table.identity_key} IS NOT NULL`),
+    check(sql`${table.identity_key} IS NULL OR ${table.identity_key} = ${literal("workbench-library")}
+      OR ${table.identity_key} GLOB ${literal("remote://?*")}
+      OR ${table.identity_key} GLOB ${literal("local://?*")}
+      OR ${table.identity_key} GLOB ${literal("workspace://?*")}`),
+  ],
+}));
 
 const roots = defineTable("workbench_project_roots", {
   project_id: text().notNull().references("workbench_projects", "id"),
@@ -84,7 +115,7 @@ function initial<Table extends TableDefinition>(table: Table) {
 }
 
 const projectsHistory = defineTableHistory({
-  current: canonicalProjects,
+  current: stableProjects,
   versions: [
     ...initial(projects).versions,
     tableVersion({
@@ -92,9 +123,32 @@ const projectsHistory = defineTableHistory({
       table: canonicalProjects,
       migration: rebuildTable({ from: projects, to: canonicalProjects }),
     }),
+    tableVersion({
+      schemaVersion: databaseReleases.stableProjectPreparation.version,
+      table: preparingProjects,
+      migration: rebuildTable({
+        from: canonicalProjects, to: preparingProjects,
+        map: ({ from }) => ({ identity_key: sql.text`${from.id}` }),
+      }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.stableProjectOwnership.version,
+      table: stableProjects,
+      migration: rebuildTable({ from: preparingProjects, to: stableProjects }),
+    }),
   ],
 });
-const rootsHistory = initial(roots);
+const stableRoots = evolveTable(roots, { add: { identity_key: text() } });
+const rootsHistory = defineTableHistory({
+  current: stableRoots,
+  versions: [
+    ...initial(roots).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.stableProjectPreparation.version, table: stableRoots,
+      migration: rebuildTable({ from: roots, to: stableRoots }),
+    }),
+  ],
+});
 const aliasesHistory = initial(aliases);
 export const projectTables = Object.freeze({
   projects: projectsHistory.current, roots: rootsHistory.current, aliases: aliasesHistory.current,

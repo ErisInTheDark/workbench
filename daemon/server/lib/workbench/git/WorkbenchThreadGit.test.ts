@@ -12,7 +12,8 @@ import Database from "better-sqlite3";
 import WorkbenchThreadGitSelectionStore, { type ThreadGitSelectionCommand } from "../../../database/git/WorkbenchThreadGitSelectionStore";
 import WorkbenchThreadIdentityRepository from "../../../database/thread-identity/WorkbenchThreadIdentityRepository";
 import { installWorkbenchDatabaseSchema } from "../../../database/workbench-database-schema";
-import { NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
@@ -91,7 +92,7 @@ async function createRepositoryFrom<State extends object>(context: TestContext, 
     async executeThreadGitSelection(command: ThreadGitSelectionCommand) {
       if (!identities.resolve({ threadId: ThreadReferenceSchema.parse(command.scope.threadId) })) identities.observe({
         native: { harness: "codex", nativeLocation: repoRoot, nativeThreadId: NativeThreadIdSchema.parse(command.scope.threadId) },
-        projectId: ProjectIdSchema.parse("local:///fixture"), projectRoot: repoRoot,
+        projectId: testProjectIds.fixture, projectRoot: repoRoot,
         title: command.scope.threadId, createdAt: 1, updatedAt: 1, activityAt: 1,
       });
       return store.execute(command);

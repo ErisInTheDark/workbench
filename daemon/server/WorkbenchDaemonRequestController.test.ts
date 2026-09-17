@@ -17,6 +17,7 @@ import WorkbenchThreadStateController from "./WorkbenchThreadStateController.ts"
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore.ts";
 import WorkbenchThreadStateRelationalRepository from "./database/thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 test("context capability bounds reject invalid target mutations without writing", async () => {
   const unused = async (): Promise<never> => { throw new Error("Profile validation must only read model context."); };
@@ -267,7 +268,7 @@ test("questionnaire response dispatch validates and delegates one semantic daemo
 });
 
 test("thread lookup resolves native and WB inputs without publishing native bindings or requiring bodies", async () => {
-  const projectId = ProjectIdSchema.parse("local:///project");
+  const projectId = testProjectIds.project;
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -553,7 +554,7 @@ test("sandbox network requests validate project ownership and preserve explicit 
 });
 
 test("project-scoped network, search, and stats requests use the resolved owner rather than the supplied alias", async () => {
-  const canonicalProjectId = "remote://example.test/request";
+  const canonicalProjectId = testProjectIds.project;
   const { controller, networkWrites, searchRequests, statsRequests } = createController({ canonicalProjectId });
   const projectId = "old-request";
   const network = await controller.handle({
@@ -572,7 +573,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
     const sqlite = new Database(":memory:");
     installWorkbenchDatabaseSchema(sqlite);
     const identities = new WorkbenchThreadIdentityRepository(sqlite);
-    const projectId = ProjectIdSchema.parse("local:///profile-project");
+    const projectId = testProjectIds.otherProject;
     const nativeThreadId = NativeThreadIdSchema.parse("a116df94-9125-43c6-ae1f-898fbd140cd0");
     const admitted = identities.observe({
       native: { harness, nativeLocation: "C:/profile-project", nativeThreadId },

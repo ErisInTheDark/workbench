@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import WorkbenchLegacyDiffArtifactStore from "./WorkbenchLegacyDiffArtifactStore.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
@@ -23,7 +24,7 @@ test("legacy diff text retains its canonical owner and reopens through the worke
     const identities = new WorkbenchThreadIdentityRepository(database);
     const threads = ["owner", "other"].map(id => identities.observe({
       native: { harness: "codex", nativeLocation: "/project", nativeThreadId: NativeThreadIdSchema.parse(id) },
-      projectId: ProjectIdSchema.parse("local:///project"), projectRoot: "/project",
+      projectId: testProjectIds.project, projectRoot: "/project",
       title: id, createdAt: 1, updatedAt: 1, activityAt: 1,
     }));
     const diff = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";

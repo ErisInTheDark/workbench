@@ -23,6 +23,7 @@ import {
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
+import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 
 export interface WorkbenchClientStateSnapshot {
   daemonRegistrationId: string;
@@ -182,18 +183,10 @@ export default class WorkbenchClientStateController {
       await Promise.all(writes);
       if (this.#disposed) throw new Error("Workbench app state is disposed.");
       const request = WorkbenchProjectRemapSchema.parse({ daemonRegistrationId: this.#daemonRegistrationId, aliases });
-      const additions = request.aliases.filter(alias => this.#projectAliases.get(alias.alias) !== alias.projectId);
+      const composed = composeProjectAliases(this.getProjectAliases(), request.aliases);
+      const additions = composed.changes;
       if (!additions.length) return;
-      const mapping = new Map(this.#projectAliases);
-      for (const alias of additions) {
-        const previous = mapping.get(alias.alias);
-        if (previous && previous !== alias.projectId) throw new Error("Project alias changes retained ownership.");
-        if (alias.alias === alias.projectId || (alias.projectId !== "workbench-library" && !/^(?:remote|local|workspace):\/\/.+$/u.test(alias.projectId))) {
-          throw new Error("Project alias has an invalid canonical destination.");
-        }
-        mapping.set(alias.alias, alias.projectId);
-      }
-      if ([...mapping.values()].some(id => mapping.has(id))) throw new Error("Project aliases cannot form chains.");
+      const mapping = new Map(composed.aliases.map(item => [item.alias, item.projectId]));
       this.#remappedThreadAliases(mapping);
       if (this.#mode === "memory") {
         const keys = new Set<string>();

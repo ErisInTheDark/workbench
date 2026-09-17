@@ -2,13 +2,12 @@
  * Exports:
  * - AgentEndpointProjectResolution: validated cwd, project, and owning root.
  * - resolveAgentEndpointProjectFromProjects: resolve cwd against a supplied catalogue without admitting excluded checkouts.
- * - resolveAgentEndpointProjectFromCwd: resolve cwd through project discovery.
+ * - AgentEndpointProjectResolver: catalogue-owned cwd resolution port.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  discoverProjectIdentities,
   normalizeRelativePath,
   resolveDiscoveredProject,
   type ResolvedProject,
@@ -21,6 +20,11 @@ export interface AgentEndpointProjectResolution {
   project: ResolvedProject;
   root: ResolvedProject["roots"][number];
 }
+
+export type AgentEndpointProjectResolver = (
+  cwd: string | null | undefined,
+  options?: { endpointName?: string },
+) => Promise<AgentEndpointProjectResolution>;
 
 function normalizeComparablePath(filePath: string) {
   const normalizedPath = normalizeRelativePath(path.resolve(filePath)).replace(/\/+$/u, "");
@@ -81,14 +85,6 @@ async function findOwningResolvedRoot(project: ResolvedProject, cwd: string) {
     }
   }
   return null;
-}
-
-export async function resolveAgentEndpointProjectFromCwd(
-  cwd: string | null | undefined,
-  { endpointName = "Agent endpoint" }: { endpointName?: string } = {},
-): Promise<AgentEndpointProjectResolution> {
-  const catalog = await discoverProjectIdentities();
-  return await resolveAgentEndpointProjectFromProjects(catalog.data, cwd, { endpointName, excludedRootPaths: catalog.excludedRootPaths });
 }
 
 export async function resolveAgentEndpointProjectFromProjects(

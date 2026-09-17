@@ -92,6 +92,7 @@ export default new ReloadableNode<
     "daemon/server/lib/project.ts",
     "daemon/server/lib/git.ts",
     "daemon/server/lib/workbench/project/project-identity.ts",
+    "daemon/server/workbench-thread-state-record.ts",
   ].join("\n"),
   children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {

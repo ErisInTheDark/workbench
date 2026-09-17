@@ -15,6 +15,14 @@ import {
 } from "./WorkbenchBrowseDaemonClient.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
+function createRuntime(options: Partial<ConstructorParameters<typeof WorkbenchBrowseRuntime>[0]> = {}) {
+  return new WorkbenchBrowseRuntime({
+    resolveProjectById: async () => { throw new Error("Unexpected project resolution in runtime fixture"); },
+    resolveProjectFromCwd: async () => { throw new Error("Unexpected cwd resolution in runtime fixture"); },
+    ...options,
+  });
+}
+
 function createResolvedProject(id: string) {
   const rootPath = `C:/projects/${id}`;
   return {
@@ -62,7 +70,7 @@ class FakeBrowseTransport implements WorkbenchBrowseDaemonTransport {
 
 test("executes with a supplied project context without resolving the project again", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => undefined,
     resolveProjectFromCwd: async () => { throw new Error("unexpected project resolution"); },
@@ -96,7 +104,7 @@ test("executes with a supplied project context without resolving the project aga
 
 test("resolves project-ID execution contexts through the injected catalog port", async () => {
   const requestedIds: Array<string | null | undefined> = [];
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     resolveProjectById: async (projectId) => {
       requestedIds.push(projectId);
       return createResolvedProject(projectId ?? "alpha");
@@ -112,7 +120,7 @@ test("resolves project-ID execution contexts through the injected catalog port",
 
 test("serializes one session while allowing unrelated sessions to proceed", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await new Promise<void>((resolve) => setImmediate(resolve));
   const second = runtime.status("research");
@@ -131,7 +139,7 @@ test("retires only the session whose runtime-owned status deadline expires", asy
   const client = new FakeBrowseTransport();
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
   const retiredPids: number[] = [];
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async (pid) => { retiredPids.push(pid); },
   });
@@ -146,7 +154,7 @@ test("observational status timeout does not retire its session", async () => {
   const client = new FakeBrowseTransport();
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated observation deadline"));
   const retiredPids: number[] = [];
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async (pid) => { retiredPids.push(pid); },
   });
@@ -159,7 +167,7 @@ test("observational status timeout does not retire its session", async () => {
 
 test("queued observational timeout does not retire the active session owner", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
 
@@ -173,7 +181,7 @@ test("queued observational timeout does not retire the active session owner", as
 
 test("aborting an observational waiter releases its queue position", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
   const abortController = new AbortController();
@@ -190,7 +198,7 @@ test("aborting an observational waiter releases its queue position", async () =>
 
 test("releases a failed session queue so its next request is not stranded", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
   const second = runtime.status("research");
@@ -203,7 +211,7 @@ test("releases a failed session queue so its next request is not stranded", asyn
 
 test("aborting a queued waiter does not retire or bypass the active session owner", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
 
@@ -224,7 +232,7 @@ test("aborting a queued waiter does not retire or bypass the active session owne
 
 test("a queued waiter observes its deadline without retiring the active owner", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const runtime = createRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
 
@@ -241,7 +249,7 @@ test("run keeps its session lease through retirement while other sessions procee
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
   const retirementStarted = deferred<void>();
   const releaseRetirement = deferred<void>();
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => {
       retirementStarted.resolve();
@@ -281,7 +289,7 @@ test("failed retirement retains runtime records and propagates failure", async (
   context.after(() => assert.equal(diagnostics.length, 1));
   const client = new FakeBrowseTransport();
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => { throw new Error("retirement denied"); },
   });
@@ -292,7 +300,7 @@ test("failed retirement retains runtime records and propagates failure", async (
 test("force stop does not discard unreadable PID records", async () => {
   const client = new FakeBrowseTransport();
   client.readPid = async () => { throw new Error("pid read denied"); };
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => { throw new Error("must not signal without a pid"); },
   });
@@ -304,7 +312,7 @@ test("a cooperative stop response still requires process retirement before recor
   const client = new FakeBrowseTransport();
   const events: string[] = [];
   client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => { events.push("retired"); },
   });
@@ -317,7 +325,7 @@ test("force stop propagates retirement failure without silently retrying it", as
   context.after(() => assert.equal(diagnostics.length, 1));
   const client = new FakeBrowseTransport();
   let attempts = 0;
-  const runtime = new WorkbenchBrowseRuntime({
+  const runtime = createRuntime({
     client,
     retireProcess: async () => { attempts += 1; throw new Error("retirement denied"); },
   });
@@ -334,7 +342,7 @@ test("an unresponsive recorded process retires before replacement preparation an
     const events: string[] = [];
     client.request = async () => { throw Object.assign(new Error("offline"), { code: "ECONNREFUSED" }); };
     client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
-    const runtime = new WorkbenchBrowseRuntime({
+    const runtime = createRuntime({
       client,
       retireProcess: async () => {
         events.push("retire");
@@ -373,7 +381,7 @@ test("cancellation during failed retirement cannot trigger another retirement at
     const client = new FakeBrowseTransport();
     const abort = new AbortController();
     let attempts = 0;
-    const runtime = new WorkbenchBrowseRuntime({
+    const runtime = createRuntime({
       client,
       retireProcess: async () => {
         attempts += 1;

@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchProjectAlias: a retained address pointing to canonical project identity.
  * - WorkbenchProjectDiscovery: structural discovery and its validated identity evidence.
+ * - WorkbenchProjectCandidate: derived identity evidence awaiting durable project admission.
  * - WorkbenchProjectCacheRecord: catalogue metadata with durable icon freshness.
  * - WorkbenchProjectIconSettlement: source-fenced positive or negative icon result.
  * - WorkbenchProjectPreparation: current structural evidence for startup.
@@ -10,11 +11,18 @@
  */
 import type { WorkbenchProjectAlias, WorkbenchProjectIcon, WorkbenchProjectOption } from "workbench-shared/types";
 export type { WorkbenchProjectAlias } from "workbench-shared/types";
-import type { ProjectId } from "workbench-shared/workbench/identity";
+import type { ProjectId, ProjectIdentityKey } from "workbench-shared/workbench/identity";
+
+export interface WorkbenchProjectCandidate extends Omit<WorkbenchProjectOption, "id" | "roots"> {
+  identityKey: ProjectIdentityKey;
+  roots: Array<WorkbenchProjectOption["roots"][number] & { identityKey: ProjectIdentityKey }>;
+}
 
 export interface WorkbenchProjectDiscovery {
-  data: WorkbenchProjectOption[];
-  aliases: WorkbenchProjectAlias[];
+  data: WorkbenchProjectCandidate[];
+  aliases: Array<{ alias: string; identityKey: ProjectIdentityKey }>;
+  observedKeys: ProjectIdentityKey[];
+  complete: boolean;
   excludedRootPaths: string[];
   rootPath: string;
 }
@@ -44,7 +52,7 @@ export interface WorkbenchProjectIconSettlement {
 }
 
 export interface WorkbenchProjectPersistence {
-  reconcileProjectCatalog(projects: readonly WorkbenchProjectOption[]): Promise<WorkbenchProjectCacheRecord[]>;
+  reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery): Promise<WorkbenchProjectStartup>;
   readProjectAliases(): Promise<WorkbenchProjectAlias[]>;
   resolveProjectIdentity(projectId: string): Promise<ProjectId>;
   settleProjectIcon(settlement: WorkbenchProjectIconSettlement): Promise<boolean>;

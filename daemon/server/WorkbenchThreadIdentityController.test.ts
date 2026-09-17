@@ -10,6 +10,7 @@ import type {
 } from "./database/thread-identity/workbench-thread-identity-types";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -50,7 +51,7 @@ function database(overrides: Partial<WorkbenchThreadIdentityDatabase> = {}): Wor
 }
 
 test("cached thread ownership delegates retained project aliases to the database owner", async () => {
-  const canonical = { ...record, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/repo") };
+  const canonical = { ...record, projectId: testProjectIds.repo };
   const controller = new WorkbenchThreadIdentityController(database({
     listThreadIdentities: async () => [canonical],
     resolveThreadIdentity: async input => {

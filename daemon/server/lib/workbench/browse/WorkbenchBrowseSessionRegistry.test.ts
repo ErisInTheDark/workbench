@@ -1,5 +1,6 @@
 /* No production exports. Protect durable session ownership and inactivity transitions. */
 import assert from "node:assert/strict";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -13,11 +14,11 @@ test("session updates preserve other owners and retain the first inactive timest
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-browse-registry-"));
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "workbench.sqlite3") });
   try {
-    await database.executeTransaction([insertRow(projectTables.projects, { id: "local:///repo" })]);
+    await database.executeTransaction([insertRow(projectTables.projects, { id: testProjectIds.repo })]);
     let now = 1000;
     const registry = new WorkbenchBrowseSessionRegistry(database, () => now);
     await Promise.all(["a", "b"].map(name => registry.remember({
-      name, threadId: name, cwd: "/repo", mode: "headless", projectId: "local:///repo", projectRootPath: "/repo",
+      name, threadId: name, cwd: "/repo", mode: "headless", projectId: testProjectIds.repo, projectRootPath: "/repo",
     })));
     await registry.markThreadInactive("a");
     now = 2000;

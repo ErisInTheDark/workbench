@@ -25,6 +25,7 @@ import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workb
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { TranscriptQuerySchema } from "./transcript/transcript-query-contract";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -34,7 +35,7 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.NativeTurnIdSchema.parse("turn"),
   },
   ProjectId: {
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "project": testProjectIds.project,
   },
   WorkbenchThreadId: {
     "active-thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("active-thread"),
@@ -92,9 +93,9 @@ test("prepared project reconciliation precedes worker readiness and retains its 
   aliases.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('project', ?)").run(projectId);
   aliases.close();
   const project = {
-    id: projectId, kind: "git" as const, name: "prepared", relativePath: "prepared",
+    identityKey: fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(projectId), kind: "git" as const, name: "prepared", relativePath: "prepared",
     rootPath: "C:/prepared", lastCommitTimeMs: null,
-    roots: [{ id: "root", name: "prepared", relativePath: "prepared", rootPath: "C:/prepared", isPrimary: true }],
+    roots: [{ id: "root", name: "prepared", relativePath: "prepared", rootPath: "C:/prepared", isPrimary: true, identityKey: fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(projectId) }],
   };
   let preparations = 0;
   let checkpoint: string | undefined;
@@ -103,21 +104,23 @@ test("prepared project reconciliation precedes worker readiness and retains its 
     beforeMigration: backupPath => { checkpoint = backupPath; },
     prepareProjects: async () => {
       preparations += 1;
-      return { discovery: { data: [project], aliases: [{ alias: "project", projectId }], excludedRootPaths: [], rootPath: "C:/" } };
+      return { discovery: { data: [project], aliases: [{ alias: "project", identityKey: project.identityKey }], excludedRootPaths: [], rootPath: "C:/", complete: true, observedKeys: [project.identityKey] } };
     },
   });
   try {
     await Promise.all([controller.start(), controller.start()]);
     assert.equal(preparations, 1);
-    assert.equal(controller.readInitialProjectCatalog().catalog[0]?.project.id, projectId);
-    assert.equal(await controller.resolveProjectIdentity("project"), projectId);
+    const owner = controller.readInitialProjectCatalog().catalog[0]!.project.id;
+    assert.notEqual(owner, projectId, "the old address must become an alias, not remain the durable owner");
+    assert.equal(await controller.resolveProjectIdentity("project"), owner);
+    assert.equal(await controller.resolveProjectIdentity(projectId), owner);
     assert.ok(checkpoint);
     const backup = new Database(checkpoint, { readonly: true, fileMustExist: true });
     try {
       assert.equal(backup.pragma("user_version", { simple: true }), 33);
       assert.equal(backup.prepare("SELECT project_id FROM workbench_threads").pluck().get(), projectId);
     } finally { backup.close(); }
-    assert.deepEqual((await controller.query(selectRows(coreTables.workbenchThreads))).map(row => row.project_id), [projectId]);
+    assert.deepEqual((await controller.query(selectRows(coreTables.workbenchThreads))).map(row => row.project_id), [owner]);
     await checkProviderCursor(controller);
   } finally {
     await controller.close();
@@ -169,14 +172,14 @@ test("worker startup retains its old-schema backup even when closed during openi
       if (error.code === "ENOENT") return [];
       throw error;
     });
-    assert.equal(files.length, 1, "worker readiness requires a pre-upgrade backup");
-    const backup = new Database(join(backups, files[0]!), { readonly: true, fileMustExist: true });
-    try {
-      assert.equal(backup.pragma("user_version", { simple: true }), version);
-      assert.deepEqual(backup.prepare("SELECT value FROM preserved_extension").get(), { value: "retained" });
-    } finally {
-      backup.close();
-    }
+    const originalBackups = files.filter(file => {
+      const backup = new Database(join(backups, file), { readonly: true, fileMustExist: true });
+      try {
+        assert.deepEqual(backup.prepare("SELECT value FROM preserved_extension").get(), { value: "retained" });
+        return backup.pragma("user_version", { simple: true }) === version;
+      } finally { backup.close(); }
+    });
+    assert.ok(originalBackups.length > 0, "worker readiness requires its original pre-upgrade checkpoint");
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
@@ -498,12 +501,12 @@ test("schema constraints reject invalid thread state and mismatched item augment
     database.pragma("foreign_keys = ON");
     installWorkbenchDatabaseSchema(database);
     database.exec(`
-      INSERT INTO workbench_projects(id) VALUES ('local:///project');
+      INSERT INTO workbench_projects(id) VALUES ('${testProjectIds.project}');
       INSERT INTO workbench_harnesses(id) VALUES ('codex');
       INSERT INTO workbench_threads(id,project_id,project_root,title,transcript_content_version,created_at,updated_at,activity_at) VALUES
-        ('parent', 'local:///project', 'C:/project', 'Parent', 3, 1, 2, 2),
-        ('historical-child', 'local:///project', 'C:/project', 'Child', 3, 1, 2, 2),
-        ('replacement-child', 'local:///project', 'C:/project', 'Replacement', 3, 3, 4, 4);
+        ('parent', '${testProjectIds.project}', 'C:/project', 'Parent', 3, 1, 2, 2),
+        ('historical-child', '${testProjectIds.project}', 'C:/project', 'Child', 3, 1, 2, 2),
+        ('replacement-child', '${testProjectIds.project}', 'C:/project', 'Replacement', 3, 3, 4, 4);
       INSERT INTO workbench_thread_states VALUES
         ('parent', 'topLevel', 'codex', 'Parent', 2, 1),
         ('historical-child', 'subagent', 'codex', 'Child', 2, 1),
@@ -519,13 +522,13 @@ test("schema constraints reject invalid thread state and mismatched item augment
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,archived,pinned,snoozed,transcript_content_version,
         next_turn_index,created_at,updated_at,activity_at
-      ) VALUES ('thread','local:///project','C:/project','title',1,1,0,1,0,1,1,1)
+      ) VALUES ('thread','${testProjectIds.project}','C:/project','title',1,1,0,1,0,1,1,1)
     `).run(), /CHECK constraint failed/);
 
     database.prepare(`
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,transcript_content_version,created_at,updated_at,activity_at
-      ) VALUES ('thread','local:///project','C:/project','title',1,1,1,1)
+      ) VALUES ('thread','${testProjectIds.project}','C:/project','title',1,1,1,1)
     `).run();
     database.prepare(`
       INSERT INTO thread_turns(
@@ -869,10 +872,10 @@ async function checkWorkspaceSearch(controller: WorkbenchDatabaseController) {
     ]);
     await controller.replaceSearchProjects([
       { id: fixtureIdentityValues.ProjectId.project, name: "Project", rootPath: "C:/project" },
-      { id: "local:///other", name: "Other project", rootPath: "C:/other" },
+      { id: testProjectIds.other, name: "Other project", rootPath: "C:/other" },
     ]);
     await controller.replaceSearchProjectFiles(fixtureIdentityValues.ProjectId.project, ["src/lowestvalue-needle.ts"]);
-    await controller.replaceSearchProjectFiles("local:///other", ["src/other-only.ts"]);
+    await controller.replaceSearchProjectFiles(testProjectIds.other, ["src/other-only.ts"]);
 
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "search" })).results[0]?.title, "Active search thread");
     assert.equal((await controller.search({ projectId: fixtureIdentityValues.ProjectId.project, query: "narwhal" })).results[0]?.title, "Active search thread");

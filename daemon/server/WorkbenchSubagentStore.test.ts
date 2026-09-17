@@ -11,11 +11,12 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import WorkbenchSubagentRelationshipRepository from "./database/thread-state/WorkbenchSubagentRelationshipRepository";
 import type { WorkbenchSubagentPersistence } from "./database/thread-state/workbench-thread-state-persistence";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 const fixtureIdentityValues = {
   ProjectId: {
-    "another": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///another"),
-    "project": fixtureIdentitySchemas.ProjectIdSchema.parse("local:///project"),
+    "another": testProjectIds.other,
+    "project": testProjectIds.project,
   },
 };
 

@@ -31,6 +31,10 @@ const stores = {
   registry: new WorkbenchBrowseSessionRegistry(unusedDatabase),
   profileStore: new WorkbenchBrowseProfileStore(unusedDatabase),
 };
+const unusedProjectResolvers = {
+  resolveProjectById: async () => { throw new Error("Unexpected project resolution in request fixture"); },
+  resolveProjectFromCwd: async () => { throw new Error("Unexpected cwd resolution in request fixture"); },
+};
 
 function deferred() {
   let resolve = () => undefined;
@@ -50,7 +54,7 @@ function createController(
     deliverScreenshot: async () => ({ kind: "steered", turnId: "turn-1" }),
     waitForIdle: async () => undefined,
   };
-  return new WorkbenchBrowseController(results, new WorkbenchBrowseRuntime(), {
+  return new WorkbenchBrowseController(results, new WorkbenchBrowseRuntime(unusedProjectResolvers), {
     controlSession: async () => ({ result: null, session: null, stopped: false }),
     findStaleInactiveSessionStops: async () => [],
     handle: async (_body, signal) => {
@@ -71,7 +75,7 @@ test("expired identity lookup cannot launch work after rollback resumes admissio
   let executions = 0;
   const controller = new WorkbenchBrowseController({
     captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
-  }, new WorkbenchBrowseRuntime(), {
+  }, new WorkbenchBrowseRuntime(unusedProjectResolvers), {
     handle: async () => { executions++; return Response.json({ ok: true }); },
     listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),
     controlSession: async () => ({ result: null, session: null, stopped: false }),
@@ -210,7 +214,7 @@ test("Browse translates only declared targets and returns public session identit
   };
   const controller = new WorkbenchBrowseController({
     captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
-  }, new WorkbenchBrowseRuntime(), {
+  }, new WorkbenchBrowseRuntime(unusedProjectResolvers), {
     handle: async (body) => { received.push(JSON.parse(body.toString())); return Response.json({ ok: true }); },
     listSessions: async (request) => { received.push(request); return { generatedAt: "", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sessions: [session] }; },
     controlSession: async (request) => { received.push(request); return { result: null, session, stopped: true }; },
@@ -251,7 +255,7 @@ test("Browse reload waits for admitted identity lookups and rejects later comman
     let settled = false;
     const controller = new WorkbenchBrowseController({
       captureOrigin: async () => null, record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
-    }, new WorkbenchBrowseRuntime(), {
+    }, new WorkbenchBrowseRuntime(unusedProjectResolvers), {
       handle: async () => Response.json({ ok: true }),
       listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),
       controlSession: async () => ({ result: null, session: null, stopped: false }),
