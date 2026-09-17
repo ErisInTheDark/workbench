@@ -1,12 +1,19 @@
-/* Exports: default ThreadMeasuredContent replaces offscreen content with its measured space. */
+/*
+ * Exports:
+ * - default ThreadMeasuredContent: replace exact or nearby offscreen content with its measured space.
+ */
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
-import type { ThreadContentVisibility } from "./ThreadViewportVisibilityController";
+import type {
+  ThreadContentVisibility,
+  ThreadContentVisibilityRange,
+} from "./ThreadViewportVisibilityController";
 
-export default function ThreadMeasuredContent({ children, onHidden }: {
+export default function ThreadMeasuredContent({ children, onHidden, visibilityRange = "viewport" }: {
   children: ReactNode;
   onHidden?: () => void;
+  visibilityRange?: ThreadContentVisibilityRange;
 }) {
   const viewport = useThreadScrollViewportContext();
   const element = useRef<HTMLDivElement>(null);
@@ -20,8 +27,8 @@ export default function ThreadMeasuredContent({ children, onHidden }: {
         onHiddenRef.current?.();
       }
       setState(next);
-    });
-  }, [viewport]);
+    }, visibilityRange);
+  }, [viewport, visibilityRange]);
   return <div ref={element} className="flow-root min-w-0" data-thread-measured-content={state.visible ? "visible" : "placeholder"}
     style={state.visible ? undefined : { height: state.height }} aria-hidden={state.visible ? undefined : true}>
     {state.visible ? children : null}

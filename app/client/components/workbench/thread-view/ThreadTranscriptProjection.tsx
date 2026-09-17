@@ -19,6 +19,7 @@ import type { ThreadTextPresentationSource } from "../../../workbench/thread/Thr
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
@@ -128,35 +129,37 @@ export default function ThreadTranscriptProjection({
                 data-thread-history-turn-id={segment.turnId}
               />
             ) : null}
-            <section className={segment.isFirstForTurn
-              ? `${hideTopBorder ? "" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"} py-3`
-              : "pb-3"}
-            >
-              <ThreadTranscriptItemsDetails
-                initialInactiveItemIds={initialInactive.threadId === projection.thread.id ? initialInactive.itemIds : new Set<string>()}
-                initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
-                browseResultEntries={browseResultEntries}
-                hiddenReasoningStep={hiddenReasoningStep}
-                hoistedGitArcProposalIds={hoistedGitArcProposalIds}
-                inlineMentionSources={inlineMentionSources}
-                items={segment.items}
-                itemTimeline={turn.itemTimeline}
-                knownSkills={knownSkills}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                presentationSource={turn.status === "inProgress" ? presentationSource : null}
-                relatedThreadsById={relatedThreadsById}
-                subagents={subagents}
-                threadCwdPath={projection.thread.projectRoot}
-                threadId={projection.thread.id}
-                turnCompletedAt={turn.completedAt}
-                turnId={turn.id}
-                turnStartedAt={turn.startedAt}
-                turnStatus={turn.status}
-                workspaceRoots={workspaceRoots}
-              />
-            </section>
+            <ThreadMeasuredContent visibilityRange="nearby">
+              <section className={segment.isFirstForTurn
+                ? `${hideTopBorder ? "" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"} py-3`
+                : "pb-3"}
+              >
+                <ThreadTranscriptItemsDetails
+                  initialInactiveItemIds={initialInactive.threadId === projection.thread.id ? initialInactive.itemIds : new Set<string>()}
+                  initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
+                  browseResultEntries={browseResultEntries}
+                  hiddenReasoningStep={hiddenReasoningStep}
+                  hoistedGitArcProposalIds={hoistedGitArcProposalIds}
+                  inlineMentionSources={inlineMentionSources}
+                  items={segment.items}
+                  itemTimeline={turn.itemTimeline}
+                  knownSkills={knownSkills}
+                  projectFilePaths={projectFilePaths}
+                  projectId={projectId}
+                  projectRootPath={projectRootPath}
+                  presentationSource={turn.status === "inProgress" ? presentationSource : null}
+                  relatedThreadsById={relatedThreadsById}
+                  subagents={subagents}
+                  threadCwdPath={projection.thread.projectRoot}
+                  threadId={projection.thread.id}
+                  turnCompletedAt={turn.completedAt}
+                  turnId={turn.id}
+                  turnStartedAt={turn.startedAt}
+                  turnStatus={turn.status}
+                  workspaceRoots={workspaceRoots}
+                />
+              </section>
+            </ThreadMeasuredContent>
           </Fragment>
         );
       })}

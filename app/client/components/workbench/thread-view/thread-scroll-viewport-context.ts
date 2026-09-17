@@ -5,11 +5,18 @@
  */
 
 import { createContext, useContext } from "react";
-import type { ThreadContentVisibility } from "./ThreadViewportVisibilityController";
+import type {
+  ThreadContentVisibility,
+  ThreadContentVisibilityRange,
+} from "./ThreadViewportVisibilityController";
 
 export interface ThreadScrollViewportContextValue {
   readonly getViewport: () => HTMLDivElement | null;
-  readonly observeContent: (element: HTMLElement, listener: (state: ThreadContentVisibility) => void) => () => void;
+  readonly observeContent: (
+    element: HTMLElement,
+    listener: (state: ThreadContentVisibility) => void,
+    range?: ThreadContentVisibilityRange,
+  ) => () => void;
   readonly preserveOffscreenLayout: () => () => void;
   readonly setEndTarget: (target: HTMLElement | null) => void;
   readonly onBottomReattached: (listener: () => void) => () => void;

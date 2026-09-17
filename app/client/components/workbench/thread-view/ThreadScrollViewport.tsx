@@ -148,14 +148,18 @@ function ActiveThreadScrollViewport ({
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     getViewport: () => viewportRef.current,
-    observeContent: (element, listener) => {
+    observeContent: (element, listener, range = "viewport") => {
       const root = viewportRef.current;
       if (!root) return () => { };
       visibility.current ??= new ThreadViewportVisibilityController({
-        intersection: callback => new IntersectionObserver(callback, { root }),
+        root,
+        intersection: (callback, observedRange, rootMarginPx) => new IntersectionObserver(callback, {
+          root,
+          rootMargin: observedRange === "nearby" ? `${rootMarginPx}px 0px` : "0px",
+        }),
         resize: callback => new ResizeObserver(callback),
       });
-      return visibility.current.observe(element, listener);
+      return visibility.current.observe(element, listener, range);
     },
     onBottomReattached: (listener) => {
       bottomListeners.current.add(listener);

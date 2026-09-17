@@ -26,16 +26,16 @@ interface FieldState {
   displayedText: string;
   listeners: Set<() => void>;
   pendingText: string;
+  revealStartedAt: number | null;
 }
 
-type ScheduleFrame = (callback: () => void) => () => void;
+type ScheduleFrame = (callback: (timestamp: number) => void) => () => void;
 
 const MAX_FIELD_PENDING_CHARACTERS = 512 * 1024;
 const MAX_PASSIVE_FIELDS = 512;
-const MAX_REVEAL_CHARACTERS_PER_FRAME = 32;
-const TARGET_REVEAL_FRAMES = 10;
+const TEXT_REVEAL_DURATION_MS = 180;
 
-function defaultScheduleFrame(callback: () => void) {
+function defaultScheduleFrame(callback: (timestamp: number) => void) {
   const frame = window.requestAnimationFrame(callback);
   return () => window.cancelAnimationFrame(frame);
 }
@@ -56,28 +56,25 @@ function sourcePrefix(source: ThreadTextPresentationSource) {
   return `${source.kind}\0${source.sourceKey}\0`;
 }
 
-function revealBudget(pendingCharacters: number) {
-  return Math.min(
-    MAX_REVEAL_CHARACTERS_PER_FRAME,
-    Math.max(1, Math.ceil(pendingCharacters / TARGET_REVEAL_FRAMES)),
-  );
-}
-
 export default class ThreadTextPresentationController {
   readonly #fields = new Map<string, FieldState>();
+  readonly #now: () => number;
   readonly #reducedMotion: () => boolean;
   readonly #scheduleFrame: ScheduleFrame;
   #cancelFrame: (() => void) | null = null;
   #disposed = false;
 
   constructor({
+    now = () => performance.now(),
     reducedMotion = () => typeof window !== "undefined"
       && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false),
     scheduleFrame = defaultScheduleFrame,
   }: {
+    now?: () => number;
     reducedMotion?: () => boolean;
     scheduleFrame?: ScheduleFrame;
   } = {}) {
+    this.#now = now;
     this.#reducedMotion = reducedMotion;
     this.#scheduleFrame = scheduleFrame;
   }
@@ -104,6 +101,7 @@ export default class ThreadTextPresentationController {
         displayedText: canonicalText,
         listeners: new Set(),
         pendingText: "",
+        revealStartedAt: null,
       });
       return;
     }
@@ -111,6 +109,7 @@ export default class ThreadTextPresentationController {
       current.canonicalText = canonicalText;
       current.displayedText = canonicalText;
       current.pendingText = "";
+      current.revealStartedAt = null;
       return;
     }
     if (
@@ -124,6 +123,7 @@ export default class ThreadTextPresentationController {
 
     const state = current;
     state.canonicalText = canonicalText;
+    if (!state.pendingText) state.revealStartedAt = this.#now();
     state.pendingText += delta;
     if (state.pendingText.length > MAX_FIELD_PENDING_CHARACTERS) {
       this.#snap(identity, canonicalText);
@@ -162,6 +162,7 @@ export default class ThreadTextPresentationController {
         displayedText: canonicalText,
         listeners: new Set(),
         pendingText: "",
+        revealStartedAt: null,
       };
       this.#fields.set(identity, state);
     } else if (
@@ -171,6 +172,7 @@ export default class ThreadTextPresentationController {
     ) {
       state.canonicalText = canonicalText;
       state.displayedText = canonicalText;
+      state.revealStartedAt = null;
     } else if (
       !state.canonicalText.startsWith(canonicalText)
       && !canonicalText.startsWith(state.displayedText)
@@ -178,6 +180,7 @@ export default class ThreadTextPresentationController {
       state.canonicalText = canonicalText;
       state.displayedText = canonicalText;
       state.pendingText = "";
+      state.revealStartedAt = null;
     }
     state.listeners.add(listener);
     return () => {
@@ -218,16 +221,21 @@ export default class ThreadTextPresentationController {
   #schedule() {
     if (this.#cancelFrame || this.#disposed) return;
     if (![...this.#fields.values()].some((state) => state.pendingText)) return;
-    this.#cancelFrame = this.#scheduleFrame(() => {
+    this.#cancelFrame = this.#scheduleFrame((timestamp) => {
       this.#cancelFrame = null;
-      this.#tick();
+      this.#tick(timestamp);
     });
   }
 
-  #tick() {
+  #tick(timestamp: number) {
     for (const [identity, state] of this.#fields) {
-      const budget = revealBudget(state.pendingText.length);
-      const revealLength = Math.min(budget, state.pendingText.length);
+      const startedAt = state.revealStartedAt ?? timestamp;
+      state.revealStartedAt = startedAt;
+      const progress = Math.min(1, Math.max(0, timestamp - startedAt) / TEXT_REVEAL_DURATION_MS);
+      const revealLength = Math.min(
+        Math.max(1, Math.ceil(state.pendingText.length * progress)),
+        state.pendingText.length,
+      );
       if (revealLength === 0) continue;
       const nextText = `${state.displayedText}${state.pendingText.slice(0, revealLength)}`;
       if (!state.canonicalText.startsWith(nextText)) {
@@ -236,6 +244,7 @@ export default class ThreadTextPresentationController {
       }
       state.displayedText = nextText;
       state.pendingText = state.pendingText.slice(revealLength);
+      if (!state.pendingText) state.revealStartedAt = null;
       this.#notify(state);
     }
     this.#schedule();
@@ -248,6 +257,7 @@ export default class ThreadTextPresentationController {
     state.canonicalText = canonicalText;
     state.displayedText = canonicalText;
     state.pendingText = "";
+    state.revealStartedAt = null;
     if (changed) this.#notify(state);
     this.#cancelFrameIfIdle();
   }

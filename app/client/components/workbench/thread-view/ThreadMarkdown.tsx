@@ -294,14 +294,6 @@ export default memo(function ThreadMarkdown ({
     () => ({ inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots: resolvedWorkspaceRoots }),
     [inlineMentionSources, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots, threadCwdPath],
   );
-  const renderedMarkdown = useMemo(
-    () => renderCachedThreadMarkdown(
-      markdown,
-      renderOptions,
-      cacheKey,
-    ),
-    [cacheKey, markdown, renderOptions],
-  );
   const appendPresentation = useMemo(() => {
     const previous = committedPresentationRef.current;
     if (!revealAppends || !previous || previous.contextKey !== contextKey) return { kind: "instant" as const };
@@ -316,8 +308,10 @@ export default memo(function ThreadMarkdown ({
   const presentedMarkdown = useMemo(
     () => appendPresentation.kind === "append"
       ? renderThreadMarkdown(markdown, renderOptions, appendPresentation.target)
-      : renderedMarkdown,
-    [appendPresentation, markdown, renderOptions, renderedMarkdown],
+      : revealAppends
+        ? renderThreadMarkdown(markdown, renderOptions)
+        : renderCachedThreadMarkdown(markdown, renderOptions, cacheKey),
+    [appendPresentation, cacheKey, markdown, renderOptions, revealAppends],
   );
 
   useEffect(() => {

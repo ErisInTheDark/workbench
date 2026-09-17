@@ -20,6 +20,7 @@ import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { PreviousTurnLoadStatus } from "./previous-turn-load-state";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import {
   ThreadTurnDetails,
   ThreadTurnLoadFailure,
@@ -115,36 +116,37 @@ export default function ThreadTranscript({
             data-thread-history-turn-id={entry.turnId}
           />,
           turn ? (
-            <ThreadTurnDetails
-              key={entry.turnId}
-              browseResultEntries={browseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
-              hiddenDynamicToolCallItemIds={isCurrentTurn
-                ? hiddenDynamicToolCallItemIds
-                : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
-              hideFinalAgentMessage={hideFinalAgentMessage}
-              hideTerminalReasoning={isCurrentTurn && hideTerminalReasoning}
-              hideTopBorder={turn.items.some((item) => (
-                item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content)
-              ))}
-              hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
-              hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-              inlineMentionSources={inlineMentionSources}
-              knownSkills={knownSkills}
-              threadCwdPath={thread.cwd}
-              threadId={thread.id}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              presentationSource={turn.status === "inProgress" ? presentationSource : null}
-              relatedThreadsById={relatedThreadsById}
-              subagents={subagents}
-              turn={turn}
-              workspaceRoots={workspaceRoots}
-              hiddenReasoningStep={isCurrentTurn ? hiddenReasoningStep : null}
-              hoistedGitArcProposalIds={terminalGitArcProposalIds}
-              hiddenWebSearchItemIds={isCurrentTurn ? hiddenWebSearchItemIds : undefined}
-              itemTimeline={entry.itemTimeline}
-            />
+            <ThreadMeasuredContent key={entry.turnId} visibilityRange="nearby">
+              <ThreadTurnDetails
+                browseResultEntries={browseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
+                hiddenDynamicToolCallItemIds={isCurrentTurn
+                  ? hiddenDynamicToolCallItemIds
+                  : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
+                hideFinalAgentMessage={hideFinalAgentMessage}
+                hideTerminalReasoning={isCurrentTurn && hideTerminalReasoning}
+                hideTopBorder={turn.items.some((item) => (
+                  item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content)
+                ))}
+                hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
+                hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
+                inlineMentionSources={inlineMentionSources}
+                knownSkills={knownSkills}
+                threadCwdPath={thread.cwd}
+                threadId={thread.id}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                presentationSource={turn.status === "inProgress" ? presentationSource : null}
+                relatedThreadsById={relatedThreadsById}
+                subagents={subagents}
+                turn={turn}
+                workspaceRoots={workspaceRoots}
+                hiddenReasoningStep={isCurrentTurn ? hiddenReasoningStep : null}
+                hoistedGitArcProposalIds={terminalGitArcProposalIds}
+                hiddenWebSearchItemIds={isCurrentTurn ? hiddenWebSearchItemIds : undefined}
+                itemTimeline={entry.itemTimeline}
+              />
+            </ThreadMeasuredContent>
           ) : isPreviousTurnBoundary && previousTurnLoadStatus === "loading" ? (
             <ThreadTurnLoadingSkeleton
               key={entry.turnId}

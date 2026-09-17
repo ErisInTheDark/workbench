@@ -20,9 +20,11 @@ function key(source: "json" | "sqlite", itemId = "item"): ThreadTextPresentation
 }
 
 function harness(options: { reducedMotion?: boolean } = {}) {
-  let scheduled: (() => void) | null = null;
+  let scheduled: ((timestamp: number) => void) | null = null;
   let cancellations = 0;
+  let timestamp = 0;
   const controller = new ThreadTextPresentationController({
+    now: () => timestamp,
     reducedMotion: () => options.reducedMotion ?? false,
     scheduleFrame: (callback) => {
       scheduled = callback;
@@ -33,10 +35,11 @@ function harness(options: { reducedMotion?: boolean } = {}) {
     },
   });
   return {
-    advance() {
+    advance(elapsedMs = 16) {
       const callback = scheduled;
       scheduled = null;
-      callback?.();
+      timestamp += elapsedMs;
+      callback?.(timestamp);
     },
     cancellations: () => cancellations,
     controller,
@@ -88,21 +91,32 @@ test("simultaneous fields each make bounded playback progress", () => {
   assert.ok(sqliteLength > 0 && sqliteLength < delta.length);
 });
 
-test("larger backlogs increase playback duration instead of one-frame chunk size", () => {
-  function firstFrameLength(length: number) {
-    const testHarness = harness();
-    const field = key("json");
-    const delta = "x".repeat(length);
-    testHarness.controller.subscribe(field, "", () => undefined);
-    testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
-    testHarness.advance();
-    return testHarness.controller.getSnapshot(field)?.length ?? 0;
-  }
+test("large backlogs preserve partial reveal but complete within one visual window", () => {
+  const testHarness = harness();
+  const field = key("json");
+  const delta = "x".repeat(20_000);
+  testHarness.controller.subscribe(field, "", () => undefined);
+  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
 
-  const mediumFrame = firstFrameLength(2_000);
-  const largeFrame = firstFrameLength(20_000);
-  assert.ok(mediumFrame > 0);
-  assert.ok(largeFrame <= mediumFrame);
+  testHarness.advance();
+  const firstFrame = testHarness.controller.getSnapshot(field)?.length ?? 0;
+  assert.ok(firstFrame > 0 && firstFrame < delta.length);
+  for (let frame = 0; frame < 11; frame += 1) testHarness.advance();
+  assert.equal(testHarness.controller.getSnapshot(field), delta);
+});
+
+test("late frames advance along elapsed presentation time instead of accumulating frame debt", () => {
+  const testHarness = harness();
+  const field = key("json");
+  const delta = "x".repeat(20_000);
+  testHarness.controller.subscribe(field, "", () => undefined);
+  testHarness.controller.acceptDelta({ canonicalText: delta, delta, key: field });
+
+  testHarness.advance(70);
+  assert.ok((testHarness.controller.getSnapshot(field)?.length ?? 0) < delta.length);
+  testHarness.advance(70);
+  testHarness.advance(70);
+  assert.equal(testHarness.controller.getSnapshot(field), delta);
 });
 
 test("frame starvation with many tiny deltas retains animated playback", () => {
