@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitSourceAnchor/ThreadCheckpointCommitTargetAnchor: mark transcript and terminal placement for one proposal.
+ * - ThreadCheckpointCommitAnchorRegistry: notify proposal portals when independently rendered anchors mount or unmount.
  * - default ThreadCheckpointCommitPortalLayer: keep one proposal controller mounted while moving its DOM host between anchors.
  */
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -13,16 +14,96 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { ThreadGitArcProposalSource } from "./thread-git-arc-presentation";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 
-function anchorId(proposalId: string, placement: "source" | "target") {
+type ThreadCheckpointCommitPlacement = "source" | "target";
+
+interface ThreadCheckpointCommitAnchorEntry {
+  listeners: Set<() => void>;
+  source: HTMLDivElement | null;
+  target: HTMLDivElement | null;
+}
+
+export class ThreadCheckpointCommitAnchorRegistry {
+  readonly #entries = new Map<string, ThreadCheckpointCommitAnchorEntry>();
+
+  #entry(proposalId: string) {
+    const existing = this.#entries.get(proposalId);
+    if (existing) return existing;
+    const entry: ThreadCheckpointCommitAnchorEntry = {
+      listeners: new Set(),
+      source: null,
+      target: null,
+    };
+    this.#entries.set(proposalId, entry);
+    return entry;
+  }
+
+  #retire(proposalId: string, entry: ThreadCheckpointCommitAnchorEntry) {
+    if (!entry.source && !entry.target && !entry.listeners.size) this.#entries.delete(proposalId);
+  }
+
+  setAnchor(proposalId: string, placement: ThreadCheckpointCommitPlacement, anchor: HTMLDivElement | null) {
+    const entry = this.#entry(proposalId);
+    if (entry[placement] === anchor) return;
+    entry[placement] = anchor;
+    for (const listener of entry.listeners) listener();
+    this.#retire(proposalId, entry);
+  }
+
+  subscribe(proposalId: string, listener: () => void) {
+    const entry = this.#entry(proposalId);
+    entry.listeners.add(listener);
+    return () => {
+      entry.listeners.delete(listener);
+      this.#retire(proposalId, entry);
+    };
+  }
+
+  getDestination(
+    proposalId: string,
+    preferred: ThreadCheckpointCommitPlacement,
+    parking: HTMLDivElement | null,
+  ) {
+    const entry = this.#entries.get(proposalId);
+    const fallback = preferred === "source" ? "target" : "source";
+    return entry?.[preferred] ?? entry?.[fallback] ?? parking;
+  }
+}
+
+const anchorRegistry = new ThreadCheckpointCommitAnchorRegistry();
+
+function anchorId(proposalId: string, placement: ThreadCheckpointCommitPlacement) {
   return `thread-checkpoint-proposal-${placement}-${encodeURIComponent(proposalId)}`;
 }
 
+function ThreadCheckpointCommitAnchor({
+  className,
+  placement,
+  proposalId,
+}: {
+  className?: string;
+  placement: ThreadCheckpointCommitPlacement;
+  proposalId: string;
+}) {
+  const setAnchor = useCallback((anchor: HTMLDivElement | null) => {
+    anchorRegistry.setAnchor(proposalId, placement, anchor);
+  }, [placement, proposalId]);
+  return (
+    <div
+      className={className}
+      data-thread-checkpoint-proposal-source={placement === "source" ? proposalId : undefined}
+      data-thread-checkpoint-proposal-target={placement === "target" ? proposalId : undefined}
+      id={anchorId(proposalId, placement)}
+      ref={setAnchor}
+    />
+  );
+}
+
 export function ThreadCheckpointCommitSourceAnchor({ proposalId }: { proposalId: string }) {
-  return <div data-thread-checkpoint-proposal-source={proposalId} id={anchorId(proposalId, "source")} />;
+  return <ThreadCheckpointCommitAnchor placement="source" proposalId={proposalId} />;
 }
 
 export function ThreadCheckpointCommitTargetAnchor({ proposalId }: { proposalId: string }) {
-  return <div className="scroll-mt-6" data-thread-checkpoint-proposal-target={proposalId} id={anchorId(proposalId, "target")} />;
+  return <ThreadCheckpointCommitAnchor className="scroll-mt-6" placement="target" proposalId={proposalId} />;
 }
 
 function ThreadCheckpointCommitPortal({
@@ -60,15 +141,21 @@ function ThreadCheckpointCommitPortal({
 
   useLayoutEffect(() => {
     if (!host) return;
-    const preferred = document.getElementById(anchorId(proposalId, hoisted ? "target" : "source"));
-    const fallback = document.getElementById(anchorId(proposalId, hoisted ? "source" : "target"));
-    const destination = preferred ?? fallback;
-    if (destination && host.parentNode !== destination) {
-      if (host.isConnected) destination.moveBefore(host, null);
-      else destination.append(host);
-    }
-    // Keep the host connected while React replaces either placement anchor.
+    const reconcile = () => {
+      const destination = anchorRegistry.getDestination(
+        proposalId,
+        hoisted ? "target" : "source",
+        parkingRef.current,
+      );
+      if (destination && host.parentNode !== destination) {
+        if (host.isConnected) destination.moveBefore(host, null);
+        else destination.append(host);
+      }
+    };
+    const unsubscribe = anchorRegistry.subscribe(proposalId, reconcile);
+    reconcile();
     return () => {
+      unsubscribe();
       const parking = parkingRef.current;
       if (parking && host.isConnected && host.parentNode !== parking) parking.moveBefore(host, null);
     };

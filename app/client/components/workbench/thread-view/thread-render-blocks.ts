@@ -181,7 +181,7 @@ export function isBrowseCommandItem({ item, ...context }: CommandContext & { ite
 
 export type CommandSequenceRenderSegment =
   | { items: CommandSequenceItem[]; kind: "commands" }
-  | { item: CommandItem; kind: "gitArc" }
+  | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "subagent" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
@@ -216,7 +216,8 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     if (status && (outcome === "completed" || outcome === "inProgress")) {
       flushCommands(); flushWaits(); segments.push({ kind: "threadStatus", item, status: status.status }); continue;
     }
-    if (getGitArcMatcherAction(display.claimedBy)) { flushCommands(); flushWaits(); segments.push({ kind: "gitArc", item }); continue; }
+    const gitArcAction = getGitArcMatcherAction(display.claimedBy);
+    if (gitArcAction) { flushCommands(); flushWaits(); segments.push({ action: gitArcAction, kind: "gitArc", item }); continue; }
     const subagent = parseWorkbenchSubagentCommand(display.unwrappedCommand, item.commandActions);
     if (subagent?.action === "wait" && subagent.targets.length) {
       flushCommands();
@@ -243,8 +244,10 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
     // Narrative and unclassified interaction payloads are boundaries, never hidden by inference.
     const eligible = block.kind !== "item" || (block.item.type === "mcpToolCall" && (() => {
       const route = getWorkbenchMcpCommandRoute({ argumentsValue: block.item.arguments, server: block.item.server, tool: block.item.tool });
-      return route?.kind === "specialized" && (route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait" || route.operation.kind === "threadRecall"
-        || (route.operation.kind === "subagent" && route.operation.operation.action !== "create" && route.operation.operation.action !== "message"));
+      if (route?.kind !== "specialized") return false;
+      if (route.operation.kind === "gitArc") return route.operation.operation.action !== "propose";
+      return route.operation.kind === "gitArcWait" || route.operation.kind === "threadRecall"
+        || (route.operation.kind === "subagent" && route.operation.operation.action !== "create" && route.operation.operation.action !== "message");
     })());
     return [{ block, eligible }];
   }
@@ -269,7 +272,10 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
       getThreadCommandDisplay({ command: segment.item.command, commandActions: segment.item.commandActions, cwd: segment.item.cwd, shell: segment.item.shell, ...context }).unwrappedCommand,
       segment.item.commandActions,
     ) : null;
-    return [{ block: { kind: "commandSequence" as const, items: [segment.item] }, eligible: segment.kind === "gitArc" || segment.kind === "threadContext"
-      || Boolean(subagent && subagent.action !== "create" && subagent.action !== "message") }];
+    return [{
+      block: { kind: "commandSequence" as const, items: [segment.item] },
+      eligible: (segment.kind === "gitArc" && segment.action !== "propose") || segment.kind === "threadContext"
+        || Boolean(subagent && subagent.action !== "create" && subagent.action !== "message"),
+    }];
   });
 }

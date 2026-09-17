@@ -89,6 +89,24 @@ test("standalone Git rows count separately while CLI task actions split runs", (
   assert.deepEqual(partitionWorkedRows(result).map(group => group.length), [2, 1, 1, 1]);
 });
 
+test("proposal rows remain visible boundaries while other Git arc work stays collapsible", () => {
+  assert.deepEqual(
+    rows([command("proposal-cli", 'wb git arc propose --title "Keep this visible"')]).map(row => row.eligible),
+    [false],
+  );
+  assert.deepEqual(
+    rows([mcp("proposal-mcp", "git_arc_propose", { title: "Keep this visible" })]).map(row => row.eligible),
+    [false],
+  );
+  assert.deepEqual(
+    rows([
+      command("scope-cli", "wb git arc scope"),
+      mcp("status-mcp", "git_arc_status", {}),
+    ]).map(row => row.eligible),
+    [true, true],
+  );
+});
+
 test("MCP task actions and outgoing subagent messages remain boundaries", () => {
   const result = rows([
     command("before"),
