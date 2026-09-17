@@ -5,10 +5,9 @@
  * - default Workbench: stable shell composition, providers, explorer/file dialogs, responsive chrome, and DOM surfaces.
  * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
-import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
-import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
     ExplorerSnapshot,
     OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
@@ -55,6 +54,7 @@ import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";

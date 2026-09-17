@@ -2,20 +2,20 @@
 "use client";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { WorkingTreeFile, WorkingTreeMutation } from "workbench-shared/workbench/git/working-tree-contracts";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
-import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
+import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
+import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon, OpenThreadIcon } from "../workbench-icons";
+import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
 type ActionScope = Pick<WorkingTreeMutation, "rootId" | "expectedHead" | "selections">;
 const STATUS_ICONS = { A: FileAddIcon, D: FileDeleteIcon, R: FileMoveIcon, M: FileUpdateIcon, T: FileUpdateIcon };
 
-export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void }) {
+export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void }) {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
   const menu = useWorkbenchContextMenu();
@@ -64,13 +64,15 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
       selections: selected.map(file => ({ path: file.path, identity: file.identity, lineIds: null })),
     };
     const disabled = state.mutationBlocked || Boolean(repository.blockedReason) || selected.some(file => file.ownerIds.length > 0);
-    menu.openContextMenu({ x: event.clientX, y: event.clientY, menu: {
-      id: "working-tree-files", label: "Selected file actions",
-      items: [
-        { id: "stash", label: `Stash ${selected.length} files`, disabled: disabled || !repository.head, onSelect: () => { void state.submit("stash", scope); } },
-        { id: "discard", label: `Discard ${selected.length} files`, disabled, tone: "danger", onSelect: () => setDiscard(scope) },
-      ],
-    } });
+    menu.openContextMenu({
+      x: event.clientX, y: event.clientY, menu: {
+        id: "working-tree-files", label: "Selected file actions",
+        items: [
+          { id: "stash", label: `Stash ${selected.length} files`, disabled: disabled || !repository.head, onSelect: () => { void state.submit("stash", scope); } },
+          { id: "discard", label: `Discard ${selected.length} files`, disabled, tone: "danger", onSelect: () => setDiscard(scope) },
+        ],
+      }
+    });
   };
   const row = (file: WorkingTreeFile) => {
     const selection = snapshot.selections.find(selection => selection.path === file.path);
@@ -82,7 +84,7 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
       flex min-w-0 items-center gap-1 rounded-lg px-1 py-1
       ${active || selectedRows.includes(file.path) ? "bg-accent-soft" : "hover:bg-accent-soft/40"}
     `} onContextMenu={event => context(file, event)}>
-      <WorkbenchCheckbox className="shrink-0" label={<span className="sr-only">Include {file.path}</span>} disabled={locked || snapshot.busy}
+      <WorkbenchCheckbox className="shrink-0 block!" label={<span className="sr-only">Include {file.path}</span>} disabled={locked || snapshot.busy}
         checked={included.has(file.path)} indeterminate={partial}
         onChange={() => state.toggleFile(file.path)} />
       <button type="button" data-git-file={file.path}
@@ -102,11 +104,11 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
           const target = files.find(file => file.path === button?.dataset.gitFile);
           if (target) { select(target, event); button?.focus(); button?.scrollIntoView({ block: "nearest" }); }
         }}>
-        <Icon size={16} className="mt-0.5 shrink-0 text-fg/muted" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm">{file.path.split("/").at(-1)}</span>
           <span className="block truncate text-xs text-fg/muted">{file.oldPath ? `${file.oldPath} → ` : ""}{file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : ""}</span>
           <span className="flex gap-2 text-xs tabular-nums">
+            <Icon size={12} className="mt-0.75 shrink-0 text-fg/muted" />
             {file.additions !== null ? <span className="text-emerald-700 dark:text-emerald-300">+{file.additions}</span> : <span className="text-fg/muted">Binary</span>}
             {file.deletions !== null ? <span className="text-red-700 dark:text-red-300">−{file.deletions}</span> : null}
           </span>
@@ -133,11 +135,13 @@ export default function WorkbenchGitFileList({ onSelect }: { onSelect(): void })
         return <ThreadDisclosure key={id} summaryClassName="py-1" summary={owner ? (
           <WorkbenchThreadListItem entry={owner.entry} projectId={ProjectIdSchema.parse(owner.projectId)}
             compact={false} presentation="disclosure-summary" href={undefined} showTooltip={false}
-            action={href ? { Icon: OpenThreadIcon, label: "Open", href, onClick: event => {
+            action={href ? {
+              Icon: OpenThreadIcon, label: "Open", href, onClick: event => {
                 if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();
                 window.history.pushState({ workbench: true }, "", href);
-              } } : undefined} />
+              }
+            } : undefined} />
         ) : <span className="text-sm text-fg/muted">Claimed thread unavailable</span>}>
           {files.filter(file => file.ownerIds.includes(id)).map(row)}
         </ThreadDisclosure>;

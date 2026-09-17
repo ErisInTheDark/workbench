@@ -1,14 +1,14 @@
 /* Exports: default WorkbenchWorkingTreeView: compose file navigation and sticky diff review beneath the shell header. */
 "use client";
 import { useCallback, useRef, useState, type CSSProperties } from "react";
-import WorkbenchGitFileList from "./WorkbenchGitFileList";
-import WorkbenchGitDiffView from "./WorkbenchGitDiffView";
-import WorkbenchGitComposer from "./WorkbenchGitComposer";
-import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 import PrimaryButton from "../PrimaryButton";
 import { BackArrowIcon, OpenThreadIcon } from "../workbench-icons";
+import WorkbenchGitComposer from "./WorkbenchGitComposer";
+import WorkbenchGitDiffView from "./WorkbenchGitDiffView";
+import WorkbenchGitFileList from "./WorkbenchGitFileList";
+import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
-export default function WorkbenchWorkingTreeView() {
+export default function WorkbenchWorkingTreeView () {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
   const [filesWidth, setFilesWidth] = useState(280);
@@ -43,7 +43,6 @@ export default function WorkbenchWorkingTreeView() {
     {snapshot.error ? <p role="alert" className="whitespace-pre-line px-3 text-sm text-danger">{snapshot.error}</p> : null}
     {snapshot.operationError ? <p role="alert" className="px-3 text-sm text-danger">{snapshot.operationError}</p> : null}
     {snapshot.result ? <div role="status" className="px-3 text-sm text-fg/muted">
-      <p>{snapshot.result.message}</p>
       {snapshot.result.stash ? <p>Saved stash <code>{snapshot.result.stash.slice(0, 12)}</code>. It is available through Git.</p> : null}
       {snapshot.result.warnings.map((warning, index) => <p key={index} className="text-danger">{warning}</p>)}
     </div> : null}

@@ -76,8 +76,8 @@ export default function WorkbenchGitComposer ({ getViewport }: { getViewport ():
             }} />
         </div>
         {draft.title && draft.mode !== "stash" ? <span className="inline-flex shrink-0 items-center gap-2 text-xs tabular-nums text-fg/muted" aria-label={`${remaining} characters remaining`}>
-          <span>{remaining} remaining</span>
           <WorkbenchProgressWheel percent={remaining / WORKING_TREE_SUBJECT_LIMIT * 100} />
+          <span>{remaining}</span>
         </span> : null}
       </div>
       {draft.mode !== "stash" ? <PlaintextEditable ref={body} ariaLabel="Commit description" placeholder="Description (optional)"

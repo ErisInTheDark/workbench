@@ -1,15 +1,15 @@
 /* Exports: default WorkbenchGitDiffView: coordinate shared diff controls, loading and specialised previews. */
 "use client";
 import { useEffect, useState } from "react";
-import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import WorkbenchModeRow from "../WorkbenchModeRow";
+import { RefreshCwIcon } from "../workbench-icons";
 import WorkbenchGitImageDiff from "./WorkbenchGitImageDiff";
 import WorkbenchGitMarkdownDiff from "./WorkbenchGitMarkdownDiff";
 import WorkbenchGitTextDiff from "./WorkbenchGitTextDiff";
-import WorkbenchModeRow from "../WorkbenchModeRow";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import { RefreshCwIcon } from "../workbench-icons";
+import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
-export default function WorkbenchGitDiffView() {
+export default function WorkbenchGitDiffView () {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
   const [mode, setMode] = useState<"unified" | "split" | "markdown">("unified");
@@ -42,7 +42,6 @@ export default function WorkbenchGitDiffView() {
         </span> : null}
       </div> : null}
     </div>
-    {file?.ownerIds.length ? <p className="mb-3 text-sm text-fg/muted">Claimed changes are inspect-only. Open the owning thread to act on them.</p> : null}
     {snapshot.contentError ? <div role="alert" className="py-3 text-sm text-danger">{snapshot.contentError}
       <WorkbenchIconButton label="Retry diff" onClick={() => { void state.loadContent(); }}><RefreshCwIcon size={16} /></WorkbenchIconButton>
     </div> : null}
@@ -53,9 +52,9 @@ export default function WorkbenchGitDiffView() {
       </div>)}
     </div> : !file ? <p className="py-4 text-sm text-fg/muted">Select a file to inspect its changes.</p>
       : image ? <WorkbenchGitImageDiff key={`${snapshot.rootId}:${file.path}`} />
-      : effectiveMode === "markdown" ? <WorkbenchGitMarkdownDiff />
-      : snapshot.diff?.unavailable ? <p className="py-4 text-sm text-fg/muted">{snapshot.diff.unavailable}</p>
-      : snapshot.diff ? <WorkbenchGitTextDiff key={`${snapshot.rootId}:${file.identity}:${effectiveMode}:${whitespace}`} mode={effectiveMode} whitespace={whitespace} />
-      : null}
+        : effectiveMode === "markdown" ? <WorkbenchGitMarkdownDiff />
+          : snapshot.diff?.unavailable ? <p className="py-4 text-sm text-fg/muted">{snapshot.diff.unavailable}</p>
+            : snapshot.diff ? <WorkbenchGitTextDiff key={`${snapshot.rootId}:${file.identity}:${effectiveMode}:${whitespace}`} mode={effectiveMode} whitespace={whitespace} />
+              : null}
   </section>;
 }
