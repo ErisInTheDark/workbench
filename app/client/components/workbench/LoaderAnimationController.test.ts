@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import LoaderAnimationController, { type LoaderAnimator } from "./LoaderAnimationController";
 
+const fixtures = [1, 3, 2].map((weight, target) => ({
+  weight,
+  duration: 100,
+  tracks: () => [
+    { target, frames: [{ opacity: 1 }, { opacity: 1 }] },
+    { target, frames: [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }] },
+  ],
+}));
+
 function harness(random = () => 0) {
   const calls: Array<{
     target: Parameters<LoaderAnimator>[0];
@@ -20,7 +29,7 @@ function harness(random = () => 0) {
       call.cancelled = true;
       completion.reject(new DOMException("Cancelled", "AbortError"));
     } };
-  }, random, () => { warnings++; });
+  }, random, () => { warnings++; }, fixtures);
   return { controller, calls, warnings: () => warnings };
 }
 
@@ -31,7 +40,7 @@ async function flush() {
 test("weights choices and renormalises after excluding the previous motion", async () => {
   for (const excludeFirst of [false, true]) {
     const counts = new Map<number, number>();
-    const total = excludeFirst ? 140 : 150;
+    const total = excludeFirst ? 5 : 6;
     for (let sample = 0; sample < total; sample++) {
       let random = excludeFirst ? 0 : (sample + .5) / total;
       const h = harness(() => random);
@@ -44,15 +53,14 @@ test("weights choices and renormalises after excluding the previous motion", asy
         await flush();
         batch = h.calls.slice(count);
       }
-      const duration = Number(batch[0]!.options.duration);
-      counts.set(duration, (counts.get(duration) ?? 0) + 1);
+      const choice = Number(batch[0]!.target);
+      counts.set(choice, (counts.get(choice) ?? 0) + 1);
       h.controller.dispose();
       await flush();
     }
     assert.deepEqual(counts, new Map([
-      ...(!excludeFirst ? [[2160, 10] as const] : []),
-      [2100, 20], [4800, 30], [4020, 30],
-      [2800, 20], [2400, 20], [2000, 20],
+      ...(!excludeFirst ? [[0, 1] as const] : []),
+      [1, 3], [2, 2],
     ]));
   }
 });
@@ -70,7 +78,7 @@ test("waits for the whole motion, excludes its previous choice and preserves the
   await flush();
   const second = h.calls.slice(first.length + 1);
   assert.ok(second.length > 0);
-  assert.notEqual(second[0]!.options.duration, first[0]!.options.duration);
+  assert.notEqual(second[0]!.target, first[0]!.target);
   assert.equal(h.calls.filter(call => call.target === "spin").length, 1);
   h.controller.dispose();
   await flush();

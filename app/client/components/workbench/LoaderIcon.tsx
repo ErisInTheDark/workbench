@@ -12,9 +12,13 @@ const midpoints = ["12px 4px", "17.65px 6.35px", "20px 12px", "17.65px 17.65px",
 
 export default function LoaderIcon(props: IconProps) {
   const group = useRef<SVGGElement>(null);
+  const brake = useRef<SVGGElement>(null);
+  const jitter = useRef<SVGGElement>(null);
   useEffect(() => {
     const element = group.current;
-    if (!element) return;
+    const brakeElement = brake.current;
+    const jitterElement = jitter.current;
+    if (!element || !brakeElement || !jitterElement) return;
     const paths = element.querySelectorAll("path");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let controller: LoaderAnimationController | null = null;
@@ -24,9 +28,11 @@ export default function LoaderIcon(props: IconProps) {
       if (reducedMotion.matches) return;
       controller = new LoaderAnimationController((target, frames, options) => {
         const node = target === "spin" ? element
-          : typeof target === "object" ? ("rotation" in target ? element.children[target.rotation]! : paths[target.selfRotation]!)
+          : target === "brake" ? brakeElement
+          : target === "jitter" ? jitterElement
+          : typeof target === "object" ? ("rotation" in target ? jitterElement.children[target.rotation]! : paths[target.selfRotation]!)
           : target === "traveller" ? paths[8]!
-          : element.children[target]!.firstElementChild!;
+          : jitterElement.children[target]!.firstElementChild!;
         return node.animate(frames, options);
       });
       controller.start();
@@ -43,14 +49,18 @@ export default function LoaderIcon(props: IconProps) {
     {/* Keep rotation coordinates independent of the outer bounce clearance. */}
     <svg x={0} y={0} width={24} height={24} viewBox="0 0 24 24" overflow="visible">
       <g ref={group} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
-        {spokes.map((path, index) => (
-          <g key={path} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
-            <g>
-              <path d={path} style={{ transformBox: "view-box", transformOrigin: midpoints[index] }} />
-            </g>
+        <g ref={brake} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
+          <g ref={jitter} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
+            {spokes.map((path, index) => (
+              <g key={path} style={{ transformBox: "view-box", transformOrigin: "12px 12px" }}>
+                <g>
+                  <path d={path} style={{ transformBox: "view-box", transformOrigin: midpoints[index] }} />
+                </g>
+              </g>
+            ))}
+            <path d={spokes[0]} style={{ opacity: 0, transformBox: "view-box", transformOrigin: "12px 12px" }} />
           </g>
-        ))}
-        <path d={spokes[0]} style={{ opacity: 0, transformBox: "view-box", transformOrigin: "12px 12px" }} />
+        </g>
       </g>
     </svg>
   </OutlinedIcon>;
