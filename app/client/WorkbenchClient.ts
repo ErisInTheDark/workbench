@@ -319,7 +319,7 @@ export async function WorkbenchClient(
     onReconnect: (listener) => threadClient.onReconnect(listener),
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
-  const voice = new WorkbenchVoiceClient(daemon, `/assets/voice-capture.js?v=${frontendJavaScriptGeneration}`);
+  const voice = new WorkbenchVoiceClient(daemon, `/assets/voice-capture.js?v=${frontendJavaScriptGeneration}`, workbenchBindings.clientStateController);
   coordinatorLifecycle.addUnsubscribe(() => voice.dispose());
   const threadIdentity = new ThreadIdentityController(async (request) => {
     const { data } = await daemon.threads.resolveIdentity(request);
@@ -445,6 +445,7 @@ export async function WorkbenchClient(
       }
       return;
     }
+    if (notification.method !== "workbench/thread-state/reset") return;
     projectClient.resetObservation();
     void threadSidebarClient.reopen().then(async () => {
       if (coordinatorLifecycle.isDisposed) return;

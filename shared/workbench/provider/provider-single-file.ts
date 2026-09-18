@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - SingleFileInput: revisioned context and final-input marker.
+ * - SingleFileInput: latest recognition context and final-input marker.
  * - SingleFileEvent: committed document and terminal outcomes.
  * - SingleFileStart: private document, resolved instructions and model settings.
  * - WorkbenchProviderSingleFile: isolated native editing capability.
@@ -8,7 +8,6 @@
 import type { WorkbenchComposerSettings } from "../../types";
 
 export interface SingleFileInput {
-  revision: number;
   transcript: string;
   final: boolean;
 }
@@ -20,7 +19,7 @@ export interface SingleFileStart {
   sessionId: string;
   text: string;
   instructions: string;
-  settings: WorkbenchComposerSettings;
+  settings: Pick<WorkbenchComposerSettings, "harness" | "model">;
   onEvent: (event: SingleFileEvent) => void;
 }
 export interface WorkbenchProviderSingleFile {

@@ -8,7 +8,7 @@ import type { ComponentPropsWithRef } from "react";
 
 type WorkbenchIconButtonProps = {
   label: string;
-  size?: "compact" | "small" | "medium";
+  size?: "compact" | "small" | "medium" | "font";
   tone?: "default" | "danger";
   display?: "bordered" | "hover-border";
 } & (
@@ -28,7 +28,7 @@ export default function WorkbenchIconButton({
       data-[invalid=true]:hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] data-[invalid=true]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]
       [&[data-invalid=true]_.save-icon-slash]:opacity-100 [&[data-invalid=true]_.save-icon-main]:opacity-45
       ${display === "hover-border" ? "border-transparent" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}
-      ${size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9"}
+      ${size === "font" ? "size-[1.75em]" : size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9"}
       ${tone === "danger" ? "[&:not(:disabled)]:hover:text-danger" : "[&:not(:disabled)]:hover:text-text"}
       ${className}
     `;

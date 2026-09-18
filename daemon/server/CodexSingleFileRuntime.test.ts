@@ -2,11 +2,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
 
 test("initialization acknowledges readiness before later native requests", async () => {
   const methods: string[] = [];
-  const runtime = createCodexSingleFileRuntime(options => ({
+  const runtime = createCodexSingleFileRuntime("/unused", options => ({
     send(message) {
       const request = message as { id?: number; method: string };
       methods.push(request.method);
@@ -26,14 +28,16 @@ test("initialization acknowledges readiness before later native requests", async
   await transport.dispose();
 });
 
-test("scratch disposal cannot affect a different owned document", async () => {
-  const runtime = createCodexSingleFileRuntime();
+test("scratch disposal retains history without affecting another active document", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "voice-test-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runtime = createCodexSingleFileRuntime(root);
   const first = await runtime.createDocument("first");
   const second = await runtime.createDocument("second");
   try {
     assert.notEqual(first.directory, second.directory);
     await first.dispose();
-    await assert.rejects(first.read(), { code: "ENOENT" });
+    assert.equal(await first.read(), "first");
     assert.equal(await second.read(), "second");
   } finally {
     await Promise.all([first.dispose(), second.dispose()]);
@@ -44,7 +48,7 @@ test("native process failure rejects pending and future work without silently re
   let fail!: () => void;
   let sent = 0;
   const failures: Error[] = [];
-  const runtime = createCodexSingleFileRuntime(options => {
+  const runtime = createCodexSingleFileRuntime("/unused", options => {
     fail = () => options.onFatalExit("exited");
     return { send() { sent++; }, async stopAsync() {} };
   });
@@ -62,8 +66,10 @@ test("native process failure rejects pending and future work without silently re
   await transport.dispose();
 });
 
-test("edited scratch contents cannot exceed the receiving document contract", async () => {
-  const document = await createCodexSingleFileRuntime().createDocument("original");
+test("edited scratch contents cannot exceed the receiving document contract", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "voice-test-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const document = await createCodexSingleFileRuntime(root).createDocument("original");
   try {
     await fs.writeFile(document.file, "x".repeat(1_000_001), "utf8");
     await assert.rejects(document.read());
@@ -72,7 +78,7 @@ test("edited scratch contents cannot exceed the receiving document contract", as
 
 test("thread admission disables inherited MCP servers while preserving caller restrictions", async () => {
   const configurations: object[] = [];
-  const runtime = createCodexSingleFileRuntime(options => ({
+  const runtime = createCodexSingleFileRuntime("/unused", options => ({
     send(message) {
       const request = message as { id: number; method: string; params: { config?: object } };
       if (request.method === "thread/start") configurations.push(request.params.config!);

@@ -8,12 +8,15 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import CodexSingleFileController from "./CodexSingleFileController";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
 import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
+import path from "node:path";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
   children: [WorkbenchVoiceNode],
-  create: (_context, { get }) => {
-    const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime());
+  create: (context, { get }) => {
+    const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime(
+      path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),
+    ));
     const local = get("codexConfiguration");
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
@@ -67,6 +70,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/CodexProvider.ts",
     "daemon/server/CodexSingleFileController.ts",
     "daemon/server/CodexSingleFileRuntime.ts",
+    "daemon/server/CodexSingleFileDocuments.ts",
     "shared/workbench/provider/provider-single-file.ts",
   ].join("\n"),
 });

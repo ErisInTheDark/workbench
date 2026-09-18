@@ -7,17 +7,23 @@ import { useContext, useEffect, useId, useLayoutEffect, useRef, useSyncExternalS
 import WorkbenchClientContext from "../workbench-client-context";
 import VoiceCaptureController from "../../../workbench/voice/VoiceCaptureController";
 import type { VoiceClientSnapshot } from "../../../workbench/voice/WorkbenchVoiceClient";
+import WorkbenchIconButton from "../WorkbenchIconButton";
+import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
 const idle: VoiceClientSnapshot = { fieldId: null, state: "idle", error: "" };
 const subscribeIdle = () => () => {};
 const readIdle = () => idle;
+const readUnconfigured = () => false;
 
-export function useVoiceInput(value: string, onChange: ((value: string) => void) | undefined, enabled: boolean) {
+export function useVoiceInput(value: string, onChange: ((value: string) => void) | undefined, enabled: boolean,
+  selection?: { read(): VoiceSelection; accept(text: string, selection: VoiceSelection): void }) {
   const available = enabled && VoiceCaptureController.isSupported();
   const client = useContext(WorkbenchClientContext)?.mounted?.voice ?? null;
+  const configured = useSyncExternalStore(client?.settings.subscribe ?? subscribeIdle,
+    client ? () => client.settings.enabled : readUnconfigured, readUnconfigured);
   const fieldId = useId();
-  const latest = useRef({ value, onChange });
-  latest.current = { value, onChange };
+  const latest = useRef({ value, onChange, selection });
+  latest.current = { value, onChange, selection };
   const state = useSyncExternalStore(client?.subscribe ?? subscribeIdle, client?.getSnapshot ?? readIdle, readIdle);
   const active = state.fieldId === fieldId;
   const locked = active && state.state !== "idle" && state.state !== "failed";
@@ -25,14 +31,20 @@ export function useVoiceInput(value: string, onChange: ((value: string) => void)
   useEffect(() => () => { void client?.cancel(fieldId); }, [client, fieldId]);
   useEffect(() => { if (!available) void client?.cancel(fieldId); }, [client, available, fieldId]);
   return {
-    visible: Boolean(client && available && onChange),
+    visible: Boolean(client && configured && available && onChange),
     busy: Boolean(state.fieldId && !active && state.state !== "idle" && state.state !== "failed"),
     locked,
     state: active ? state.state : "idle",
     error: active ? state.error : "",
     begin: () => {
-      if (!client || !available || !latest.current.onChange) return;
-      void client.begin({ id: fieldId, text: latest.current.value, change: text => latest.current.onChange?.(text) })
+      if (!client || !configured || !available || !latest.current.onChange) return;
+      void client.begin({ id: fieldId, text: latest.current.value,
+        getSelection: () => latest.current.selection?.read() ?? { start: latest.current.value.length, end: latest.current.value.length },
+        change: (text, position) => {
+          latest.current.selection?.accept(text, position);
+          latest.current.onChange?.(text);
+        },
+      })
         .catch(error => console.warn("[voice] could not claim field", error instanceof Error ? error.message : "unknown failure"));
     },
     finish: () => { void client?.finish(fieldId); },
@@ -56,14 +68,19 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
   }, [voice.locked, voice.cancel]);
   if (!voice.visible) return null;
   const release = () => { if (held.current) { held.current = false; voice.finish(); } };
-  return <div className="absolute right-0 bottom-0 z-30 flex items-center gap-1">
+  return <div className="
+    absolute right-0 bottom-0 z-30 flex items-center gap-1
+    text-[length:var(--voice-field-font-size)] opacity-0
+    group-hover/voice-field:opacity-100 group-focus-within/voice-field:opacity-100
+  ">
     {voice.state !== "idle" ? <span role={voice.error ? "alert" : "status"} className="max-w-48 truncate text-xs text-fg/muted" title={voice.error}>
       {voice.error || voice.state}
     </span> : null}
-    <button
-      type="button" aria-label="Hold to dictate" aria-pressed={held.current} disabled={voice.busy}
+    <WorkbenchIconButton
+      label="Hold to dictate" size="font" display="hover-border"
+      aria-pressed={voice.state === "listening"} aria-busy={voice.locked} disabled={voice.busy}
       title={voice.error || "Hold to dictate. Release to finish. Escape to cancel."}
-      className="touch-none rounded p-1 text-fg/muted hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-text focus-visible:outline focus-visible:outline-accent-soft"
+      className="touch-none"
       onPointerDown={event => {
         if (event.button !== 0 || voice.locked) return;
         event.preventDefault();
@@ -85,9 +102,9 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
       }}
       onBlur={release}
     >
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg className={voice.locked ? "animate-spin motion-reduce:animate-none" : undefined} aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="13" rx="3" />
       </svg>
-    </button>
+    </WorkbenchIconButton>
   </div>;
 }

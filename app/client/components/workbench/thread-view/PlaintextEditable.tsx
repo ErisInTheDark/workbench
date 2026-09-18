@@ -17,6 +17,8 @@ import {
 import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../workbench/thread/inline-mention-styles";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import VoiceInputControl, { useVoiceInput } from "../voice/VoiceInputControl";
+import { capturePlaintextSelection, restorePlaintextSelection } from "./plaintext-selection";
+import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
 export interface PlaintextEditableHandle { focus(offset?: number): void }
 
@@ -231,8 +233,22 @@ export default function PlaintextEditable ({
   spellCheck?: boolean;
   value: string;
 }) {
-  const voice = useVoiceInput(value, onChange, !disabled && !readOnly);
   const elementRef = useRef<HTMLDivElement>(null);
+  const savedVoiceSelection = useRef<{ text: string } & ({ selection: VoiceSelection } | { error: Error }) | null>(null);
+  const pendingVoiceSelection = useRef<{ text: string; selection: VoiceSelection } | null>(null);
+  const voice = useVoiceInput(value, onChange, !disabled && !readOnly, {
+    read() {
+      const current = elementRef.current ? capturePlaintextSelection(elementRef.current, value) : null;
+      if (current) return current;
+      const saved = savedVoiceSelection.current;
+      if (saved?.text === value) {
+        if ("error" in saved) throw saved.error;
+        return saved.selection;
+      }
+      return { start: value.length, end: value.length };
+    },
+    accept(text, selection) { pendingVoiceSelection.current = { text, selection }; },
+  });
   useImperativeHandle(ref, () => ({
     focus(offset) {
       const element = elementRef.current;
@@ -245,6 +261,22 @@ export default function PlaintextEditable ({
   }), [disabled, readOnly, value, voice.locked]);
   const containerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
+  const syncVoiceFontSize = () => {
+    if (voice.visible && elementRef.current) {
+      const fontSize = getComputedStyle(elementRef.current).fontSize;
+      if (containerRef.current?.style.getPropertyValue("--voice-field-font-size") !== fontSize) {
+        containerRef.current?.style.setProperty("--voice-field-font-size", fontSize);
+      }
+    }
+  };
+  useLayoutEffect(syncVoiceFontSize);
+  useLayoutEffect(() => {
+    if (!voice.visible || !elementRef.current) return;
+    const observer = new ResizeObserver(syncVoiceFontSize);
+    observer.observe(elementRef.current);
+    window.addEventListener("resize", syncVoiceFontSize);
+    return () => { observer.disconnect(); window.removeEventListener("resize", syncVoiceFontSize); };
+  }, [voice.visible]);
   const [caretOffset, setCaretOffset] = useState<number | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [suggestionsPortalHost, setSuggestionsPortalHost] = useState<HTMLElement | null>(null);
@@ -320,6 +352,19 @@ export default function PlaintextEditable ({
   }, [value]);
 
   useLayoutEffect(() => {
+    const pending = pendingVoiceSelection.current;
+    const element = elementRef.current;
+    if (voice.locked || !pending || !element) return;
+    pendingVoiceSelection.current = null;
+    if (pending.text !== value) return;
+    savedVoiceSelection.current = pending;
+    if (document.activeElement === element || containerRef.current?.contains(document.activeElement)) {
+      element.focus();
+      restorePlaintextSelection(element, value, pending.selection);
+    }
+  }, [value, voice.locked]);
+
+  useLayoutEffect(() => {
     const element = elementRef.current;
     if (!autoFocus || disabled || readOnly || !element) {
       return;
@@ -369,7 +414,7 @@ export default function PlaintextEditable ({
 
   return (
     <>
-      <div ref={containerRef} className="relative">
+      <div ref={containerRef} className="group/voice-field relative" onPointerEnter={syncVoiceFontSize} onFocusCapture={syncVoiceFontSize}>
         <VoiceInputControl voice={{ ...voice, begin: () => { if (!isComposingRef.current) voice.begin(); } }} />
         <div
           aria-hidden="true"
@@ -380,7 +425,7 @@ export default function PlaintextEditable ({
             "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
             "[&_*]:!text-transparent",
             highlights.length === 0 && "hidden",
-            voice.visible && "pr-9",
+            voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]",
           )}
         >
           {renderHighlightContent(value, highlights)}
@@ -392,7 +437,7 @@ export default function PlaintextEditable ({
           aria-label={ariaLabel}
           aria-multiline="true"
           aria-readonly={readOnly || voice.locked || undefined}
-          className={joinClasses(className, "relative z-10", voice.visible && "pr-9")}
+          className={joinClasses(className, "relative z-10", voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]")}
           contentEditable={readOnly || disabled || voice.locked ? false : "plaintext-only"}
           data-empty={value ? "false" : "true"}
           data-placeholder={placeholder ?? ""}
@@ -400,7 +445,18 @@ export default function PlaintextEditable ({
           spellCheck={spellCheck}
           suppressContentEditableWarning
           tabIndex={readOnly || disabled ? -1 : 0}
-          onBlur={onBlur}
+          onBlur={event => {
+            if (!voice.locked && voice.visible) {
+              try {
+                const selection = capturePlaintextSelection(event.currentTarget, value);
+                if (selection) savedVoiceSelection.current = { text: value, selection };
+              } catch (error) {
+                savedVoiceSelection.current = { text: value, error: error instanceof Error ? error : new Error("Unable to retain field selection.") };
+                console.warn("[voice] unable to retain field selection", error instanceof Error ? error.message : "selection failed");
+              }
+            }
+            onBlur?.(event);
+          }}
           onCompositionEnd={(event) => {
             isComposingRef.current = false;
             updateCaretOffset();

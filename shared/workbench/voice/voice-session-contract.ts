@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - VoiceConfigurationSchema/VoiceConfiguration: daemon-owned profile selection.
+ * - VoiceConfigurationSchema/VoiceConfiguration: reload-compatible configuration wire shape.
+ * - VoiceModelSelection: the complete user-configurable transformer settings.
+ * - readVoiceModelSelection/createVoiceConfiguration: isolate legacy composer-shaped transport.
  * - VoiceSessionEventSchema/VoiceSessionEvent: connection-local voice outcomes.
  * - VoiceStartSchema/VoiceStart: controlled-document admission.
  * - VoiceAudioSchema/VoiceAudio: bounded ordered PCM frames.
@@ -8,11 +10,25 @@
 import { z } from "zod";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state";
 import { TranscriptDeltaSchema } from "./voice-contract";
+import type { WorkbenchComposerSettings } from "../../types";
 
 export const VoiceConfigurationSchema = z.object({
   selection: WorkbenchComposerProfileSelectionSchema.nullable(),
 }).strict();
 export type VoiceConfiguration = z.infer<typeof VoiceConfigurationSchema>;
+export type VoiceModelSelection = Pick<WorkbenchComposerSettings, "harness" | "model">;
+
+export function readVoiceModelSelection(value: VoiceConfiguration): VoiceModelSelection | null {
+  const settings = value.selection?.settings;
+  return settings ? { harness: settings.harness, model: settings.model } : null;
+}
+
+export function createVoiceConfiguration(settings: VoiceModelSelection | null): VoiceConfiguration {
+  return { selection: settings ? { kind: "custom", settings: {
+    ...settings, agentPath: null, agentSource: null, reasoningEffort: "none",
+    serviceTier: null, contextWindowTokens: null,
+  } } : null };
+}
 const sessionId = z.string().uuid();
 export const VoiceStartSchema = z.object({ sessionId, text: z.string().max(1_000_000) }).strict();
 export type VoiceStart = z.infer<typeof VoiceStartSchema>;

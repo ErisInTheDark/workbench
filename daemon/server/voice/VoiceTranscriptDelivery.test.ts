@@ -27,7 +27,7 @@ test("coalesced revisions preserve complete context and final input follows admi
   await finishing;
   assert.equal(sent.at(-1)?.final, true);
   assert.equal(sent.at(-1)?.transcript, "add unclaimed dirt");
-  assert.ok(sent.every((input, index) => index === 0 || input.revision > sent[index - 1]!.revision));
+  assert.deepEqual(sent.map(input => input.transcript), ["add", "add unclaimed dirt"]);
 });
 
 test("delivery failure remains observable through drain", async () => {

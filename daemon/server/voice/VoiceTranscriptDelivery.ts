@@ -20,13 +20,13 @@ export default class VoiceTranscriptDelivery {
     if (this.closed || this.failure || delta.revision <= this.revision) return;
     this.revision = delta.revision;
     this.transcript = delta.inlineText;
-    this.pending = { revision: this.revision, transcript: this.transcript, final: false };
+    this.pending = { transcript: this.transcript, final: false };
     this.pump();
   }
   async finish() {
     if (!this.closed) {
       this.closed = true;
-      this.pending = { revision: ++this.revision, transcript: this.transcript, final: true };
+      this.pending = { transcript: this.transcript, final: true };
       this.pump();
     }
     while (this.running) await this.running;

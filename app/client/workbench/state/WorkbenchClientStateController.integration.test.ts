@@ -263,7 +263,7 @@ test("HTTP state requests carry browser identity and use the browser global rece
     methods.push(init?.method ?? "GET");
     return Promise.resolve(Response.json({
       ...response("snapshot", methods.length - 1, emptyRows()),
-      schemaVersion: 4,
+      schemaVersion: 13,
     }));
   };
   const controller = new WorkbenchClientStateController({
@@ -278,11 +278,11 @@ test("HTTP state requests carry browser identity and use the browser global rece
   await controller.bootstrap();
   await controller.put({
     kind: "globalPreference",
-    preference: { key: "composerSpellCheck", value: true },
+    preference: { key: "voiceInputEnabled", value: true },
   });
-  await controller.delete({ key: "composerSpellCheck", kind: "globalPreference" });
+  await controller.delete({ key: "voiceInputEnabled", kind: "globalPreference" });
   assert.equal(controller.getSnapshot().daemonRegistrationId, "registration");
-  assert.equal(controller.getSnapshot().schemaVersion, 4);
+  assert.equal(controller.getSnapshot().schemaVersion, 13);
   assert.deepEqual(methods, ["GET", "PUT", "DELETE"]);
   controller.dispose();
 });

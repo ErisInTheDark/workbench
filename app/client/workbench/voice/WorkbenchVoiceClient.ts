@@ -6,8 +6,11 @@
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
 import VoiceCaptureController from "./VoiceCaptureController";
+import VoiceSettingsController from "./VoiceSettingsController";
+import type WorkbenchClientStateController from "../state/WorkbenchClientStateController";
+import { decodeVoiceDocument, encodeVoiceDocument, type VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
-export interface VoiceField { id: string; text: string; change(text: string): void }
+export interface VoiceField { id: string; text: string; getSelection?(): VoiceSelection; change(text: string, selection: VoiceSelection): void }
 export interface VoiceClientSnapshot {
   fieldId: string | null;
   state: "idle" | "preparing" | "listening" | "finishing" | "failed";
@@ -27,6 +30,7 @@ interface Session {
   releasing: boolean;
 }
 export default class WorkbenchVoiceClient {
+  readonly settings: VoiceSettingsController;
   private active: Session | null = null;
   private snapshot: VoiceClientSnapshot = { fieldId: null, state: "idle", error: "" };
   private readonly listeners = new Set<() => void>();
@@ -34,17 +38,31 @@ export default class WorkbenchVoiceClient {
   constructor(
     private readonly daemon: WorkbenchDaemonClient,
     private readonly workletUrl: string,
+    preferences: WorkbenchClientStateController | undefined,
     private readonly createCapture = (options: ConstructorParameters<typeof VoiceCaptureController>[0]) => new VoiceCaptureController(options),
   ) {
+    this.settings = new VoiceSettingsController(daemon, preferences);
     this.unsubscribe = [
       daemon.onVoiceEvent(event => this.event(event)),
-      daemon.onDisconnect(() => { if (this.active) this.fail(new Error("Voice connection closed.")); }),
+      daemon.onDisconnect(() => {
+        if (this.active) this.fail(new Error("Voice connection closed."));
+        this.settings.disconnect();
+      }),
+      daemon.onReconnect(() => { void this.settings.refresh(); }),
+      this.settings.subscribe(() => { if (!this.settings.enabled && this.active) void this.cancel(); }),
     ];
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
   async begin(field: VoiceField) {
+    if (!this.settings.enabled) throw new Error("Select a voice harness and model in global settings.");
     if (this.active) throw new Error("Another field is using voice.");
+    let document: string;
+    try { document = encodeVoiceDocument(field.text, field.getSelection?.()); }
+    catch (error) {
+      this.publish({ fieldId: field.id, state: "failed", error: error instanceof Error ? error.message : "Unable to capture the editor selection." });
+      return;
+    }
     const id = crypto.randomUUID();
     const capture = this.createCapture({
       workletUrl: this.workletUrl,
@@ -61,7 +79,7 @@ export default class WorkbenchVoiceClient {
       frames: [], queuedSamples: 0, sending: null, started: Promise.resolve(), releasing: false };
     this.active = session;
     this.publish({ fieldId: field.id, state: "preparing", error: "" });
-    session.started = this.daemon.voice.start({ sessionId: id, text: field.text }).then(() => undefined);
+    session.started = this.daemon.voice.start({ sessionId: id, text: document }).then(() => undefined);
     // Permission may remain pending after the server rejects admission.
     void session.started.catch(error => {
       if (this.active === session) this.fail(error instanceof Error ? error : new Error("Unable to start voice."));
@@ -96,6 +114,7 @@ export default class WorkbenchVoiceClient {
     if (session?.field.id === fieldId && text !== session.text) void this.cancel(fieldId);
   }
   dispose() {
+    this.settings.dispose();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     void this.cancel();
     this.listeners.clear();
@@ -126,9 +145,12 @@ export default class WorkbenchVoiceClient {
     const session = this.active;
     if (!session || event.sessionId !== session.id) return;
     if (event.type === "document" && event.revision > session.revision) {
+      let document: ReturnType<typeof decodeVoiceDocument>;
+      try { document = decodeVoiceDocument(event.text); }
+      catch (error) { this.fail(error instanceof Error ? error : new Error("Invalid voice document.")); return; }
       session.revision = event.revision;
-      session.text = event.text;
-      session.field.change(event.text);
+      session.text = document.text;
+      session.field.change(document.text, document.selection);
     } else if (event.type === "finished" || event.type === "cancelled") {
       this.active = null;
       void session.capture.cancel().catch(() => console.warn("[voice] microphone cleanup failed"));

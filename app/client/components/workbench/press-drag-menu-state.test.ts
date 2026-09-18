@@ -6,6 +6,15 @@ import { transitionPressDragMenu, type PressDragMenuState } from "./press-drag-m
 const closed: PressDragMenuState = { kind: "closed" };
 const press = () => transitionPressDragMenu(closed, { kind: "press", pointerId: 1, x: 10, y: 100 }).state;
 
+test("selector clicks keep the menu open rather than activating a separate editor", () => {
+  const result = transitionPressDragMenu(press(), {
+    kind: "release", pointerId: 1, x: 10, y: 100, id: null, onTrigger: true,
+  }, "menu");
+  assert.equal(result.state.kind, "open");
+  assert.equal(result.activate, false);
+  assert.equal(transitionPressDragMenu(result.state, { kind: "select", id: "model" }, "menu").selectedId, "model");
+});
+
 test("pointing only previews and release confirms exactly once", () => {
   const moved = transitionPressDragMenu(press(), { kind: "move", pointerId: 1, x: 10, y: 50, id: "profile" });
   assert.equal(moved.selectedId, null);

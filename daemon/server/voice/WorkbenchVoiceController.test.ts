@@ -17,7 +17,7 @@ function createHarness(provider: WorkbenchProviderSingleFile) {
         if (request.type === "finish") controller.native({ type: "finished", sessionId: request.sessionId });
       },
     },
-    async resolveSettings() { return { harness: "codex", model: "luna", reasoningEffort: "none", agentPath: null, agentSource: null, serviceTier: null }; },
+    async resolveSettings() { return { harness: "codex", model: "luna" }; },
     provider: () => provider,
     instructions: async () => "voice",
   });

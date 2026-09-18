@@ -2,11 +2,9 @@
  * Exports:
  * - default createCodexSingleFileRuntime: isolated native transport and owned scratch documents.
  */
-import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { z } from "zod";
-import { VoiceStartSchema } from "workbench-shared/workbench/voice/voice-session-contract";
+import CodexSingleFileDocuments from "./CodexSingleFileDocuments";
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
 import type { CodexSingleFileOptions, SingleFileTransport } from "./CodexSingleFileController";
 
@@ -17,26 +15,12 @@ const reply = z.object({
 const configReply = z.object({ config: z.object({ mcp_servers: z.record(z.string(), z.unknown()).optional() }).passthrough() });
 
 export default function createCodexSingleFileRuntime(
+  directory: string,
   createServer: (options: CodexAppServerOptions) => Pick<CodexAppServer, "send" | "stopAsync"> = options => new CodexAppServer(options),
 ): CodexSingleFileOptions {
+  const documents = new CodexSingleFileDocuments(directory);
   return {
-    async createDocument(text) {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-voice-"));
-      const file = path.join(directory, "document.txt");
-      await fs.writeFile(file, text, { encoding: "utf8", flag: "wx" });
-      return {
-        directory, file,
-        async read() {
-          const info = await fs.lstat(file);
-          if (!info.isFile() || info.isSymbolicLink() || info.size > 4_000_000) throw new Error("Invalid voice scratch document.");
-          return VoiceStartSchema.shape.text.parse(await fs.readFile(file, "utf8"));
-        },
-        async dispose() {
-          // This exact mkdtemp directory is capability-owned, never caller-selected.
-          await fs.rm(directory, { recursive: true, force: true });
-        },
-      };
-    },
+    createDocument: text => documents.create(text),
     createTransport(onMessage, onFailure): SingleFileTransport {
       let nextId = 0;
       let closed = false;

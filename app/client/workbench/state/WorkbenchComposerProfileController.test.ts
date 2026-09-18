@@ -14,7 +14,7 @@ import type {
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerSettings,
 } from "workbench-shared/types";
-import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "./composer-profile-target";
+import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
 import { createComposerProfileTargetPersistence } from "./composer-profile-api";
@@ -99,25 +99,6 @@ async function createController(initialProfiles: WorkbenchComposerProfile[] = []
   await controller.initializePersistence(persistence);
   return { controller, persistence, targets };
 }
-
-test("voice selection stays global and a removed definition retains custom fallback", async () => {
-  const global = profile({ reasoningEffort: "none" });
-  const project = profile({ id: "project-profile", scope: { kind: "project", projectId: fixtureIdentityValues.ProjectId["project-a"] } });
-  const { controller } = await createController([global, project]);
-  const slot = { kind: "voice" } as const;
-  try {
-    await controller.loadSelection(slot);
-    assert.equal(controller.resolveSettings(slot), null);
-    assert.deepEqual(controller.getVisibleProfiles(null).map(item => item.id), [global.id]);
-    assert.equal(controller.selectProfile(slot, project.id), false);
-    assert.equal(controller.selectProfile(slot, global.id), true);
-    await controller.waitForSelection(slot);
-    const settings = controller.resolveSettings(slot);
-    await controller.deleteProfile(global.id);
-    assert.equal(controller.getSelection(slot).kind, "custom");
-    assert.deepEqual(controller.resolveSettings(slot), settings);
-  } finally { controller.dispose(); }
-});
 
 test("catalogue refresh coalesces without overwriting edits or surviving disconnect", async (context) => {
   const { controller, persistence } = await createController([profile()]);

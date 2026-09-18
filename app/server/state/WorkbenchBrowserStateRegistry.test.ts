@@ -25,6 +25,22 @@ const BROWSER_B = "20000000-0000-4000-8000-000000000002";
 const BROWSER_C = "30000000-0000-4000-8000-000000000003";
 const BROWSER_D = "40000000-0000-4000-8000-000000000004";
 
+test("voice enabled preference remains browser-local and survives reopening", async context => {
+  const { directory, registry, shared } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  await registry.readBrowser(BROWSER_B);
+  const record = { kind: "globalPreference" as const, preference: { key: "voiceInputEnabled" as const, value: false } };
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record });
+  assert.ok(records(await registry.readBrowser(BROWSER_A)).some(item => item.kind === "globalPreference" && item.preference.key === "voiceInputEnabled" && item.preference.value === false));
+  assert.ok(!records(await registry.readBrowser(BROWSER_B)).some(item => item.kind === "globalPreference" && item.preference.key === "voiceInputEnabled"));
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
+  reopened.start();
+  try {
+    assert.ok(records(await reopened.readBrowser(BROWSER_A)).some(item => item.kind === "globalPreference" && item.preference.key === "voiceInputEnabled" && item.preference.value === false));
+  } finally { await reopened.close(); }
+});
+
 test("project aliases reach open stores and dormant stores before their next read", async context => {
   const { directory, registry, shared } = await fixture(context);
   const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");

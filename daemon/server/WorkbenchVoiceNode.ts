@@ -16,7 +16,7 @@ import { listWorkbenchLibraryAgents } from "./lib/workbench-library";
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent", children: [WorkbenchWebSocketNode], lifecycle: "atomic",
   scope: "server:voice", safeAll: true,
-  description: "Reload native recognition, voice profile selection and transformer sessions.",
+  description: "Reload native recognition, voice model selection and transformer sessions.",
   provides: ["voice"],
   requires: ["voiceSettings", "codexProvider"],
   sources: ["daemon/server/WorkbenchVoiceNode.ts", "daemon/server/voice/**", "shared/workbench/voice/**"].join("\n"),
@@ -39,7 +39,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         return capability;
       },
       async instructions(selection) {
-        const prompt = await buildWorkbenchPromptInstructions({ role: "voice-to-text", agentPath: selection.agentPath, harness: selection.harness });
+        const prompt = await buildWorkbenchPromptInstructions({ role: "voice-to-text", harness: selection.harness });
         const filtered = filterWorkbenchInstructionContent(prompt.baseInstructions, {
           role: "voice-to-text", harness: selection.harness, model: selection.model,
           shell: process.platform === "win32" ? "pwsh" : "bash", available: new Set(),

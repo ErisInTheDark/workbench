@@ -272,7 +272,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   if (voice) context = { ...context, workflowIds: ["voice-to-text"] };
   const instructionFiles = createLibraryInstructionFileGeneration();
   const [agentDefinition, projectSkills, instructionPacks] = await Promise.all([
-    readSelectedAgentDefinition(context, instructionFiles),
+    voice ? Promise.resolve(null) : readSelectedAgentDefinition(context, instructionFiles),
     voice ? Promise.resolve([]) : listProjectSkillDefinitionsForPrompt(context),
     listWorkbenchLibraryInstructions(),
   ]);
@@ -280,7 +280,9 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     ? await buildWorkbenchSkillCatalog(projectSkills)
     : await buildWorkbenchSkillBodyCatalog(projectSkills);
   const slots: Record<string, string> = {
-    ...buildAgentRuntimeSlots(agentDefinition),
+    ...(agentDefinition ? buildAgentRuntimeSlots(agentDefinition) : {
+      "agent.description": "", "agent.name": "", "agent.path": "", "agent.prompt": "",
+    }),
     "skills.catalog": skillManifest?.trim() || "No additional Workbench skills were detected.",
     "subagent.identity": buildSubagentIdentity(context),
     "workflow.content": buildWorkflowContent(context, instructionFiles),

@@ -6,7 +6,7 @@
  * - createComposerProfileTargetPersistence: create the daemon-backed target-profile persistence adapter.
  */
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
-import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "./composer-profile-target";
+import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
 
@@ -30,24 +30,15 @@ export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient):
 }
 
 export function createComposerProfileTargetPersistence(
-  daemon: Pick<WorkbenchDaemonClient, "profiles"> & Partial<Pick<WorkbenchDaemonClient, "voice">>,
+  daemon: Pick<WorkbenchDaemonClient, "profiles">,
   flushDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>,
 ): ComposerProfileTargetPersistence {
   return {
     read: async (slot) => {
-      if (slot.kind === "voice") {
-        if (!daemon.voice) throw new Error("Voice configuration is unavailable.");
-        return (await daemon.voice.configuration.read()).selection;
-      }
       if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
       return (await daemon.profiles.target.read({ slot })).selection;
     },
     write: async (slot, selection) => {
-      if (slot.kind === "voice") {
-        if (!daemon.voice) throw new Error("Voice configuration is unavailable.");
-        await daemon.voice.configuration.write({ selection });
-        return;
-      }
       if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
       await daemon.profiles.target.set({ selection, slot });
     },

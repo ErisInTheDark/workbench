@@ -43,6 +43,10 @@ export type WorkbenchGlobalPreference =
       | "threadLiveActivityOpen";
     value: boolean;
   }
+  | {
+    key: "voiceInputEnabled";
+    value: boolean;
+  }
   | { key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { key: "appPort" | "editorFontSize" | "projectTimeGroupCount"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }

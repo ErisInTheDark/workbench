@@ -19,14 +19,15 @@ export interface PressDragMenuItem {
 }
 
 export default function WorkbenchPressDragMenu({
-  children, label, getItems, onOpen, onSelect, onActivate,
+  children, label, getItems, items: suppliedItems, onOpen, onSelect, onActivate,
 }: {
   children: ReactNode;
   label: string;
-  getItems: () => readonly PressDragMenuItem[];
-  onOpen: () => void;
+  getItems?: () => readonly PressDragMenuItem[];
+  items?: readonly PressDragMenuItem[];
+  onOpen?: () => void;
   onSelect: (id: string, trigger: HTMLButtonElement) => void;
-  onActivate: (trigger: HTMLButtonElement) => void;
+  onActivate?: (trigger: HTMLButtonElement) => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
@@ -36,8 +37,9 @@ export default function WorkbenchPressDragMenu({
   });
   const [position, setPosition] = useState<CSSProperties | null>(null);
   const open = menu.interaction.kind !== "closed";
+  const items = suppliedItems ?? menu.items;
   const activeId = menu.interaction.kind === "closed" ? null : menu.interaction.activeId;
-  const activeIndex = menu.items.findIndex(item => item.id === activeId);
+  const activeIndex = items.findIndex(item => item.id === activeId);
 
   useLayoutEffect(() => {
     if (menu.interaction.kind === "open" && position?.visibility !== "hidden") popup.current?.focus({ preventScroll: true });
@@ -50,14 +52,14 @@ export default function WorkbenchPressDragMenu({
   }
 
   function dispatch(event: PressDragMenuEvent) {
-    const result = transitionPressDragMenu(menu.interaction, event);
+    const result = transitionPressDragMenu(menu.interaction, event, onActivate ? "action" : "menu");
     setMenu(current => ({ ...current, interaction: result.state }));
     if (result.state.kind !== "dragging") releaseCapture();
-    if (result.selectedId !== null && trigger.current) {
+    if (result.selectedId !== null && items.some(item => item.id === result.selectedId) && trigger.current) {
       if (event.kind !== "release") trigger.current.focus({ preventScroll: true });
       onSelect(result.selectedId, trigger.current);
     }
-    if (result.activate && trigger.current) onActivate(trigger.current);
+    if (result.activate && trigger.current) onActivate?.(trigger.current);
   }
 
   function begin(event: Extract<PressDragMenuEvent, { kind: "press" | "open" }>) {
@@ -65,7 +67,7 @@ export default function WorkbenchPressDragMenu({
     // Blur before opening so its cancellation cannot close the new drag.
     // Pointer capture owns drag input; focus could inherit the editor's focus-visible state.
     if (event.kind === "press") trigger.current.blur();
-    const items = getItems();
+    const items = suppliedItems ?? getItems?.() ?? [];
     const viewport = window.visualViewport;
     const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
       width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
@@ -74,7 +76,7 @@ export default function WorkbenchPressDragMenu({
     setPosition({ ...bounds, height: "auto", maxHeight: bounds.height, visibility: "hidden" });
     setMenu({ interaction: transitionPressDragMenu(menu.interaction, event).state, items });
     if (event.kind === "open") trigger.current.focus({ preventScroll: true });
-    onOpen();
+    onOpen?.();
   }
 
   function hit(x: number, y: number) {
@@ -87,37 +89,42 @@ export default function WorkbenchPressDragMenu({
     if (!["ArrowUp", "ArrowDown", "Home", "End", "Enter", " ", "Escape", "Tab"].includes(event.key)) return;
     if (event.key !== "Tab") event.preventDefault();
     if (!open && event.key !== "Escape" && event.key !== "Tab") {
-      if (event.key === "Enter" || event.key === " ") {
+      if (onActivate && (event.key === "Enter" || event.key === " ")) {
         if (trigger.current) onActivate(trigger.current);
         return;
       }
-      const items = getItems();
+      const items = suppliedItems ?? getItems?.() ?? [];
       begin({ kind: "open", activeId: event.key === "ArrowUp" || event.key === "End" ? items.at(-1)?.id ?? null : items[0]?.id ?? null });
       return;
     }
-    const action = { kind: "key" as const, key: event.key, ids: menu.items.map(item => item.id) };
+    const action = { kind: "key" as const, key: event.key, ids: items.map(item => item.id) };
     dispatch(action);
     if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Home" || event.key === "End") {
       const next = transitionPressDragMenu(menu.interaction, action).state;
-      const index = next.kind === "closed" ? -1 : menu.items.findIndex(item => item.id === next.activeId);
+      const index = next.kind === "closed" ? -1 : items.findIndex(item => item.id === next.activeId);
       popup.current?.children[index]?.scrollIntoView({ block: "nearest" });
     }
   }
 
   useLayoutEffect(() => {
     if (!open || !popup.current) return;
-    if (position?.visibility === "hidden" && trigger.current) {
+    if ((position?.visibility === "hidden" || suppliedItems) && trigger.current) {
       const viewport = window.visualViewport;
+      // Live catalogues can arrive after an initially empty menu. Measure its
+      // natural height again rather than retaining that first tiny scroll box.
+      if (suppliedItems) popup.current.style.height = "auto";
       const rect = popup.current.getBoundingClientRect();
-      setPosition(positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
+      const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
         width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
         left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
-      }, { width: rect.width, height: rect.height, align: "end" }));
-      return;
+      }, { width: rect.width, height: rect.height, align: "end" });
+      setPosition(suppliedItems ? {
+        ...bounds, height: "auto", maxHeight: Math.min(480, (viewport?.height ?? window.innerHeight) - 24),
+      } : bounds);
     }
     popup.current.scrollTop = popup.current.scrollHeight;
     if (activeIndex >= 0) popup.current.children[activeIndex]?.scrollIntoView({ block: "nearest" });
-  }, [open, menu.items, position?.visibility]);
+  }, [open, items, position?.visibility]);
 
   useEffect(() => {
     if (!open) return;
@@ -164,7 +171,7 @@ export default function WorkbenchPressDragMenu({
       type="button"
       aria-label={label}
       title={label}
-      aria-haspopup={open ? "menu" : "dialog"}
+      aria-haspopup={open || !onActivate ? "menu" : "dialog"}
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
       className={`
@@ -201,7 +208,8 @@ export default function WorkbenchPressDragMenu({
         // Physical clicks already completed on pointerup; retain assistive click activation.
         if (event.detail !== 0) return;
         dispatch({ kind: "cancel" });
-        onActivate(event.currentTarget);
+        if (onActivate) onActivate(event.currentTarget);
+        else begin({ kind: "open", activeId: null });
       }}
       onBlur={event => {
         if (!(event.relatedTarget instanceof Node) || !popup.current?.contains(event.relatedTarget)) dispatch({ kind: "cancel" });
@@ -222,7 +230,7 @@ export default function WorkbenchPressDragMenu({
       style={{ ...position, zIndex: 60 }}
       className="overflow-y-auto overscroll-contain outline-none"
     >
-      {menu.items.map((item, index) => <WorkbenchMenuAction
+      {items.map((item, index) => <WorkbenchMenuAction
         key={item.id}
         id={`${menuId}-${index}`}
         data-menu-row={item.id}

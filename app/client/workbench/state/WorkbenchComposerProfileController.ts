@@ -14,7 +14,7 @@ import type {
   WorkbenchModelOption,
   ThreadPayload,
 } from "workbench-shared/types";
-import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "./composer-profile-target";
+import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
@@ -39,7 +39,6 @@ function createProfileId() {
 }
 
 function getSlotKey(slot: WorkbenchComposerProfileSlot) {
-  if (slot.kind === "voice") return "voice";
   if (slot.kind === "thread") return `thread:${slot.projectId}:${slot.harness}:${slot.threadId}`;
   if (slot.kind === "draft") return `draft:${slot.projectId}:${slot.harness}:${slot.draftId}`;
   return `${slot.kind}:${slot.projectId}`;
@@ -221,7 +220,7 @@ export default class WorkbenchComposerProfileController {
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
-    if (!profile || (slot.kind === "voice" && profile.scope.kind !== "global")
+    if (!profile
       || ((slot.kind === "thread" || slot.kind === "draft") && profile.harness !== slot.harness)) return false;
     void this.persistSelection(slot, { kind: "profile", profileId, settings: cloneSettings(profile) });
     return true;
@@ -250,7 +249,6 @@ export default class WorkbenchComposerProfileController {
     }
   }
   materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: WorkbenchThreadId, harness: WorkbenchHarness) {
-    if (sourceSlot.kind === "voice") return;
     const selection = this.getSelection(sourceSlot);
     const settings = selection.settings;
     if (!settings || settings.harness !== harness) return;

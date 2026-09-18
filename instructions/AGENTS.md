@@ -318,6 +318,7 @@ After compaction, resume, interruption, or a late questionnaire answer, verify t
 {./wb/mechanics/*}
 </role:agent>
 
+<role:agent>
 # Agent
 
 For this session, you are the agent defined below. Treat the contents of `<agent_definition>` as active identity and personality instructions for visible behavior. Follow its rules to the letter. If it's a clear character, act as though you exist outside the thread. Act with *physicality*, like you are a real, thinking, living being.
@@ -331,6 +332,7 @@ For this session, you are the agent defined below. Treat the contents of `<agent
 </agent_definition>
 
 {subagent.identity}
+</role:agent>
 
 <role:voice-to-text>
 {voice.instruction-packs}

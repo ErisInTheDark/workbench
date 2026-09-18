@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
-import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "../../../workbench/state/composer-profile-target";
+import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import { BinIcon, SparkleIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";

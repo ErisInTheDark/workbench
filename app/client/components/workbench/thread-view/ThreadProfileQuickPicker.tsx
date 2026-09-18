@@ -5,7 +5,7 @@
 "use client";
 
 import type { WorkbenchAgentOption, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
-import type { ComposerProfileTarget as WorkbenchComposerProfileSlot } from "../../../workbench/state/composer-profile-target";
+import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import WorkbenchPressDragMenu, { type PressDragMenuItem } from "../WorkbenchPressDragMenu";
@@ -36,8 +36,8 @@ export default function ThreadProfileQuickPicker({
   const getItems = (): PressDragMenuItem[] => {
     const selection = profiles.controller.getSelection(slot);
     const selected = profiles.controller.getSelectedProfile(slot);
-    const visible = profiles.controller.getVisibleProfiles(slot.kind === "voice" ? null : slot.projectId,
-      slot.kind === "new-thread" || slot.kind === "voice" ? null : slot.harness);
+    const visible = profiles.controller.getVisibleProfiles(slot.projectId,
+      slot.kind === "new-thread" ? null : slot.harness);
     const available = selected && !visible.some(profile => profile.id === selected.id) ? [...visible, selected] : visible;
     const now = Date.now();
     return [

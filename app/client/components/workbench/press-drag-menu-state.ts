@@ -18,7 +18,7 @@ export type PressDragMenuEvent =
   | { kind: "key"; key: string; ids: readonly string[] }
   | { kind: "cancel" };
 
-export function transitionPressDragMenu(state: PressDragMenuState, event: PressDragMenuEvent): { state: PressDragMenuState; selectedId: string | null; activate: boolean } {
+export function transitionPressDragMenu(state: PressDragMenuState, event: PressDragMenuEvent, activation: "action" | "menu" = "action"): { state: PressDragMenuState; selectedId: string | null; activate: boolean } {
   const result = (next: PressDragMenuState, selectedId: string | null = null, activate = false) => ({ state: next, selectedId, activate });
   if (event.kind === "cancel") return result({ kind: "closed" });
   if (event.kind === "open") return result({ kind: "open", activeId: event.activeId });
@@ -31,7 +31,9 @@ export function transitionPressDragMenu(state: PressDragMenuState, event: PressD
     const moved = state.moved || Math.hypot(event.x - state.x, event.y - state.y) > 4;
     if (event.kind === "move") return result({ ...state, activeId: event.id, moved });
     if (event.id) return result({ kind: "closed" }, event.id);
-    return result({ kind: "closed" }, null, !moved && event.onTrigger);
+    const clicked = !moved && event.onTrigger;
+    if (clicked && activation === "menu") return result({ kind: "open", activeId: null });
+    return result({ kind: "closed" }, null, clicked);
   }
   if (event.kind === "highlight") return result({ ...state, activeId: event.id });
   if (event.kind === "select") return state.kind === "open" ? result({ kind: "closed" }, event.id) : result(state);

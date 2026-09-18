@@ -90,11 +90,12 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
 
-for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias"] as const) {
+for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias", "voice-events"] as const) {
   test(`route completion never reopens the winning route: ${order}`, async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalWebSocket = globalThis.WebSocket;
+    const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
     const pages: Array<{ threadId: string; complete: () => void }> = [];
     let pageReads = 0;
     const firstPage = Promise.withResolvers<void>();
@@ -110,10 +111,11 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     }));
+    const sockets: EventTarget[] = [];
     class Socket extends EventTarget {
       static OPEN = 1;
       readyState = 1;
-      constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event("open"))); }
+      constructor() { super(); sockets.push(this); queueMicrotask(() => this.dispatchEvent(new Event("open"))); }
       close() { this.readyState = 3; this.dispatchEvent(new Event("close")); }
       send(raw: string) {
         const request = JSON.parse(raw) as { id?: number; method: string; params?: Record<string, unknown> };
@@ -124,6 +126,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
         let result: object;
         switch (request.method) {
           case "initialize": result = {}; break;
+          case "voice/configuration/read": result = { selection: null }; break;
           case "workbench/daemon/reload-dirt/read": result = { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }; break;
           case "workbench/thread-state/open":
             result = {
@@ -163,6 +166,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       }
     }
     globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+    process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://workbench.test";
     globalThis.document = new EventTarget() as Document;
     globalThis.window = {
       setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
@@ -177,6 +181,21 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
     });
     try {
       client = await WorkbenchClient({ clientStateController, initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" } });
+      if (order === "voice-events") {
+        let recovered = 0;
+        const sidebar = client.threadSidebar as ThreadSidebarClient;
+        sidebar.reopen = async () => { recovered++; };
+        const notify = (method: string, params: object) => {
+          for (const socket of sockets) socket.dispatchEvent(new MessageEvent("message", {
+            data: JSON.stringify({ method, params }),
+          }));
+        };
+        notify("voice/event", { type: "finished", sessionId: crypto.randomUUID() });
+        assert.equal(recovered, 0, "voice notifications must not reopen thread observations");
+        notify("workbench/thread-state/reset", {});
+        assert.ok(recovered > 0, "real resets must still recover observations");
+        return;
+      }
       if (order === "project-alias") {
         const result = await client.controls.applyRoute({
           ...createHomeRoute(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("web/repo"), view: "project",
@@ -219,6 +238,8 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       globalThis.window = originalWindow;
       globalThis.document = originalDocument;
       globalThis.WebSocket = originalWebSocket;
+      if (originalDaemonUrl === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+      else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalDaemonUrl;
     }
   });
 }

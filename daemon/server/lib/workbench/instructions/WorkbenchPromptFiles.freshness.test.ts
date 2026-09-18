@@ -1,4 +1,4 @@
-/* No production exports. Tests protect per-use library and project instruction freshness, emitted overrides, workflows, mechanics, agents, and builtin skills. */
+/* Exports: none. Protect instruction freshness, overrides, role-specific identity and skill precedence. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -249,6 +249,13 @@ user-owned agent prompt
       roots: projectRoots,
       threadId: "freshness-thread",
     }) ?? "", /project browse skill/u);
+
+    const voiceInstructions = await promptFiles.buildWorkbenchPromptInstructions({
+      ...context, role: "voice-to-text", agentPath: "library:agents/does-not-exist.md",
+    });
+    assert.doesNotMatch(voiceInstructions.baseInstructions ?? "", /user-owned agent prompt|overridden alternate|imported agent note/u);
+    assert.match(voiceInstructions.baseInstructions ?? "", /deep override revision two/u);
+    assert.equal(voiceInstructions.developerInstructions, null);
 
     const removedCompositeSlots = [
       "old override",

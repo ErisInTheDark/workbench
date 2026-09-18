@@ -99,7 +99,7 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
   });
   const profileStore = new WorkbenchComposerProfileStore(database);
-  const voiceSettings = new VoiceSettingsStore(database, profileStore);
+  const voiceSettings = new VoiceSettingsStore(database);
   const logThreadStateWarning = (message: string) => {
     console.warn("[thread-state-ws]", message.slice(0, 500));
   };

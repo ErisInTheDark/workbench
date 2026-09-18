@@ -3,7 +3,7 @@
  * - WorkbenchVoiceOptions: owned recognition, configuration and provider boundaries.
  * - default WorkbenchVoiceController: connection-bound audio, transformer and final drain.
  */
-import type { WorkbenchComposerSettings } from "workbench-shared/types";
+import type { VoiceModelSelection } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { VoiceEvent, VoiceRequest } from "workbench-shared/workbench/voice/voice-contract";
 import type { VoiceAudio, VoiceSessionEvent, VoiceStart } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { SingleFileEvent, WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
@@ -11,9 +11,9 @@ import VoiceTranscriptDelivery from "./VoiceTranscriptDelivery";
 
 export interface WorkbenchVoiceOptions {
   recognizer: { prepare(): Promise<void>; send(request: VoiceRequest): Promise<void>; dispose(): Promise<void> };
-  resolveSettings(): Promise<WorkbenchComposerSettings>;
-  provider(settings: WorkbenchComposerSettings): WorkbenchProviderSingleFile;
-  instructions(settings: WorkbenchComposerSettings): Promise<string>;
+  resolveSettings(): Promise<VoiceModelSelection>;
+  provider(settings: VoiceModelSelection): WorkbenchProviderSingleFile;
+  instructions(settings: VoiceModelSelection): Promise<string>;
 }
 interface Session {
   id: string;
