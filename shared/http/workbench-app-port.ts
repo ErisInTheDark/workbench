@@ -14,6 +14,7 @@ export interface WorkbenchAppPortSnapshot {
   currentPort: number;
   editable: boolean;
   source: WorkbenchAppPortSource;
+  stableOrigin?: string | null;
 }
 
 export interface WorkbenchAppPortUpdateRequest {

@@ -59,12 +59,13 @@ export default class WorkbenchAppPortRoutes {
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
     onDiagnostic?: (message: string) => void;
+    stableOrigin?: (request: IncomingMessage) => string | null;
   }) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     if (url.pathname !== WORKBENCH_APP_PORT_PATH) return false;
     if (request.method === "GET") {
-      sendJson(response, 200, this.options.appPort.read());
+      sendJson(response, 200, this.project(this.options.appPort.read(), request, url));
       return true;
     }
     if (request.method !== "PUT") {
@@ -73,7 +74,7 @@ export default class WorkbenchAppPortRoutes {
       return true;
     }
     try {
-      sendJson(response, 200, await this.options.appPort.update((await readUpdate(request)).port));
+      sendJson(response, 200, this.project(await this.options.appPort.update((await readUpdate(request)).port), request, url));
     } catch (error) {
       const expected = expectedUpdateFailure(error);
       if (expected) {
@@ -89,5 +90,11 @@ export default class WorkbenchAppPortRoutes {
       }
     }
     return true;
+  }
+
+  private project(snapshot: ReturnType<WorkbenchAppPortControl["read"]>, request: IncomingMessage, url: URL) {
+    return url.searchParams.get("version") === "2"
+      ? { ...snapshot, stableOrigin: this.options.stableOrigin?.(request) ?? null }
+      : snapshot;
   }
 }

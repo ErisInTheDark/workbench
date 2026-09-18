@@ -83,3 +83,27 @@ test("serves SPA and launch routes while unknown APIs return not found", async (
   assert.equal(missingApi.status, 404);
   assert.deepEqual(await missingApi.json(), { error: "Workbench app route not found." });
 });
+
+test("rejects LAN clients before pages or APIs despite forged local headers", async (context) => {
+  const errors: string[] = [];
+  const router = await fixtureRouter(errors);
+  await router.start();
+  context.after(() => router.close());
+  const server = new HttpServer({
+    hostname: "127.0.0.1",
+    handleRequest: (request, response) => {
+      Object.defineProperty(request.socket, "remoteAddress", { value: "192.168.1.50", configurable: true });
+      return router.handle(request, response);
+    },
+  });
+  context.after(async () => await server.close({ force: true }));
+  const { url } = await server.start();
+  for (const pathname of ["/", "/api/workbench-app-port", "/api/workbench-client-log"]) {
+    const response = await fetch(`${url}${pathname}`, {
+      headers: { "X-Forwarded-For": "127.0.0.1", Origin: url },
+    });
+    assert.equal(response.status, 403);
+    await response.text();
+  }
+  assert.deepEqual(errors, []);
+});

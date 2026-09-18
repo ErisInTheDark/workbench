@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchDaemonHost: own daemon child startup, logs, pause, health recovery, port cleanup, restart, and shutdown.
+ * - default WorkbenchDaemonHost: own daemon child startup, endpoint readiness, logs, health recovery, restart and shutdown.
  * Local mechanics:
  * - RunnerLog writes one plain formatted stream to terminal and the active file.
  * - WakeSignal wakes a pending watchdog wait when child output changes lifecycle truth.
@@ -12,10 +12,8 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 
 import WorkbenchProcessLogger from "../../shared/process/WorkbenchProcessLogger.ts";
-import {
-  deriveWorkbenchRuntimeTopology,
-  type WorkbenchRuntimeTopology,
-} from "../../shared/workbench/runtime-topology.ts";
+import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint.ts";
+import { killProcessTreeAsync } from "../server/process-helpers.ts";
 
 import DaemonHealthWatchdog from "./DaemonHealthWatchdog.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
@@ -24,14 +22,6 @@ type RunnerChildResult = {
   error?: Error;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
-};
-
-type RunnerCommandResult = {
-  error?: Error;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-  stdout: string;
 };
 
 interface RunnerLog {
@@ -50,10 +40,9 @@ interface WorkbenchDaemonHostOptions {
   loggerFactory?: (logFilePath: string) => RunnerLog;
   now?: () => number;
   projectRootPath: string;
-  runCommand?: (command: string, args: readonly string[]) => Promise<RunnerCommandResult>;
   sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   spawnDaemon?: (daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) => ChildProcess;
-  topology?: WorkbenchRuntimeTopology;
+  terminateChild?: (child: ChildProcess) => Promise<void>;
 }
 
 class WakeSignal {
@@ -119,10 +108,6 @@ function positiveInteger(environment: NodeJS.ProcessEnv, name: string, fallback:
   return value;
 }
 
-function executable(name: string) {
-  return process.platform === "win32" ? `${name}.cmd` : name;
-}
-
 function abortableSleep(delayMs: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
@@ -143,28 +128,13 @@ function abortableSleep(delayMs: number, signal?: AbortSignal) {
   });
 }
 
-function defaultRunCommand(command: string, args: readonly string[]) {
-  return new Promise<RunnerCommandResult>((resolve) => {
-    const child = spawn(command, [...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stderr = "";
-    let stdout = "";
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.once("error", (error) => resolve({ error, exitCode: null, signal: null, stderr, stdout }));
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal, stderr, stdout }));
-  });
-}
-
 function defaultSpawnDaemon(daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) {
-  return spawn(executable("pnpm"), ["dev:daemon"], {
+  return spawn(process.execPath, ["--env-file-if-exists=.env.local", "--import", "tsx", "server/index.ts"], {
     cwd: daemonDirectoryPath,
     env: { ...environment, WORKBENCH_DAEMON_LOOP: "1", FORCE_COLOR: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
-    shell: process.platform === "win32",
+    detached: process.platform !== "win32",
   });
 }
 
@@ -179,10 +149,6 @@ function childResult(child: ChildProcess) {
     child.once("error", (error) => finish({ error, exitCode: null, signal: null }));
     child.once("exit", (exitCode, signal) => finish({ exitCode, signal }));
   });
-}
-
-function outputLines(value: string) {
-  return value.split(/\r\n|\n|\r/gu).map((line) => line.trimEnd()).filter(Boolean);
 }
 
 export default class WorkbenchDaemonHost {
@@ -201,13 +167,13 @@ export default class WorkbenchDaemonHost {
   private readonly probeTimeoutMs: number;
   private readonly projectRootPath: string;
   private readonly restartDelayMs: number;
-  private readonly runCommand: (command: string, args: readonly string[]) => Promise<RunnerCommandResult>;
   private readonly sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly spawnDaemon: (daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) => ChildProcess;
-  private readonly topology: WorkbenchRuntimeTopology;
+  private readonly terminateChild: (child: ChildProcess) => Promise<void>;
   private readonly stopAbort = new AbortController();
   private activeAbort: AbortController | null = null;
   private activeChild: ChildProcess | null = null;
+  private retirement: Promise<void> | null = null;
   private activeLog: RunnerLog | null = null;
   private stopping = false;
 
@@ -217,11 +183,10 @@ export default class WorkbenchDaemonHost {
     this.logDirectoryPath = path.join(this.projectRootPath, ".workbench", "logs");
     this.pauseSentinelPath = path.join(this.projectRootPath, ".workbench", "daemon-loop.pause");
     this.environment = options.environment ?? process.env;
-    this.topology = options.topology ?? deriveWorkbenchRuntimeTopology(this.environment);
     this.healthClient = options.healthClient ?? new WorkbenchDaemonHealthClient();
     this.loggerFactory = options.loggerFactory ?? ((logFilePath) => new RunnerLogFile(logFilePath));
     this.now = options.now ?? (() => performance.now());
-    this.runCommand = options.runCommand ?? defaultRunCommand;
+    this.terminateChild = options.terminateChild ?? (child => killProcessTreeAsync(child.pid));
     this.sleep = options.sleep ?? abortableSleep;
     this.spawnDaemon = options.spawnDaemon ?? defaultSpawnDaemon;
     this.maxLogLines = positiveInteger(this.environment, "MAX_LOG_LINES", 1_000);
@@ -234,7 +199,7 @@ export default class WorkbenchDaemonHost {
 
   async run({ dryRun = false }: { dryRun?: boolean } = {}) {
     if (dryRun) {
-      this.directLogger.line("host", `dry run: Workbench would kill listeners on configured ports: ${this.topology.listeners.map(({ port }) => port).join(" ")}`);
+      this.directLogger.line("host", "dry run: Workbench would start an owned daemon on a random loopback port.");
       return;
     }
     await mkdir(this.logDirectoryPath, { recursive: true });
@@ -250,8 +215,6 @@ export default class WorkbenchDaemonHost {
         if (this.stopping) break;
         if (restartNumber === 0) this.logConfiguration(log);
         log.line("host", `logging complete daemon output to: ${logFilePath}`);
-        await this.killOwnedPorts(log);
-        if (this.stopping) break;
         const result = await this.runChild(log);
         if (this.stopping) break;
         if (result.error) throw result.error;
@@ -274,7 +237,7 @@ export default class WorkbenchDaemonHost {
     this.stopping = true;
     this.stopAbort.abort(new Error(reason));
     this.activeAbort?.abort(new Error(reason));
-    if (this.activeChild) await this.killOwnedPorts(this.activeLog);
+    await this.retireChild();
   }
 
   private async runChild(log: RunnerLog) {
@@ -285,6 +248,23 @@ export default class WorkbenchDaemonHost {
     const exited = childResult(child);
     const watchdog = new DaemonHealthWatchdog(this.idleTimeoutMs, this.now());
     const wake = new WakeSignal();
+    const readiness: { endpoint: WorkbenchDaemonEndpoint | null; failure: Error | null } = {
+      endpoint: null, failure: null,
+    };
+    const acceptReady = (message: object) => {
+      const parsed = WorkbenchDaemonReadySchema.safeParse(message);
+      if (!parsed.success || parsed.data.endpoint.pid !== child.pid) {
+        readiness.failure = new Error("Daemon sent an invalid process-bound readiness message.");
+      } else if (readiness.endpoint && (
+        readiness.endpoint.instanceId !== parsed.data.endpoint.instanceId || readiness.endpoint.origin !== parsed.data.endpoint.origin
+      )) {
+        readiness.failure = new Error("Daemon changed its published process endpoint unexpectedly.");
+      } else {
+        readiness.endpoint = parsed.data.endpoint;
+      }
+      wake.wake();
+    };
+    child.on("message", acceptReady);
     const observeOutput = () => {
       watchdog.observeOutput(this.now());
       wake.wake();
@@ -296,10 +276,15 @@ export default class WorkbenchDaemonHost {
 
     try {
       while (!this.stopping) {
+        if (readiness.failure) {
+          await this.retireChild();
+          await exited;
+          return { error: readiness.failure, exitCode: null, signal: null };
+        }
         const action = watchdog.nextAction(this.now());
         if (action.kind === "restart") {
-          log.error("host", `no daemon output or successful WebSocket health response was received for ${this.logIdleTimeoutSeconds} seconds; killing owned ports for restart.`);
-          await this.killOwnedPorts(log);
+          log.error("host", `no daemon output or successful WebSocket health response was received for ${this.logIdleTimeoutSeconds} seconds; retiring the owned child for restart.`);
+          await this.retireChild();
           return await exited;
         }
         if (action.kind === "wait") {
@@ -332,7 +317,10 @@ export default class WorkbenchDaemonHost {
         abort.signal.addEventListener("abort", stopProbe, { once: true });
         const probeAfterSeconds = this.logIdleTimeoutSeconds * (action.token.attempt === 1 ? 0.5 : 0.75);
         log.line("host", `probing daemon WebSocket health after ${probeAfterSeconds} seconds without output (attempt ${action.token.attempt}/2).`);
-        const probe = this.healthClient.probe(this.topology.endpoints.bridge, this.probeTimeoutMs, probeAbort.signal)
+        const endpointProbe = readiness.endpoint
+          ? this.healthClient.probe(readiness.endpoint.origin.replace("http:", "ws:"), this.probeTimeoutMs, probeAbort.signal)
+          : Promise.reject(new Error("Daemon has not published a ready endpoint."));
+        const probe = endpointProbe
           .then(() => ({ kind: "probe" as const, succeeded: true, message: "" }))
           .catch((error: unknown) => ({
             kind: "probe" as const,
@@ -358,6 +346,7 @@ export default class WorkbenchDaemonHost {
       return await exited;
     } finally {
       abort.abort(new Error("Daemon child supervision ended."));
+      child.off("message", acceptReady);
       stdout.flush();
       stderr.flush();
       if (this.activeChild === child) this.activeChild = null;
@@ -367,9 +356,9 @@ export default class WorkbenchDaemonHost {
 
   private logConfiguration(log: RunnerLog) {
     log.line("host", "starting Workbench daemon restart loop.");
-    log.line("host", "command: pnpm dev:daemon");
+    log.line("host", "command: node --import tsx server/index.ts");
     log.line("host", `working directory: ${this.daemonDirectoryPath}`);
-    log.line("host", `owned ports: ${this.topology.listeners.map(({ port }) => port).join(" ")}`);
+    log.line("host", "listener: OS-assigned loopback port, reported by the owned child.");
     log.line("host", `log directory: ${this.logDirectoryPath}`);
     log.line("host", `log rotation: more than ${this.maxLogLines} lines`);
     log.line("host", `log retention: ${this.maxLogFiles} files`);
@@ -379,19 +368,15 @@ export default class WorkbenchDaemonHost {
     log.line("host", "press Ctrl+C to stop.");
   }
 
-  private async killOwnedPorts(log: RunnerLog | null) {
-    for (const { port } of this.topology.listeners) {
-      const result = await this.runCommand(
-        "bash",
-        ["-lc", 'kill-by-port "$1"', "--", String(port)],
-      );
-      for (const line of outputLines(result.stdout)) (log ?? this.directLogger).line("host", line);
-      for (const line of outputLines(result.stderr)) (log ?? this.directLogger).error("host", line);
-      if (result.error) throw result.error;
-      if (result.exitCode !== 0) {
-        throw new Error(`kill-by-port failed for port ${port} with status ${result.exitCode ?? result.signal ?? "unknown"}.`);
-      }
-    }
+  private retireChild(): Promise<void> {
+    if (this.retirement) return this.retirement;
+    const child = this.activeChild;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    const retirement = this.terminateChild(child).finally(() => {
+      if (this.retirement === retirement) this.retirement = null;
+    });
+    this.retirement = retirement;
+    return retirement;
   }
 
   private async waitWhilePaused(log: RunnerLog) {

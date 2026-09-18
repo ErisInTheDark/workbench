@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchAppHttpRouter: own app routes, bounded client diagnostics, and static SPA resolution. Keywords: app, HTTP, client logs.
+ * - default WorkbenchAppHttpRouter: own network admission, app routes, client diagnostics and static SPA resolution.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
+import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
@@ -12,6 +13,8 @@ import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
+import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
+import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes.ts";
 
 const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
@@ -65,16 +68,24 @@ export default class WorkbenchAppHttpRouter {
   private readonly settingsRoutes: WorkbenchAppSettingsRoutes | null;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
   private readonly staticRequests: StaticHttpRequestController;
+  private readonly networkRoutes: WorkbenchNetworkRoutes | null;
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
     logger: WorkbenchProcessLogger;
+    network?: WorkbenchNetworkController;
     outputDirectoryPath: string;
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
   }) {
+    this.networkRoutes = options.network ? new WorkbenchNetworkRoutes(options.network) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: options.appPort,
+      stableOrigin: request => {
+        const forwarded = request.headers["x-workbench-network-origin"];
+        const origin = typeof forwarded === "string" ? forwarded : `http://${request.headers.host ?? ""}`;
+        return options.network?.stableOrigin(origin) ?? null;
+      },
       onDiagnostic: (message) => options.logger.error("http", message),
     });
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
@@ -107,12 +118,22 @@ export default class WorkbenchAppHttpRouter {
     await this.staticRequests.start();
   }
 
-  close() {
+  async close() {
+    this.networkRoutes?.close();
     this.staticRequests.close();
   }
 
+  async admitHttp(request: IncomingMessage, response: ServerResponse) {
+    if (isLoopbackConnection(request.socket)) return true;
+    response.setHeader("Connection", "close");
+    sendJson(response, 403, { error: "Workbench is available only through localhost or Tailscale." });
+    return false;
+  }
+
   async handle(request: IncomingMessage, response: ServerResponse) {
+    if (!await this.admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
+    if (this.networkRoutes && await this.networkRoutes.handle(request, response, url)) return;
     if (url.pathname === CLIENT_LOG_PATH) {
       await this.handleClientLogs(request, response);
       return;

@@ -18,6 +18,10 @@ export interface ReloadableNodeHostOptions extends Omit<
 
 const PROCESS_SOURCES = [
   "daemon/server/index.ts",
+  "daemon/server/WorkbenchDaemonListener.ts",
+  "shared/process/WorkbenchProcessLease.ts",
+  "shared/process/workbench-daemon-endpoint.ts",
+  "shared/http/workbench-daemon-endpoint.ts",
   "daemon/server/ReloadableNodeHost.ts",
   "daemon/server/reloadable-node-loader.ts",
   "daemon/server/daemon-process-context.ts",

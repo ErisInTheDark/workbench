@@ -8,6 +8,7 @@ import WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppStateNode from "./AppStateNode.ts";
+import AppNetworkNode from "./AppNetworkNode.ts";
 
 interface AppDatabaseReloadState {
   checkpointPath: string | null;
@@ -16,7 +17,7 @@ interface AppDatabaseReloadState {
 
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
-  children: [AppStateNode],
+  children: [AppStateNode, AppNetworkNode],
   create: (context, build) => {
     const database = context.createDatabase(WorkbenchAppStateRepository);
     const handoffState = build.handoffState as AppDatabaseReloadState | undefined;

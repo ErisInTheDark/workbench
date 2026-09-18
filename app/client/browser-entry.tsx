@@ -2,6 +2,7 @@
  * No exports. Browser entry installs diagnostics before loading and rendering the standalone Workbench browser shell.
  */
 import WorkbenchBrowserLogForwarder from "./WorkbenchBrowserLogForwarder.ts";
+import { workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import frontendJavaScriptGeneration, {
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
 } from "workbench-shared/frontend-generation";
@@ -64,6 +65,7 @@ async function start() {
       activeController.dispose();
       runtime.dispose();
       logForwarder.dispose();
+      workbenchDaemonConnection.dispose();
     }, { once: true });
     createRoot(rootElement).render(
       <>

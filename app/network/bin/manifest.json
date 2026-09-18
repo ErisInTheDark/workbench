@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "artifacts": {
+    "windows-x64": {
+      "file": "windows-x64/workbench-network.exe",
+      "sha256": "ccc55b973c2b6cfdad4dd92502f4fed06cd093b2fc08dd4abd93cf4ac851b5dc",
+      "sourceHash": "d2147a6b0736b5642abec4e979ba8b8062f4bdbdc1f5c51be1e78731054c35aa"
+    }
+  }
+}

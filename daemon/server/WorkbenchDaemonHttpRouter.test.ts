@@ -1,6 +1,8 @@
 /* No production exports. Tests protect reloadable HTTP route dispatch, project icon routing, method matching, fallback responses, and bounded controller failures. */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { Socket } from "node:net";
+import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
 
 import WorkbenchDaemonHttpRouter, { type WorkbenchDaemonHttpRouterOptions } from "./WorkbenchDaemonHttpRouter";
@@ -26,7 +28,9 @@ class TestResponse extends EventEmitter {
 }
 
 function request(url: string, method: string) {
-  return { method, url } as import("node:http").IncomingMessage;
+  const socket = new Socket();
+  Object.defineProperty(socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+  return { method, url, socket } as import("node:http").IncomingMessage;
 }
 
 function response() {
@@ -97,4 +101,46 @@ test("turns controller failures into bounded HTTP errors", async () => {
   await router.handleHttpRequest(request("/daemon/agent-command", "POST"), output);
   assert.equal(output.statusCode, 500);
   assert.deepEqual(JSON.parse((output as unknown as TestResponse).body), { error: "controller exploded" });
+});
+
+test("rejects LAN requests before invoking daemon controllers", async () => {
+  const events: string[] = [];
+  const router = createRouter(events);
+  const input = request("/daemon/projects", "GET");
+  Object.defineProperty(input.socket, "remoteAddress", { value: "192.168.1.50", configurable: true });
+  input.headers = { host: "127.0.0.1", "x-forwarded-for": "127.0.0.1" };
+  const output = response();
+  await router.handleHttpRequest(input, output);
+  assert.equal(output.statusCode, 403);
+  assert.deepEqual(events, []);
+});
+
+test("WebSocket upgrades reject non-loopback peers before switching protocols despite forged local headers", async context => {
+  const router = createRouter([]);
+  let peer = "192.168.1.50";
+  const server = createServer();
+  server.on("upgrade", (input, socket) => {
+    Object.defineProperty(input.socket, "remoteAddress", { value: peer, configurable: true });
+    void router.admitUpgrade(input).then(admitted => {
+      if (admitted) socket.end("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    });
+  });
+  context.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const upgrade = () => new Promise<number>((resolve, reject) => {
+    const input = httpRequest(`http://127.0.0.1:${address.port}/`, { headers: {
+      Connection: "Upgrade", Upgrade: "websocket", Host: "localhost", "X-Forwarded-For": "127.0.0.1",
+    } });
+    input.on("error", reject);
+    input.on("response", output => { output.resume(); resolve(output.statusCode!); });
+    input.on("upgrade", (output, socket) => { socket.destroy(); resolve(output.statusCode!); });
+    input.end();
+  });
+  assert.equal(await upgrade(), 403);
+  peer = "127.0.0.1";
+  assert.equal(await upgrade(), 101);
 });

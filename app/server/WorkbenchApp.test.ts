@@ -279,6 +279,82 @@ test("moves the listener only after persistence and publishes the new origin", a
   }]);
 });
 
+test("listener subscriptions observe readiness and committed moves without guessing startup ports", async () => {
+  const observed: (number | null)[] = [];
+  let control!: WorkbenchAppPortControl;
+  let unsubscribe!: () => void;
+  const app = new WorkbenchApp({
+    callerThreadId: null,
+    acquireLaunchLease: async () => ({ dispose: async () => {} }),
+    createRuntime: value => {
+      control = value;
+      return {
+        start: async () => {
+          assert.ok(control.current);
+          assert.ok(control.subscribe);
+          observed.push(control.current()?.currentPort ?? null);
+          unsubscribe = control.subscribe(async () => { observed.push(control.current?.()?.currentPort ?? null); });
+        },
+        close: async () => { unsubscribe?.(); },
+        handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+      };
+    },
+    createServer: () => ({
+      start: async () => address, close: async () => {},
+      moveToPort: async (port, save) => {
+        if (port === 44002) throw new Error("bind failed");
+        await save();
+        return { ...address, port, url: `http://127.0.0.1:${port}` };
+      },
+    }),
+  });
+  try {
+    await app.start();
+    await control.update(44001);
+    await assert.rejects(control.update(44002));
+    assert.deepEqual(observed, [null, address.port, 44001]);
+    unsubscribe();
+    await control.update(44003);
+    assert.deepEqual(observed, [null, address.port, 44001]);
+  } finally { await app.close(); }
+});
+
+test("shutdown cancels network forwarding before waiting for an in-flight port notification", async () => {
+  let control!: WorkbenchAppPortControl;
+  let release!: () => void;
+  let entered!: () => void;
+  let stopped = false;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const notifying = new Promise<void>(resolve => { entered = resolve; });
+  const app = new WorkbenchApp({
+    callerThreadId: null,
+    acquireLaunchLease: async () => ({ dispose: async () => {} }),
+    createRuntime: value => {
+      control = value;
+      return {
+        start: async () => { control.subscribe?.(async () => {
+          if (control.read().currentPort !== 44001) return;
+          entered();
+          await blocked;
+        }); },
+        stopNetwork: async () => { stopped = true; release(); },
+        close: async () => {},
+        handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+      };
+    },
+    createServer: () => ({
+      start: async () => address, close: async () => {},
+      moveToPort: async (port, save) => { await save(); return { ...address, port, url: `http://127.0.0.1:${port}` }; },
+    }),
+  });
+  await app.start();
+  const moving = control.update(44001);
+  await notifying;
+  const closing = app.close();
+  try { assert.equal(stopped, true); }
+  finally { release(); await moving; await closing; }
+});
+
 test("failed bind or persistence leaves the current listener truth unchanged", async () => {
   const bindFailure = fixture({ failMove: true });
   await bindFailure.app.start();

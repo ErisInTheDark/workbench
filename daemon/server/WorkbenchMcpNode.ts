@@ -122,6 +122,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/WorkbenchDaemonHttpRouter.ts",
     "daemon/server/WorkbenchTranscriptAssetController.ts",
     "shared/workbench/commands/workbench-shell-command.ts",
+    "shared/http/loopback-connection.ts",
     "daemon/server/workbench-agent-mcp-request-registry.ts",
   ].join("\n"),
 });

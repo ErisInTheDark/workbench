@@ -1,9 +1,10 @@
 /*
  * Exports:
  * - WorkbenchDaemonHttpRouterOptions: reloadable HTTP controller ports owned by one route registry.
- * - default WorkbenchDaemonHttpRouter: dispatch non-shell daemon HTTP requests through reloadable feature controllers.
+ * - default WorkbenchDaemonHttpRouter: own connection admission and dispatch reloadable daemon HTTP routes.
  */
 import type http from "node:http";
+import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
 
 interface HttpController {
   handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void>;
@@ -86,7 +87,21 @@ export default class WorkbenchDaemonHttpRouter {
     ];
   }
 
+  async admitUpgrade(request: http.IncomingMessage) {
+    if (isLoopbackConnection(request.socket)) return !request.socket.destroyed;
+    request.socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return false;
+  }
+
+  async admitHttp(request: http.IncomingMessage, response: http.ServerResponse) {
+    if (isLoopbackConnection(request.socket)) return true;
+    response.setHeader("Connection", "close");
+    sendJson(response, 403, { error: "Workbench is available only through localhost or Tailscale." });
+    return false;
+  }
+
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    if (!await this.admitHttp(request, response)) return;
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
     if (request.method === "GET" && requestPath.startsWith("/daemon/project-icons/")) {
       try {

@@ -6,7 +6,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -18,6 +17,7 @@ import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 import type { WorkbenchComposerProfile } from "../../shared/types";
+import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
 
@@ -56,12 +56,12 @@ export default class IsolatedWorkbench {
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
   private closed = false;
+  private endpoint: WorkbenchDaemonEndpoint | null = null;
   private constructor(
     private readonly fixtures: string,
     readonly root: string,
     readonly project: string,
     readonly dataRootPath: string,
-    readonly origin: string,
     readonly signal: AbortSignal,
     private readonly codexIdentity: boolean,
   ) {}
@@ -87,6 +87,11 @@ export default class IsolatedWorkbench {
     assert.ok(this.transcriptClient, "Scenario transcript client must be connected");
     return this.transcriptClient;
   }
+  get daemonEndpoint() {
+    assert.ok(this.endpoint, "Isolated daemon must have published readiness");
+    return this.endpoint;
+  }
+  get origin() { return this.daemonEndpoint.origin; }
 
   static async create(source: string, signal: AbortSignal, options = { codexIdentity: true }) {
     const fixtures = path.join(source, ".workbench", "test-runs");
@@ -140,13 +145,6 @@ export default class IsolatedWorkbench {
     await this.command("git", ["config", "user.email", "scenario@localhost"], project, process.env, signal);
     await this.command("git", ["-c", "user.name=Workbench scenario", "-c", "user.email=scenario@localhost",
       "commit", "--allow-empty", "-qm", "isolated scenario fixture"], project, process.env, signal);
-    const listener = net.createServer();
-    listener.listen(0, "127.0.0.1");
-    await once(listener, "listening", { signal });
-    const address = listener.address();
-    assert.ok(address && typeof address !== "string");
-    const port = address.port;
-    await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
     if (codexIdentity && process.platform === "win32") {
       // Convex-lab's sharing boundary: reuse the existing Windows identity, not
       // its sessions or the whole .sandbox directory. Never initialise another.
@@ -170,7 +168,6 @@ export default class IsolatedWorkbench {
       root,
       project,
       path.join(root, "data", "inthedark", "wb"),
-      `http://127.0.0.1:${port}`,
       signal,
       codexIdentity,
     );
@@ -178,7 +175,7 @@ export default class IsolatedWorkbench {
 
   async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
     this.closed = false;
-    const logOffset = this.log.length;
+    this.endpoint = null;
     const home = path.join(this.root, "codex");
     const library = path.join(this.root, "library");
     await fs.mkdir(home, { recursive: true });
@@ -203,10 +200,19 @@ export default class IsolatedWorkbench {
     };
     child.stdout!.on("data", collect);
     child.stderr!.on("data", collect);
+    let readinessError: Error | null = null;
+    child.on("message", message => {
+      const ready = WorkbenchDaemonReadySchema.safeParse(message);
+      if (!ready.success || ready.data.endpoint.pid !== child.pid) {
+        readinessError = new Error("Isolated daemon sent an invalid ready message");
+      } else this.endpoint = ready.data.endpoint;
+      for (const observer of this.observers) observer();
+    });
     child.once("exit", () => { for (const observer of this.observers) observer(); });
     await this.until(() => {
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Isolated daemon exited ${child.exitCode}\n${this.log.slice(-12000)}`);
-      return this.log.slice(logOffset).includes("[workbench-socket] listening on");
+      if (readinessError) throw readinessError;
+      return this.endpoint !== null;
     });
     const client = new WorkbenchSocketClient();
     this.client = client;
@@ -250,12 +256,12 @@ export default class IsolatedWorkbench {
       WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
       TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
-      CODEX_APP_SERVER_URL: this.origin.replace("http:", "ws:"),
       XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
       XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
     };
     // These children represent a separate installation, never the agent's live caller.
-    for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT"]) delete env[key];
+    for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT",
+      "CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_PORT"]) delete env[key];
     env.WORKBENCH_APP_HOST = "127.0.0.1";
     return env;
   }

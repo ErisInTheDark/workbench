@@ -251,7 +251,6 @@ export default class WorkbenchFrontendCompiler {
         // Keep this separate from the process.env object so esbuild folds React's runtime branch.
         "process.env.NODE_ENV": JSON.stringify(this.readReactDevelopmentMode() ? "development" : "production"),
         "process.env": JSON.stringify({
-          WORKBENCH_CODEX_APP_SERVER_PORT: this.environment.WORKBENCH_CODEX_APP_SERVER_PORT ?? "4500",
           WORKBENCH_CODEX_APP_SERVER_URL: this.environment.WORKBENCH_CODEX_APP_SERVER_URL,
           WORKBENCH_DISABLE_REACT_SCAN: this.environment.WORKBENCH_DISABLE_REACT_SCAN,
         }),

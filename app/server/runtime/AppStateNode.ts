@@ -9,11 +9,12 @@ import { formatWorkbenchAppLogMessage } from "../workbench-app-log-format.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppCompilerNode from "./AppCompilerNode.ts";
+import AppNetworkNode from "./AppNetworkNode.ts";
 import AppHttpNode from "./AppHttpNode.ts";
 
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
-  children: [AppCompilerNode, AppHttpNode],
+  children: [AppCompilerNode, AppNetworkNode, AppHttpNode],
   create: (context, build) => {
     const logger = context.processLogger.withMessageFormatter(formatWorkbenchAppLogMessage);
     const state = new WorkbenchBrowserStateRegistry(build.get("database"), {

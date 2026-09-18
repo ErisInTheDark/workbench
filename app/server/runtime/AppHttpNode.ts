@@ -16,6 +16,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     const router = new WorkbenchAppHttpRouter({
       appPort: context.appPort,
       logger,
+      network: build.get("network"),
       outputDirectoryPath: context.outputDirectoryPath,
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
       state: build.get("state"),
@@ -29,7 +30,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   description: "Reload app routes, static SPA serving, and browser diagnostic admission.",
   lifecycle: "atomic",
   provides: ["http"],
-  requires: ["logger", "state"],
+  requires: ["logger", "state", "network"],
   safeAll: false,
   scope: "client:http",
   sources: [
@@ -41,5 +42,6 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "shared/http/workbench-app-port.ts",
     "shared/http/workbench-app-settings.ts",
     "shared/http/StaticHttpRequestController.ts",
+    "shared/http/loopback-connection.ts",
   ].join("\n"),
 });

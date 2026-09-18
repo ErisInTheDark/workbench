@@ -17,9 +17,10 @@ const current: WorkbenchAppPortSnapshot = {
   source: "random",
 };
 
-async function fixture(context: TestContext, appPort: WorkbenchAppPortControl, diagnostics: string[] = []) {
+async function fixture(context: TestContext, appPort: WorkbenchAppPortControl, diagnostics: string[] = [], stableOrigin?: () => string | null) {
   const routes = new WorkbenchAppPortRoutes({
     appPort,
+    stableOrigin,
     onDiagnostic: (message) => diagnostics.push(message),
   });
   const server = new HttpServer({
@@ -102,4 +103,15 @@ test("distinguishes expected port conflicts from unexpected owner failures", asy
     method: "PUT",
   })).status, 500);
   assert.equal(diagnostics.length, 1);
+});
+
+test("only versioned clients receive stable network-origin metadata after a port move", async context => {
+  const stableOrigin = "https://desktop.wb.inthedark.boo";
+  const moved = { ...current, currentPort: 43211, appOrigin: "http://127.0.0.1:43211" };
+  const address = await fixture(context, { read: () => current, update: async () => moved }, [], () => stableOrigin);
+  assert.deepEqual(await (await fetch(`${address.url}${WORKBENCH_APP_PORT_PATH}`)).json(), current);
+  const response = await fetch(`${address.url}${WORKBENCH_APP_PORT_PATH}?version=2`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: 43211 }),
+  });
+  assert.deepEqual(await response.json(), { ...moved, stableOrigin });
 });

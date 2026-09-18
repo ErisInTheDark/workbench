@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { Socket } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
@@ -23,6 +24,14 @@ import type { ReloadableNodeBuild } from "workbench-shared/reload/ReloadableNode
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
+
+function localRequest(chunks: string[]) {
+  const request = Readable.from(chunks) as import("node:http").IncomingMessage;
+  const socket = new Socket();
+  Object.defineProperty(socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+  request.socket = socket;
+  return request;
+}
 const nonServerSourcePaths = new Set([
   "app/client/browser-entry.tsx",
   "app/server/desktop.ts",
@@ -69,6 +78,7 @@ function runtime() {
     startWatching: async () => "C:/workbench-output",
   } as unknown as WorkbenchFrontendCompiler;
   const database = {
+    databasePath: path.join(os.tmpdir(), "workbench-source-ownership", "app-state.sqlite3"),
     close: async () => {},
     start: async () => "registration",
   } as WorkbenchAppStateRepository;
@@ -89,6 +99,7 @@ function runtime() {
     },
     createCompiler: () => compiler,
     createDatabase: () => database,
+    daemonEndpointPath: path.join(os.tmpdir(), "workbench-source-ownership", "daemon", "runtime.json"),
     logger: new WorkbenchProcessLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
     outputDirectoryPath: "C:/workbench-output",
     repositoryRootPath: path.resolve(appDirectoryPath, ".."),
@@ -255,6 +266,7 @@ test("reloads the database with a fresh repository constructor and no process re
       };
       return repository;
     },
+    daemonEndpointPath: path.join(rootPath, "daemon", "runtime.json"),
     logger: new WorkbenchProcessLogger({
       color: false,
       writeError: (line) => {
@@ -276,9 +288,9 @@ test("reloads the database with a fresh repository constructor and no process re
     started = true;
     await target.writeAppPort(43_211);
 
-    const settingsRequest = Readable.from([
+    const settingsRequest = localRequest([
       JSON.stringify({ reactDevelopmentMode: true }),
-    ]) as import("node:http").IncomingMessage;
+    ]);
     settingsRequest.method = "PUT";
     settingsRequest.url = "/api/workbench-app-settings";
     const settingsResponse = new TestResponse();
@@ -288,7 +300,7 @@ test("reloads the database with a fresh repository constructor and no process re
     );
     assert.equal(settingsResponse.statusCode, 200);
 
-    const dirtyRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    const dirtyRequest = localRequest([]);
     dirtyRequest.method = "GET";
     dirtyRequest.url = "/api/workbench-app-runtime?version=2";
     const dirtyResponse = new TestResponse();
@@ -301,7 +313,7 @@ test("reloads the database with a fresh repository constructor and no process re
       ["client:process"],
     );
 
-    const request = Readable.from([JSON.stringify({ scopes: ["client:database"] })]) as import("node:http").IncomingMessage;
+    const request = localRequest([JSON.stringify({ scopes: ["client:database"] })]);
     request.method = "POST";
     request.url = "/api/workbench-app-runtime";
     const response = new TestResponse();
@@ -320,9 +332,9 @@ test("reloads the database with a fresh repository constructor and no process re
     assert.match(reloadLine, /client:http/u);
     assert.doesNotMatch(reloadLine, /client:process/u);
 
-    const restoreRequest = Readable.from([
+    const restoreRequest = localRequest([
       JSON.stringify({ reactDevelopmentMode: false }),
-    ]) as import("node:http").IncomingMessage;
+    ]);
     restoreRequest.method = "PUT";
     restoreRequest.url = "/api/workbench-app-settings";
     const restoreResponse = new TestResponse();
@@ -332,7 +344,7 @@ test("reloads the database with a fresh repository constructor and no process re
     );
     assert.equal(restoreResponse.statusCode, 200);
 
-    const cleanRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    const cleanRequest = localRequest([]);
     cleanRequest.method = "GET";
     cleanRequest.url = "/api/workbench-app-runtime?version=2";
     const cleanResponse = new TestResponse();
@@ -342,7 +354,7 @@ test("reloads the database with a fresh repository constructor and no process re
     );
     assert.deepEqual(JSON.parse(cleanResponse.body).reloadDirt.dirtyScopes, []);
 
-    const generationRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    const generationRequest = localRequest([]);
     generationRequest.method = "GET";
     generationRequest.url = "/api/workbench-app-runtime?version=3";
     const generationResponse = new TestResponse();

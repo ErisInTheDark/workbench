@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect runner wiring from silence through two failed WebSocket probes to owned-port recovery.
+ * No production exports. Protect reported-endpoint health checks and owned-child recovery without timer races.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -10,8 +10,32 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
-import { deriveWorkbenchRuntimeTopology } from "../../shared/workbench/runtime-topology.ts";
 import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+
+function fakeChild() {
+  const child = new EventEmitter() as ChildProcess;
+  Object.defineProperty(child, "pid", { value: 12345 });
+  let exitCode: number | null = null;
+  let signalCode: NodeJS.Signals | null = null;
+  Object.defineProperties(child, {
+    exitCode: { get: () => exitCode },
+    signalCode: { get: () => signalCode },
+  });
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exitCode = code;
+    signalCode = signal;
+  });
+  return child;
+}
+
+function reportReady(child: ChildProcess) {
+  child.emit("message", {
+    type: "workbench-daemon-ready",
+    endpoint: { version: 1, instanceId: "6e1a6f64-af71-4639-b997-65d8f314b352", pid: child.pid, origin: "http://127.0.0.1:32123" },
+  });
+}
 
 class FakeClock {
   nowMs = 0;
@@ -100,13 +124,11 @@ function fakeLog(lines: string[]) {
   };
 }
 
-test("retries failed health once before killing owned ports at the silence deadline", async (context) => {
+test("probes the reported endpoint twice before retiring only its owned child", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-"));
   context.after(async () => await rm(root, { force: true, recursive: true }));
   const clock = new FakeClock();
-  const child = new EventEmitter() as ChildProcess;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  const child = fakeChild();
   const lines: string[] = [];
   const probes: number[] = [];
   const deadlineCleanup = event();
@@ -123,7 +145,8 @@ test("retries failed health once before killing owned ports at the silence deadl
       RESTART_DELAY_SECONDS: "3",
     },
     healthClient: {
-      probe: async (_url, timeoutMs) => {
+      probe: async (url, timeoutMs) => {
+        assert.equal(url, "ws://127.0.0.1:32123");
         probes.push(timeoutMs);
         (probes.length === 1 ? firstProbe : secondProbe).resolve();
         throw new Error("fixture unavailable");
@@ -132,24 +155,19 @@ test("retries failed health once before killing owned ports at the silence deadl
     loggerFactory: () => fakeLog(lines),
     now: clock.now,
     projectRootPath: root,
-    runCommand: async () => {
+    terminateChild: async owned => {
+      assert.equal(owned, child);
       kills += 1;
-      if (kills === 2) {
-        deadlineCleanup.resolve();
-        queueMicrotask(() => child.emit("exit", 7, null));
-      }
-      return { exitCode: 0, signal: null, stderr: "", stdout: "" };
+      deadlineCleanup.resolve();
+      queueMicrotask(() => child.emit("exit", 7, null));
     },
     sleep: clock.sleep,
     spawnDaemon: () => {
       spawns += 1;
       spawned.resolve();
+      queueMicrotask(() => reportReady(child));
       return child;
     },
-    topology: deriveWorkbenchRuntimeTopology({
-      CODEX_APP_SERVER_URL: "ws://127.0.0.1:4500",
-      OPENCODE_SERVER_URL: "http://127.0.0.1:4096",
-    }),
   });
 
   let runError: unknown = null;
@@ -160,7 +178,7 @@ test("retries failed health once before killing owned ports at the silence deadl
   ]);
   assert.equal(runError, null);
   await clock.waitUntilArmed();
-  assert.equal(kills, 1);
+  assert.equal(kills, 0);
 
   clock.advance(1_500);
   await firstProbe.promise;
@@ -174,7 +192,7 @@ test("retries failed health once before killing owned ports at the silence deadl
 
   clock.advance(750);
   await deadlineCleanup.promise;
-  assert.ok(lines.some((line) => line.includes("killing owned ports for restart")));
+  assert.equal(kills, 1);
 
   await runner.stop();
   await running;
@@ -194,16 +212,12 @@ test("stop exits a paused runner without spawning or deleting the sentinel", asy
     loggerFactory: () => fakeLog([]),
     now: clock.now,
     projectRootPath: root,
-    runCommand: async () => ({ exitCode: 0, signal: null, stderr: "", stdout: "" }),
+    terminateChild: async () => assert.fail("A paused runner owns no child."),
     sleep: clock.sleep,
     spawnDaemon: () => {
       spawns += 1;
       return new EventEmitter() as ChildProcess;
     },
-    topology: deriveWorkbenchRuntimeTopology({
-      CODEX_APP_SERVER_URL: "ws://127.0.0.1:4500",
-      OPENCODE_SERVER_URL: "http://127.0.0.1:4096",
-    }),
   });
 
   const running = runner.run();
@@ -219,9 +233,7 @@ test("child output cancels the stale wait before arming a fresh silence window",
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-output-"));
   context.after(async () => await rm(root, { force: true, recursive: true }));
   const clock = new FakeClock();
-  const child = new EventEmitter() as ChildProcess;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  const child = fakeChild();
   let kills = 0;
   const spawned = event();
   const runner = new WorkbenchDaemonHost({
@@ -230,20 +242,16 @@ test("child output cancels the stale wait before arming a fresh silence window",
     loggerFactory: () => fakeLog([]),
     now: clock.now,
     projectRootPath: root,
-    runCommand: async () => {
+    terminateChild: async owned => {
+      assert.equal(owned, child);
       kills += 1;
-      if (kills === 2) queueMicrotask(() => child.emit("exit", 0, null));
-      return { exitCode: 0, signal: null, stderr: "", stdout: "" };
+      queueMicrotask(() => child.emit("exit", 0, null));
     },
     sleep: clock.sleep,
     spawnDaemon: () => {
       spawned.resolve();
       return child;
     },
-    topology: deriveWorkbenchRuntimeTopology({
-      CODEX_APP_SERVER_URL: "ws://127.0.0.1:4500",
-      OPENCODE_SERVER_URL: "http://127.0.0.1:4096",
-    }),
   });
 
   const running = runner.run();
@@ -258,4 +266,5 @@ test("child output cancels the stale wait before arming a fresh silence window",
 
   await runner.stop();
   await running;
+  assert.equal(kills, 1);
 });

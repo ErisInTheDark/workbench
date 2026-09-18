@@ -10,6 +10,7 @@ import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 
 export interface AppProcessContext {
+  daemonEndpointPath: string;
   appPort: WorkbenchAppPortControl;
   createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;

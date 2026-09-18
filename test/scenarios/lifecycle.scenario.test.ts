@@ -20,6 +20,8 @@ import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/wo
 import type { TranscriptStreamUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
+import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
+import { WorkbenchDaemonConnectionSchema, WorkbenchDaemonEndpointSchema } from "../../shared/http/workbench-daemon-endpoint";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -40,6 +42,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
   console.log(`lifecycle fixture: ${runtime.root}`);
   const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
   const serverDatabase = path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3");
+  const endpointPath = path.join(runtime.dataRootPath, "daemon", "runtime.json");
   const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = '{"retained":"lifecycle cutover evidence"}';
@@ -52,6 +55,20 @@ test("real application survives reload expiry, migrated candidate failure, retry
     return response;
   };
   const appState = async () => (await http("/api/workbench-client-state")).json() as Promise<{ daemonRegistrationId: string }>;
+  const verifyEndpoint = async () => {
+    const endpoint = runtime.daemonEndpoint;
+    assert.deepEqual(await readDaemonEndpoint(endpointPath), endpoint);
+    const health = await fetch(`${endpoint.origin}/healthz`, { signal: t.signal });
+    assert.deepEqual(WorkbenchDaemonEndpointSchema.parse(await health.json()), endpoint);
+    // App listener readiness deliberately precedes asynchronous daemon verification.
+    // Request completion yields to that observer; the scenario signal bounds failure.
+    for (;;) {
+      const connection = WorkbenchDaemonConnectionSchema.parse(await (await http("/api/workbench-network?connection=1")).json());
+      if (connection.localPort === null) continue;
+      assert.equal(connection.localPort, Number(new URL(endpoint.origin).port));
+      break;
+    }
+  };
   const appDirt = async (signal?: AbortSignal) => (await (await http(runtimePath, { signal })).json() as { reloadDirt: WorkbenchReloadDirtSnapshot }).reloadDirt;
   const serverDirt = async () => WorkbenchDaemonReloadDirtEnvelopeSchema.parse(
     await runtime.request(WORKBENCH_RELOAD_DIRT_READ_METHOD)).snapshot;
@@ -187,6 +204,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, fixtureProject.id);
     const appStart = performance.now();
     await runtime.startApp();
+    await verifyEndpoint();
     const appStartupMs = Math.round(performance.now() - appStart);
     console.log(`cold startup to scenario readiness: daemon ${daemonStartupMs}ms, app ${appStartupMs}ms`);
     for (const output of [runtime.output, runtime.appOutput]) {
@@ -267,11 +285,15 @@ test("real application survives reload expiry, migrated candidate failure, retry
       console.log(`${owner}: schema restored after failure; same-process retry migrated successfully`);
       await writeLifecycleFault(runtime.project, {});
     }
+    const previousInstance = runtime.daemonEndpoint.instanceId;
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 }, "Owners must complete shutdown successfully before reopen");
+    assert.equal(await readDaemonEndpoint(endpointPath), null, "Shutdown must withdraw the retired endpoint");
     await runtime.start();
+    assert.notEqual(runtime.daemonEndpoint.instanceId, previousInstance);
     assert.deepEqual((await runtime.transcripts.read({ threadId: transcript.threadId, turnLimit: 1 }))?.loadedTurnIds,
       [transcript.turnId], "Cold startup must permit an immediate durable read");
     await runtime.startApp();
+    await verifyEndpoint();
     await assets();
     await verifyTranscript();
     assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);

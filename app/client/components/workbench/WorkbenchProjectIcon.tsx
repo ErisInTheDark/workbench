@@ -1,13 +1,12 @@
 /*
- * Keywords: project, icon, favicon, fallback, colour.
  * Exports:
  * - default WorkbenchProjectIcon: render a discovered project asset or stable theme-aware initial fallback.
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { getWorkbenchProjectIconUrl } from "workbench-shared/workbench/workbench-connection";
+import { getWorkbenchProjectIconUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
 
@@ -41,17 +40,19 @@ export default function WorkbenchProjectIcon ({
   variant?: keyof typeof VARIANT_CLASS_NAMES;
 }) {
   const assetKey = project.icon ? `${project.id}:${project.icon.rootId}:${project.icon.path}` : project.id;
+  useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
+  const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey);
   const [loadFailed, setLoadFailed] = useState(false);
-  useEffect(() => setLoadFailed(false), [assetKey]);
+  useEffect(() => setLoadFailed(false), [assetKey, assetUrl]);
   const className = `inline-flex shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;
 
-  if (project.icon && !loadFailed) {
+  if (project.icon && assetUrl && !loadFailed) {
     return (
       <span aria-hidden="true" className={`${className} ${VARIANT_CLASS_NAMES[variant].max}`}>
         <img
           alt=""
           className="max-h-full max-w-full object-contain"
-          src={getWorkbenchProjectIconUrl(project.id, assetKey)}
+          src={assetUrl}
           onError={() => setLoadFailed(true)}
         />
       </span>

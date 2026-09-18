@@ -7,6 +7,7 @@
  * - AppStateRows: inferred selected row types for app-state tables.
  */
 import appStateReleases from "./workbench-app-state-releases.ts";
+import { workbenchNetworkHistory, workbenchNetworkTables } from "./workbench-network-state-schema.ts";
 import {
   booleanInteger,
   check,
@@ -639,6 +640,7 @@ const projectAliasesHistory = defineTableHistory({
 });
 
 const histories = [
+  ...workbenchNetworkHistory(appStateReleases.privateNetworking.version, appStateReleases.networkModes.version),
   workbenchHarnessesHistory,
   modelPreferencesHistory,
   appStateMetadataHistory,
@@ -677,6 +679,7 @@ export const appStateClientTables = Object.freeze({
 });
 
 export const appStateTables = Object.freeze({
+  ...workbenchNetworkTables,
   projectAliases: projectAliasesHistory.current,
   workbenchHarnesses: workbenchHarnessesHistory.current,
   appStateMetadata: appStateMetadataHistory.current,

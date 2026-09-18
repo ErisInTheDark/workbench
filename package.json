@@ -4,6 +4,8 @@
   "scripts": {
     "app": "node app/node_modules/tsx/dist/cli.mjs app/server/index.ts",
     "build:tray": "node scripts/build-tray.mjs",
+    "build:network": "node scripts/build-network.mjs",
+    "test:network": "node scripts/test-network.mjs",
     "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
     "test:codex": "node --disable-warning=ExperimentalWarning --import tsx test/run-codex-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",

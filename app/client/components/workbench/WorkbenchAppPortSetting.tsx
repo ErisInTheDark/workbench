@@ -34,7 +34,7 @@ function sourceDescription(snapshot: WorkbenchAppPortClientSnapshot | null) {
   }
 }
 
-export default function WorkbenchAppPortSetting() {
+export default function WorkbenchAppPortSetting({ inline = false }: { inline?: boolean }) {
   const [snapshot, setSnapshot] = useState<WorkbenchAppPortClientSnapshot | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
@@ -75,6 +75,12 @@ export default function WorkbenchAppPortSetting() {
         window.location.href,
         nextSnapshot.appOrigin,
         readWorkbenchBrowserStateTransferId(snapshot),
+        nextSnapshot.stableOrigin ?? (
+          window.location.protocol === "https:"
+          || Number(window.location.port || "80") !== snapshot?.currentPort
+            ? window.location.origin
+            : null
+        ),
       ));
     } catch (applyError) {
       setError(boundedError(applyError));
@@ -84,12 +90,12 @@ export default function WorkbenchAppPortSetting() {
 
   return (
     <section className="space-y-3 rounded-[0.85rem] py-1">
-      <div className="min-w-0">
+      {!inline ? <div className="min-w-0">
         <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">App port</h3>
         <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{sourceDescription(snapshot)}</p>
-      </div>
+      </div> : null}
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { void apply(event); }}>
-        <label className="sr-only" htmlFor="workbench-app-port">App port</label>
+        <label className={inline ? "w-24 text-sm text-text" : "sr-only"} htmlFor="workbench-app-port">{inline ? "Port" : "App port"}</label>
         <input
           id="workbench-app-port"
           aria-describedby={error ? "workbench-app-port-error" : undefined}
@@ -114,6 +120,7 @@ export default function WorkbenchAppPortSetting() {
           {isApplying ? "Applying..." : "Apply"}
         </button>
       </form>
+      {inline && snapshot?.source === "environment" ? <p className="m-0 text-sm text-fg/muted">{sourceDescription(snapshot)}</p> : null}
       {error ? (
         <p id="workbench-app-port-error" className="m-0 text-[0.78rem] leading-5 text-danger" role="alert">{error}</p>
       ) : null}

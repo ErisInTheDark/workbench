@@ -27,30 +27,20 @@ import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchDaemonReloadController";
 import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
+import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
 const PROJECT_ROOT = path.resolve(DAEMON_PACKAGE_ROOT, "..");
 const WORKBENCH_DATA_ROOT = resolveWorkbenchDataRoot();
-const WORKBENCH_SOCKET_URL = process.env.CODEX_APP_SERVER_URL ?? "ws://0.0.0.0:4500";
 const DAEMON_RELOAD_PATH = "/daemon/reload";
 const DAEMON_BROWSE_PATH = "/daemon/browse";
 const DAEMON_BROWSE_SESSIONS_PATH = "/daemon/browse/sessions";
 
-function parseWebSocketPort(url: string) {
-  const parsedUrl = new URL(url);
-  if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
-    throw new Error(`Workbench socket URL must use ws:// or wss://, received ${url}`);
-  }
-
-  return parsedUrl.port || (parsedUrl.protocol === "wss:" ? "443" : "80");
-}
-
-const LOCAL_DAEMON_ORIGIN = `http://127.0.0.1:${parseWebSocketPort(WORKBENCH_SOCKET_URL)}`;
-const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
-  origin: LOCAL_DAEMON_ORIGIN,
-  runtimeDirectoryPath: path.join(DAEMON_PACKAGE_ROOT, "node_modules", ".bin"),
-  shellSourcePath: path.join(DAEMON_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
+const daemonListener = new WorkbenchDaemonListener({
+  endpointPath: path.join(WORKBENCH_DATA_ROOT, "daemon", "runtime.json"),
+  leasePath: path.join(WORKBENCH_DATA_ROOT, "daemon", "launch.sqlite3"),
 });
 
 const bridgeConnections = new Set<BridgeClient>();
@@ -70,8 +60,10 @@ let shuttingDown = false;
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
-const featureHost = new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>(
-  createDaemonFeatureContext(),
+let featureHost: ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
+function createFeatureHost(endpoint: WorkbenchDaemonEndpoint) {
+  return new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>(
+  createDaemonFeatureContext(endpoint),
   createReloadableNodeModuleLoader(),
   {
     logError: (message) => logError("runtime-drain", message),
@@ -86,6 +78,7 @@ const featureHost = new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeOb
     runtimeDrainTimeoutMs: 30_000,
   },
 );
+}
 
 function sendJsonToClient(client: BridgeClient, message: unknown) {
   void featureHost.run(
@@ -166,7 +159,7 @@ function finalizeReloadResponse(
 }
 
 async function stopAllChildren() {
-  const closures = [featureHost.dispose()];
+  const closures = featureHost ? [featureHost.dispose()] : [];
 
   for (const client of bridgeConnections) {
     client.close();
@@ -178,12 +171,10 @@ async function stopAllChildren() {
     bridgeWebSocketServer = null;
   }
 
-  if (bridgeServer) {
-    bridgeServer.close();
-    bridgeServer = null;
-  }
+  bridgeServer = null;
   const results = await Promise.allSettled(closures);
   const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+  try { await daemonListener.close(); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(failures, "Daemon child shutdown failed.");
 }
 
@@ -201,20 +192,21 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
         closeBridgeClients(1012, "The daemon is hard reloading; reconnect shortly.");
         bridgeWebSocketServer?.close();
         bridgeWebSocketServer = null;
-        bridgeServer?.close();
         bridgeServer = null;
+        // Keep the installation lease until the graph has relinquished its resources.
+        return Promise.allSettled([featureHost.beginHardShutdown()]).then(() => daemonListener.close());
       },
     },
     { name: "feature graph", notify: () => featureHost.beginHardShutdown() },
   ];
 }
 
-function createDaemonFeatureContext(): DaemonProcessContext {
+function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonProcessContext {
   return {
     dataRootPath: WORKBENCH_DATA_ROOT,
     daemonPackageRoot: DAEMON_PACKAGE_ROOT,
     isShuttingDown: () => shuttingDown,
-    webSocketUrl: WORKBENCH_SOCKET_URL,
+    webSocketUrl: endpoint.origin.replace("http:", "ws:"),
     isHardReloadPending: () => featureHost.get("reloadController").isHardReloadPending(),
     broadcastProviderNotification: broadcastToClients,
     browseProjectResolvers: {
@@ -238,7 +230,7 @@ function createDaemonFeatureContext(): DaemonProcessContext {
       `thread state: install subagent ${record.harness}:${record.threadId}`,
     ),
     legacyMigrationProjectRoot: PROJECT_ROOT,
-    localDaemonOrigin: LOCAL_DAEMON_ORIGIN,
+    localDaemonOrigin: endpoint.origin,
     logTurnRecovery: (message) => log("turn-recovery", message),
     publishThreadState,
     reportWebSocketDelivery: (delivery) => {
@@ -409,12 +401,14 @@ const controlIngress = new WorkbenchDaemonControlIngress({
   ),
 });
 
-function startBridgeServer() {
-  const address = new URL(WORKBENCH_SOCKET_URL);
-  const host = address.hostname || "127.0.0.1";
-  const port = Number(parseWebSocketPort(WORKBENCH_SOCKET_URL));
+async function startBridgeServer() {
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
-  bridgeServer = http.createServer((request, response) => {
+  const handleRequest = async (request: http.IncomingMessage, response: http.ServerResponse) => {
+    if (shuttingDown || !daemonListener.ready) {
+      sendHttpJson(response, 503, { error: "Workbench daemon is starting or stopping." });
+      return;
+    }
+    if (!await featureHost.get("daemonHttp").admitHttp(request, response)) return;
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
     if (requestPath === DAEMON_BROWSE_PATH && request.method === "POST") {
       void featureHost.run("browseExecution", (execution) => execution.handleBrowseHttpRequest(request, response), "Browse HTTP request").catch((error) => {
@@ -449,7 +443,7 @@ function startBridgeServer() {
     }
 
     if (request.url === "/readyz" || request.url === "/healthz") {
-      sendHttpJson(response, 200, {});
+      sendHttpJson(response, 200, daemonListener.current);
       return;
     }
 
@@ -460,11 +454,29 @@ function startBridgeServer() {
         response.end();
       }
     });
+  };
+  bridgeServer = http.createServer((request, response) => {
+    void handleRequest(request, response).catch((error: unknown) => {
+      logError("network", error instanceof Error ? error.message.slice(0, 300) : "Daemon ingress failed.");
+      if (!response.headersSent) sendHttpJson(response, 503, { error: "Workbench ingress is unavailable." });
+      else response.destroy();
+    });
   });
 
   bridgeServer.on("upgrade", (request, socket, head) => {
-    bridgeWebSocketServer?.handleUpgrade(request, socket, head, (client) => {
-      bridgeWebSocketServer?.emit("connection", client, request);
+    if (shuttingDown || !daemonListener.ready) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    void (async () => {
+      if (!await featureHost.get("daemonHttp").admitUpgrade(request)) return;
+      if (socket.destroyed) return;
+      bridgeWebSocketServer?.handleUpgrade(request, socket, head, (client) => {
+        bridgeWebSocketServer?.emit("connection", client, request);
+      });
+    })().catch((error: unknown) => {
+      logError("network", error instanceof Error ? error.message.slice(0, 300) : "WebSocket ingress failed.");
+      socket.destroy();
     });
   });
 
@@ -500,9 +512,7 @@ function startBridgeServer() {
     shutdownAndExit(1, error);
   });
 
-  bridgeServer.listen(port, host, () => {
-    log("workbench-socket", `listening on ${WORKBENCH_SOCKET_URL}`);
-  });
+  return await daemonListener.bind(bridgeServer);
 }
 
 function shutdownAndExit(exitCode: number, error?: unknown) {
@@ -538,11 +548,31 @@ process.on("exit", () => {
 });
 
 async function startDaemon() {
-  log("daemon", `starting socket at ${WORKBENCH_SOCKET_URL}`);
+  log("daemon", "starting a random loopback listener");
+  if (process.env.CODEX_APP_SERVER_URL) {
+    log("daemon", "CODEX_APP_SERVER_URL no longer selects a local listener; the bound endpoint is published automatically.");
+  }
+  const endpoint = await startBridgeServer();
+  if (shuttingDown) return;
+  const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
+    origin: endpoint.origin,
+    runtimeDirectoryPath: path.join(DAEMON_PACKAGE_ROOT, "node_modules", ".bin"),
+    shellSourcePath: path.join(DAEMON_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
+  });
   await workbenchAgentCliEnvironment.install();
+  if (shuttingDown) return;
+  featureHost = createFeatureHost(endpoint);
   await ensureWorkbenchPromptFiles();
+  if (shuttingDown) return;
   await featureHost.start();
-  startBridgeServer();
+  if (shuttingDown) return;
+  await daemonListener.publish();
+  if (process.connected && process.send) {
+    await new Promise<void>((resolve, reject) => {
+      process.send!({ type: "workbench-daemon-ready", endpoint }, error => error ? reject(error) : resolve());
+    });
+  }
+  log("workbench-socket", `listening on ${endpoint.origin.replace("http:", "ws:")}`);
 }
 
 void startDaemon().catch((error) => {

@@ -90,6 +90,34 @@ class FakeWebSocket {
   }
 }
 
+test("default reconnection resolves the current daemon instead of retaining a retired local port", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const clock = new FakeClock();
+  const sockets: FakeWebSocket[] = [];
+  const addresses: string[] = [];
+  globalThis.setTimeout = clock.setTimeout as typeof setTimeout;
+  globalThis.clearTimeout = clock.clearTimeout as typeof clearTimeout;
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) { super(url); addresses.push(url); sockets.push(this); }
+  } as unknown as typeof WebSocket;
+  let port = 32123;
+  const client = new WorkbenchSocketClient({ resolveUrl: async () => `ws://127.0.0.1:${port}` });
+  try {
+    await client.connect();
+    sockets[0]!.close();
+    port = 32124;
+    await client.connectSocket();
+    assert.deepEqual(addresses, ["ws://127.0.0.1:32123", "ws://127.0.0.1:32124"]);
+  } finally {
+    client.dispose();
+    globalThis.WebSocket = originalWebSocket;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("a socket that errors before opening is closed before replacement", async () => {
   const originalWebSocket = globalThis.WebSocket;
   const sockets: FakeWebSocket[] = [];

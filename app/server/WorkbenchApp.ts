@@ -1,14 +1,16 @@
 /*
  * Exports:
- * - WorkbenchAppServer/WorkbenchAppLease/WorkbenchAppRuntime/WorkbenchAppPortControl: app-owned lifecycle ports. Keywords: app, server, lease, runtime, port.
- * - WorkbenchAppOptions/WorkbenchAppStartResult: foreground app startup configuration and result. Keywords: app, lifecycle, singleton.
- * - default WorkbenchApp: own foreground listener moves and reload runtime behind one machine launch lease. Keywords: app, controller, process, port.
+ * - WorkbenchAppServer/WorkbenchAppLease/WorkbenchAppRuntime/WorkbenchAppPortControl: app-owned lifecycle and listener notification ports.
+ * - WorkbenchAppOptions/WorkbenchAppStartResult: foreground startup configuration and result.
+ * - default WorkbenchApp: own listener readiness, moves and reload runtime behind one launch lease.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import type { HttpServerAddress } from "workbench-shared/http/HttpServer";
 import type { WorkbenchAppPortSnapshot } from "workbench-shared/http/workbench-app-port";
 
-import WorkbenchAppLaunchLease from "./WorkbenchAppLaunchLease.ts";
+import WorkbenchProcessLease from "workbench-shared/process/WorkbenchProcessLease";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 export interface WorkbenchAppServer {
   close(): Promise<void>;
@@ -25,11 +27,14 @@ export interface WorkbenchAppRuntime {
   handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void>;
   readAppPort(): number | null;
   start(): Promise<void>;
+  stopNetwork?(): Promise<void>;
   writeAppPort(port: number): Promise<void>;
 }
 
 export interface WorkbenchAppPortControl {
   read(): WorkbenchAppPortSnapshot;
+  current?(): WorkbenchAppPortSnapshot | null;
+  subscribe?(listener: () => Promise<void>): () => void;
   update(port: number): Promise<WorkbenchAppPortSnapshot>;
 }
 
@@ -75,9 +80,11 @@ export default class WorkbenchApp {
   private portSource: WorkbenchAppPortSnapshot["source"] = "random";
   private runtime: WorkbenchAppRuntime | null = null;
   private server: WorkbenchAppServer | null = null;
+  private readonly portListeners = new Set<() => Promise<void>>();
 
   constructor(options: WorkbenchAppOptions) {
-    this.acquireLaunchLease = options.acquireLaunchLease ?? (() => WorkbenchAppLaunchLease.acquire());
+    this.acquireLaunchLease = options.acquireLaunchLease
+      ?? (() => WorkbenchProcessLease.acquire(path.join(resolveWorkbenchDataRoot(), "app", "app-launch.sqlite3")));
     this.callerThreadId = Object.hasOwn(options, "callerThreadId")
       ? options.callerThreadId?.trim() || null
       : currentThreadId();
@@ -112,6 +119,11 @@ export default class WorkbenchApp {
     if (!this.lease) return { kind: "already-running" };
     const runtime = this.createRuntime({
       read: () => this.readPort(),
+      current: () => this.address ? this.readPort() : null,
+      subscribe: listener => {
+        this.portListeners.add(listener);
+        return () => { this.portListeners.delete(listener); };
+      },
       update: async (port) => await this.updatePort(port),
     });
     this.runtime = runtime;
@@ -125,6 +137,7 @@ export default class WorkbenchApp {
     this.address = address;
     const portSource = this.environmentPort !== null ? "environment" : savedPort !== null ? "setting" : "random";
     this.portSource = portSource;
+    await this.publishPort();
     return { address, kind: "started", portSource };
   }
 
@@ -132,8 +145,14 @@ export default class WorkbenchApp {
     if (this.closeTask) return this.closeTask;
     this.closing = true;
     this.closeTask = (async () => {
-      await this.portChangeQueue;
       const failures: unknown[] = [];
+      // Forwarding may be awaiting an external Tailscale service during a port
+      // notification. Cancel that owner before waiting for port work to settle.
+      if (this.address) {
+        try { await this.runtime?.stopNetwork?.(); }
+        catch (error) { failures.push(error); }
+      }
+      await this.portChangeQueue;
       const closures: Promise<void>[] = [];
       for (const owner of [this.server, this.runtime]) {
         try { if (owner) closures.push(owner.close()); }
@@ -150,6 +169,7 @@ export default class WorkbenchApp {
       this.runtime = null;
       this.lease = null;
       this.address = null;
+      this.portListeners.clear();
     })();
     return this.closeTask;
   }
@@ -172,6 +192,15 @@ export default class WorkbenchApp {
     return null;
   }
 
+  private async publishPort() {
+    for (const listener of this.portListeners) {
+      try { await listener(); }
+      catch {
+        this.onDiagnostic("A Workbench listener subscriber failed; check networking status.");
+      }
+    }
+  }
+
   private updatePort(port: number): Promise<WorkbenchAppPortSnapshot> {
     if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
       return Promise.reject(new Error("Workbench app port must be an integer from 1 through 65535."));
@@ -190,6 +219,7 @@ export default class WorkbenchApp {
       this.address = address;
       this.portSource = "setting";
       this.onAddressChange(address);
+      await this.publishPort();
       return this.readPort();
     });
     this.portChangeQueue = operation.then(() => undefined, () => undefined);

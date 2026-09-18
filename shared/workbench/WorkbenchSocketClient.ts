@@ -15,7 +15,7 @@ import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
 } from "../workbench/websocket-stream.ts";
 import type { WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
-import { getWorkbenchDaemonUrl } from "./workbench-connection.ts";
+import { workbenchDaemonConnection } from "./workbench-connection.ts";
 import { createWorkbenchRequestIdGenerator, type WorkbenchRpcResponse } from "./workbench-rpc.ts";
 
 type PendingResponseHandler = {
@@ -79,36 +79,49 @@ export default class WorkbenchSocketClient {
   private eventStreamAckTimer: Timer | null = null;
   private pendingEventStreamAckSequence: number | null = null;
   private readonly scheduleEventStreamAck: (callback: () => void, delayMs: number) => Timer;
-  private url = getWorkbenchDaemonUrl();
+  private explicitUrl: string | null = null;
+  private readonly resolveUrl: () => Promise<string>;
   private socket: WebSocket | null = null;
 
   constructor({
     clearEventStreamAckTimeout: cancelEventStreamAck = (timer) => globalThis.clearTimeout(timer),
     setEventStreamAckTimeout: scheduleEventStreamAck = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+    resolveUrl = () => workbenchDaemonConnection.resolve(),
   }: {
     clearEventStreamAckTimeout?: (timer: Timer) => void;
     setEventStreamAckTimeout?: (callback: () => void, delayMs: number) => Timer;
+    resolveUrl?: () => Promise<string>;
   } = {}) {
     this.cancelEventStreamAck = cancelEventStreamAck;
     this.scheduleEventStreamAck = scheduleEventStreamAck;
+    this.resolveUrl = resolveUrl;
   }
 
-  async connect(url = getWorkbenchDaemonUrl()) {
+  async connect(url?: string) {
     await this.connectSocket(url);
   }
 
-  async connectSocket(url = this.url) {
+  async connectSocket(url?: string) {
     if (this.disposed) throw new Error("Workbench socket client is disposed.");
-    this.url = url;
+    if (url !== undefined) this.explicitUrl = url;
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.socketPromise) return await this.socketPromise;
-    const socketPromise = this.openSocket(url);
+    const socketPromise = this.openResolvedSocket();
     this.socketPromise = socketPromise;
     try {
       await socketPromise;
+    } catch (error) {
+      if (!this.disposed) this.scheduleReconnect();
+      throw error;
     } finally {
       if (this.socketPromise === socketPromise) this.socketPromise = null;
     }
+  }
+
+  private async openResolvedSocket() {
+    const url = this.explicitUrl ?? await this.resolveUrl();
+    if (this.disposed) throw new Error("Workbench socket client is disposed.");
+    await this.openSocket(url);
   }
 
   private async openSocket(url: string) {
@@ -161,7 +174,7 @@ export default class WorkbenchSocketClient {
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.connectSocket(this.url).catch(() => this.scheduleReconnect());
+      void this.connectSocket().catch(() => this.scheduleReconnect());
     }, delay);
   }
 

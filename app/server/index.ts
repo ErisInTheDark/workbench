@@ -15,6 +15,11 @@ const processLogger = new WorkbenchProcessLogger();
 
 async function main() {
   const commandLine = readWorkbenchAppCommandLine();
+  const configuredHostname = process.env.WORKBENCH_APP_HOST?.trim();
+  const hostname = !configuredHostname || configuredHostname === "localhost" ? "127.0.0.1" : configuredHostname;
+  if (hostname !== "127.0.0.1" && hostname !== "::1") {
+    throw new Error("WORKBENCH_APP_HOST must be loopback; use Networking settings for tailnet access.");
+  }
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
   const createCompiler = (
@@ -46,7 +51,7 @@ async function main() {
         : {}),
     }),
     createServer: (runtime, port) => new WorkbenchFrontendServer({
-      hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
+      hostname,
       onDiagnostic: (message) => processLogger.error("http", message),
       port,
       requests: runtime,

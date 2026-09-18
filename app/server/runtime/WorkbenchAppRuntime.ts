@@ -4,11 +4,13 @@
  * - default WorkbenchAppRuntime: own the stable graph host and reload ingress while leasing requests.
  */
 import { createRequire } from "node:module";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import {
   WORKBENCH_RELOAD_SCOPE_PATTERN,
   type WorkbenchReloadDirtSnapshot,
@@ -24,13 +26,14 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 const RUNTIME_PATH = "/api/workbench-app-runtime";
 const MAX_RELOAD_BODY_BYTES = 16_000;
 const requiredRegistrations = [
-  "compiler", "database", "http", "logger", "reloadController", "reloadDirt", "state", "topology",
+  "compiler", "database", "http", "logger", "network", "reloadController", "reloadDirt", "state", "topology",
 ] as const satisfies readonly (keyof AppRuntimeObjects)[];
 
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
   createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
+  daemonEndpointPath?: string;
   logger: WorkbenchProcessLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;
@@ -87,6 +90,7 @@ export default class WorkbenchAppRuntime {
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
+      daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
       appPort: options.appPort,
       createCompiler: (logger, readReactDevelopmentMode) => options.createCompiler(logger, () => {
         this.appliedReactDevelopmentMode ??= readReactDevelopmentMode();
@@ -140,11 +144,12 @@ export default class WorkbenchAppRuntime {
           "app/server/app-command-line.ts",
           "package.json",
           "app/server/WorkbenchApp.ts",
-          "app/server/WorkbenchAppLaunchLease.ts",
+          "shared/process/WorkbenchProcessLease.ts",
           "app/server/workbench-runtime-root.ts",
           "app/server/WorkbenchAppProcessProtocol.ts",
           "app/server/WorkbenchFrontendServer.ts",
           "app/server/runtime/WorkbenchAppRuntime.ts",
+          "app/server/runtime/app-process-context.ts",
           "shared/http/HttpServer.ts",
           "shared/process/WorkbenchProcessLogger.ts",
           "shared/workbench-data-root.ts",
@@ -186,6 +191,10 @@ export default class WorkbenchAppRuntime {
     await this.host.dispose();
   }
 
+  async stopNetwork() {
+    await this.host.get("network").suspend();
+  }
+
   readAppPort() {
     return this.host.get("state").readGlobalPreference("appPort");
   }
@@ -201,6 +210,7 @@ export default class WorkbenchAppRuntime {
   }
 
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
+    if (!await this.host.get("http").admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
       const responseVersion = url.searchParams.get("version");
