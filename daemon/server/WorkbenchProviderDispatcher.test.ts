@@ -79,7 +79,7 @@ test("optional single-file calls reject unsupported owners and follow replacemen
     await assert.rejects(capability.prepare(), /does not support single-file/);
     let prepared = 0;
     f.setSingleFile({
-      async prepare() { prepared++; }, async start() {}, async input() {}, async finish() {}, async cancel() {},
+      async prepare() { prepared++; }, async start() { return { directory: "/scratch" }; }, async input() {}, async finish() {}, async cancel() {},
     });
     await f.host.reload(["server:codex/def"]);
     await capability.prepare();

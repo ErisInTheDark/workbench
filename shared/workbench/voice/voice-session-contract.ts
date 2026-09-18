@@ -30,8 +30,10 @@ export function createVoiceConfiguration(settings: VoiceModelSelection | null): 
   } } : null };
 }
 const sessionId = z.string().uuid();
-export const VoiceStartSchema = z.object({ sessionId, text: z.string().max(1_000_000) }).strict();
-export type VoiceStart = z.infer<typeof VoiceStartSchema>;
+export const VoiceStartSchema = z.object({
+  sessionId, text: z.string().max(1_000_000), recordAudio: z.boolean().default(false),
+}).strict();
+export type VoiceStart = z.input<typeof VoiceStartSchema>;
 export const VoiceAudioSchema = z.object({
   sessionId, sequence: z.number().int().nonnegative(),
   pcm: z.string().min(4).max(42668).regex(/^[A-Za-z0-9+/]+={0,2}$/),

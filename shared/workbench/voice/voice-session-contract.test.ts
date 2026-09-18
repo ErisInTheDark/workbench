@@ -1,7 +1,13 @@
 /* Exports: none. Protect old/new wire compatibility without leaking composer settings. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createVoiceConfiguration, readVoiceModelSelection, VoiceConfigurationSchema } from "./voice-session-contract";
+import { createVoiceConfiguration, readVoiceModelSelection, VoiceConfigurationSchema, VoiceStartSchema } from "./voice-session-contract";
+
+test("audio retention requires explicit opt-in and old clients stay unrecorded", () => {
+  const input = { sessionId: "11111111-1111-4111-8111-111111111111", text: "<caret />" };
+  assert.equal(VoiceStartSchema.parse(input).recordAudio, false);
+  assert.equal(VoiceStartSchema.parse({ ...input, recordAudio: true }).recordAudio, true);
+});
 
 test("legacy profile payloads become independent model selections and encode neutral settings", () => {
   const legacy = VoiceConfigurationSchema.parse({ selection: {

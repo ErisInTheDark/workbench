@@ -6,7 +6,7 @@ import type { VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-s
 import type { VoiceRequest } from "workbench-shared/workbench/voice/voice-contract";
 import type { WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
 
-function createHarness(provider: WorkbenchProviderSingleFile) {
+function createHarness(provider: WorkbenchProviderSingleFile, recording?: ConstructorParameters<typeof WorkbenchVoiceController>[0]["recording"]) {
   const events: VoiceSessionEvent[] = [];
   const native: VoiceRequest[] = [];
   const controller = new WorkbenchVoiceController({
@@ -20,11 +20,12 @@ function createHarness(provider: WorkbenchProviderSingleFile) {
     async resolveSettings() { return { harness: "codex", model: "luna" }; },
     provider: () => provider,
     instructions: async () => "voice",
+    recording,
   });
-  return { controller, events, native, start: (id: string) => controller.start("connection", { sessionId: id, text: "" }, event => events.push(event)) };
+  return { controller, events, native, start: (id: string, recordAudio = false) => controller.start("connection", { sessionId: id, text: "", recordAudio }, event => events.push(event)) };
 }
 const provider: WorkbenchProviderSingleFile = {
-  async prepare() {}, async start() {}, async input() {}, async finish() {}, async cancel() {},
+  async prepare() {}, async start() { return { directory: "/scratch" }; }, async input() {}, async finish() {}, async cancel() {},
 };
 
 test("late failure from cancelled startup cannot cancel its successor", async context => {
@@ -35,6 +36,7 @@ test("late failure from cancelled startup cannot cancel its successor", async co
   const failed = new Promise<void>((_resolve, fail) => { reject = fail; });
   const h = createHarness({ ...provider, start: async input => {
     if (input.sessionId === "old") { entered(); await failed; }
+    return { directory: "/scratch" };
   } });
   const old = h.start("old");
   const rejected = assert.rejects(old, /old startup/);
@@ -80,4 +82,83 @@ test("handoff cancellation releases final drain without reporting success", asyn
   await finish;
   assert.equal(h.events.some(event => event.type === "finished"), false);
   assert.equal(h.events.at(-1)?.type, "cancelled");
+});
+
+test("opt-out never opens audio and opt-in preserves admitted PCM before final retirement", async () => {
+  const calls: string[] = [];
+  const frames: Buffer[] = [];
+  const h = createHarness({ ...provider, finish: async () => { calls.push("provider-finish"); } }, directory => {
+    assert.equal(directory, "/scratch");
+    calls.push("open");
+    return {
+      async prepare() {},
+      async append(pcm) { frames.push(pcm); },
+      async close() { calls.push("close"); },
+    };
+  });
+  await h.start("off");
+  await h.controller.audio("connection", { sessionId: "off", sequence: 0, pcm: "AAAA" });
+  await h.controller.finish("connection", "off");
+  assert.deepEqual(calls, ["provider-finish"]);
+  calls.length = 0;
+  await h.start("on", true);
+  const pcm = Buffer.from([0, 128, 255, 127]);
+  await h.controller.audio("connection", { sessionId: "on", sequence: 0, pcm: pcm.toString("base64") });
+  await h.controller.finish("connection", "on");
+  assert.deepEqual(frames, [pcm]);
+  assert.deepEqual(calls, ["open", "close", "provider-finish"]);
+});
+
+for (const route of ["cancel", "disconnect", "dispose"] as const) {
+  test(`${route} waits for recording closure before retiring its directory`, async () => {
+    const entered = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    let retired = false;
+    const h = createHarness({ ...provider, cancel: async () => { retired = true; } }, () => ({
+      async prepare() {}, async append() {},
+      close() { entered.resolve(); return closed.promise; },
+    }));
+    await h.start("session", true);
+    const cancelling = route === "cancel" ? h.controller.cancel("connection", "session")
+      : route === "disconnect" ? h.controller.disconnect("connection") : h.controller.dispose();
+    await entered.promise;
+    assert.equal(retired, false);
+    closed.resolve();
+    await cancelling;
+    assert.equal(retired, true);
+    assert.equal(h.events.at(-1)?.type, "cancelled");
+  });
+}
+
+test("a recording failure is visible and still retires the provider", async context => {
+  context.mock.method(console, "warn", () => {});
+  const retired = Promise.withResolvers<void>();
+  const h = createHarness({ ...provider, cancel: async () => { retired.resolve(); } }, () => ({
+    async prepare() {},
+    async append() { throw new Error("recording disk failed"); },
+    async close() { throw new Error("recording disk failed"); },
+  }));
+  await h.start("session", true);
+  await assert.rejects(h.controller.audio("connection", { sessionId: "session", sequence: 0, pcm: "AAAA" }), /disk failed/);
+  await retired.promise;
+  assert.ok(h.events.some(event => event.type === "error" && /disk failed/.test(event.message)));
+  assert.equal(h.native.some(request => request.type === "audio"), false);
+});
+
+test("cancellation while the audio file opens drains the same writer and never starts capture", async () => {
+  const opening = Promise.withResolvers<void>();
+  const opened = Promise.withResolvers<void>();
+  let retired = false;
+  const h = createHarness({ ...provider, cancel: async () => { retired = true; } }, () => ({
+    prepare() { opening.resolve(); return opened.promise; }, async append() {},
+    close() { return opened.promise; },
+  }));
+  const starting = h.start("session", true);
+  await opening.promise;
+  const cancelling = h.controller.cancel("connection", "session");
+  assert.equal(retired, false);
+  opened.resolve();
+  await Promise.all([starting, cancelling]);
+  assert.equal(retired, true);
+  assert.equal(h.native.some(request => request.type === "start"), false);
 });

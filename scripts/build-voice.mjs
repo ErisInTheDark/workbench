@@ -12,15 +12,22 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const voice = path.join(root, "app", "voice");
+const voice = path.join(root, "daemon", "voice");
 const cache = path.join(root, ".workbench", "native-voice");
 const lockPath = path.join(voice, "native-dependencies.json");
 const args = new Set(process.argv.slice(2));
-const modes = ["--pin", "--prepare", "--build", "--test"];
+const modes = ["--pin", "--pin-model", "--prepare", "--build", "--test"];
 if (args.size !== 1 || !modes.some(mode => args.has(mode))) {
   throw new Error(`Use node scripts/build-voice.mjs ${modes.join(" | ")}`);
 }
 const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+const modelFiles = [lock.model.encoder, lock.model.decoder, lock.model.joiner, lock.model.tokens, "README.md"];
+if (!/^[a-f0-9]{40}$/.test(lock.model.revision ?? "")
+  || !/^[\w.-]+\/[\w.-]+$/.test(lock.model.repository ?? "")
+  || modelFiles.some(file => typeof file !== "string" || !/^[\w.-]+$/.test(file))) {
+  throw new Error("Model repository, revision and filenames must be explicitly pinned.");
+}
+const pinModel = args.has("--pin") || args.has("--pin-model");
 const env = {
   ...process.env,
   CARGO_HOME: path.join(cache, "cargo"),
@@ -88,7 +95,7 @@ async function download(url, file, expectedHash) {
 
 await fs.mkdir(cache, { recursive: true });
 if (args.has("--pin")) {
-  if (lock.sherpa.commit || lock.sherpa.sha256 || lock.model.sha256) {
+  if (lock.sherpa.commit || lock.sherpa.sha256) {
     throw new Error("Dependency identities already pinned. Review an explicit lock edit before repinning.");
   }
   const ref = await getJson(`https://api.github.com/repos/k2-fsa/sherpa-onnx/git/ref/tags/v${lock.sherpa.version}`);
@@ -100,9 +107,14 @@ if (args.has("--pin")) {
   }
   lock.sherpa.commit = object.sha;
 } else if (!/^[a-f0-9]{40}$/.test(lock.sherpa.commit ?? "")
-  || !/^[a-f0-9]{64}$/.test(lock.sherpa.sha256 ?? "")
-  || !/^[a-f0-9]{64}$/.test(lock.model.sha256 ?? "")) {
+  || !/^[a-f0-9]{64}$/.test(lock.sherpa.sha256 ?? "")) {
   throw new Error("Dependencies are not pinned; the maintainer must explicitly run --pin first.");
+}
+if (pinModel && Object.keys(lock.model.sha256 ?? {}).length) {
+  throw new Error("Model digests already pinned. Review an explicit lock edit before repinning.");
+}
+if (!pinModel && modelFiles.some(file => !/^[a-f0-9]{64}$/.test(lock.model.sha256?.[file] ?? ""))) {
+  throw new Error("Model digests are not pinned; run --pin-model after reviewing the model revision.");
 }
 
 const sourceArchive = path.join(cache, `sherpa-${lock.sherpa.commit}.tar.gz`);
@@ -110,9 +122,14 @@ lock.sherpa.sha256 = await download(
   `https://github.com/k2-fsa/sherpa-onnx/archive/${lock.sherpa.commit}.tar.gz`,
   sourceArchive, lock.sherpa.sha256,
 );
-const modelArchive = path.join(cache, `${lock.model.name}.tar.bz2`);
-lock.model.sha256 = await download(lock.model.url, modelArchive, lock.model.sha256);
-if (args.has("--pin")) {
+const modelDirectory = path.join(cache, `model-${lock.model.revision}`, lock.model.name);
+for (const file of modelFiles) {
+  lock.model.sha256[file] = await download(
+    `https://huggingface.co/${lock.model.repository}/resolve/${lock.model.revision}/${file}`,
+    path.join(modelDirectory, file), lock.model.sha256[file],
+  );
+}
+if (pinModel) {
   await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
   console.log("Pinned dependency identities. Subsequent preparation/builds verify these hashes.");
 }
@@ -128,10 +145,64 @@ async function unpack(archive, target, directory) {
   return path.join(target, directory);
 }
 
+async function publishRuntime(profile, files, modelDirectory) {
+  const id = randomUUID();
+  const candidate = path.join(cache, `publish-${id}`);
+  const retired = path.join(cache, `retired-${id}`);
+  const platform = `${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`;
+  const destination = path.join(voice, "bin", platform);
+  const receipt = path.join(candidate, "runtime.json");
+  await fs.mkdir(candidate);
+  await fs.mkdir(retired);
+  await fs.mkdir(destination, { recursive: true });
+  for (const file of files) await fs.copyFile(path.join(profile, file), path.join(candidate, file));
+  const executableName = process.platform === "win32" ? "workbench-voice.exe" : "workbench-voice";
+  // Loading the actual candidate verifies its platform, libraries, model and patched API.
+  await run(path.join(candidate, executableName), [], {
+    cwd: candidate, env: { ...env, WORKBENCH_VOICE_MODEL_DIR: modelDirectory },
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  await fs.writeFile(receipt, `${JSON.stringify({
+    version: 1, platform: process.platform, arch: process.arch,
+    executable: path.join(destination, executableName), modelDirectory,
+  }, null, 2)}\n`);
+  const replaced = [];
+  const published = [];
+  try {
+    for (const file of files) {
+      try {
+        await fs.rename(path.join(destination, file), path.join(retired, file));
+        replaced.push(file);
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      await fs.rename(path.join(candidate, file), path.join(destination, file));
+      published.push(file);
+    }
+    await fs.rename(receipt, path.join(cache, "runtime.json"));
+  } catch (error) {
+    const failures = [error];
+    for (const file of [...published].reverse()) {
+      try { await fs.rename(path.join(destination, file), path.join(candidate, file)); }
+      catch (recoveryError) { failures.push(recoveryError); }
+    }
+    for (const file of [...replaced].reverse()) {
+      try { await fs.rename(path.join(retired, file), path.join(destination, file)); }
+      catch (recoveryError) { failures.push(recoveryError); }
+    }
+    throw new AggregateError(failures, "Voice publication failed; candidate and retirement evidence retained.");
+  }
+  for (const file of replaced) {
+    try { await fs.unlink(path.join(retired, file)); }
+    catch (error) {
+      if (error.code !== "EBUSY" && error.code !== "EPERM") throw error;
+      console.warn(`Retained running voice image: ${path.join(retired, file)}`);
+    }
+  }
+  console.log(`Published voice runtime: ${path.join(destination, executableName)}`);
+}
+
 const sourceRoot = `sherpa-onnx-${lock.sherpa.commit}`;
 const original = await unpack(sourceArchive, path.join(cache, `source-cmake-${lock.sherpa.sha256}`), sourceRoot);
-const modelDirectory = await unpack(modelArchive, path.join(cache, `model-cmake-${lock.model.sha256}`), lock.model.name);
-if (args.has("--pin") || args.has("--prepare")) {
+if (pinModel || args.has("--prepare")) {
   console.log(`Source: ${original}\nModel: ${modelDirectory}`);
 } else {
   const patch = path.join(voice, "patches", `sherpa-onnx-v${lock.sherpa.version}.patch`);
@@ -181,6 +252,15 @@ if (args.has("--pin") || args.has("--prepare")) {
     SHERPA_ONNX_LIB_DIR: path.join(install, "lib"),
     WORKBENCH_VOICE_MODEL_DIR: modelDirectory,
   };
+  if (args.has("--test")) {
+    const fixture = lock.testFixture;
+    if (!/^[a-f0-9]{64}$/.test(fixture?.sha256 ?? "")) throw new Error("Test fixture must be pinned.");
+    const archive = path.join(cache, `${fixture.directory}.tar.bz2`);
+    await download(fixture.url, archive, fixture.sha256);
+    nativeEnv.WORKBENCH_VOICE_TEST_DIR = await unpack(
+      archive, path.join(cache, `model-cmake-${fixture.sha256}`), fixture.directory,
+    );
+  }
   if (process.platform === "linux" || process.platform === "darwin") {
     const existingFlags = env.CARGO_ENCODED_RUSTFLAGS !== undefined
       ? env.CARGO_ENCODED_RUSTFLAGS.split("\x1f").filter(Boolean)
@@ -196,10 +276,8 @@ if (args.has("--pin") || args.has("--prepare")) {
     ...(args.has("--test") ? ["--", "--nocapture"] : ["--release"]),
   ], { env: nativeEnv });
   if (!args.has("--test")) {
-    const executable = path.join(profile, process.platform === "win32" ? "workbench-voice.exe" : "workbench-voice");
-    await fs.access(executable);
-    await fs.writeFile(path.join(cache, "runtime.json"), `${JSON.stringify({
-      version: 1, platform: process.platform, arch: process.arch, executable, modelDirectory,
-    }, null, 2)}\n`);
+    await publishRuntime(profile, [
+      ...runtimeFiles, process.platform === "win32" ? "workbench-voice.exe" : "workbench-voice",
+    ], modelDirectory);
   }
 }

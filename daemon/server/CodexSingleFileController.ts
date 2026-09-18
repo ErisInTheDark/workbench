@@ -104,7 +104,7 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
         params: {
           ...prompt,
           model: start.settings.model, cwd: document.directory, runtimeWorkspaceRoots: [],
-          approvalPolicy: "never", permissions: profile, ephemeral: true, environments: [],
+          approvalPolicy: "never", permissions: profile, ephemeral: true,
           serviceTier: null,
           config: {
             ...prompt.config, model_reasoning_effort: "none",
@@ -124,6 +124,7 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
       };
       this.session = session;
       await this.pump(session);
+      return { directory: document.directory };
     } catch (error) {
       if (this.session) this.fail(error instanceof Error ? error : new Error("Single-file startup failed."));
       else if (document) {

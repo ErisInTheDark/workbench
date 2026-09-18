@@ -79,7 +79,10 @@ export default class WorkbenchVoiceClient {
       frames: [], queuedSamples: 0, sending: null, started: Promise.resolve(), releasing: false };
     this.active = session;
     this.publish({ fieldId: field.id, state: "preparing", error: "" });
-    session.started = this.daemon.voice.start({ sessionId: id, text: document }).then(() => undefined);
+    session.started = this.daemon.voice.start({
+      sessionId: id, text: document,
+      ...(this.settings.getSnapshot().recordAudio ? { recordAudio: true } : {}),
+    }).then(() => undefined);
     // Permission may remain pending after the server rejects admission.
     void session.started.catch(error => {
       if (this.active === session) this.fail(error instanceof Error ? error : new Error("Unable to start voice."));

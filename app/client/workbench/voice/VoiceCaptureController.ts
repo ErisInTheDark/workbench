@@ -1,8 +1,10 @@
 /*
  * Exports:
+ * - VoiceCaptureSounds: decoded local recording cues.
  * - VoiceCaptureOptions: browser media ports and PCM callbacks.
  * - default VoiceCaptureController: HTTPS availability, microphone permission, audio graph, flush and cancellation.
  */
+export interface VoiceCaptureSounds { on: AudioBuffer; off: AudioBuffer }
 export interface VoiceCaptureOptions {
   workletUrl: string;
   onFrame: (frame: Int16Array) => void;
@@ -10,6 +12,7 @@ export interface VoiceCaptureOptions {
   getUserMedia?: () => Promise<MediaStream>;
   createContext?: () => AudioContext;
   createNode?: (context: AudioContext) => AudioWorkletNode;
+  loadSounds?: (context: AudioContext, signal: AbortSignal) => Promise<VoiceCaptureSounds>;
 }
 export default class VoiceCaptureController {
   static isSupported() {
@@ -25,6 +28,11 @@ export default class VoiceCaptureController {
   private source: MediaStreamAudioSourceNode | null = null;
   private flushed: (() => void) | null = null;
   private finished: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
+  private release: { timer: ReturnType<typeof setTimeout>; resolve(): void } | null = null;
+  private readonly loading = new AbortController();
+  private sounds: VoiceCaptureSounds | null = null;
+  private cue: (() => void) | null = null;
   constructor(private readonly options: VoiceCaptureOptions) {}
   async start(ready: Promise<void> = Promise.resolve()) {
     if (!this.options.getUserMedia && !VoiceCaptureController.isSupported()) {
@@ -42,6 +50,20 @@ export default class VoiceCaptureController {
       if (generation !== this.generation) { for (const track of stream.getTracks()) track.stop(); return false; }
       this.stream = stream;
       await ready;
+      if (generation !== this.generation) return false;
+      try {
+        this.sounds = await (this.options.loadSounds ?? (async (audio, signal) => {
+          const load = async (name: string) => {
+            const response = await fetch(`/audio/${name}.mp3`, { signal });
+            if (!response.ok) throw new Error("Recording cue download failed.");
+            return audio.decodeAudioData(await response.arrayBuffer());
+          };
+          const [on, off] = await Promise.all([load("on"), load("off")]);
+          return { on, off };
+        }))(context, this.loading.signal);
+      } catch {
+        if (!this.loading.signal.aborted) console.warn("[voice] recording sounds unavailable");
+      }
       if (generation !== this.generation) return false;
       for (const track of stream.getTracks()) track.addEventListener("ended", () => {
         if (generation === this.generation) this.options.onError(new Error("Microphone capture ended."));
@@ -65,6 +87,7 @@ export default class VoiceCaptureController {
       source.connect(node);
       // The processor writes only silence to its output, keeping it scheduled without feedback.
       node.connect(context.destination);
+      if (this.sounds) void this.playCue(context, this.sounds.on);
       return true;
     } catch (error) {
       if (generation !== this.generation) return false;
@@ -74,6 +97,13 @@ export default class VoiceCaptureController {
   }
   finish() {
     return this.finished ??= (async () => {
+      const generation = this.generation;
+      if (this.node) {
+        await new Promise<void>(resolve => {
+          this.release = { timer: setTimeout(() => { this.release = null; resolve(); }, 500), resolve };
+        });
+      }
+      if (generation !== this.generation) { await this.stopping; return; }
       if (this.node) {
         await new Promise<void>(resolve => {
           this.flushed = resolve;
@@ -83,10 +113,20 @@ export default class VoiceCaptureController {
       await this.cancel();
     })();
   }
-  async cancel() {
+  cancel() {
+    return this.stopping ??= this.stop();
+  }
+  private async stop() {
     this.generation++;
+    this.loading.abort();
+    if (this.release) {
+      clearTimeout(this.release.timer);
+      this.release.resolve();
+      this.release = null;
+    }
     this.flushed?.();
     this.flushed = null;
+    const wasRecording = this.node !== null;
     this.node?.disconnect();
     this.node?.port.close();
     this.source?.disconnect();
@@ -96,6 +136,48 @@ export default class VoiceCaptureController {
     this.source = null;
     this.stream = null;
     this.context = null;
-    if (context && context.state !== "closed") await context.close();
+    this.cue?.();
+    try {
+      if (context && wasRecording && this.sounds) await this.playCue(context, this.sounds.off);
+    } finally {
+      this.sounds = null;
+      if (context && context.state !== "closed") await context.close();
+    }
+  }
+  private playCue(context: AudioContext, buffer: AudioBuffer): Promise<void> {
+    this.cue?.();
+    if (context.state !== "running") {
+      console.warn("[voice] recording sound skipped because audio output is suspended");
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      let source: AudioBufferSourceNode | null = null;
+      let started = false;
+      const done = () => {
+        if (this.cue !== done) return;
+        this.cue = null;
+        context.removeEventListener("statechange", stateChanged);
+        if (source) {
+          source.onended = null;
+          if (started) source.stop();
+          source.disconnect();
+        }
+        resolve();
+      };
+      const stateChanged = () => { if (context.state !== "running") done(); };
+      this.cue = done;
+      try {
+        source = context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(context.destination);
+        source.onended = done;
+        context.addEventListener("statechange", stateChanged);
+        source.start();
+        started = true;
+      } catch {
+        console.warn("[voice] recording sound could not play");
+        done();
+      }
+    });
   }
 }

@@ -155,6 +155,13 @@ test("first premature completion restarts silently, repeated no-progress complet
 
 test("journal records the exact model payloads and coalesces only undelivered context", async () => {
   const h = await harness();
+  const thread = h.requests.find(request => request.method === "thread/start");
+  if (thread?.method !== "thread/start") throw new Error("No native thread");
+  // An empty environment list removes native file tools, even with write permission.
+  assert.notDeepEqual(thread.params.environments, []);
+  assert.deepEqual(thread.params.config?.permissions, {
+    "voice-session": { filesystem: { "/scratch/document.txt": "write" }, network: { enabled: false } },
+  });
   const start = h.requests.find(request => request.method === "turn/start");
   assert.equal(start?.method, "turn/start");
   if (start?.method !== "turn/start") throw new Error("No initial turn");

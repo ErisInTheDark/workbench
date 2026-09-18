@@ -109,7 +109,7 @@ test("voice RPC binds events and audio admission to the initiating connection", 
     recognizer: { async prepare() {}, async dispose() {}, async send(request) { if (request.type === "audio") audio++; } },
     async resolveSettings() { return { harness: "codex", model: "luna", reasoningEffort: "none", agentPath: null, agentSource: null, serviceTier: null }; },
     instructions: async () => "voice",
-    provider: () => ({ async prepare() {}, async start() {}, async input() {}, async finish() {}, async cancel() { cancelled++; } }),
+    provider: () => ({ async prepare() {}, async start() { return { directory: "/scratch" }; }, async input() {}, async finish() {}, async cancel() { cancelled++; } }),
   });
   const { controller } = createController({
     clock: new FakeClock(), onDisconnect: connection => disconnected.push(connection),

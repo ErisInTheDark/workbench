@@ -16,6 +16,8 @@ voice/target/
 tray/gen/
 app/tray/target/
 app/voice/target/
+daemon/voice/target/
+daemon/voice/bin/
 app/tray/gen/
 .next
 *.tsbuildinfo

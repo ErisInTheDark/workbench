@@ -78,6 +78,7 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
     </span> : null}
     <WorkbenchIconButton
       label="Hold to dictate" size="font" display="hover-border"
+      pendingHalo={voice.locked}
       aria-pressed={voice.state === "listening"} aria-busy={voice.locked} disabled={voice.busy}
       title={voice.error || "Hold to dictate. Release to finish. Escape to cancel."}
       className="touch-none"
@@ -102,7 +103,7 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
       }}
       onBlur={release}
     >
-      <svg className={voice.locked ? "animate-spin motion-reduce:animate-none" : undefined} aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="13" rx="3" />
       </svg>
     </WorkbenchIconButton>

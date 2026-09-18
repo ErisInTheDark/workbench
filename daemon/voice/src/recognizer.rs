@@ -163,12 +163,15 @@ mod tests {
         let started = Instant::now();
         let recognizer = Recognizer::load(directory).unwrap();
         let load_time = started.elapsed();
-        let mut reader = hound::WavReader::open(directory.join("test_wavs/0.wav")).unwrap();
+        let fixture = std::env::var_os("WORKBENCH_VOICE_TEST_DIR")
+            .expect("Use node scripts/build-voice.mjs --test");
+        let fixture = Path::new(&fixture);
+        let mut reader = hound::WavReader::open(fixture.join("test_wavs/0.wav")).unwrap();
         assert_eq!(reader.spec().sample_rate, 16000);
         assert_eq!(reader.spec().channels, 1);
         let samples: Vec<f32> = reader.samples::<i16>()
             .map(|sample| sample.unwrap() as f32 / 32768.0).collect();
-        let reference = std::fs::read_to_string(directory.join("test_wavs/trans.txt")).unwrap();
+        let reference = std::fs::read_to_string(fixture.join("test_wavs/trans.txt")).unwrap();
         let reference = reference.lines().find(|line| line.starts_with("0.wav ")).unwrap();
         let last_word = reference.split_whitespace().last().unwrap().to_lowercase();
         let mut stream = recognizer.stream().unwrap();

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import WorkbenchVoiceClient from "./WorkbenchVoiceClient";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
+import type { VoiceSessionEvent, VoiceStart } from "workbench-shared/workbench/voice/voice-session-contract";
 import type VoiceCaptureController from "./VoiceCaptureController";
 import WorkbenchClientStateController from "../state/WorkbenchClientStateController";
 import { encodeVoiceDocument } from "workbench-shared/workbench/voice/voice-document";
@@ -15,6 +15,7 @@ function harness(configured = true) {
   let cancelled = 0;
   let finishes = 0;
   const changed: string[] = [];
+  const starts: VoiceStart[] = [];
   const captures: ConstructorParameters<typeof VoiceCaptureController>[0][] = [];
   const daemon = {
     onVoiceEvent(listener: typeof observe) { observe = listener; return () => {}; },
@@ -28,7 +29,7 @@ function harness(configured = true) {
         async write(value: { selection: object | null }) { configured = value.selection !== null; return { ok: true }; },
       },
       async prepare() {},
-      async start(input: { sessionId: string }) { sessionId = input.sessionId; },
+      async start(input: VoiceStart) { starts.push(input); sessionId = input.sessionId; },
       async audio() {},
       async finish() { finishes++; },
       async cancel() { cancelled++; },
@@ -42,7 +43,7 @@ function harness(configured = true) {
     return ({
     async start(ready: Promise<void>) { await ready; return true; }, async cancel() {}, async finish() {},
   }) as unknown as VoiceCaptureController; });
-  return { client, changed, captures, disconnect: () => disconnect(), observe: (event: Omit<Extract<VoiceSessionEvent, { type: "document" }>, "sessionId">) => observe({ ...event, text: encodeVoiceDocument(event.text), sessionId }),
+  return { client, changed, starts, captures, disconnect: () => disconnect(), observe: (event: Omit<Extract<VoiceSessionEvent, { type: "document" }>, "sessionId">) => observe({ ...event, text: encodeVoiceDocument(event.text), sessionId }),
     malformed: () => observe({ type: "document", text: "missing marker", revision: 1, sessionId }),
     finish: () => observe({ type: "finished", sessionId }),
     get cancelled() { return cancelled; }, get finishes() { return finishes; },
@@ -57,6 +58,24 @@ test("unconfigured voice cannot allocate capture or claim a field", async () => 
   await assert.rejects(h.begin(), /configure|select/i);
   assert.equal(h.captures.length, 0);
   assert.equal(h.client.getSnapshot().fieldId, null);
+  h.client.dispose();
+});
+
+test("recording choice is admitted once per session and omitted when disabled", async () => {
+  const h = harness();
+  await h.begin();
+  assert.equal("recordAudio" in h.starts[0]!, false);
+  h.client.settings.setRecordAudio(true);
+  assert.equal(h.cancelled, 0);
+  await h.client.cancel();
+  await h.begin();
+  assert.equal(h.starts[1]?.recordAudio, true);
+  h.client.settings.setRecordAudio(false);
+  assert.equal(h.starts[1]?.recordAudio, true);
+  await h.client.cancel();
+  await h.begin();
+  assert.equal("recordAudio" in h.starts[2]!, false);
+  await h.client.cancel();
   h.client.dispose();
 });
 

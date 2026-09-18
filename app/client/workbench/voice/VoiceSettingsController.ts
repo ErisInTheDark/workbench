@@ -20,13 +20,14 @@ export interface VoiceSettingsSnapshot {
   catalogueError: string;
   inputEnabled: boolean;
   canToggle: boolean;
+  recordAudio: boolean;
 }
 
 export default class VoiceSettingsController {
   private snapshot: VoiceSettingsSnapshot = {
     selection: null, harness: defaultProviderKey, status: "loading", error: "",
     models: [], catalogue: "idle", catalogueError: "",
-    inputEnabled: true, canToggle: false,
+    inputEnabled: true, canToggle: false, recordAudio: false,
   };
   private readonly listeners = new Set<() => void>();
   private disposed = false;
@@ -89,6 +90,7 @@ export default class VoiceSettingsController {
   }
 
   disable = () => this.setEnabled(false);
+  setRecordAudio(recordAudio: boolean) { this.publish({ recordAudio }); }
   async setEnabled(enabled: boolean) {
     if (!this.preferences || !this.snapshot.canToggle) {
       this.failConfiguration(this.configurationRevision, new Error("Reload the app database to enable browser voice preferences."));

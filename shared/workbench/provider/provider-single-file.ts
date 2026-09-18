@@ -24,7 +24,7 @@ export interface SingleFileStart {
 }
 export interface WorkbenchProviderSingleFile {
   prepare(): Promise<void>;
-  start(input: SingleFileStart): Promise<void>;
+  start(input: SingleFileStart): Promise<{ directory: string }>;
   input(sessionId: string, input: SingleFileInput): Promise<void>;
   finish(sessionId: string): Promise<void>;
   cancel(sessionId: string): Promise<void>;

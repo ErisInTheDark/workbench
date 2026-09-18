@@ -9,6 +9,7 @@ import WorkbenchPressDragMenu from "../WorkbenchPressDragMenu";
 import ThreadHarnessControl from "../thread-view/ThreadHarnessControl";
 import LoaderIcon from "../LoaderIcon";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { CheckIcon, XIcon } from "../workbench-icons";
 
 export default function VoiceSettings() {
@@ -28,12 +29,12 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
   return <section aria-label="Voice input" className="grid gap-2 rounded-[0.85rem] py-1">
     <WorkbenchOptionCard
       label="Voice input"
+      density="tight"
       isChecked={state.inputEnabled}
       isSingleChoice={false}
       disabled={!state.canToggle}
       onClick={() => { void controller.setEnabled(!state.inputEnabled); }}
-    >
-    <div className="flex flex-wrap items-center gap-2">
+      inlineContent={<>
       <WorkbenchPressDragMenu
         label="Voice harness"
         items={installedProviderKeys.map(harness => ({
@@ -61,7 +62,13 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
       <span role="status" aria-label={state.status} title={state.status} className="inline-flex items-center gap-1 text-xs text-fg/muted">
         {pending ? <LoaderIcon size={12} /> : state.status === "ready" ? <CheckIcon size={12} /> : <XIcon size={12} />}
       </span>
-    </div>
+      <WorkbenchCheckbox
+        label="Save audio locally"
+        checked={state.recordAudio}
+        onChange={value => controller.setRecordAudio(value)}
+      />
+      </>}
+    >
     {!state.canToggle ? <p className="m-0 text-xs text-fg/muted">Reload the app database to save browser voice preferences.</p> : null}
     {state.error ? <div role="alert" className="text-sm text-danger">
       {state.error} <button type="button" className="rounded px-2 py-1 hover:bg-button-hover" onClick={() => { void controller.refresh(); }}>Retry</button>

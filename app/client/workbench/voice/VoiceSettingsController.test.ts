@@ -59,6 +59,23 @@ test("voice enables only after a complete selection is saved and prepared", asyn
   assert.equal(controller.enabled, true);
 });
 
+test("audio retention is browser-memory opt-in, independent of shared settings", async context => {
+  const h = fixture();
+  const controller = new VoiceSettingsController(h.port, h.preferences);
+  context.after(() => controller.dispose());
+  await controller.ready;
+  assert.equal(controller.getSnapshot().recordAudio, false);
+  controller.setRecordAudio(true);
+  await controller.disable();
+  await controller.refresh();
+  assert.equal(controller.getSnapshot().recordAudio, true);
+  assert.equal(h.saved().selection, null);
+  const reopened = new VoiceSettingsController(h.port, h.preferences);
+  context.after(() => reopened.dispose());
+  await reopened.ready;
+  assert.equal(reopened.getSnapshot().recordAudio, false);
+});
+
 test("old app schemas keep voice usable but reject unsupported preference writes", async context => {
   context.mock.method(console, "warn", () => {});
   const h = fixture();

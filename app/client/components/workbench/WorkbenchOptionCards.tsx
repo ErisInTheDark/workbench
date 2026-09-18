@@ -36,6 +36,7 @@ type WorkbenchOptionCardProps = {
   isChecked: boolean;
   isHistoryMode?: boolean;
   isSingleChoice?: boolean;
+  inlineContent?: ReactNode;
   label: ReactNode;
   labelEditor?: ReactNode;
   markerId?: string;
@@ -59,6 +60,7 @@ export function WorkbenchOptionCard ({
   isChecked,
   isHistoryMode = false,
   isSingleChoice = true,
+  inlineContent,
   label,
   labelEditor,
   markerId,
@@ -69,7 +71,7 @@ export function WorkbenchOptionCard ({
   const optionDescription = description.trim();
   const compactInline = presentation === "compact-inline";
   const compactPresentation = presentation !== "card";
-  const isComposed = !isHistoryMode && Boolean(actions || labelEditor || children);
+  const isComposed = !isHistoryMode && Boolean(actions || labelEditor || children || inlineContent);
   const selectedBackdropClassName = isChecked ? "[--fg-bg:var(--option-card-bg)]" : "";
   const optionCardClassName = joinClasses(
     compactInline
@@ -140,6 +142,7 @@ export function WorkbenchOptionCard ({
     return <div className={joinClasses(optionCardClassName, "flex-col", density === "tight" && "justify-center")} data-workbench-option-presentation={presentation}>
       <div className={joinClasses(
         "flex w-full min-w-0 gap-2",
+        Boolean(inlineContent) && "flex-wrap",
         density === "tight" ? "items-center" : "items-start",
         selectedBackdropClassName,
       )}>
@@ -160,10 +163,12 @@ export function WorkbenchOptionCard ({
           disabled={disabled}
           onClick={onClick}
           className={`
-            flex min-w-0 flex-1 gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+            flex min-w-0 gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+            ${inlineContent ? "shrink-0" : "flex-1"}
             ${density === "tight" ? "items-center" : "items-start"}
           `}
         >{optionBody}</button>}
+        {inlineContent ? <div className="flex min-w-0 flex-wrap items-center gap-2">{inlineContent}</div> : null}
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
       {children ? <div className={joinClasses("w-full min-w-0 pl-7", selectedBackdropClassName)}>{children}</div> : null}

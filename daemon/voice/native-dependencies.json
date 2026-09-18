@@ -1,0 +1,28 @@
+{
+  "sherpa": {
+    "version": "1.13.7",
+    "commit": "917bed95c8e5c7c18aa4d69fea42e9ef8ef0a60e",
+    "sha256": "acf539e930283442c4237b7b23a06ebe3bff10cbc00694a4f09a3580e3c10e9e"
+  },
+  "testFixture": {
+    "directory": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+    "sha256": "639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282"
+  },
+  "model": {
+    "name": "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+    "repository": "csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+    "revision": "572aaf4e2e0c603c3fc2a574d096e755a178faa1",
+    "encoder": "encoder.onnx",
+    "decoder": "decoder.onnx",
+    "joiner": "joiner.onnx",
+    "tokens": "tokens.txt",
+    "sha256": {
+      "encoder.onnx": "d4881c57449d581e0770fd53fa66c2fdc6cd167d92ece7c715e603defc96d9d4",
+      "decoder.onnx": "455ba38466fce8d5a57e7db68a323b684079ca4d9e1dd93a740d9b2429aae3b1",
+      "joiner.onnx": "d406f616736350e2a7df3e39398b78eb2fc1a2ca6973a19d3853fa3227e25b52",
+      "tokens.txt": "396dbeb5f4858875690716084f54e90d339679d0ba3e6b5b584f3d7589254d2d",
+      "README.md": "f42a5c6d54eb811dd0dd624cbee0e86205fc7bcb05507097f3278cf1b0b5c6af"
+    }
+  }
+}
