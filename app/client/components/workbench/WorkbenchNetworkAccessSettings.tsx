@@ -54,13 +54,9 @@ export default function WorkbenchNetworkAccessSettings() {
     setChoices(null);
     if (nodeId !== (kind === "dns" ? group!.dnsNodeId : group!.ownerNodeId)) setCandidate({ kind, nodeId });
   }
-  async function saveAccess() {
+  function saveAccess() {
     if (!draft || stale) return;
-    setWorking(true);
-    setError("");
-    try { await network.client.changeAccess(draft); setDraft(null); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Access could not be saved."); }
-    finally { setWorking(false); }
+    void act({ action: "access", ...draft }, () => setDraft(null));
   }
   return <section className="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--text)_12%,transparent)] p-4 text-sm">
     <h4 className="m-0 font-medium text-text">Network access</h4>
@@ -119,14 +115,18 @@ export default function WorkbenchNetworkAccessSettings() {
         <thead><tr><th className="py-2 pr-4 font-medium text-fg/muted">Device</th>{members.map(app => <th className="px-2 py-2 font-medium text-text" key={app.nodeId}>{app.label}</th>)}</tr></thead>
         <tbody>{devices.map(device => <tr key={device.nodeId}>
           <th className="py-2 pr-4 font-normal text-text">{device.name}{!device.online ? <span className="ml-2 text-xs text-fg/muted">offline</span> : null}</th>
-          {members.map(app => <td key={app.nodeId} className="px-2 py-1"><WorkbenchCheckbox
-            label={<span className="sr-only">{device.name} access to {app.label}</span>}
-            checked={policy.grants.some(grant => grant.deviceNodeId === device.nodeId && grant.appNodeId === app.nodeId)}
-            disabled={busy || !canManage || stale} onChange={checked => {
+          {members.map(app => {
+            const ownApp = device.nodeId === (app.nodeId === snapshot.runtime.privateAccess.nodeId
+              ? snapshot.runtime.host?.nodeId ?? app.hostNodeId : app.hostNodeId);
+            return <td key={app.nodeId} className="px-2 py-1" title={ownApp ? "Always allowed on this device" : undefined}><WorkbenchCheckbox
+            label={<span className="sr-only">{device.name} access to {app.label}{ownApp ? " - Always allowed on this device" : ""}</span>}
+            checked={ownApp || policy.grants.some(grant => grant.deviceNodeId === device.nodeId && grant.appNodeId === app.nodeId)}
+            disabled={ownApp || busy || !canManage || stale} onChange={checked => {
               const grants = policy.grants.filter(grant => grant.deviceNodeId !== device.nodeId || grant.appNodeId !== app.nodeId);
               if (checked) grants.push({ deviceNodeId: device.nodeId, appNodeId: app.nodeId });
               setDraft({ revision: group.revision, access: "selected", grants });
-            }} /></td>)}
+            }} /></td>;
+          })}
         </tr>)}</tbody>
       </table>
       {!devices.length ? <p className="text-fg/muted">No browsing devices are currently visible to this app on Tailscale.</p> : null}
@@ -147,7 +147,7 @@ export default function WorkbenchNetworkAccessSettings() {
     </div> : null}
     {error ? <p className="m-0 text-danger" role="alert">{error}</p> : null}
     {draft ? <div className="flex gap-2">
-      <WorkbenchIconButton label="Save access" disabled={busy || stale || !canManage} onClick={() => { void saveAccess(); }}><SaveIcon className="size-4" /></WorkbenchIconButton>
+      <WorkbenchIconButton label="Save access" disabled={busy || stale || !canManage} onClick={saveAccess}><SaveIcon className="size-4" /></WorkbenchIconButton>
       <WorkbenchIconButton label="Reset access changes" disabled={busy} onClick={() => setDraft(null)}><ResetIcon className="size-4" /></WorkbenchIconButton>
     </div> : null}
   </section>;

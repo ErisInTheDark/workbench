@@ -4,42 +4,112 @@ import test from "node:test";
 import WorkbenchNetworkClient from "./WorkbenchNetworkClient.ts";
 import type { WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
 
-test("access saves once, or navigates before applying a self-revoking policy", async context => {
+test("enabling a higher mode upgrades the address, but HTTPS waits for browser trust", async context => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
   const navigations: string[] = [];
-  const location = { href: "https://desktop.wb.inthedark.boo/settings", origin: "https://desktop.wb.inthedark.boo",
+  const location = { href: "http://127.0.0.1:4200/settings", origin: "http://127.0.0.1:4200",
     assign: (href: string) => { navigations.push(href); } };
   Object.defineProperty(globalThis, "window", { configurable: true, value: { location } });
   context.after(() => {
     if (previous) Object.defineProperty(globalThis, "window", previous);
     else Reflect.deleteProperty(globalThis, "window");
   });
-  const actions: string[] = [];
-  let handoff = false;
-  const client = new WorkbenchNetworkClient({ fetcher: async (_input, options) => {
-    const action = JSON.parse(String(options?.body)) as { action: string };
-    actions.push(action.action);
-    if (action.action === "settings-finish") return Response.json({ error: "Policy revision changed." }, { status: 409 });
-    return Response.json(handoff
-      ? { kind: "handoff", token: "d479a147-899e-4332-8855-7b219e652aab", origin: "http://127.0.0.1:4200", returning: false }
-      : { kind: "ok" });
+  const snapshot: WorkbenchNetworkSnapshot = {
+    configuration: { mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [],
+      privateAccess: { role: "authority", label: "desktop", enabled: false } },
+    runtime: {
+      hostServe: { phase: "ready", message: null, url: "http://100.80.0.2:8080" },
+      privateAccess: { phase: "ready", message: null, url: "https://desktop.wb.inthedark.boo",
+        hostname: "desktop.wb.inthedark.boo", nodeId: "app", keyFingerprint: null, loginUrl: null,
+        addresses: [], rootCertificate: "public certificate", rootFingerprint: "a".repeat(64), certificateExpiresAt: null, pending: [] },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
+  };
+  const stream: Pick<EventSource, "close" | "onmessage" | "onerror"> = { close: () => {}, onmessage: null, onerror: null };
+  const publish = () => {
+    const receive: ((event: MessageEvent) => void) | null = stream.onmessage;
+    receive?.({ data: JSON.stringify(snapshot) } as MessageEvent);
+  };
+  let selected: "tailnet-ip" | "tailnet-service" = "tailnet-ip";
+  let trusted = false;
+  let checks = 0;
+  let verificationResponse: Promise<Response> | null = null;
+  let verificationStarted = () => {};
+  let verificationSignal: AbortSignal | null | undefined;
+  const client = new WorkbenchNetworkClient({ events: () => stream, fetcher: async (input, options) => {
+    if (String(input).startsWith("https:")) {
+      checks++;
+      verificationSignal = options?.signal;
+      verificationStarted();
+      if (verificationResponse) return await verificationResponse;
+      if (!trusted) throw new TypeError("Failed to fetch");
+      return Response.json({ hostname: "desktop.wb.inthedark.boo", nodeId: "app" });
+    }
+    if (!options?.body) return Response.json(snapshot);
+    const action = JSON.parse(String(options.body)) as { action: string };
+    if (action.action === "settings-prepare") return Response.json({
+      kind: "handoff", token: "d479a147-899e-4332-8855-7b219e652aab", origin: location.origin, returning: false,
+    });
+    snapshot.configuration.mode = selected;
+    publish();
+    return Response.json({ kind: "settings-saved", origin: location.origin });
   } });
   context.after(() => client.close());
-  const policy = { revision: 1, access: "selected" as const, grants: [] };
-  await client.changeAccess(policy);
-  assert.deepEqual(actions, ["access-prepare"]);
+  await client.start();
   assert.equal(navigations.length, 0);
-  handoff = true;
-  await client.changeAccess(policy);
-  assert.deepEqual(actions, ["access-prepare", "access-prepare"]);
-  const url = new URL(navigations[0]!);
-  assert.equal(url.origin, "http://127.0.0.1:4200");
-  assert.equal(url.searchParams.get("workbenchNetworkPanel"), "access");
-  location.origin = url.origin;
-  location.href = url.href;
-  await assert.rejects(client.finishSettings(), /revision/);
-  assert.equal(client.snapshot().handoff, null, "failed access draft must not trap the editor in retry mode");
-  assert.equal(navigations.length, 1, "stay on safe loopback after a policy failure");
+  await client.changeSettings({ mode: selected, localPort: 4200, tailnetPort: 8080 });
+  assert.equal(navigations.length, 1);
+  assert.equal(new URL(navigations[0]!).origin, "http://100.80.0.2:8080");
+  location.href = navigations[0]!;
+  location.origin = new URL(location.href).origin;
+  selected = "tailnet-service";
+  await client.changeSettings({ mode: selected, localPort: 4200, tailnetPort: 8080 });
+  assert.equal(checks, 1);
+  assert.equal(navigations.length, 1, "untrusted HTTPS must not strand the browser");
+  assert.match(client.snapshot().error ?? "", /certificate/);
+  publish();
+  assert.equal(checks, 1, "progress must not repeatedly retry failed trust checks");
+  trusted = true;
+  await client.verify();
+  assert.equal(navigations.length, 2);
+  assert.equal(new URL(navigations[1]!).origin, "https://desktop.wb.inthedark.boo");
+  assert.equal(new URL(navigations[1]!).pathname, "/settings");
+
+  snapshot.configuration.mode = "localhost";
+  snapshot.runtime.hostServe = { phase: "starting", message: null, url: null };
+  publish();
+  location.href = "http://127.0.0.1:4200/settings";
+  location.origin = "http://127.0.0.1:4200";
+  selected = "tailnet-ip";
+  await client.changeSettings({ mode: selected, localPort: 4200, tailnetPort: 8080 });
+  assert.equal(navigations.length, 2, "wait for the newly enabled listener");
+  snapshot.runtime.hostServe = { phase: "ready", message: null, url: "http://100.80.0.2:8080" };
+  publish();
+  assert.equal(navigations.length, 3, "readiness completes the pending upgrade");
+
+  selected = "tailnet-service";
+  snapshot.runtime.privateAccess.phase = "starting";
+  await client.changeSettings({ mode: selected, localPort: 4200, tailnetPort: 8080 });
+  snapshot.configuration.mode = "tailnet-ip";
+  publish();
+  snapshot.runtime.privateAccess.phase = "ready";
+  snapshot.configuration.mode = "tailnet-service";
+  publish();
+  assert.equal(checks, 2, "a mode change cancels the old upgrade instead of reviving it later");
+  assert.equal(navigations.length, 3);
+
+  snapshot.configuration.mode = "tailnet-ip";
+  publish();
+  let finishVerification!: (response: Response) => void;
+  verificationResponse = new Promise<Response>(resolve => { finishVerification = resolve; });
+  const entered = new Promise<void>(resolve => { verificationStarted = resolve; });
+  const changing = client.changeSettings({ mode: "tailnet-service", localPort: 4200, tailnetPort: 8080 });
+  await entered;
+  client.close();
+  assert.equal(verificationSignal?.aborted, true);
+  finishVerification(Response.json({ hostname: "desktop.wb.inthedark.boo", nodeId: "app" }));
+  await changing;
+  assert.equal(navigations.length, 3, "a disposed client cannot navigate on late verification success");
 });
 
 test("another-device eligibility follows committed app grants rather than this host or another app", async context => {

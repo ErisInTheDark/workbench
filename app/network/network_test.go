@@ -41,6 +41,24 @@ func TestRetiringPrivateNodeCannotOverwriteReplacementStatus(t *testing.T) {
 	}
 }
 
+func TestSelfAccessUsesHostIdentityAndCurrentApp(t *testing.T) {
+	host, app := "host", "app"
+	owner := &networkProcess{}
+	if owner.ownsConnection(host, "host-app") { t.Fatal("unknown host was treated as this device") }
+	owner.runtime.Host.NodeID = &host
+	if !owner.ownsConnection(host, "host-app") { t.Fatal("host IP mode lost self-access before private setup") }
+	owner.config.Configuration.Group = &networkGroup{Access: "selected"}
+	owner.runtime.PrivateAccess.NodeID = &app
+	if !owner.ownsConnection(host, app) { t.Fatal("private service lost self-access") }
+	if owner.ownsConnection(host, "other-app") || owner.ownsConnection("other-host", app) {
+		t.Fatal("self-access leaked to another device or app")
+	}
+	owner.runtime.PrivateAccess.NodeID = nil
+	owner.config.Configuration.PrivateAccess = &privateConfiguration{Label: "desktop"}
+	owner.config.Configuration.Members = []networkMember{{NodeID: app, Label: "desktop"}}
+	if !owner.ownsConnection(host, app) { t.Fatal("temporarily offline private node lost its stored app identity") }
+}
+
 func TestProxyFollowsAppPortAndPreservesRequestSemantics(t *testing.T) {
 	targets := &networkTargets{}
 	if err := targets.set("http://127.0.0.1:4200", "http://127.0.0.1:4500"); err != nil {

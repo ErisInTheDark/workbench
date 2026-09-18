@@ -17,10 +17,9 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 
 type SettingsCaller = { deviceNodeId: string | null; origin: string };
-type AccessAction = Extract<WorkbenchNetworkAction, { action: "access" }>;
 type PendingSettings = {
   token: string;
-  intent: { kind: "settings"; settings: WorkbenchNetworkSettings } | { kind: "access"; action: AccessAction };
+  settings: WorkbenchNetworkSettings;
   caller: SettingsCaller;
   loopbackOrigin: string | null;
   sourceOrigin: string;
@@ -351,19 +350,11 @@ export default class WorkbenchNetworkController {
     action: Extract<WorkbenchNetworkAction, { action: "access" | "access-prepare" }>, caller?: SettingsCaller,
   ): Promise<WorkbenchNetworkResult> {
     if (action.action === "access-prepare" && !caller) throw new Error("Access changes require an authenticated browser connection.");
-    const policy: AccessAction = { ...action, action: "access" };
-    const revokesCaller = caller?.deviceNodeId && policy.access === "selected"
+    const policy = { ...action, action: "access" as const };
+    const revokesCaller = caller?.deviceNodeId && !this.isHost(caller) && policy.access === "selected"
       && !policy.grants.some(grant => grant.deviceNodeId === caller.deviceNodeId && grant.appNodeId === this.runtime.privateAccess.nodeId);
-    if (!revokesCaller) return await this.apply(policy);
-    if (action.action === "access") throw new Error("Refresh settings and use Save to change this connection safely.");
-    if (!this.isHost(caller) || !this.options.appPort) throw new Error("Use this app's local host to remove access for your current device.");
-    if (!this.stableOrigin(caller.origin)) throw new Error("Use the app's current address to change access.");
-    const origin = this.options.appPort.read().appOrigin;
-    this.change = {
-      token: randomUUID(), intent: { kind: "access", action: policy }, caller, loopbackOrigin: origin,
-      sourceOrigin: caller.origin, destinationOrigin: origin, phase: "prepared", retainedPort: 0, previewPort: null,
-    };
-    return { kind: "handoff", token: this.change.token, origin, returning: false };
+    if (revokesCaller) throw new Error("Use this app's local host to remove access for your current device.");
+    return await this.apply(policy);
   }
 
   private async applySettings(action: WorkbenchNetworkAction, caller?: SettingsCaller): Promise<WorkbenchNetworkResult> {
@@ -403,7 +394,7 @@ export default class WorkbenchNetworkController {
         || source.protocol === "http:" && Number(source.port) !== settings.tailnetPort
       );
       const change: PendingSettings = {
-        token: randomUUID(), intent: { kind: "settings", settings }, caller,
+        token: randomUUID(), settings, caller,
         loopbackOrigin: loopback ? localOrigin : null,
         sourceOrigin: caller.origin, destinationOrigin: loopback ? localOrigin : caller.origin,
         phase: "preparing", retainedPort: this.configuration.hostServe.enabled ? this.configuration.hostServe.port : 0,
@@ -443,18 +434,7 @@ export default class WorkbenchNetworkController {
       return { kind: "settings-saved", origin: change.sourceOrigin };
     }
     if (caller.origin !== change.destinationOrigin) throw new Error("Open the destination address before finishing this change.");
-    if (change.intent.kind === "access") {
-      change.phase = "applying";
-      try {
-        await this.apply(change.intent.action);
-        return { kind: "settings-saved", origin: change.destinationOrigin };
-      } finally {
-        // A policy failure may follow persistence. Stay on loopback and let the
-        // current revision drive a new draft, never replay an obsolete grant set.
-        this.change = null;
-      }
-    }
-    const settings = change.intent.settings;
+    const settings = change.settings;
     change.phase = "applying";
     try {
       if (settings.localPort !== this.options.appPort!.read().currentPort) await this.options.appPort!.update(settings.localPort);

@@ -20,8 +20,7 @@ function NetworkSettingsContent() {
   const network = useWorkbenchNetwork();
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
-  const [view, setView] = useState<"summary" | "access">(() =>
-    new URL(window.location.href).searchParams.get("workbenchNetworkPanel") === "access" ? "access" : "summary");
+  const [view, setView] = useState<"summary" | "access">("summary");
   const snapshot = network.snapshot;
   if (!snapshot) return <p className="text-sm text-fg/muted" role="status">{network.error ?? "Loading networking..."}</p>;
   const mode = workbenchNetworkMode(snapshot.configuration);

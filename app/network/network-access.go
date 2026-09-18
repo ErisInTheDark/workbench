@@ -41,13 +41,19 @@ func closeNetworkConnection(ctx context.Context) func() error {
 type networkAccess struct {
 	mu sync.Mutex
 	group *networkGroup
+	ownsConnection func(device, app string) bool
 	requests map[*admittedRequest]struct{}
+}
+
+func (access *networkAccess) allows(device, app string) bool {
+	if device != "" && app != "" && access.ownsConnection != nil && access.ownsConnection(device, app) { return true }
+	return access.group.allows(device, app, false)
 }
 
 func (access *networkAccess) admit(parent context.Context, device, app string, closeConnection ...func() error) (context.Context, func(), error) {
 	access.mu.Lock()
 	defer access.mu.Unlock()
-	if !access.group.allows(device, app, false) {
+	if !access.allows(device, app) {
 		return nil, nil, errors.New("this device does not have access to this app")
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -69,7 +75,7 @@ func (access *networkAccess) apply(group *networkGroup) error {
 	access.group = group
 	var failures []error
 	for request := range access.requests {
-		if !group.allows(request.device, request.app, false) {
+		if !access.allows(request.device, request.app) {
 			request.cancel()
 			if request.closeConnection != nil {
 				if err := request.closeConnection(); err != nil && !errors.Is(err, net.ErrClosed) {

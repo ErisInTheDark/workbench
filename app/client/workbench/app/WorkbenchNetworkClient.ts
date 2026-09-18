@@ -5,12 +5,12 @@
  */
 import { createContext, useContext, useSyncExternalStore } from "react";
 import {
-  WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema, WorkbenchNetworkResultSchema, WorkbenchNetworkSnapshotSchema, WorkbenchNetworkVerificationSchema,
+  WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema, WorkbenchNetworkResultSchema, WorkbenchNetworkSnapshotSchema, WorkbenchNetworkVerificationSchema, workbenchNetworkMode,
   type WorkbenchNetworkAction, type WorkbenchNetworkResult, type WorkbenchNetworkSnapshot, type WorkbenchNetworkSettings,
 } from "workbench-shared/http/workbench-network";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { z } from "zod";
-import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff } from "./workbench-network-navigation";
+import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff, type NetworkUpgrade } from "./workbench-network-navigation";
 import { readWorkbenchBrowserStateTransferId } from "../state/workbench-browser-state-identity";
 
 const actionError = z.object({ error: z.string().max(512) }).strict();
@@ -27,6 +27,7 @@ export default class WorkbenchNetworkClient {
   private readonly requests = new Set<AbortController>();
   private events: Pick<EventSource, "close" | "onmessage" | "onerror"> | null = null;
   private closed = false;
+  private upgrade: { mode: NetworkUpgrade; phase: "waiting" | "checking" | "failed"; verification: AbortController | null } | null = null;
 
   constructor(private readonly options: {
     fetcher?: typeof fetch;
@@ -68,10 +69,14 @@ export default class WorkbenchNetworkClient {
       };
       if (typeof window !== "undefined") {
         const consumed = consumeNetworkHandoff(window.location.href);
-        if (consumed.receipt) {
+        if (consumed.receipt || consumed.upgrade) {
           window.history.replaceState(window.history.state, "", consumed.href);
+        }
+        if (consumed.receipt) {
           this.update({ ...this.state, handoff: consumed.receipt });
           if (!consumed.receipt.manual) await this.finishSettings(consumed.receipt.returning);
+        } else if (consumed.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === consumed.upgrade) {
+          await this.beginUpgrade(consumed.upgrade);
         }
       }
       if (typeof window !== "undefined" && window.location.protocol === "https:"
@@ -112,9 +117,13 @@ export default class WorkbenchNetworkClient {
   }
 
   async changeSettings(settings: WorkbenchNetworkSettings) {
+    this.cancelUpgrade();
+    const modes = ["localhost", "tailnet-ip", "tailnet-service"] as const;
+    const previous = this.state.snapshot ? workbenchNetworkMode(this.state.snapshot.configuration) : settings.mode;
+    const upgrade = settings.mode !== "localhost" && modes.indexOf(settings.mode) > modes.indexOf(previous) ? settings.mode : undefined;
     const result = await this.action({ action: "settings-prepare", settings });
     if (result.kind !== "handoff") throw new Error("Settings did not return a connection handoff.");
-    this.update({ ...this.state, handoff: { token: result.token, returning: false } });
+    this.update({ ...this.state, handoff: { token: result.token, returning: false, ...(upgrade ? { upgrade } : {}) } });
     if (result.origin !== window.location.origin) this.navigate(result.origin, this.state.handoff!);
     else await this.finishSettings();
   }
@@ -127,16 +136,6 @@ export default class WorkbenchNetworkClient {
     const app = snapshot.runtime.privateAccess.nodeId;
     const host = snapshot.runtime.host?.nodeId;
     return Boolean(app && host && group.grants.some(grant => grant.appNodeId === app && grant.deviceNodeId !== host));
-  }
-
-  async changeAccess(policy: Omit<Extract<WorkbenchNetworkAction, { action: "access" }>, "action">) {
-    const result = await this.action({ action: "access-prepare", ...policy });
-    if (result.kind === "ok") return;
-    if (result.kind !== "handoff") throw new Error("Access settings did not return a connection handoff.");
-    const receipt: NetworkHandoff = { token: result.token, returning: false, panel: "access" };
-    this.update({ ...this.state, handoff: receipt });
-    if (result.origin !== window.location.origin) this.navigate(result.origin, receipt);
-    else await this.finishSettings();
   }
 
   async finishSettings(cancel = false) {
@@ -154,31 +153,32 @@ export default class WorkbenchNetworkClient {
         if (result.origin !== window.location.origin) this.navigate(result.origin, next);
       } else if (result.kind === "settings-saved") {
         this.update({ ...this.state, handoff: null, error: null });
-        if (result.origin !== window.location.origin) this.navigate(result.origin);
+        const upgrade = !cancel && !receipt.returning ? receipt.upgrade : undefined;
+        if (result.origin !== window.location.origin) this.navigate(result.origin, undefined, upgrade);
+        else if (upgrade) await this.beginUpgrade(upgrade);
       } else throw new Error("Settings returned an unexpected completion response.");
     } catch (error) {
-      this.update({ ...this.state, handoff: receipt.panel === "access" ? null : this.state.handoff,
-        error: error instanceof Error ? error.message : "Settings could not finish." });
+      this.update({ ...this.state, error: error instanceof Error ? error.message : "Settings could not finish." });
       throw error;
     }
   }
 
-  private navigate(origin: string, receipt?: NetworkHandoff) {
+  private navigate(origin: string, receipt?: NetworkHandoff, upgrade?: NetworkUpgrade) {
     window.location.assign(networkNavigationUrl(window.location.href, origin, receipt,
-      readWorkbenchBrowserStateTransferId(this.state.snapshot?.localPort ?? null)));
+      readWorkbenchBrowserStateTransferId(this.state.snapshot?.localPort ?? null), upgrade));
   }
 
   async resumeSettings() {
     const result = await this.action({ action: "settings-resume" });
     if (result.kind !== "handoff") throw new Error("Settings did not return a connection handoff.");
-    const receipt: NetworkHandoff = { token: result.token, returning: result.returning, manual: true,
-      ...(new URL(window.location.href).searchParams.get("workbenchNetworkPanel") === "access" ? { panel: "access" } : {}) };
+    const receipt: NetworkHandoff = { token: result.token, returning: result.returning, manual: true };
     this.update({ ...this.state, handoff: receipt });
     if (result.origin !== window.location.origin) this.navigate(result.origin, receipt);
   }
 
   close() {
     this.closed = true;
+    this.cancelUpgrade();
     this.events?.close();
     this.events = null;
     for (const controller of this.requests) controller.abort();
@@ -191,6 +191,11 @@ export default class WorkbenchNetworkClient {
     const node = this.state.snapshot?.runtime.privateAccess;
     if (!node?.hostname || !node.nodeId || !node.rootCertificate) throw new Error("Finish certificate setup before verifying this device.");
     const controller = new AbortController();
+    const upgrade = this.upgrade?.mode === "tailnet-service" ? this.upgrade : null;
+    if (upgrade) {
+      upgrade.verification?.abort();
+      upgrade.verification = controller;
+    }
     this.requests.add(controller);
     try {
       const response = await (this.options.fetcher ?? fetch)(`https://${node.hostname}/_workbench-network/verify`, {
@@ -209,13 +214,63 @@ export default class WorkbenchNetworkClient {
         throw new Error("Private DNS reached a different Workbench installation.");
       }
       const current = this.state.snapshot?.runtime.privateAccess;
+      controller.signal.throwIfAborted();
       if (this.closed || current?.hostname !== node.hostname || current.nodeId !== node.nodeId || current.rootFingerprint !== node.rootFingerprint) {
         throw new Error("The private address changed during verification; verify its current identity.");
       }
       const verified = { hostname: node.hostname, nodeId: node.nodeId, rootFingerprint: node.rootFingerprint };
       this.update({ ...this.state, verified });
+      if (upgrade && this.upgrade === upgrade) {
+        upgrade.verification = null;
+        this.finishUpgrade();
+      }
       return verified;
-    } finally { this.requests.delete(controller); }
+    } finally {
+      this.requests.delete(controller);
+      if (upgrade?.verification === controller) upgrade.verification = null;
+    }
+  }
+
+  private cancelUpgrade() {
+    this.upgrade?.verification?.abort();
+    this.upgrade = null;
+  }
+
+  private async beginUpgrade(mode: NetworkUpgrade) {
+    this.cancelUpgrade();
+    this.upgrade = { mode, phase: "waiting", verification: null };
+    await this.tryUpgrade();
+  }
+
+  private async tryUpgrade() {
+    const upgrade = this.upgrade;
+    const snapshot = this.state.snapshot;
+    if (!upgrade || upgrade.phase !== "waiting" || !snapshot || workbenchNetworkMode(snapshot.configuration) !== upgrade.mode) return;
+    try {
+      const status = upgrade.mode === "tailnet-service" ? snapshot.runtime.privateAccess : snapshot.runtime.hostServe;
+      if (status.phase !== "ready" || !status.url) return;
+      if (new URL(status.url).origin === window.location.origin) { this.cancelUpgrade(); return; }
+      if (upgrade.mode === "tailnet-ip") { this.finishUpgrade(); return; }
+      upgrade.phase = "checking";
+      await this.verify();
+    }
+    catch (error) {
+      if (this.closed || this.upgrade !== upgrade || error instanceof DOMException && error.name === "AbortError") return;
+      upgrade.phase = "failed";
+      this.update({ ...this.state, error: error instanceof Error ? error.message : "The HTTPS address could not be verified." });
+    }
+  }
+
+  private finishUpgrade() {
+    const upgrade = this.upgrade;
+    const snapshot = this.state.snapshot;
+    if (!upgrade || !snapshot || workbenchNetworkMode(snapshot.configuration) !== upgrade.mode) return;
+    const status = upgrade.mode === "tailnet-service" ? snapshot.runtime.privateAccess : snapshot.runtime.hostServe;
+    if (status.phase !== "ready" || !status.url) return;
+    const origin = new URL(status.url).origin;
+    this.cancelUpgrade();
+    this.update({ ...this.state, error: null });
+    if (origin !== window.location.origin) this.navigate(origin);
   }
 
   private receive(value: unknown) {
@@ -226,8 +281,11 @@ export default class WorkbenchNetworkClient {
     }
     const node = result.data.runtime.privateAccess;
     const verified = this.state.verified;
-    this.update({ ...this.state, snapshot: result.data, error: null, loading: false,
+    if (this.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === this.upgrade.mode
+      && workbenchNetworkMode(result.data.configuration) !== this.upgrade.mode) this.cancelUpgrade();
+    this.update({ ...this.state, snapshot: result.data, error: this.upgrade?.phase === "failed" ? this.state.error : null, loading: false,
       verified: verified?.hostname === node.hostname && verified.nodeId === node.nodeId && verified.rootFingerprint === node.rootFingerprint ? verified : null });
+    void this.tryUpgrade();
   }
 
   private update(state: typeof this.state) {

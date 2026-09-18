@@ -139,7 +139,7 @@ test("the verified host moves to loopback before disabling remote access", async
   assert.equal(f.owner.snapshot().change, null);
 });
 
-test("access restrictions hand off before revoking the host connection and release failed drafts", async context => {
+test("host access is inherent so saving restrictions needs no handoff or self-grant", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
   f.forward();
@@ -151,21 +151,16 @@ test("access restrictions hand off before revoking the host connection and relea
   });
   const source = { deviceNodeId: "owner-host", origin: "http://100.80.0.2:8080" };
   const policy = { revision: 1, access: "selected" as const, grants: [] };
-  await assert.rejects(f.owner.action({ action: "access", ...policy }, source), /save|refresh|connection/i);
-  for (const fail of [true, false]) {
-    const offset = f.calls.length;
-    const prepared = await f.owner.action({ action: "access-prepare", ...policy }, source);
-    assert.ok(prepared.kind === "handoff");
-    assert.equal(prepared.origin, "http://127.0.0.1:4200");
-    assert.equal(f.calls.slice(offset).some(call => call.action === "access"), false);
-    await assert.rejects(f.owner.action({ action: "settings-finish", token: prepared.token }, source), /destination/i);
-    f.fail(fail ? "access" : null);
-    const finishing = f.owner.action({ action: "settings-finish", token: prepared.token }, { deviceNodeId: null, origin: prepared.origin });
-    if (fail) await assert.rejects(finishing, /Injected/);
-    else assert.deepEqual(await finishing, { kind: "settings-saved", origin: prepared.origin });
+  for (const action of ["access", "access-prepare"] as const) {
+    assert.deepEqual(await f.owner.action({ action, ...policy }, source), { kind: "ok" });
+    assert.deepEqual(f.calls.at(-1), { action: "access", ...policy });
     assert.equal(f.owner.snapshot().change, null);
   }
-  const permitted = { ...policy, grants: [{ deviceNodeId: "owner-host", appNodeId: "app" }] };
+  f.fail("access");
+  await assert.rejects(f.owner.action({ action: "access", ...policy }, source), /Injected/);
+  assert.equal(f.owner.snapshot().change, null);
+  f.fail(null);
+  const permitted = { ...policy, grants: [{ deviceNodeId: "other-device", appNodeId: "app" }] };
   assert.deepEqual(await f.owner.action({ action: "access-prepare", ...permitted }, source), { kind: "ok" });
   assert.equal(f.calls.at(-1)?.action, "access");
   await assert.rejects(f.owner.action({ action: "access-prepare", ...policy },

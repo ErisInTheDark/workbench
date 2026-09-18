@@ -71,6 +71,7 @@ func main() {
 			PrivateAccess: privateStatus{modeStatus: modeStatus{Phase: "off"}, Addresses: []string{}, Pending: []pairingRequest{}},
 		},
 	}
+	owner.access.ownsConnection = owner.ownsConnection
 	protocolError := serveProtocol(ctx, os.Stdin, writer, owner.dispatch)
 	closeError := owner.close()
 	if err := errors.Join(protocolError, closeError); err != nil {
@@ -517,6 +518,17 @@ func (owner *networkProcess) close() error {
 func (owner *networkProcess) appNodeID() string {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	return owner.appNodeIDLocked()
+}
+
+func (owner *networkProcess) ownsConnection(device, app string) bool {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return device != "" && app != "" && owner.runtime.Host.NodeID != nil &&
+		device == *owner.runtime.Host.NodeID && app == owner.appNodeIDLocked()
+}
+
+func (owner *networkProcess) appNodeIDLocked() string {
 	configuration := owner.config.Configuration
 	if configuration.Group == nil { return "host-app" }
 	if owner.runtime.PrivateAccess.NodeID != nil { return *owner.runtime.PrivateAccess.NodeID }

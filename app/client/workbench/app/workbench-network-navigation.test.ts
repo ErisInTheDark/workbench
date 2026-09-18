@@ -23,11 +23,14 @@ test("handoff rejects non-origin destinations and malformed receipts", () => {
   assert.throws(() => consumeNetworkHandoff("http://127.0.0.1:4200/?workbenchNetworkHandoff=invalid"), /handoff/i);
 });
 
-test("an access handoff retains its panel after the one-use receipt is consumed", () => {
-  const receipt = { token: "d479a147-899e-4332-8855-7b219e652aab", returning: false, panel: "access" as const };
+test("an upgrade survives an intermediate handoff and is consumed once after completion", () => {
+  const receipt = { token: "d479a147-899e-4332-8855-7b219e652aab", returning: false, upgrade: "tailnet-service" as const };
   const url = networkNavigationUrl("https://desktop.wb.inthedark.boo/settings", "http://127.0.0.1:4200", receipt);
   const consumed = consumeNetworkHandoff(url);
   assert.deepEqual(consumed.receipt, receipt);
-  assert.equal(new URL(consumed.href).searchParams.get("workbenchNetworkPanel"), "access");
   assert.equal(consumeNetworkHandoff(consumed.href).receipt, null);
+  const completed = networkNavigationUrl(consumed.href, "http://127.0.0.1:4300", undefined, undefined, receipt.upgrade);
+  const next = consumeNetworkHandoff(completed);
+  assert.equal(next.upgrade, "tailnet-service");
+  assert.equal(consumeNetworkHandoff(next.href).upgrade, null);
 });
