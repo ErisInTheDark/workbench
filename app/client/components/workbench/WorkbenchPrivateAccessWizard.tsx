@@ -8,10 +8,10 @@ import type { WorkbenchNetworkAction } from "workbench-shared/http/workbench-net
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import privateAccessStep from "../../workbench/app/private-access-step";
 import PrimaryButton from "./PrimaryButton";
-import LoaderIcon from "./LoaderIcon";
+import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
-import { CheckIcon, ExternalLinkIcon, LockIcon, RefreshCwIcon, WarningIcon } from "./workbench-icons";
+import { ExternalLinkIcon, LockIcon, RefreshCwIcon } from "./workbench-icons";
 
 export default function WorkbenchPrivateAccessWizard() {
   const network = useWorkbenchNetwork();
@@ -23,10 +23,10 @@ export default function WorkbenchPrivateAccessWizard() {
   const status = snapshot.runtime.privateAccess;
   const configuration = snapshot.configuration.privateAccess;
   const dnsApp = snapshot.configuration.members.find(member => member.nodeId === snapshot.configuration.group?.dnsNodeId);
-  const step = privateAccessStep(snapshot, Boolean(network.verified), dnsConfirmed);
-  const busy = working || snapshot.busy;
+  const step = privateAccessStep(snapshot, network.verification.phase, dnsConfirmed);
+  const busy = working || snapshot.busy || network.verification.phase === "checking";
   const editable = snapshot.capabilities?.manageApp ?? false;
-  async function run(operation: () => Promise<object>) {
+  async function run(operation: () => Promise<object | void>) {
     setWorking(true);
     setError(null);
     try { await operation(); }
@@ -35,17 +35,10 @@ export default function WorkbenchPrivateAccessWizard() {
   }
   const act = (action: WorkbenchNetworkAction) => { void run(() => network.client.action(action)); };
   const waiting = step === "connecting" || step === "discovering";
-  const title = {
-    prepare: "Connect this app", connecting: "Connecting to your tailnet", discovering: "Finding your Workbench network",
-    signin: "Sign in to Tailscale", create: "Set up your Workbench network", choose: "Choose your Workbench network",
-    dns: "Add your Workbench nameserver", trust: "Trust HTTPS on this device", ready: "Private HTTPS is ready", failed: "Private access needs attention",
-  }[step];
-  return <section className="flex flex-col items-start gap-4 rounded-2xl bg-accent-soft/20 p-4 sm:p-5">
-    <div className="flex items-center gap-2 text-sm font-medium text-text" role="status">
-      {waiting ? <LoaderIcon className="size-4" /> : step === "ready" ? <CheckIcon className="size-4 text-success" />
-        : step === "failed" ? <WarningIcon className="size-4 text-danger" /> : <LockIcon className="size-4" />}
-      <h4 className="m-0 text-sm font-medium">{title}</h4>
-    </div>
+  if ((step === "ready" || step === "checking") && status.discovery !== "failed" && !error) return null;
+  return <section className="flex flex-col items-start gap-3 text-sm">
+    {network.verification.phase === "failed" && (step === "dns" || step === "trust")
+      ? <p role="alert" className="m-0 text-danger">{network.verification.message}</p> : null}
     {waiting ? <p className="m-0 text-sm text-fg/muted">{step === "discovering" ? "Existing apps are found automatically. There is no pairing code to copy." : "Workbench is opening its own private connection. Your computer's normal ports stay untouched."}</p> : null}
     {step === "prepare" && configuration ? <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "prepare", label: configuration.label })}>Connect app</PrimaryButton> : null}
     {step === "signin" && status.loginUrl ? <WorkbenchLinkButton href={status.loginUrl} target="_blank" rel="noreferrer">
@@ -67,33 +60,26 @@ export default function WorkbenchPrivateAccessWizard() {
         {dnsApp?.addresses[0] ? <WorkbenchCopyButton label="Copy nameserver address" text={dnsApp.addresses[0]} /> : null}
         <WorkbenchLinkButton href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">Open Tailscale DNS<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
       </div>
-      <PrimaryButton onClick={() => setDnsConfirmed(true)}>I've added the entry</PrimaryButton>
+      <PrimaryButton disabled={busy} onClick={() => { setDnsConfirmed(true); void run(() => network.client.verify()); }}>I've added the entry</PrimaryButton>
     </> : null}
     {step === "trust" && status.rootCertificate ? <>
-      <p className="m-0 text-sm text-fg/muted">Install and trust this certificate on the device you're using now. You only need to do this once per device, not for every Workbench app.</p>
       <div className="flex flex-wrap items-center gap-2">
         {snapshot.hostPlatform === "win32" && editable && snapshot.capabilities?.trustHost
           ? <PrimaryButton disabled={busy} onClick={() => act({ action: "trust-host" })}><LockIcon className="mr-2 size-4" />Trust certificate on this PC</PrimaryButton>
           : null}
         <WorkbenchLinkButton download="workbench-private-root.crt" href={`data:application/x-x509-ca-cert,${encodeURIComponent(status.rootCertificate)}`}>Download certificate</WorkbenchLinkButton>
+        <PrimaryButton disabled={busy} pendingHalo={busy} onClick={() => { void run(() => network.client.verify()); }}><RefreshCwIcon className="mr-2 size-4" />Retry HTTPS check</PrimaryButton>
       </div>
-      <details className="text-sm text-fg/muted">
-        <summary className="cursor-pointer text-text">How do I install it?</summary>
-        <div className="mt-3 flex flex-col items-start gap-2">
+      <ThreadDisclosure summary="How do I install it?" className="w-full text-sm text-fg/muted" contentClassName="flex flex-col items-start gap-2 pt-3">
+          <p className="m-0">Trust is only needed once per browsing device. If this certificate is already trusted, check Tailscale connectivity and the nameserver entry instead of installing it again.</p>
           <p className="m-0">Open the downloaded certificate in your device's certificate settings and enable trust for websites. Only trust it if you recognise this Workbench network.</p>
           <p className="m-0">On another Windows PC, import it into your Current User &gt; Trusted Root Certification Authorities store.</p>
           <WorkbenchLinkButton href="https://learn.microsoft.com/en-us/windows-hardware/drivers/install/trusted-root-certification-authorities-certificate-store" target="_blank" rel="noreferrer">Windows certificate help<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
           <WorkbenchLinkButton href="https://support.apple.com/en-ie/102390" target="_blank" rel="noreferrer">iPhone and iPad instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
           <WorkbenchLinkButton href="https://support.apple.com/en-ie/guide/keychain-access/kyca11871/mac" target="_blank" rel="noreferrer">Mac instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
           <WorkbenchLinkButton href="https://support.google.com/pixelphone/answer/2844832?hl=en" target="_blank" rel="noreferrer">Android instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-        </div>
-      </details>
-      <div className="flex flex-col items-start gap-2">
-        <p className="m-0 text-sm text-fg/muted">Once the certificate is trusted, check that this browser can open the HTTPS address.</p>
-        <PrimaryButton disabled={busy} pendingHalo={busy} onClick={() => { void run(() => network.client.verify()); }}>Check HTTPS connection</PrimaryButton>
-      </div>
+      </ThreadDisclosure>
     </> : null}
-    {step === "ready" ? <p className="m-0 text-sm text-fg/muted">This browser verified the private address and the expected app.</p> : null}
     {configuration?.role !== "unconfigured" && step !== "failed" && status.discovery === "failed" ? <div className="space-y-2">
       <p className="m-0 text-sm text-fg/muted">{status.message ?? "Network updates could not be checked. Previously saved access settings remain in use."}</p>
       <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "retry" })}><RefreshCwIcon className="mr-2 size-4" />Check network updates</PrimaryButton>

@@ -4,6 +4,98 @@ import test from "node:test";
 import WorkbenchNetworkClient from "./WorkbenchNetworkClient.ts";
 import type { WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
 
+async function settledVerification(client: WorkbenchNetworkClient) {
+  if (client.snapshot().verification.phase === "checking") {
+    await new Promise<void>(resolve => {
+      const release = client.subscribe(() => {
+        if (client.snapshot().verification.phase !== "checking") { release(); resolve(); }
+      });
+    });
+  }
+  return client.snapshot().verification;
+}
+
+test("ready HTTPS checks automatically from HTTP and only retries after trust changes or explicit intent", async context => {
+  const snapshot: WorkbenchNetworkSnapshot = {
+    configuration: { mode: "tailnet-service", hostServe: { enabled: true, port: 8080 }, members: [],
+      privateAccess: { role: "authority", enabled: true, label: "desktop" } },
+    runtime: {
+      hostServe: { phase: "ready", message: null, url: "http://100.80.0.2:8080" },
+      privateAccess: { phase: "starting", message: null, url: null, hostname: "desktop.wb.inthedark.boo", nodeId: "app",
+        keyFingerprint: null, loginUrl: null, addresses: [], rootCertificate: "certificate",
+        rootFingerprint: "a".repeat(64), certificateExpiresAt: null, pending: [] },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
+  };
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const navigations: string[] = [];
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: { href: "http://100.80.0.2:8080/settings", origin: "http://100.80.0.2:8080", protocol: "http:",
+      assign: (href: string) => navigations.push(href) },
+  } });
+  context.after(() => {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const stream: Pick<EventSource, "close" | "onmessage" | "onerror"> = { close: () => {}, onmessage: null, onerror: null };
+  const publish = () => {
+    const receive: ((event: MessageEvent) => void) | null = stream.onmessage;
+    receive?.({ data: JSON.stringify(snapshot) } as MessageEvent);
+  };
+  let checks = 0;
+  let trusted = false;
+  let delayedCheck: Promise<Response> | null = null;
+  let delayedSignal: AbortSignal | null | undefined;
+  const client = new WorkbenchNetworkClient({ events: () => stream, fetcher: async (input, options) => {
+    if (String(input).startsWith("https:")) {
+      checks++;
+      if (delayedCheck) {
+        const pending = delayedCheck;
+        delayedCheck = null;
+        delayedSignal = options?.signal;
+        return await pending;
+      }
+      if (!trusted) throw new TypeError("Failed to fetch");
+      return Response.json({ hostname: snapshot.runtime.privateAccess.hostname, nodeId: "app" });
+    }
+    if (options?.method === "POST") { trusted = true; return Response.json({ kind: "ok" }); }
+    return Response.json(snapshot);
+  } });
+  context.after(() => client.close());
+  await client.start();
+  assert.equal(checks, 0, "wait until the service can answer HTTPS");
+  snapshot.runtime.privateAccess.phase = "ready";
+  snapshot.runtime.privateAccess.url = "https://desktop.wb.inthedark.boo";
+  publish();
+  assert.equal(checks, 1, "HTTP settings must check HTTPS when it becomes ready");
+  assert.equal((await settledVerification(client)).phase, "failed");
+  publish();
+  publish();
+  assert.equal(checks, 1, "ordinary progress must not retry a failed check");
+  await client.action({ action: "trust-host" });
+  assert.equal(checks, 2);
+  assert.equal((await settledVerification(client)).phase, "verified");
+  assert.equal(navigations.length, 0, "a bootstrap visit is not an upgrade request");
+  snapshot.runtime.privateAccess.hostname = "renamed.wb.inthedark.boo";
+  snapshot.runtime.privateAccess.url = "https://renamed.wb.inthedark.boo";
+  publish();
+  assert.equal(checks, 3, "a new service identity needs its own verification");
+  assert.equal((await settledVerification(client)).phase, "verified");
+  let finishOldCheck!: (response: Response) => void;
+  delayedCheck = new Promise(resolve => { finishOldCheck = resolve; });
+  const obsoleteCheck = client.verify();
+  snapshot.runtime.privateAccess.hostname = "current.wb.inthedark.boo";
+  snapshot.runtime.privateAccess.url = "https://current.wb.inthedark.boo";
+  publish();
+  assert.equal(delayedSignal?.aborted, true);
+  const current = await settledVerification(client);
+  assert.ok(current.phase === "verified");
+  assert.equal(current.identity.hostname, "current.wb.inthedark.boo");
+  finishOldCheck(Response.json({ hostname: "renamed.wb.inthedark.boo", nodeId: "app" }));
+  await obsoleteCheck;
+  assert.deepEqual(client.snapshot().verification, current, "late results cannot replace current proof");
+});
+
 test("enabling a higher mode upgrades the address, but HTTPS waits for browser trust", async context => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
   const navigations: string[] = [];
@@ -66,7 +158,9 @@ test("enabling a higher mode upgrades the address, but HTTPS waits for browser t
   await client.changeSettings({ mode: selected, localPort: 4200, tailnetPort: 8080 });
   assert.equal(checks, 1);
   assert.equal(navigations.length, 1, "untrusted HTTPS must not strand the browser");
-  assert.match(client.snapshot().error ?? "", /certificate/);
+  const failed = await settledVerification(client);
+  assert.ok(failed.phase === "failed");
+  assert.match(failed.message, /certificate/);
   publish();
   assert.equal(checks, 1, "progress must not repeatedly retry failed trust checks");
   trusted = true;
@@ -95,7 +189,8 @@ test("enabling a higher mode upgrades the address, but HTTPS waits for browser t
   snapshot.runtime.privateAccess.phase = "ready";
   snapshot.configuration.mode = "tailnet-service";
   publish();
-  assert.equal(checks, 2, "a mode change cancels the old upgrade instead of reviving it later");
+  assert.equal(checks, 3, "the re-enabled service is checked without reviving the cancelled redirect");
+  await settledVerification(client);
   assert.equal(navigations.length, 3);
 
   snapshot.configuration.mode = "tailnet-ip";
@@ -105,10 +200,12 @@ test("enabling a higher mode upgrades the address, but HTTPS waits for browser t
   const entered = new Promise<void>(resolve => { verificationStarted = resolve; });
   const changing = client.changeSettings({ mode: "tailnet-service", localPort: 4200, tailnetPort: 8080 });
   await entered;
+  await changing;
+  const lateCheck = client.verify();
   client.close();
   assert.equal(verificationSignal?.aborted, true);
   finishVerification(Response.json({ hostname: "desktop.wb.inthedark.boo", nodeId: "app" }));
-  await changing;
+  await lateCheck;
   assert.equal(navigations.length, 3, "a disposed client cannot navigate on late verification success");
 });
 
@@ -256,20 +353,28 @@ test("HTTPS verification must reach the expected node and disposal closes the pr
   });
   await client.start();
   unreachable = true;
-  await assert.rejects(client.verify(), error => error instanceof Error && /certificate/i.test(error.message) && /DNS/.test(error.message));
-  assert.equal(client.snapshot().verified, null);
+  await client.verify();
+  const unreachableState = client.snapshot().verification;
+  assert.ok(unreachableState.phase === "failed");
+  assert.match(unreachableState.message, /certificate/i);
+  assert.match(unreachableState.message, /DNS/);
   unreachable = false;
-  await assert.rejects(client.verify(), /different/u);
+  await client.verify();
+  const wrongNode = client.snapshot().verification;
+  assert.ok(wrongNode.phase === "failed");
+  assert.match(wrongNode.message, /different/u);
   nodeId = "expected";
   await client.verify();
-  assert.equal(client.snapshot().verified?.nodeId, "expected");
+  const verified = client.snapshot().verification;
+  assert.ok(verified.phase === "verified");
+  assert.equal(verified.identity.nodeId, "expected");
   snapshot.runtime.privateAccess.hostname = "renamed.wb.inthedark.boo";
   const receive: ((event: MessageEvent) => void) | null = stream.onmessage;
   receive?.({ data: JSON.stringify(snapshot) } as MessageEvent);
-  assert.equal(client.snapshot().verified, null);
+  assert.equal(client.snapshot().verification.phase, "idle");
   client.close();
   assert.equal(closed, true);
   const before = requests;
-  await assert.rejects(client.verify());
+  await client.verify();
   assert.equal(requests, before, "disposed client must not begin another verification");
 });

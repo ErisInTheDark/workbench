@@ -7,7 +7,6 @@ import { useState } from "react";
 import type { WorkbenchNetworkAction, WorkbenchNetworkGroup } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
-import WorkbenchPopover from "./WorkbenchPopover";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchModeRow from "./WorkbenchModeRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
@@ -17,7 +16,6 @@ import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon } from "./work
 export default function WorkbenchNetworkAccessSettings() {
   const network = useWorkbenchNetwork();
   const [candidate, setCandidate] = useState<{ kind: "dns" | "owner"; nodeId: string } | null>(null);
-  const [choices, setChoices] = useState<{ kind: "dns" | "owner"; anchor: HTMLElement } | null>(null);
   const [draft, setDraft] = useState<Pick<WorkbenchNetworkGroup, "revision" | "access" | "grants"> | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -51,7 +49,6 @@ export default function WorkbenchNetworkAccessSettings() {
     finally { setWorking(false); }
   }
   function choose(kind: "dns" | "owner", nodeId: string) {
-    setChoices(null);
     if (nodeId !== (kind === "dns" ? group!.dnsNodeId : group!.ownerNodeId)) setCandidate({ kind, nodeId });
   }
   function saveAccess() {
@@ -59,7 +56,6 @@ export default function WorkbenchNetworkAccessSettings() {
     void act({ action: "access", ...draft }, () => setDraft(null));
   }
   return <section className="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--text)_12%,transparent)] p-4 text-sm">
-    <h4 className="m-0 font-medium text-text">Network access</h4>
     {pendingTransfer ? <div className="space-y-2">
       <p className="m-0 text-fg/muted">Ownership handover to {members.find(app => app.nodeId === pendingTransfer.toNodeId)?.label ?? "the selected app"} is waiting to finish. DNS hosting and access grants are unchanged.</p>
       {snapshot.capabilities?.manageNetwork && pendingTransfer.fromNodeId === snapshot.runtime.privateAccess.nodeId
@@ -74,20 +70,14 @@ export default function WorkbenchNetworkAccessSettings() {
         return <div key={kind} className="flex items-center gap-2">
           <span className="text-fg/muted">{kind === "dns" ? "Nameserver" : "Owner"}</span>
           {canManage && !busy ? <WorkbenchPressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
-            getItems={() => members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span>{member.label}<span className="ml-2 text-xs text-fg/muted">{availability(member.nodeId)}</span></span> }))}
-            onOpen={() => setChoices(null)} onSelect={nodeId => choose(kind, nodeId)} onActivate={anchor => setChoices({ kind, anchor })}>
+            items={members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span>{member.label}<span className="ml-2 text-xs text-fg/muted">{availability(member.nodeId)}</span></span> }))}
+            onSelect={nodeId => choose(kind, nodeId)}>
             <span className="inline-flex items-center gap-1 font-medium">{name}<ChevronDownIcon className="size-3" /></span>
           </WorkbenchPressDragMenu> : <span className="font-medium text-text">{name}</span>}
           <span className="text-xs text-fg/muted">{availability(id)}</span>
         </div>;
       })}
     </div>
-    {choices ? <WorkbenchPopover anchor={choices.anchor} label={`Choose ${choices.kind === "dns" ? "nameserver" : "owner"} app`}
-      onClose={() => setChoices(null)} width={320} height={Math.min(320, 24 + members.length * 44)}>
-      <div className="flex flex-col gap-1 overflow-y-auto p-2">
-        {members.map(app => <PrimaryButton key={app.nodeId} disabled={busy} onClick={() => choose(choices.kind, app.nodeId)}>{app.label}<span className="ml-2 text-xs text-fg/muted">{availability(app.nodeId)}</span></PrimaryButton>)}
-      </div>
-    </WorkbenchPopover> : null}
     {candidate && selected ? <div className="space-y-3 rounded-xl bg-accent-soft/30 p-3">
       <p className="m-0 text-text">{candidate.kind === "dns" ? `Use ${selected.label} for DNS?` : `Transfer ownership to ${selected.label}?`}</p>
       <p className="m-0 text-fg/muted">{candidate.kind === "dns"

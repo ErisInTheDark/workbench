@@ -2,6 +2,7 @@
  * Exports:
  * - default WorkbenchNetworkClient: own validated network settings, progress subscription and request cancellation.
  * - WorkbenchNetworkClientContext/useWorkbenchNetwork: share the settings owner without transporting app state through props.
+ * - WorkbenchHttpsVerification: current browser proof, progress or failure for one service identity.
  */
 import { createContext, useContext, useSyncExternalStore } from "react";
 import {
@@ -14,20 +15,26 @@ import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff, type 
 import { readWorkbenchBrowserStateTransferId } from "../state/workbench-browser-state-identity";
 
 const actionError = z.object({ error: z.string().max(512) }).strict();
+type HttpsIdentity = { hostname: string; nodeId: string; rootFingerprint: string | null };
+export type WorkbenchHttpsVerification =
+  | { phase: "idle" }
+  | { phase: "checking" | "verified"; identity: HttpsIdentity }
+  | { phase: "failed"; identity: HttpsIdentity; message: string };
 
 export default class WorkbenchNetworkClient {
   private state: {
     snapshot: WorkbenchNetworkSnapshot | null; error: string | null; loading: boolean;
-    verified: { hostname: string; nodeId: string; rootFingerprint: string | null } | null;
+    verification: WorkbenchHttpsVerification;
     handoff: NetworkHandoff | null;
   } = {
-    snapshot: null, error: null, loading: true, verified: null, handoff: null,
+    snapshot: null, error: null, loading: true, verification: { phase: "idle" }, handoff: null,
   };
   private readonly listeners = new Set<() => void>();
   private readonly requests = new Set<AbortController>();
   private events: Pick<EventSource, "close" | "onmessage" | "onerror"> | null = null;
   private closed = false;
-  private upgrade: { mode: NetworkUpgrade; phase: "waiting" | "checking" | "failed"; verification: AbortController | null } | null = null;
+  private upgrade: NetworkUpgrade | null = null;
+  private verificationRequest: AbortController | null = null;
 
   constructor(private readonly options: {
     fetcher?: typeof fetch;
@@ -76,11 +83,9 @@ export default class WorkbenchNetworkClient {
           this.update({ ...this.state, handoff: consumed.receipt });
           if (!consumed.receipt.manual) await this.finishSettings(consumed.receipt.returning);
         } else if (consumed.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === consumed.upgrade) {
-          await this.beginUpgrade(consumed.upgrade);
+          this.beginUpgrade(consumed.upgrade);
         }
       }
-      if (typeof window !== "undefined" && window.location.protocol === "https:"
-        && window.location.hostname === this.state.snapshot?.runtime.privateAccess.hostname) await this.verify();
     } catch (error) {
       if (!this.closed) this.update({
         ...this.state, loading: false,
@@ -112,6 +117,7 @@ export default class WorkbenchNetworkClient {
         throw new Error("Network action returned invalid data.");
       }
       if (this.closed) throw new Error("Network settings have closed.");
+      if (action.action === "trust-host") await this.verify();
       return result.data;
     } finally { this.requests.delete(controller); }
   }
@@ -155,7 +161,7 @@ export default class WorkbenchNetworkClient {
         this.update({ ...this.state, handoff: null, error: null });
         const upgrade = !cancel && !receipt.returning ? receipt.upgrade : undefined;
         if (result.origin !== window.location.origin) this.navigate(result.origin, undefined, upgrade);
-        else if (upgrade) await this.beginUpgrade(upgrade);
+        else if (upgrade) this.beginUpgrade(upgrade);
       } else throw new Error("Settings returned an unexpected completion response.");
     } catch (error) {
       this.update({ ...this.state, error: error instanceof Error ? error.message : "Settings could not finish." });
@@ -179,6 +185,8 @@ export default class WorkbenchNetworkClient {
   close() {
     this.closed = true;
     this.cancelUpgrade();
+    this.verificationRequest?.abort();
+    this.verificationRequest = null;
     this.events?.close();
     this.events = null;
     for (const controller of this.requests) controller.abort();
@@ -187,22 +195,24 @@ export default class WorkbenchNetworkClient {
   }
 
   async verify() {
-    if (this.closed) throw new Error("Network settings have closed.");
+    if (this.closed) return;
     const node = this.state.snapshot?.runtime.privateAccess;
-    if (!node?.hostname || !node.nodeId || !node.rootCertificate) throw new Error("Finish certificate setup before verifying this device.");
-    const controller = new AbortController();
-    const upgrade = this.upgrade?.mode === "tailnet-service" ? this.upgrade : null;
-    if (upgrade) {
-      upgrade.verification?.abort();
-      upgrade.verification = controller;
+    if (!node?.hostname || !node.nodeId || !node.rootCertificate) {
+      this.update({ ...this.state, error: "Finish certificate setup before verifying this device." });
+      return;
     }
+    const identity = { hostname: node.hostname, nodeId: node.nodeId, rootFingerprint: node.rootFingerprint };
+    this.verificationRequest?.abort();
+    const controller = new AbortController();
+    this.verificationRequest = controller;
     this.requests.add(controller);
+    this.update({ ...this.state, verification: { phase: "checking", identity } });
     try {
       const response = await (this.options.fetcher ?? fetch)(`https://${node.hostname}/_workbench-network/verify`, {
         cache: "no-store", credentials: "omit", signal: controller.signal,
       }).catch((error: unknown) => {
         if (controller.signal.aborted) throw error;
-        throw new Error("This browser could not open the HTTPS address. Check that this device is connected to Tailscale, the DNS entry is saved, and the certificate is installed and trusted. The browser cannot tell us which check failed.");
+        throw new Error("This browser could not verify HTTPS. Check Tailscale connectivity, DNS and certificate trust.");
       });
       if (!response.ok) throw new Error("Private HTTPS verification failed.");
       const parsed = WorkbenchNetworkVerificationSchema.safeParse(await response.json());
@@ -218,59 +228,43 @@ export default class WorkbenchNetworkClient {
       if (this.closed || current?.hostname !== node.hostname || current.nodeId !== node.nodeId || current.rootFingerprint !== node.rootFingerprint) {
         throw new Error("The private address changed during verification; verify its current identity.");
       }
-      const verified = { hostname: node.hostname, nodeId: node.nodeId, rootFingerprint: node.rootFingerprint };
-      this.update({ ...this.state, verified });
-      if (upgrade && this.upgrade === upgrade) {
-        upgrade.verification = null;
-        this.finishUpgrade();
-      }
-      return verified;
+      this.update({ ...this.state, verification: { phase: "verified", identity } });
+      this.tryUpgrade();
+    } catch (error) {
+      if (this.closed || controller.signal.aborted || this.verificationRequest !== controller) return;
+      this.update({ ...this.state, verification: { phase: "failed", identity,
+        message: error instanceof Error ? error.message.slice(0, 512) : "HTTPS could not be verified." } });
     } finally {
       this.requests.delete(controller);
-      if (upgrade?.verification === controller) upgrade.verification = null;
+      if (this.verificationRequest === controller) this.verificationRequest = null;
     }
   }
 
   private cancelUpgrade() {
-    this.upgrade?.verification?.abort();
     this.upgrade = null;
   }
 
-  private async beginUpgrade(mode: NetworkUpgrade) {
+  private beginUpgrade(mode: NetworkUpgrade) {
     this.cancelUpgrade();
-    this.upgrade = { mode, phase: "waiting", verification: null };
-    await this.tryUpgrade();
+    this.upgrade = mode;
+    this.tryUpgrade();
   }
 
-  private async tryUpgrade() {
+  private tryUpgrade() {
     const upgrade = this.upgrade;
     const snapshot = this.state.snapshot;
-    if (!upgrade || upgrade.phase !== "waiting" || !snapshot || workbenchNetworkMode(snapshot.configuration) !== upgrade.mode) return;
+    if (!upgrade || !snapshot || workbenchNetworkMode(snapshot.configuration) !== upgrade) return;
     try {
-      const status = upgrade.mode === "tailnet-service" ? snapshot.runtime.privateAccess : snapshot.runtime.hostServe;
+      const status = upgrade === "tailnet-service" ? snapshot.runtime.privateAccess : snapshot.runtime.hostServe;
       if (status.phase !== "ready" || !status.url) return;
-      if (new URL(status.url).origin === window.location.origin) { this.cancelUpgrade(); return; }
-      if (upgrade.mode === "tailnet-ip") { this.finishUpgrade(); return; }
-      upgrade.phase = "checking";
-      await this.verify();
+      if (upgrade === "tailnet-service" && this.state.verification.phase !== "verified") return;
+      const origin = new URL(status.url).origin;
+      this.cancelUpgrade();
+      if (origin !== window.location.origin) this.navigate(origin);
+    } catch (error) {
+      this.cancelUpgrade();
+      this.update({ ...this.state, error: error instanceof Error ? error.message : "The enabled address could not be opened." });
     }
-    catch (error) {
-      if (this.closed || this.upgrade !== upgrade || error instanceof DOMException && error.name === "AbortError") return;
-      upgrade.phase = "failed";
-      this.update({ ...this.state, error: error instanceof Error ? error.message : "The HTTPS address could not be verified." });
-    }
-  }
-
-  private finishUpgrade() {
-    const upgrade = this.upgrade;
-    const snapshot = this.state.snapshot;
-    if (!upgrade || !snapshot || workbenchNetworkMode(snapshot.configuration) !== upgrade.mode) return;
-    const status = upgrade.mode === "tailnet-service" ? snapshot.runtime.privateAccess : snapshot.runtime.hostServe;
-    if (status.phase !== "ready" || !status.url) return;
-    const origin = new URL(status.url).origin;
-    this.cancelUpgrade();
-    this.update({ ...this.state, error: null });
-    if (origin !== window.location.origin) this.navigate(origin);
   }
 
   private receive(value: unknown) {
@@ -280,12 +274,20 @@ export default class WorkbenchNetworkClient {
       throw new Error("Network settings returned invalid data.");
     }
     const node = result.data.runtime.privateAccess;
-    const verified = this.state.verified;
-    if (this.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === this.upgrade.mode
-      && workbenchNetworkMode(result.data.configuration) !== this.upgrade.mode) this.cancelUpgrade();
-    this.update({ ...this.state, snapshot: result.data, error: this.upgrade?.phase === "failed" ? this.state.error : null, loading: false,
-      verified: verified?.hostname === node.hostname && verified.nodeId === node.nodeId && verified.rootFingerprint === node.rootFingerprint ? verified : null });
-    void this.tryUpgrade();
+    const mode = workbenchNetworkMode(result.data.configuration);
+    const eligible = mode === "tailnet-service" && node.phase === "ready" && node.hostname && node.nodeId && node.rootCertificate && node.url;
+    let verification = this.state.verification;
+    if (!eligible || verification.phase !== "idle" && (verification.identity.hostname !== node.hostname
+      || verification.identity.nodeId !== node.nodeId || verification.identity.rootFingerprint !== node.rootFingerprint)) {
+      this.verificationRequest?.abort();
+      this.verificationRequest = null;
+      verification = { phase: "idle" };
+    }
+    if (this.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === this.upgrade
+      && mode !== this.upgrade) this.cancelUpgrade();
+    this.update({ ...this.state, snapshot: result.data, error: null, loading: false, verification });
+    if (eligible && verification.phase === "idle") void this.verify();
+    this.tryUpgrade();
   }
 
   private update(state: typeof this.state) {

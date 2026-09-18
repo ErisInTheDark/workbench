@@ -14,16 +14,16 @@ test("an enrolled node still connecting never offers duplicate preparation or ne
     } },
     executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
   };
-  assert.equal(privateAccessStep(snapshot, false, false), "connecting");
+  assert.equal(privateAccessStep(snapshot, "idle", false), "connecting");
   snapshot.runtime.privateAccess.phase = "setup";
   snapshot.runtime.privateAccess.discovery = "searching";
-  assert.equal(privateAccessStep(snapshot, false, false), "discovering");
+  assert.equal(privateAccessStep(snapshot, "idle", false), "discovering");
   snapshot.runtime.privateAccess.discovery = "none";
-  assert.equal(privateAccessStep(snapshot, false, false), "create");
+  assert.equal(privateAccessStep(snapshot, "idle", false), "create");
   snapshot.runtime.privateAccess.discovery = "failed";
-  assert.equal(privateAccessStep(snapshot, false, false), "failed");
+  assert.equal(privateAccessStep(snapshot, "idle", false), "failed");
   snapshot.runtime.privateAccess.loginUrl = "https://login.tailscale.com/example";
-  assert.equal(privateAccessStep(snapshot, false, false), "signin");
+  assert.equal(privateAccessStep(snapshot, "idle", false), "signin");
   snapshot.runtime.privateAccess.loginUrl = null;
   snapshot.runtime.privateAccess.phase = "ready";
   snapshot.runtime.privateAccess.rootCertificate = "trusted-root";
@@ -33,10 +33,11 @@ test("an enrolled node still connecting never offers duplicate preparation or ne
     ownerNodeId: "node", dnsNodeId: "node", access: "all", grants: [],
   };
   snapshot.capabilities = { manageApp: true, manageNetwork: true, trustHost: true };
-  assert.equal(privateAccessStep(snapshot, false, false), "dns");
-  assert.equal(privateAccessStep(snapshot, false, true), "trust");
+  assert.equal(privateAccessStep(snapshot, "checking", false), "checking", "do not prescribe setup before the automatic check finishes");
+  assert.equal(privateAccessStep(snapshot, "failed", false), "dns");
+  assert.equal(privateAccessStep(snapshot, "failed", true), "trust");
   snapshot.capabilities = { manageApp: false, manageNetwork: false, trustHost: false };
-  assert.equal(privateAccessStep(snapshot, false, false), "trust", "another browsing device needs trust, not repeated network-wide DNS setup");
+  assert.equal(privateAccessStep(snapshot, "failed", false), "trust", "another browsing device needs trust, not repeated network-wide DNS setup");
   snapshot.busy = true;
-  assert.equal(privateAccessStep(snapshot, true, true), "ready", "an unrelated pending operation must not reset verified setup");
+  assert.equal(privateAccessStep(snapshot, "verified", true), "ready", "an unrelated pending operation must not reset verified setup");
 });
