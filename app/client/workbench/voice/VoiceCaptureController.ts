@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - VoiceCaptureOptions: browser media ports and PCM callbacks.
- * - default VoiceCaptureController: microphone permission, audio graph, flush and cancellation.
+ * - default VoiceCaptureController: HTTPS availability, microphone permission, audio graph, flush and cancellation.
  */
 export interface VoiceCaptureOptions {
   workletUrl: string;
@@ -12,6 +12,12 @@ export interface VoiceCaptureOptions {
   createNode?: (context: AudioContext) => AudioWorkletNode;
 }
 export default class VoiceCaptureController {
+  static isSupported() {
+    return globalThis.location?.protocol === "https:"
+      && globalThis.isSecureContext === true
+      && typeof globalThis.navigator?.mediaDevices?.getUserMedia === "function";
+  }
+
   private generation = 0;
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
@@ -21,6 +27,9 @@ export default class VoiceCaptureController {
   private finished: Promise<void> | null = null;
   constructor(private readonly options: VoiceCaptureOptions) {}
   async start(ready: Promise<void> = Promise.resolve()) {
+    if (!this.options.getUserMedia && !VoiceCaptureController.isSupported()) {
+      throw new Error("Voice input requires secure HTTPS and browser microphone support.");
+    }
     const generation = ++this.generation;
     const context = (this.options.createContext ?? (() => new AudioContext()))();
     this.context = context;

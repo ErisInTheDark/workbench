@@ -5,6 +5,7 @@
  */
 import { useContext, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import WorkbenchClientContext from "../workbench-client-context";
+import VoiceCaptureController from "../../../workbench/voice/VoiceCaptureController";
 import type { VoiceClientSnapshot } from "../../../workbench/voice/WorkbenchVoiceClient";
 
 const idle: VoiceClientSnapshot = { fieldId: null, state: "idle", error: "" };
@@ -12,6 +13,7 @@ const subscribeIdle = () => () => {};
 const readIdle = () => idle;
 
 export function useVoiceInput(value: string, onChange: ((value: string) => void) | undefined, enabled: boolean) {
+  const available = enabled && VoiceCaptureController.isSupported();
   const client = useContext(WorkbenchClientContext)?.mounted?.voice ?? null;
   const fieldId = useId();
   const latest = useRef({ value, onChange });
@@ -21,15 +23,15 @@ export function useVoiceInput(value: string, onChange: ((value: string) => void)
   const locked = active && state.state !== "idle" && state.state !== "failed";
   useLayoutEffect(() => { client?.reconcile(fieldId, value); }, [client, fieldId, value]);
   useEffect(() => () => { void client?.cancel(fieldId); }, [client, fieldId]);
-  useEffect(() => { if (!enabled) void client?.cancel(fieldId); }, [client, enabled, fieldId]);
+  useEffect(() => { if (!available) void client?.cancel(fieldId); }, [client, available, fieldId]);
   return {
-    visible: Boolean(client && enabled && onChange),
+    visible: Boolean(client && available && onChange),
     busy: Boolean(state.fieldId && !active && state.state !== "idle" && state.state !== "failed"),
     locked,
     state: active ? state.state : "idle",
     error: active ? state.error : "",
     begin: () => {
-      if (!client || !enabled || !latest.current.onChange) return;
+      if (!client || !available || !latest.current.onChange) return;
       void client.begin({ id: fieldId, text: latest.current.value, change: text => latest.current.onChange?.(text) })
         .catch(error => console.warn("[voice] could not claim field", error instanceof Error ? error.message : "unknown failure"));
     },
