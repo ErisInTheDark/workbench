@@ -1328,7 +1328,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   [data-thread-scroll-target="true"][data-thread-scroll-direction="down"][data-thread-scroll-proximity="near"] {
-    --thread-scroll-snap-distance: 100vh;
+    --thread-scroll-snap-distance: calc(100dvh - 1px);
   }
 
   [data-thread-scroll-end="true"] {
