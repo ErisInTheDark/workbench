@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - useWorkbenchRoute: React hook that derives workbench route state from browser history and exposes guarded user navigation. Keywords: URL source of truth, browser history, pathname, search params.
+ * - useWorkbenchRoute: derive routes from browser history and expose guarded canonical navigation.
  */
 
 import { useCallback, useEffect, useMemo } from "react";
@@ -46,11 +46,23 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
   }, [href, locationSnapshot]);
 
   useEffect(() => {
-    // Launch intent needs catalogue addresses. Never replace a location the user
-    // reached while the initial project observation was opening.
-    if (pathname !== "/launch" || !client.controls || window.location.pathname !== "/launch") return;
-    navigateToRoute(route, { replace: true });
-  }, [pathname, client.controls, navigateToRoute, route]);
+    // Prefer the catalogue once available, including when an old junction URL
+    // was opened directly. Never replace newer user navigation.
+    if (!client.controls || `${window.location.pathname}${window.location.search}` !== locationSnapshot) return;
+    const identities = [route.projectId, route.threadOwnerProjectId].filter(Boolean);
+    if (identities.some(id => !client.explorer.projects.some(project => project.id === id))) return;
+    if (pathname === "/launch") {
+      navigateToRoute(route, { replace: true });
+      return;
+    }
+    if (identities.length === 0) return;
+    const canonical = href(route);
+    if (!canonical) return;
+    const canonicalPath = new URL(canonical, window.location.origin).pathname;
+    if (canonicalPath !== pathname) {
+      window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
+    }
+  }, [pathname, locationSnapshot, client.controls, client.explorer.projects, href, navigateToRoute, route]);
 
   return {
     navigateToRoute,

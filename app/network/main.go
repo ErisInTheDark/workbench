@@ -32,6 +32,9 @@ func (writer *pipeWriter) Write(data []byte) (int, error) {
 }
 
 type networkProcess struct {
+	access networkAccess
+	ingress *hostIngress
+	group *networkGroupController
 	ctx       context.Context
 	cancel    context.CancelFunc
 	directory string
@@ -46,6 +49,7 @@ type networkProcess struct {
 	host      *hostServe
 	persistenceMu sync.Mutex
 	persistence map[string]*memberPersistence
+	networkPersistence map[string]*networkPersistence
 	nextPersistence uint64
 }
 
@@ -98,10 +102,27 @@ func (owner *networkProcess) members() []networkMember {
 	return slices.Clone(owner.config.Configuration.Members)
 }
 
+func (owner *networkProcess) directorySnapshot() *networkDirectory {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	configuration := owner.config.Configuration
+	if configuration.Group == nil { return nil }
+	return &networkDirectory{Group: *configuration.Group, Members: slices.Clone(configuration.Members)}
+}
+
+func (owner *networkProcess) configurationSnapshot() networkConfiguration {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.config.Configuration
+}
+
 func (owner *networkProcess) dispatch(ctx context.Context, request pipeRequest) (json.RawMessage, error) {
 	// Issuance can be waiting for this response while holding actions.
 	if request.Action == "persist-member-result" {
 		return owner.acknowledgeMember(request.Payload)
+	}
+	if request.Action == "persist-network-result" {
+		return owner.acknowledgeNetwork(request.Payload)
 	}
 	owner.actions.Lock()
 	defer owner.actions.Unlock()
@@ -127,18 +148,6 @@ func (owner *networkProcess) apply(ctx context.Context, request pipeRequest) (ac
 		}
 		return actionResult{Kind: "ok"}, owner.configure(ctx, configuration)
 	}
-	if request.Action == "backup" {
-		var payload struct {
-			Password string `json:"password"`
-		}
-		if err := decodePipeValue(request.Payload, &payload); err != nil {
-			return actionResult{}, err
-		}
-		owner.mu.Lock()
-		configuration := owner.config.Configuration
-		owner.mu.Unlock()
-		return backupAuthority(owner.directory, configuration, payload.Password)
-	}
 	if request.Action == "trust-host" {
 		owner.mu.Lock()
 		root := owner.runtime.PrivateAccess.RootCertificate
@@ -155,12 +164,37 @@ func (owner *networkProcess) apply(ctx context.Context, request pipeRequest) (ac
 		return actionResult{}, err
 	}
 	switch request.Action {
+	case "discover":
+		return actionResult{Kind: "ok"}, owner.group.discover(ctx)
+	case "select-network":
+		var input struct { ID string `json:"id"` }
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		return actionResult{Kind: "ok"}, owner.group.discover(ctx, input.ID)
+	case "dns-app":
+		var input struct { NodeID string `json:"nodeId"` }
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		return actionResult{Kind: "ok"}, owner.group.change(ctx, input.NodeID, "", nil)
+	case "transfer-owner":
+		var input struct { NodeID string `json:"nodeId"` }
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		return actionResult{Kind: "ok"}, owner.group.transferOwner(ctx, input.NodeID)
+	case "access":
+		var input struct {
+			Revision uint64 `json:"revision"`
+			Access string `json:"access"`
+			Grants []networkGrant `json:"grants"`
+		}
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		if directory := owner.group.directory(); directory == nil || directory.Group.Revision != input.Revision {
+			return actionResult{}, errors.New("network settings changed; refresh the access draft")
+		}
+		return actionResult{Kind: "ok"}, owner.group.change(ctx, "", input.Access, input.Grants, input.Revision)
 	case "create-setup":
-		var credentials dnsCredentials
+		var credentials legacyDNSCredentials
 		if err := decodePipeValue(request.Payload, &credentials); err != nil {
 			return actionResult{}, err
 		}
-		return owner.authority.create(ctx, credentials)
+		return owner.authority.create(ctx)
 	case "pair-code":
 		return owner.authority.pairingCode()
 	case "join", "reconnect":
@@ -185,18 +219,12 @@ func (owner *networkProcess) apply(ctx context.Context, request pipeRequest) (ac
 		err := owner.authority.admission.decide(payload.RequestID, payload.Member)
 		owner.authority.publishPending()
 		return actionResult{Kind: "ok"}, err
-	case "restore":
-		var payload struct {
-			Password string `json:"password"`
-			Backup   string `json:"backup"`
-		}
-		if err := decodePipeValue(request.Payload, &payload); err != nil {
-			return actionResult{}, err
-		}
-		return owner.authority.restore(ctx, payload.Backup, payload.Password)
 	case "remove-registration":
 		return actionResult{Kind: "ok"}, owner.authority.removeRegistration(ctx)
 	case "retry":
+		if owner.group != nil {
+			if err := owner.group.reconnect(ctx); err != nil { return actionResult{}, err }
+		}
 		return actionResult{Kind: "ok"}, owner.authority.renew(ctx)
 	case "rename-prepare", "rename-activate", "rename-retire":
 		var rename networkRename
@@ -212,6 +240,13 @@ func (owner *networkProcess) apply(ctx context.Context, request pipeRequest) (ac
 }
 
 func (owner *networkProcess) configure(ctx context.Context, configuration sidecarConfiguration) error {
+	if configuration.IngressToken != "" && len(configuration.IngressToken) != 64 {
+		return errors.New("invalid app ingress credential")
+	}
+	if configuration.Configuration.Group != nil {
+		directory := networkDirectory{Group: *configuration.Configuration.Group, Members: configuration.Configuration.Members}
+		if err := directory.validate(); err != nil { return err }
+	}
 	if configuration.Configuration.HostServe.Port == 0 {
 		return errors.New("static Tailscale port must be nonzero")
 	}
@@ -261,6 +296,8 @@ func (owner *networkProcess) configure(ctx context.Context, configuration sideca
 	owner.mu.Lock()
 	owner.config = configuration
 	owner.mu.Unlock()
+	owner.targets.ingressToken.Store(&configuration.IngressToken)
+	if err := owner.access.apply(configuration.Configuration.Group); err != nil { return err }
 	owner.configureHost(ctx, configuration)
 	active := settings != nil && (settings.Enabled || configuration.Preparing)
 	if owner.private != nil && (!active || owner.private.ctx.Err() != nil || owner.private.port != daemonPort) {
@@ -293,7 +330,20 @@ func (owner *networkProcess) configure(ctx context.Context, configuration sideca
 			owner.private = node
 			owner.mu.Unlock()
 			owner.authority = &networkAuthority{node: node, members: owner.members, persist: owner.persistMember}
+			owner.group = &networkGroupController{
+				node: node, authority: owner.authority, read: owner.configurationSnapshot,
+				persist: owner.persistNetwork, hostNodeID: func() string {
+					owner.mu.Lock()
+					defer owner.mu.Unlock()
+					if owner.runtime.Host.NodeID != nil { return *owner.runtime.Host.NodeID }
+					return ""
+				},
+			}
+			node.group = owner.group
+			owner.authority.publishDirectory = owner.group.publishDNS
 			node.control, node.renew = owner.authority, owner.authority.renew
+			node.directorySnapshot = owner.directorySnapshot
+			node.access = &owner.access
 			owner.mu.Lock()
 			owner.runtime.PrivateAccess = node.snapshot()
 			owner.mu.Unlock()
@@ -301,6 +351,9 @@ func (owner *networkProcess) configure(ctx context.Context, configuration sideca
 		}
 	} else if active {
 		owner.private.configure(*settings)
+		if settings.Role == "authority" && configuration.Configuration.Group == nil && owner.private.snapshot().NodeID != nil {
+			if err := owner.group.initialise(ctx); err != nil { return err }
+		}
 	} else {
 		status, err := offlinePrivateStatus(owner.directory, settings)
 		if err != nil {
@@ -344,6 +397,10 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 			err = owner.host.close()
 			owner.host = nil
 		}
+		if owner.ingress != nil {
+			err = errors.Join(err, owner.ingress.close())
+			owner.ingress = nil
+		}
 		owner.mu.Lock()
 		owner.runtime.HostServe = modeStatus{Phase: "off"}
 		owner.runtime.DaemonServe = modeStatus{Phase: "off"}
@@ -358,6 +415,11 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 		owner.hostFailure(err)
 		return
 	}
+	if owner.ingress == nil {
+		owner.ingress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure)
+		if err != nil { owner.hostFailure(err); return }
+	}
+	target.Host = owner.ingress.listener.Addr().String()
 	daemonTarget := ""
 	if configuration.DaemonOrigin != "" {
 		daemon, err := localProxyURL(configuration.DaemonOrigin)
@@ -373,9 +435,9 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 	owner.mu.Unlock()
 	var publication hostPublication
 	if owner.host == nil {
-		owner.host, publication, err = startHostServe(owner.ctx, ctx, settings.Port, target.Host, daemonTarget, owner.hostFailure)
+		owner.host, publication, err = startHostServe(owner.ctx, ctx, settings.Port, configuration.RetainedHostPort, target.Host, daemonTarget, owner.hostFailure)
 	} else {
-		publication, err = owner.host.update(ctx, settings.Port, target.Host, daemonTarget)
+		publication, err = owner.host.update(ctx, settings.Port, configuration.RetainedHostPort, target.Host, daemonTarget)
 	}
 	if err != nil {
 		owner.hostFailure(err)
@@ -410,6 +472,10 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 			owner.runtime.DaemonServe = modeStatus{Phase: "failed", Message: &message}
 		}
 		owner.runtime.Host = hostIdentity{Hostname: &hostname, Address: &ip}
+		if status.Self != nil {
+			nodeID := string(status.Self.ID)
+			owner.runtime.Host.NodeID = &nodeID
+		}
 	}
 	owner.mu.Unlock()
 }
@@ -431,6 +497,10 @@ func (owner *networkProcess) close() error {
 	owner.actions.Lock()
 	defer owner.actions.Unlock()
 	var failures []error
+	if owner.ingress != nil {
+		failures = append(failures, owner.ingress.close())
+		owner.ingress = nil
+	}
 	if owner.host != nil {
 		failures = append(failures, owner.host.close())
 		owner.host = nil
@@ -442,4 +512,21 @@ func (owner *networkProcess) close() error {
 		owner.mu.Unlock()
 	}
 	return errors.Join(failures...)
+}
+
+func (owner *networkProcess) appNodeID() string {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	configuration := owner.config.Configuration
+	if configuration.Group == nil { return "host-app" }
+	if owner.runtime.PrivateAccess.NodeID != nil { return *owner.runtime.PrivateAccess.NodeID }
+	if configuration.PrivateAccess != nil {
+		for _, member := range configuration.Members {
+			if member.Label == configuration.PrivateAccess.Label ||
+				(member.Rename != nil && (member.Rename.From == configuration.PrivateAccess.Label || member.Rename.To == configuration.PrivateAccess.Label)) {
+				return member.NodeID
+			}
+		}
+	}
+	return ""
 }

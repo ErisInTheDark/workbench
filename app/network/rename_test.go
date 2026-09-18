@@ -4,12 +4,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
-	"net/http"
 	"net/netip"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -46,28 +43,23 @@ func newRenameFixture(t *testing.T) *renameFixture {
 			}
 			return errors.New("unexpected new member")
 		},
-		dnsClient: func(credentials dnsCredentials) *tailscaleDNS {
-			return &tailscaleDNS{credentials: credentials, baseURL: "https://api.test", client: &http.Client{
-				Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-					if strings.HasSuffix(request.URL.Path, "/token") { return testHTTPResponse(200, `{"access_token":"token"}`), nil }
-					if request.Method == http.MethodPatch {
-						if fixture.failDNS { return testHTTPResponse(503, `{}`), nil }
-						var patch map[string][]string
-						if err := json.NewDecoder(request.Body).Decode(&patch); err != nil { return nil, err }
-						for name, addresses := range patch {
-							if addresses == nil { delete(fixture.dns, name) } else { fixture.dns[name] = addresses }
-						}
-						return testHTTPResponse(200, `{}`), nil
-					}
-					body, err := json.Marshal(fixture.dns)
-					return testHTTPResponse(200, string(body)), err
-				}),
-			}}
+		publishDirectory: func(context.Context) error {
+			if fixture.failDNS { return errors.New("injected DNS directory publication failure") }
+			fixture.dns = make(map[string][]string)
+			for _, member := range fixture.members {
+				fixture.dns[member.Label+".wb.inthedark.boo"] = member.Addresses
+				if member.Rename != nil {
+					fixture.dns[member.Rename.From+".wb.inthedark.boo"] = member.Addresses
+					fixture.dns[member.Rename.To+".wb.inthedark.boo"] = member.Addresses
+				}
+			}
+			return nil
 		},
 	}
-	result, err := fixture.authority.create(context.Background(), dnsCredentials{ClientID: "id", ClientSecret: "secret"})
+	result, err := fixture.authority.create(context.Background())
 	if err != nil { t.Fatal(err) }
 	fixture.members = *result.Members
+	if err := fixture.authority.publishDirectory(context.Background()); err != nil { t.Fatal(err) }
 	result.PrivateAccess.Enabled = true
 	node.settings.Store(result.PrivateAccess)
 	return fixture

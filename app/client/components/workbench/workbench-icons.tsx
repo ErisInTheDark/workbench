@@ -11,6 +11,7 @@
  * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: harness identity glyphs.
  * - BookIcon/BookBookmarkIcon/BookSearchIcon and dashed variants: Thread Recall activity and empty-result glyphs.
  * - SaveIcon: save glyph with disabled slash.
+ * - ResetIcon: counterclockwise reset arrow.
  * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: lifecycle and draft glyphs.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
  * - BinIcon: discard glyph.
@@ -259,6 +260,10 @@ export function SaveIcon(props: IconProps) {
       <path className="save-icon-slash opacity-0 transition-opacity" d="M3 21 21 3" />
     </OutlinedIcon>
   );
+}
+
+export function ResetIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></OutlinedIcon>;
 }
 
 export function Trash2Icon(props: IconProps) {

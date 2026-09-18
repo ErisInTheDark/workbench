@@ -1,8 +1,7 @@
-// No exports. Protect certificate ownership, trust, expiry and recovery confidentiality.
+// No exports. Protect certificate ownership, trust and expiry.
 package main
 
 import (
-	"bytes"
 	"crypto/x509"
 	"testing"
 	"time"
@@ -48,27 +47,5 @@ func TestCertificateTrustAndOwnership(t *testing.T) {
 	}
 	if renewalDue(certificate, now) || !renewalDue(certificate, certificate.NotAfter.Add(-24*time.Hour)) {
 		t.Fatal("renewal did not follow certificate validity")
-	}
-}
-
-func TestBackupAuthenticatesPasswordAndContent(t *testing.T) {
-	plain := []byte("private signing material and DNS credentials")
-	encrypted, err := encryptBackup(plain, "a long recovery password")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encrypted, plain) {
-		t.Fatal("backup exposes plaintext")
-	}
-	restored, err := decryptBackup(encrypted, "a long recovery password")
-	if err != nil || !bytes.Equal(restored, plain) {
-		t.Fatalf("backup failed round trip: %v", err)
-	}
-	if _, err := decryptBackup(encrypted, "the wrong recovery password"); err == nil {
-		t.Fatal("accepted wrong password")
-	}
-	encrypted[len(encrypted)-1] ^= 1
-	if _, err := decryptBackup(encrypted, "a long recovery password"); err == nil {
-		t.Fatal("accepted modified backup")
 	}
 }

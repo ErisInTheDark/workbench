@@ -10,6 +10,8 @@
  * - WorkbenchNetworkAction/WorkbenchNetworkResult/WorkbenchNetworkSidecarConfiguration/WorkbenchNetworkCommand: inferred intent/process contracts.
  * - WorkbenchNetworkModeSchema/workbenchNetworkMode: selected exposure mode and legacy flag conversion.
  * - WorkbenchNetworkRenameSchema: durable URL transition intent and activation phase.
+ * - WorkbenchNetworkGroupSchema/WorkbenchNetworkGroup: directory authority, DNS selection and remote app grants.
+ * - WorkbenchNetworkSettingsSchema/WorkbenchNetworkSettings: one explicit connection-settings draft.
  */
 import { z } from "zod";
 
@@ -28,6 +30,10 @@ export const WorkbenchNetworkRenameSchema = renameReservation.extend({
 }).strict();
 const port = z.number().int().min(1).max(65_535);
 const address = z.union([z.ipv4(), z.ipv6()]);
+export const WorkbenchNetworkSettingsSchema = z.object({
+  mode: WorkbenchNetworkModeSchema, localPort: port, tailnetPort: port,
+  label: label.optional(), removeRegistration: z.boolean().default(false).optional(),
+}).strict();
 const issuer = z.object({
   address,
   hostname: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?\.wb\.inthedark\.boo$/u),
@@ -40,10 +46,28 @@ const privateConfiguration = z.discriminatedUnion("role", [
 
 export const WorkbenchNetworkMemberSchema = z.object({
   nodeId: z.string().min(1).max(256),
+  hostNodeId: z.string().min(1).max(256).optional(),
+  published: z.boolean().optional(),
   label,
   keyFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
   addresses: z.array(address).min(1).max(2),
   rename: renameReservation.optional(),
+}).strict();
+
+const nodeId = z.string().min(1).max(256);
+export const WorkbenchNetworkGroupSchema = z.object({
+  id: z.uuid(),
+  revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  ownerNodeId: nodeId,
+  dnsNodeId: nodeId,
+  access: z.enum(["all", "selected"]),
+  grants: z.array(z.object({ deviceNodeId: nodeId, appNodeId: nodeId }).strict()).max(4096),
+  transfer: z.object({
+    id: z.uuid(),
+    fromNodeId: nodeId,
+    toNodeId: nodeId,
+    phase: z.enum(["prepare", "relinquished", "activated"]),
+  }).strict().optional(),
 }).strict();
 
 export const WorkbenchNetworkConfigurationSchema = z.object({
@@ -52,6 +76,7 @@ export const WorkbenchNetworkConfigurationSchema = z.object({
   privateAccess: privateConfiguration.nullable(),
   members: z.array(WorkbenchNetworkMemberSchema).max(256),
   rename: WorkbenchNetworkRenameSchema.optional(),
+  group: WorkbenchNetworkGroupSchema.optional(),
 }).strict();
 
 export function workbenchNetworkMode(configuration: WorkbenchNetworkConfiguration) {
@@ -68,7 +93,7 @@ const modeStatus = z.object({
 export const WorkbenchNetworkRuntimeSchema = z.object({
   hostServe: modeStatus,
   daemonServe: modeStatus.optional(),
-  host: z.object({ hostname: z.string().max(253).nullable(), address: address.nullable() }).strict().optional(),
+  host: z.object({ hostname: z.string().max(253).nullable(), address: address.nullable(), nodeId: nodeId.nullable().optional() }).strict().optional(),
   privateAccess: modeStatus.extend({
     hostname: z.string().max(253).nullable(),
     loginUrl: z.url().nullable(),
@@ -79,6 +104,10 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
     rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
     certificateExpiresAt: z.string().datetime().nullable(),
     pending: z.array(z.object({ id: z.string().min(1).max(64), member: WorkbenchNetworkMemberSchema }).strict()).max(4),
+    discovery: z.enum(["searching", "none", "joined", "conflict", "failed"]).optional(),
+    networks: z.array(z.object({ id: z.uuid(), ownerNodeId: nodeId, label }).strict()).max(256).optional(),
+    devices: z.array(z.object({ nodeId, name: z.string().max(253), online: z.boolean() }).strict()).max(4096).optional(),
+    pendingUpdates: z.array(nodeId).max(256).optional(),
   }).strict(),
 }).strict();
 
@@ -90,9 +119,25 @@ export const WorkbenchNetworkSnapshotSchema = z.object({
   busy: z.boolean(),
   failure: z.string().max(512).nullable(),
   localUrl: z.url().nullable().optional(),
+  localPort: z.object({
+    appOrigin: z.url(), currentPort: port, editable: z.boolean(), source: z.enum(["environment", "random", "setting"]),
+  }).strict().optional(),
+  change: z.object({
+    phase: z.enum(["preparing", "prepared", "applying", "finalising", "failed", "returning"]),
+    sourceOrigin: z.url(), destinationOrigin: z.url(),
+  }).strict().nullable().optional(),
+  capabilities: z.object({
+    manageApp: z.boolean(), manageNetwork: z.boolean(), trustHost: z.boolean().default(false),
+    localConnection: z.boolean().default(false).optional(), settingsApply: z.boolean().default(false).optional(),
+  }).strict().optional(),
 }).strict();
 
 export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("access-prepare"), revision: z.number().int().min(1), access: z.enum(["all", "selected"]), grants: WorkbenchNetworkGroupSchema.shape.grants }).strict(),
+  z.object({ action: z.literal("settings-prepare"), settings: WorkbenchNetworkSettingsSchema }).strict(),
+  z.object({ action: z.literal("settings-finish"), token: z.uuid() }).strict(),
+  z.object({ action: z.literal("settings-cancel"), token: z.uuid() }).strict(),
+  z.object({ action: z.literal("settings-resume") }).strict(),
   z.object({ action: z.literal("mode"), mode: WorkbenchNetworkModeSchema }).strict(),
   z.object({ action: z.literal("tailnet-port"), port }).strict(),
   z.object({ action: z.literal("machine-name"), label }).strict(),
@@ -101,14 +146,17 @@ export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("private-access"), enabled: z.boolean() }).strict(),
   z.object({
     action: z.literal("create-setup"),
-    clientId: z.string().trim().min(1).max(1024),
-    clientSecret: z.string().trim().min(1).max(4096),
+    clientId: z.string().trim().min(1).max(1024).optional(),
+    clientSecret: z.string().trim().min(1).max(4096).optional(),
   }).strict(),
+  z.object({ action: z.literal("discover") }).strict(),
+  z.object({ action: z.literal("select-network"), id: z.uuid() }).strict(),
+  z.object({ action: z.literal("dns-app"), nodeId }).strict(),
+  z.object({ action: z.literal("transfer-owner"), nodeId }).strict(),
+  z.object({ action: z.literal("access"), revision: z.number().int().min(1), access: z.enum(["all", "selected"]), grants: WorkbenchNetworkGroupSchema.shape.grants }).strict(),
   z.object({ action: z.literal("pair-code") }).strict(),
   z.object({ action: z.literal("join"), code: z.string().min(1).max(32_768) }).strict(),
   z.object({ action: z.literal("approve"), requestId: z.string().min(1).max(64), approved: z.boolean() }).strict(),
-  z.object({ action: z.literal("backup"), password: z.string().min(12).max(1024) }).strict(),
-  z.object({ action: z.literal("restore"), password: z.string().min(12).max(1024), backup: z.string().min(1).max(6_000_000) }).strict(),
   z.object({ action: z.literal("reconnect"), code: z.string().min(1).max(32_768) }).strict(),
   z.object({ action: z.literal("trust-host") }).strict(),
   z.object({ action: z.literal("remove-registration") }).strict(),
@@ -117,13 +165,16 @@ export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
 ]);
 
 export const WorkbenchNetworkResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("settings-pending"), token: z.uuid(), origin: z.url(), message: z.string().max(512) }).strict(),
+  z.object({ kind: z.literal("handoff"), token: z.uuid(), origin: z.url(), returning: z.boolean() }).strict(),
+  z.object({ kind: z.literal("settings-saved"), origin: z.url() }).strict(),
   z.object({ kind: z.literal("ok") }).strict(),
   z.object({ kind: z.literal("pairing-code"), code: z.string().max(32_768) }).strict(),
-  z.object({ kind: z.literal("backup"), data: z.string().max(6_000_000) }).strict(),
   z.object({
     kind: z.literal("setup"),
     privateAccess: privateConfiguration,
     members: z.array(WorkbenchNetworkMemberSchema).max(256),
+    group: WorkbenchNetworkGroupSchema.optional(),
   }).strict(),
 ]);
 
@@ -133,6 +184,8 @@ export const WorkbenchNetworkSidecarConfigurationSchema = z.object({
   daemonOrigin: z.url().nullable(),
   daemonPort: port.nullable(),
   preparing: z.boolean(),
+  ingressToken: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  retainedHostPort: port.optional(),
 }).strict();
 
 export const WorkbenchNetworkPipeResponseSchema = z.union([
@@ -140,6 +193,11 @@ export const WorkbenchNetworkPipeResponseSchema = z.union([
   z.object({
     event: z.literal("persist-member"), id: z.string().min(1).max(64),
     previous: WorkbenchNetworkMemberSchema.nullable(), member: WorkbenchNetworkMemberSchema,
+  }).strict(),
+  z.object({
+    event: z.literal("persist-network"), id: z.string().min(1).max(64),
+    previousRevision: z.number().int().min(1).nullable(),
+    configuration: WorkbenchNetworkConfigurationSchema,
   }).strict(),
   z.object({ id: z.string().min(1).max(64), result: WorkbenchNetworkResultSchema }).strict(),
   z.object({ id: z.string().min(1).max(64), error: z.string().min(1).max(512) }).strict(),
@@ -157,6 +215,8 @@ export const WorkbenchNetworkCommandSchema = z.union([
 ]);
 
 export type WorkbenchNetworkMember = z.infer<typeof WorkbenchNetworkMemberSchema>;
+export type WorkbenchNetworkSettings = z.infer<typeof WorkbenchNetworkSettingsSchema>;
+export type WorkbenchNetworkGroup = z.infer<typeof WorkbenchNetworkGroupSchema>;
 export type WorkbenchNetworkConfiguration = z.infer<typeof WorkbenchNetworkConfigurationSchema>;
 export type WorkbenchNetworkRuntime = z.infer<typeof WorkbenchNetworkRuntimeSchema>;
 export type WorkbenchNetworkSnapshot = z.infer<typeof WorkbenchNetworkSnapshotSchema>;

@@ -5,14 +5,30 @@
 import {
   WorkbenchNetworkActionSchema, WorkbenchNetworkConfigurationSchema, workbenchNetworkMode,
   type WorkbenchNetworkAction, type WorkbenchNetworkConfiguration, type WorkbenchNetworkMember,
-  type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkSnapshot,
+  type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkSnapshot, type WorkbenchNetworkSettings,
 } from "workbench-shared/http/workbench-network";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import type { IncomingHttpHeaders } from "node:http";
 import type WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
 import WorkbenchNetworkProcess from "./WorkbenchNetworkProcess.ts";
 import type WorkbenchLocalDaemon from "./WorkbenchLocalDaemon.ts";
 import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
+
+type SettingsCaller = { deviceNodeId: string | null; origin: string };
+type AccessAction = Extract<WorkbenchNetworkAction, { action: "access" }>;
+type PendingSettings = {
+  token: string;
+  intent: { kind: "settings"; settings: WorkbenchNetworkSettings } | { kind: "access"; action: AccessAction };
+  caller: SettingsCaller;
+  loopbackOrigin: string | null;
+  sourceOrigin: string;
+  destinationOrigin: string;
+  phase: NonNullable<WorkbenchNetworkSnapshot["change"]>["phase"];
+  retainedPort: number;
+  previewPort: number | null;
+};
 
 export default class WorkbenchNetworkController {
   private configuration!: WorkbenchNetworkConfiguration;
@@ -29,6 +45,8 @@ export default class WorkbenchNetworkController {
   private preparing = false;
   private phase: "active" | "suspended" | "closed" = "suspended";
   private failure: string | null = null;
+  private ingressToken: string | null = null;
+  private change: PendingSettings | null = null;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly options: {
@@ -37,6 +55,7 @@ export default class WorkbenchNetworkController {
     stateDirectory: string;
     readTarget: (configuration: WorkbenchNetworkConfiguration) => { appOrigin: string; daemonOrigin: string | null; daemonPort: number | null } | null;
     localDaemon?: Pick<WorkbenchLocalDaemon, "getSnapshot">;
+    appPort?: Pick<WorkbenchAppPortControl, "read" | "update">;
     warn: (message: string) => void;
     privateIssue?: () => string | null;
     inspect?: () => Promise<string>;
@@ -59,6 +78,10 @@ export default class WorkbenchNetworkController {
       configuration: this.configuration, runtime: this.runtime, executable: this.executable,
       hostPlatform: process.platform, busy: this.operation !== null, failure: this.failure,
       localUrl: target ? new URL("/launch", target.appOrigin).href : null,
+      ...(this.options.appPort ? { localPort: this.options.appPort.read() } : {}),
+      change: this.change ? {
+        phase: this.change.phase, sourceOrigin: this.change.sourceOrigin, destinationOrigin: this.change.destinationOrigin,
+      } : null,
     });
   }
 
@@ -75,6 +98,30 @@ export default class WorkbenchNetworkController {
     };
   }
 
+  ingress(headers: IncomingHttpHeaders): { deviceNodeId: string | null; manageApp: boolean; manageNetwork: boolean; trustHost: boolean } | null {
+    const token = headers["x-workbench-network-token"];
+    const device = headers["x-workbench-network-device"];
+    const forwarded = Object.keys(headers).some(key => key.startsWith("x-workbench-network-")
+      && key !== "x-workbench-network-request");
+    if (forwarded) {
+      if (!this.ingressToken || typeof token !== "string" || typeof device !== "string"
+        || !device || device.length > 256 || !/^[a-f0-9]{64}$/u.test(token)
+        || !timingSafeEqual(Buffer.from(token), Buffer.from(this.ingressToken))) return null;
+    }
+    const group = this.configuration.group;
+    const owner = group && this.configuration.members.find(member => member.nodeId === group.ownerNodeId);
+    const localOwner = !group || (this.runtime.privateAccess.nodeId
+      ? group.ownerNodeId === this.runtime.privateAccess.nodeId
+      : this.configuration.privateAccess?.role === "authority");
+    const ownerDevice = forwarded && owner?.hostNodeId === device;
+    return {
+      deviceNodeId: forwarded ? device as string : null,
+      manageApp: !forwarded || Boolean(ownerDevice),
+      manageNetwork: Boolean(localOwner && (!forwarded || ownerDevice)),
+      trustHost: !forwarded || Boolean(this.runtime.host?.nodeId && this.runtime.host.nodeId === device),
+    };
+  }
+
   stableOrigin(origin: string): string | null {
     let parsed: URL;
     try { parsed = new URL(origin); } catch { return null; }
@@ -87,7 +134,22 @@ export default class WorkbenchNetworkController {
     return null;
   }
 
-  action(input: WorkbenchNetworkAction): Promise<WorkbenchNetworkResult> {
+  canChangePort() { return this.change === null && this.operation === null; }
+
+  async updateLocalPort(port: number) {
+    const appPort = this.options.appPort;
+    if (!appPort) throw new Error("The local listener owner is unavailable.");
+    const caller = { deviceNodeId: null, origin: appPort.read().appOrigin };
+    const prepared = await this.action({ action: "settings-prepare", settings: {
+      mode: workbenchNetworkMode(this.configuration), localPort: port, tailnetPort: this.configuration.hostServe.port,
+    } }, caller);
+    if (prepared.kind !== "handoff") throw new Error("The local port change could not be prepared.");
+    const finished = await this.action({ action: "settings-finish", token: prepared.token }, caller);
+    if (finished.kind === "settings-pending") throw new Error(finished.message);
+    return appPort.read();
+  }
+
+  action(input: WorkbenchNetworkAction, caller?: SettingsCaller): Promise<WorkbenchNetworkResult> {
     if (this.phase !== "active") return Promise.reject(new Error("Network settings are closing or reloading."));
     const action = WorkbenchNetworkActionSchema.parse(input);
     if (action.action === "cancel") {
@@ -97,8 +159,14 @@ export default class WorkbenchNetworkController {
       })();
     }
     if (this.operation) return Promise.reject(new Error("Finish or cancel the current network action first."));
+    if (this.change && action.action !== "settings-finish" && action.action !== "settings-cancel" && action.action !== "settings-resume") {
+      return Promise.reject(new Error("Finish or cancel the pending settings change first."));
+    }
     this.failure = null;
-    const operation = this.apply(action).catch((error: unknown) => {
+    const operation = (action.action.startsWith("settings-")
+      ? this.applySettings(action, caller)
+      : action.action === "access" || action.action === "access-prepare"
+        ? this.applyAccess(action, caller) : this.apply(action)).catch((error: unknown) => {
       this.report(error);
       throw error;
     }).finally(() => {
@@ -112,6 +180,9 @@ export default class WorkbenchNetworkController {
 
   async targetChanged() {
     if (this.phase !== "active") return;
+    // The local-port owner awaits this subscriber. Its initiating settings
+    // operation reconciles forwarding after update() returns.
+    if (this.change?.phase === "applying" || this.change?.phase === "finalising") return;
     // Changing the bound listener must not wait indefinitely behind enrolment
     // or remote pairing. Cancellation is explicit and reaches the pending caller.
     await this.process?.cancelPending();
@@ -145,8 +216,12 @@ export default class WorkbenchNetworkController {
   private async stopProcess() {
     const child = this.process;
     this.process = null;
+    this.ingressToken = null;
     try { await child?.close(); }
-    finally { if (this.operation) await Promise.allSettled([this.operation]); }
+    finally {
+      if (this.operation) await Promise.allSettled([this.operation]);
+      this.change = null;
+    }
   }
 
   private publish() {
@@ -195,10 +270,15 @@ export default class WorkbenchNetworkController {
     if (!target || this.phase !== "active") return;
     const issue = this.configuration.privateAccess ? this.options.privateIssue?.() : null;
     const privateAccess = this.configuration.privateAccess;
-    const configuration = issue && privateAccess
+    const committed = issue && privateAccess
       ? { ...this.configuration, mode: this.configuration.hostServe.enabled ? "tailnet-ip" as const : "localhost" as const,
         privateAccess: { ...privateAccess, enabled: false as const } }
       : this.configuration;
+    const preview = this.change?.previewPort;
+    const configuration = preview ? {
+      ...committed, mode: workbenchNetworkMode(committed) === "localhost" ? "tailnet-ip" as const : committed.mode,
+      hostServe: { enabled: true, port: preview },
+    } : committed;
     const preparing = this.preparing && !issue;
     if (issue) {
       this.runtime = { ...this.runtime, privateAccess: { ...this.runtime.privateAccess, phase: "failed", message: issue, url: null } };
@@ -208,6 +288,7 @@ export default class WorkbenchNetworkController {
     if (!this.process && !active) return;
     if (!this.executable.available) throw new Error(this.executable.message ?? "Network executable is unavailable.");
     if (!this.process) {
+      this.ingressToken = randomBytes(32).toString("hex");
       const status = (runtime: WorkbenchNetworkRuntime) => {
         if (this.phase !== "active") return;
         for (const key of ["hostServe", "privateAccess"] as const) {
@@ -223,9 +304,12 @@ export default class WorkbenchNetworkController {
       this.process = this.options.createProcess?.(status) ?? new WorkbenchNetworkProcess({
         root: this.options.root, stateDirectory: this.options.stateDirectory, status,
         persistMember: (previous, member) => this.persistMember(previous, member),
+        persistNetwork: (previousRevision, configuration) => this.persistNetwork(previousRevision, configuration),
         warn: message => { this.failure = message; this.options.warn(message); this.publish(); },
+        diagnostic: message => this.options.warn(message),
         failed: message => {
           if (this.phase !== "active") return;
+          this.ingressToken = null;
           this.runtime = {
             hostServe: this.configuration.hostServe.enabled
               ? { phase: "failed", message, url: null } : this.runtime.hostServe,
@@ -238,17 +322,182 @@ export default class WorkbenchNetworkController {
     }
     const child = this.process;
     try {
-      await child.request({ action: "configure", configuration, ...target, preparing });
+      await child.request({ action: "configure", configuration, ...target, preparing,
+        ...(preview && this.change && this.change.retainedPort > 0 && this.change.phase !== "finalising" && this.change.retainedPort !== preview
+          ? { retainedHostPort: this.change.retainedPort } : {}),
+        ...(this.ingressToken ? { ingressToken: this.ingressToken } : {}) });
     } finally {
       if (!active) {
-        if (this.process === child) this.process = null;
+        if (this.process === child) {
+          this.process = null;
+          this.ingressToken = null;
+        }
         await child.close();
       }
     }
     return this.process;
   }
 
+  private isHost(caller: SettingsCaller) {
+    return caller.deviceNodeId === null || caller.deviceNodeId === this.runtime.host?.nodeId;
+  }
+
+  private pendingCaller(change: PendingSettings, caller: SettingsCaller) {
+    return change.caller.deviceNodeId === caller.deviceNodeId
+      || caller.deviceNodeId === null && change.loopbackOrigin !== null && caller.origin === change.destinationOrigin;
+  }
+
+  private async applyAccess(
+    action: Extract<WorkbenchNetworkAction, { action: "access" | "access-prepare" }>, caller?: SettingsCaller,
+  ): Promise<WorkbenchNetworkResult> {
+    if (action.action === "access-prepare" && !caller) throw new Error("Access changes require an authenticated browser connection.");
+    const policy: AccessAction = { ...action, action: "access" };
+    const revokesCaller = caller?.deviceNodeId && policy.access === "selected"
+      && !policy.grants.some(grant => grant.deviceNodeId === caller.deviceNodeId && grant.appNodeId === this.runtime.privateAccess.nodeId);
+    if (!revokesCaller) return await this.apply(policy);
+    if (action.action === "access") throw new Error("Refresh settings and use Save to change this connection safely.");
+    if (!this.isHost(caller) || !this.options.appPort) throw new Error("Use this app's local host to remove access for your current device.");
+    if (!this.stableOrigin(caller.origin)) throw new Error("Use the app's current address to change access.");
+    const origin = this.options.appPort.read().appOrigin;
+    this.change = {
+      token: randomUUID(), intent: { kind: "access", action: policy }, caller, loopbackOrigin: origin,
+      sourceOrigin: caller.origin, destinationOrigin: origin, phase: "prepared", retainedPort: 0, previewPort: null,
+    };
+    return { kind: "handoff", token: this.change.token, origin, returning: false };
+  }
+
+  private async applySettings(action: WorkbenchNetworkAction, caller?: SettingsCaller): Promise<WorkbenchNetworkResult> {
+    if (!caller) throw new Error("Settings changes require an authenticated browser connection.");
+    if (action.action === "settings-resume") {
+      const change = this.change;
+      if (!change) throw new Error("This settings change is no longer pending.");
+      if (!this.pendingCaller(change, caller)) throw new Error("Continue from the device that started this change.");
+      return { kind: "handoff", token: change.token,
+        origin: change.phase === "returning" ? change.sourceOrigin : change.destinationOrigin, returning: change.phase === "returning" };
+    }
+    if (action.action === "settings-prepare") {
+      const settings = action.settings;
+      const local = this.options.appPort;
+      if (!local) throw new Error("Connection settings are unavailable until the app reloads.");
+      if (!this.isHost(caller) && settings.mode === "localhost") throw new Error("Use this app's local host to disable remote access.");
+      if (settings.tailnetPort === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
+      if (!local.read().editable && settings.localPort !== local.read().currentPort) throw new Error("The local port is controlled by the environment.");
+      if (settings.mode === "tailnet-service") {
+        const issue = this.options.privateIssue?.();
+        if (issue) throw new Error(issue);
+        if (!settings.label && !this.configuration.privateAccess) throw new Error("Choose a machine name first.");
+      }
+      const transfer = this.configuration.group?.transfer;
+      if (this.configuration.rename || transfer && transfer.phase !== "activated") throw new Error("Finish the pending identity change first.");
+      const source = new URL(caller.origin);
+      const localOrigin = local.read().appOrigin;
+      const localAddress = source.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(source.hostname)
+        && source.port === new URL(localOrigin).port && source.origin === caller.origin;
+      if (caller.deviceNodeId ? !this.stableOrigin(caller.origin) : !localAddress) {
+        throw new Error("Use the app's current address to change connection settings.");
+      }
+      const loopback = caller.deviceNodeId !== null && settings.mode === "localhost";
+      const redirect = !loopback && caller.deviceNodeId !== null && (
+        source.protocol === "https:" && (settings.mode !== "tailnet-service"
+          || settings.removeRegistration || settings.label && settings.label !== this.configuration.privateAccess?.label)
+        || source.protocol === "http:" && Number(source.port) !== settings.tailnetPort
+      );
+      const change: PendingSettings = {
+        token: randomUUID(), intent: { kind: "settings", settings }, caller,
+        loopbackOrigin: loopback ? localOrigin : null,
+        sourceOrigin: caller.origin, destinationOrigin: loopback ? localOrigin : caller.origin,
+        phase: "preparing", retainedPort: this.configuration.hostServe.enabled ? this.configuration.hostServe.port : 0,
+        previewPort: redirect || settings.mode !== "localhost" && (
+          !this.configuration.hostServe.enabled || settings.tailnetPort !== this.configuration.hostServe.port
+        ) ? settings.tailnetPort : null,
+      };
+      this.change = change;
+      try {
+        if (change.previewPort) {
+          await this.synchronise();
+          if (this.runtime.hostServe.phase !== "ready" || !this.runtime.hostServe.url) {
+            throw new Error(this.runtime.hostServe.message ?? "The replacement tailnet address is not ready.");
+          }
+          if (redirect) change.destinationOrigin = new URL(this.runtime.hostServe.url).origin;
+        }
+        change.phase = "prepared";
+        return { kind: "handoff", token: change.token, origin: change.destinationOrigin, returning: false };
+      } catch (error) {
+        this.change = null;
+        try { await this.synchronise(); } catch (restoreError) { this.report(restoreError); }
+        throw error;
+      }
+    }
+    if (action.action !== "settings-finish" && action.action !== "settings-cancel") throw new Error("Invalid settings action.");
+    const change = this.change;
+    if (!change || change.token !== action.token) throw new Error("This settings change is no longer pending.");
+    if (!this.pendingCaller(change, caller)) throw new Error("Continue from the device that started this change.");
+    if (action.action === "settings-cancel") {
+      if (change.phase === "failed") throw new Error("Some settings may already be applied. Retry Apply from the surviving address.");
+      if (caller.origin !== change.sourceOrigin) {
+        change.phase = "returning";
+        return { kind: "handoff", token: change.token, origin: change.sourceOrigin, returning: true };
+      }
+      this.change = null;
+      await this.synchronise();
+      return { kind: "settings-saved", origin: change.sourceOrigin };
+    }
+    if (caller.origin !== change.destinationOrigin) throw new Error("Open the destination address before finishing this change.");
+    if (change.intent.kind === "access") {
+      change.phase = "applying";
+      try {
+        await this.apply(change.intent.action);
+        return { kind: "settings-saved", origin: change.destinationOrigin };
+      } finally {
+        // A policy failure may follow persistence. Stay on loopback and let the
+        // current revision drive a new draft, never replay an obsolete grant set.
+        this.change = null;
+      }
+    }
+    const settings = change.intent.settings;
+    change.phase = "applying";
+    try {
+      if (settings.localPort !== this.options.appPort!.read().currentPort) await this.options.appPort!.update(settings.localPort);
+      // Repoint forwarding immediately after the existing bind-first owner moves.
+      await this.synchronise();
+      if (settings.label && settings.label !== this.configuration.privateAccess?.label) {
+        await this.apply({ action: "machine-name", label: settings.label });
+      }
+      if (settings.removeRegistration) await this.apply({ action: "remove-registration" });
+      this.preparing = settings.mode === "tailnet-service" && this.configuration.privateAccess !== null;
+      this.save({ ...this.configuration, mode: settings.mode, hostServe: { enabled: settings.mode !== "localhost", port: settings.tailnetPort } });
+      change.phase = "finalising";
+      change.previewPort = null;
+      await this.synchronise();
+      if (settings.mode !== "localhost" && this.runtime.hostServe.phase === "failed") {
+        throw new Error(this.runtime.hostServe.message ?? "Tailnet forwarding could not be applied.");
+      }
+      const origin = this.settingsOrigin(change);
+      this.change = null;
+      return { kind: "settings-saved", origin };
+    } catch (error) {
+      change.phase = "failed";
+      change.destinationOrigin = this.settingsOrigin(change);
+      try { await this.synchronise(); } catch (forwardError) { this.report(forwardError); }
+      this.report(error);
+      return { kind: "settings-pending", token: change.token, origin: change.destinationOrigin,
+        message: this.failure ?? "Some settings could not be applied." };
+    }
+  }
+
+  private settingsOrigin(change: PendingSettings) {
+    if (change.caller.deviceNodeId && !change.loopbackOrigin) return change.destinationOrigin;
+    const origin = new URL(change.loopbackOrigin ?? change.sourceOrigin);
+    origin.port = String(this.options.appPort!.read().currentPort);
+    return origin.origin;
+  }
+
   private async apply(action: WorkbenchNetworkAction): Promise<WorkbenchNetworkResult> {
+    const transfer = this.configuration.group?.transfer;
+    if (transfer && transfer.phase !== "activated"
+      && ["machine-name", "access", "dns-app", "create-setup", "remove-registration"].includes(action.action)) {
+      throw new Error("Complete the pending ownership handover before changing network identity or policy.");
+    }
     switch (action.action) {
       case "mode": {
         const issue = action.mode === "tailnet-service" ? this.options.privateIssue?.() : null;
@@ -261,7 +510,6 @@ export default class WorkbenchNetworkController {
       }
       case "tailnet-port":
         if (action.port === WORKBENCH_DAEMON_TAILNET_PORT) throw new Error("That port is reserved for daemon discovery.");
-        if (workbenchNetworkMode(this.configuration) === "tailnet-service") throw new Error("Change the app's tailnet port in tailnet IP mode.");
         this.save({ ...this.configuration, hostServe: { ...this.configuration.hostServe, port: action.port } });
         await this.synchronise();
         return { kind: "ok" };
@@ -309,6 +557,7 @@ export default class WorkbenchNetworkController {
         return { kind: "ok" };
       }
       case "retry": {
+        this.ingressToken = null;
         await this.process?.close();
         this.process = null;
         await this.inspect();
@@ -342,7 +591,7 @@ export default class WorkbenchNetworkController {
         });
       }
       default: {
-        if (this.configuration.rename && ["create-setup", "join", "reconnect", "restore", "remove-registration"].includes(action.action)) {
+        if (this.configuration.rename && ["create-setup", "join", "reconnect", "remove-registration"].includes(action.action)) {
           throw new Error("Finish the pending URL rename before changing its setup or registration.");
         }
         if (!this.process) {
@@ -352,7 +601,8 @@ export default class WorkbenchNetworkController {
         if (!this.process) throw new Error("Prepare private access first.");
         const result = await this.process.request(action);
         if (result.kind === "setup") {
-          this.save({ ...this.configuration, privateAccess: result.privateAccess, members: result.members });
+          this.save({ ...this.configuration, privateAccess: result.privateAccess, members: result.members,
+            ...(result.group ? { group: result.group } : {}) });
           await this.synchronise();
         }
         if (action.action === "remove-registration") {
@@ -403,6 +653,20 @@ export default class WorkbenchNetworkController {
     this.save({
       ...this.configuration,
       members: [...this.configuration.members.filter(candidate => candidate.nodeId !== member.nodeId), member],
+      ...(this.configuration.group ? { group: { ...this.configuration.group, revision: this.configuration.group.revision + 1 } } : {}),
+    });
+  }
+
+  private persistNetwork(previousRevision: number | null, next: WorkbenchNetworkConfiguration) {
+    if (this.phase !== "active") throw new Error("Network persistence requires an active controller.");
+    if ((this.configuration.group?.revision ?? null) !== previousRevision) {
+      throw new Error("Network state changed before the native update could be persisted.");
+    }
+    this.save({
+      ...this.configuration,
+      privateAccess: next.privateAccess,
+      members: next.members,
+      ...(next.group ? { group: next.group } : {}),
     });
   }
 }

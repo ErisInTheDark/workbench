@@ -25,7 +25,9 @@ import (
 )
 
 type networkMember struct {
+	Published *bool `json:"published,omitempty"`
 	NodeID         string   `json:"nodeId"`
+	HostNodeID     string   `json:"hostNodeId,omitempty"`
 	Label          string   `json:"label"`
 	KeyFingerprint string   `json:"keyFingerprint"`
 	Addresses      []string `json:"addresses"`
@@ -166,25 +168,23 @@ type certificateResponse struct {
 	Certificate []byte `json:"certificate"`
 }
 
-type authorityRecovery struct {
-	Version     int             `json:"version"`
-	Authority   []byte          `json:"authority"`
-	Credentials dnsCredentials  `json:"credentials"`
-	Members     []networkMember `json:"members"`
-	Owner       networkMember   `json:"owner"`
+type legacyDNSCredentials struct {
+	ClientID string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
 }
 
 type networkAuthority struct {
 	node      *privateNetwork
 	members   func() []networkMember
 	admission pairingAdmission
-	dnsClient func(dnsCredentials) *tailscaleDNS
+	publishDirectory func(context.Context) error
 	persist func(context.Context, *networkMember, networkMember) error
 	membership sync.Mutex
 }
 
 func (authority *networkAuthority) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	if authority.node.settings.Load().Role != "authority" {
+	if authority.node.settings.Load().Role != "authority" ||
+		(authority.node.group != nil && authority.node.group.directory() != nil && !authority.node.group.isOwner()) {
 		http.Error(response, "This installation is not the setup authority.", http.StatusForbidden)
 		return
 	}
@@ -276,28 +276,14 @@ func (authority *networkAuthority) ServeHTTP(response http.ResponseWriter, reque
 		http.Error(response, "This machine and key are not authorised, or a URL rename is pending.", http.StatusForbidden)
 		return
 	}
-	api, err := authority.dnsAPI()
-	if err != nil {
-		authority.fail(err.Error())
-		http.Error(response, "Setup DNS credentials are unavailable.", http.StatusServiceUnavailable)
-		return
-	}
 	host, err := machineHostname(member.Label)
 	if err != nil {
 		http.Error(response, "Invalid machine hostname.", http.StatusBadRequest)
 		return
 	}
 	remove := request.URL.Path == "/_workbench-network/remove"
-	if err := api.update(request.Context(), host, member.Addresses, remove); err != nil {
-		authority.fail(err.Error())
-		http.Error(response, "The setup installation could not update this DNS registration.", http.StatusServiceUnavailable)
-		return
-	}
 	if remove {
-		response.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(response).Encode(certificateResponse{}); err != nil && request.Context().Err() == nil {
-			authority.fail("Removal acknowledgement could not be delivered.")
-		}
+		http.Error(response, "Disable app access in networking settings; enrolled directory identity is retained.", http.StatusConflict)
 		return
 	}
 	ca, err := loadAuthority(authority.node.directory)
@@ -330,31 +316,14 @@ func (authority *networkAuthority) fail(message string) {
 	authority.node.change(func(status *privateStatus) { status.Message = &message })
 }
 
-func (authority *networkAuthority) dnsAPI() (*tailscaleDNS, error) {
-	api, err := loadDNSAPI(authority.node.directory)
-	if err == nil && authority.dnsClient != nil {
-		return authority.dnsClient(api.credentials), nil
-	}
-	return api, err
-}
-
-func loadDNSAPI(directory string) (*tailscaleDNS, error) {
-	body, err := os.ReadFile(filepath.Join(directory, "dns-credential.json"))
-	if err != nil {
-		return nil, errors.New("setup DNS credential could not be read")
-	}
-	var credentials dnsCredentials
-	if err := decodePipeValue(body, &credentials); err != nil || credentials.ClientID == "" || credentials.ClientSecret == "" {
-		return nil, errors.New("setup DNS credential is invalid")
-	}
-	return &tailscaleDNS{credentials: credentials}, nil
-}
-
-func (authority *networkAuthority) create(ctx context.Context, credentials dnsCredentials) (actionResult, error) {
+func (authority *networkAuthority) create(ctx context.Context) (actionResult, error) {
 	authority.node.certificates.Lock()
 	defer authority.node.certificates.Unlock()
+	if authority.node.group != nil && authority.node.group.directory() != nil && !authority.node.group.isOwner() {
+		return actionResult{}, errors.New("finish the pending ownership handover before creating or renewing authority")
+	}
 	if authority.node.settings.Load().Role == "member" {
-		return actionResult{}, errors.New("this installation already belongs to a setup; restore its authority backup to recover that setup")
+		return actionResult{}, errors.New("this installation already belongs to a network; reconnect to that network")
 	}
 	ca, err := loadAuthority(authority.node.directory)
 	if errors.Is(err, os.ErrNotExist) {
@@ -369,16 +338,6 @@ func (authority *networkAuthority) create(ctx context.Context, credentials dnsCr
 	}
 	if err != nil {
 		return actionResult{}, errors.New("private certificate authority could not be prepared")
-	}
-	if credentials.ClientID == "" || credentials.ClientSecret == "" {
-		return actionResult{}, errors.New("enter a DNS-scoped Tailscale client ID and secret")
-	}
-	encoded, err := json.Marshal(credentials)
-	if err != nil {
-		return actionResult{}, errors.New("DNS credential could not be encoded")
-	}
-	if err := writePrivateFile(filepath.Join(authority.node.directory, "dns-credential.json"), encoded); err != nil {
-		return actionResult{}, errors.New("DNS credential could not be stored privately")
 	}
 	member, err := authority.issueOwn(ctx, ca)
 	if err != nil {
@@ -408,19 +367,6 @@ func (authority *networkAuthority) issueOwn(ctx context.Context, ca *certificate
 	}
 	certificate, err := ca.issue(request, authority.node.hostname(), time.Now(), authority.node.controlHostname())
 	if err != nil {
-		return networkMember{}, err
-	}
-	api, err := authority.dnsAPI()
-	if err != nil {
-		return networkMember{}, err
-	}
-	previous := status.Addresses
-	for _, member := range recovered {
-		if member.Label == authority.node.settings.Load().Label {
-			previous = member.Addresses
-		}
-	}
-	if err := api.replace(ctx, authority.node.hostname(), previous, status.Addresses, false); err != nil {
 		return networkMember{}, err
 	}
 	leaf, err := saveLeaf(authority.node.directory, key, certificate, publicCertificatePEM(ca.certificate), authority.node.hostname())
@@ -478,7 +424,7 @@ func (authority *networkAuthority) join(ctx context.Context, value string) (acti
 		return actionResult{}, errors.New("a setup authority cannot join another setup")
 	}
 	if existing := authority.node.snapshot().RootCertificate; existing != nil && !sameAuthority(*existing, code.Root) {
-		return actionResult{}, errors.New("pairing would replace this installation's trusted authority; use the original setup or its recovery backup")
+		return actionResult{}, errors.New("pairing would replace this installation's trusted authority; use the original network")
 	}
 	existingCA, existingError := loadAuthority(authority.node.directory)
 	if existingError == nil && !sameAuthority(string(publicCertificatePEM(existingCA.certificate)), code.Root) {
@@ -513,6 +459,12 @@ func (authority *networkAuthority) renew(ctx context.Context) error {
 	authority.node.certificates.Lock()
 	defer authority.node.certificates.Unlock()
 	settings := authority.node.settings.Load()
+	if authority.node.group != nil {
+		directory := authority.node.group.directory()
+		if directory != nil && directory.Group.Transfer != nil && directory.Group.Transfer.Phase == "relinquished" {
+			return errors.New("certificate renewal is waiting for ownership handover to complete")
+		}
+	}
 	if settings.rename != nil { return nil }
 	if settings.Role == "authority" {
 		ca, err := loadAuthority(authority.node.directory)
@@ -630,161 +582,16 @@ func tailnetAddress(address netip.Addr) bool {
 	return netip.MustParsePrefix("100.64.0.0/10").Contains(address) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(address)
 }
 
-func backupAuthority(directory string, configuration networkConfiguration, password string) (actionResult, error) {
-	if configuration.Rename != nil { return actionResult{}, errors.New("finish this installation's URL rename before backing up its authority") }
-	if configuration.PrivateAccess == nil || configuration.PrivateAccess.Role != "authority" {
-		return actionResult{}, errors.New("only the setup installation can export its recovery backup")
-	}
-	ca, err := loadAuthority(directory)
-	if err != nil {
-		return actionResult{}, errors.New("setup authority could not be read for backup")
-	}
-	api, err := loadDNSAPI(directory)
-	if err != nil {
-		return actionResult{}, err
-	}
-	var member *networkMember
-	for _, candidate := range configuration.Members {
-		if candidate.Label == configuration.PrivateAccess.Label {
-			value := candidate
-			member = &value
-			break
-		}
-	}
-	if member == nil {
-		return actionResult{}, errors.New("setup installation is missing its own authorised identity")
-	}
-	authority, err := ca.marshal()
-	if err != nil {
-		return actionResult{}, err
-	}
-	body, err := json.Marshal(authorityRecovery{
-		Version: 1, Authority: authority, Credentials: api.credentials,
-		Members: configuration.Members, Owner: *member,
-	})
-	if err != nil {
-		return actionResult{}, errors.New("setup backup could not be encoded")
-	}
-	encrypted, err := encryptBackup(body, password)
-	if err != nil {
-		return actionResult{}, err
-	}
-	return actionResult{Kind: "backup", Data: base64.StdEncoding.EncodeToString(encrypted)}, nil
-}
-
-func (authority *networkAuthority) restore(ctx context.Context, encoded, password string) (actionResult, error) {
-	authority.node.certificates.Lock()
-	defer authority.node.certificates.Unlock()
-	if len(encoded) > 6_000_000 {
-		return actionResult{}, errors.New("setup backup exceeds its size limit")
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return actionResult{}, errors.New("invalid encrypted setup backup")
-	}
-	plain, err := decryptBackup(data, password)
-	if err != nil {
-		return actionResult{}, err
-	}
-	var recovery authorityRecovery
-	if err := decodePipeValue(plain, &recovery); err != nil || recovery.Version != 1 || len(recovery.Members) > 256 || recovery.Credentials.ClientID == "" || recovery.Credentials.ClientSecret == "" {
-		return actionResult{}, errors.New("setup backup metadata is invalid")
-	}
-	ca, err := parseAuthority(recovery.Authority)
-	if err != nil {
-		return actionResult{}, err
-	}
-	existing, err := loadAuthority(authority.node.directory)
-	if err == nil && !bytes.Equal(existing.certificate.Raw, ca.certificate.Raw) {
-		return actionResult{}, errors.New("recovery would replace an existing certificate authority")
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return actionResult{}, errors.New("existing authority could not be checked before recovery")
-	}
-	if root := authority.node.snapshot().RootCertificate; root != nil && !sameAuthority(*root, string(publicCertificatePEM(ca.certificate))) {
-		return actionResult{}, errors.New("recovery does not match this installation's trusted authority")
-	}
-	labels, nodes := make(map[string]bool), make(map[string]bool)
-	ownerFound := false
-	for _, member := range recovery.Members {
-		_, labelError := machineHostname(member.Label)
-		fingerprint, fingerprintError := hex.DecodeString(member.KeyFingerprint)
-		if labelError != nil || fingerprintError != nil || len(fingerprint) != 32 || member.NodeID == "" || labels[member.Label] || nodes[member.NodeID] || len(member.Addresses) == 0 || len(member.Addresses) > 2 {
-			return actionResult{}, errors.New("backup contains invalid or conflicting approved members")
-		}
-		for _, value := range member.Addresses {
-			address, err := netip.ParseAddr(value)
-			if err != nil || !tailnetAddress(address) {
-				return actionResult{}, errors.New("backup contains an invalid resolver address")
-			}
-		}
-		labels[member.Label], nodes[member.NodeID] = true, true
-		if member.Rename != nil {
-			if validateRename(*member.Rename) != nil || member.Rename.From != member.Label || labels[member.Rename.To] {
-				return actionResult{}, errors.New("backup contains an invalid or conflicting pending rename")
-			}
-			labels[member.Rename.To] = true
-		}
-		if member.NodeID == recovery.Owner.NodeID && member.Label == recovery.Owner.Label && member.KeyFingerprint == recovery.Owner.KeyFingerprint && slices.Equal(member.Addresses, recovery.Owner.Addresses) {
-			ownerFound = true
-		}
-	}
-	if !ownerFound {
-		return actionResult{}, errors.New("backup does not identify its setup installation")
-	}
-	if err := writePrivateFile(filepath.Join(authority.node.directory, "authority.pem"), recovery.Authority); err != nil {
-		return actionResult{}, errors.New("recovered authority could not be stored privately")
-	}
-	credentials, err := json.Marshal(recovery.Credentials)
-	if err != nil {
-		return actionResult{}, err
-	}
-	if err := writePrivateFile(filepath.Join(authority.node.directory, "dns-credential.json"), credentials); err != nil {
-		return actionResult{}, errors.New("recovered DNS credential could not be stored privately")
-	}
-	member, err := authority.issueOwn(ctx, ca, recovery.Owner)
-	if err != nil {
-		return actionResult{}, err
-	}
-	if recovery.Owner.Label != member.Label {
-		api, err := authority.dnsAPI()
-		if err != nil {
-			return actionResult{}, err
-		}
-		oldHostname, err := machineHostname(recovery.Owner.Label)
-		if err != nil {
-			return actionResult{}, err
-		}
-		if err := api.update(ctx, oldHostname, recovery.Owner.Addresses, true); err != nil {
-			return actionResult{}, err
-		}
-	}
-	members := make([]networkMember, 0, len(recovery.Members)+1)
-	for _, previous := range recovery.Members {
-		if previous.NodeID != recovery.Owner.NodeID {
-			members = append(members, previous)
-		}
-	}
-	members, err = replaceMember(members, member)
-	if err != nil {
-		return actionResult{}, err
-	}
-	settings := *authority.node.settings.Load()
-	settings.Role, settings.Issuer, settings.Enabled = "authority", nil, false
-	return actionResult{Kind: "setup", PrivateAccess: &settings, Members: &members}, nil
-}
-
 func (authority *networkAuthority) removeRegistration(ctx context.Context) error {
+	if authority.node.group != nil && authority.node.group.directory() != nil {
+		return authority.node.group.removeRegistration(ctx)
+	}
 	authority.node.certificates.Lock()
 	defer authority.node.certificates.Unlock()
 	settings := authority.node.settings.Load()
 	status := authority.node.snapshot()
 	if settings.Role == "authority" {
-		api, err := authority.dnsAPI()
-		if err != nil {
-			return err
-		}
-		return api.update(ctx, authority.node.hostname(), status.Addresses, true)
+		return errors.New("choose another owner and DNS app before removing this network registration")
 	}
 	if settings.Role != "member" || settings.Issuer == nil || status.RootCertificate == nil {
 		return errors.New("private setup is incomplete")

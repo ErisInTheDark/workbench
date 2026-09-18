@@ -1,15 +1,11 @@
-// No exports. Own private certificate issuance, validity decisions and encrypted recovery material.
+// No exports. Own private certificate issuance and validity decisions.
 package main
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/pbkdf2"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -171,57 +167,8 @@ func (authority *certificateAuthority) issue(request []byte, host string, now ti
 	return x509.CreateCertificate(rand.Reader, template, authority.certificate, csr.PublicKey, authority.key)
 }
 
-func encryptBackup(data []byte, password string) ([]byte, error) {
-	if len(password) < 12 || len(data) > 4<<20 {
-		return nil, errors.New("use a recovery password of at least 12 characters; backup limit is 4 MiB")
-	}
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, err
-	}
-	aead, err := backupCipher(password, salt)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	header := append([]byte("WBN1"), salt...)
-	header = append(header, nonce...)
-	return aead.Seal(header, nonce, data, header), nil
-}
-
-func decryptBackup(data []byte, password string) ([]byte, error) {
-	if len(data) < 48 || len(data) > (4<<20)+64 || !bytes.Equal(data[:4], []byte("WBN1")) {
-		return nil, errors.New("invalid Workbench network backup")
-	}
-	aead, err := backupCipher(password, data[4:20])
-	if err != nil {
-		return nil, err
-	}
-	headerLength := 20 + aead.NonceSize()
-	plain, err := aead.Open(nil, data[20:headerLength], data[headerLength:], data[:headerLength])
-	if err != nil {
-		return nil, errors.New("backup password is incorrect or backup was modified")
-	}
-	return plain, nil
-}
-
 func renewalDue(certificate *x509.Certificate, now time.Time) bool {
 	return !now.Before(certificate.NotAfter.Add(-30 * 24 * time.Hour))
-}
-
-func backupCipher(password string, salt []byte) (cipher.AEAD, error) {
-	key, err := pbkdf2.Key(sha256.New, password, salt, 600_000, 32)
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
 }
 
 func certificateSerial() (*big.Int, error) {

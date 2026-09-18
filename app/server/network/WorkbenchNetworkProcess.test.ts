@@ -105,18 +105,43 @@ test("rejects invalid subprocess responses without exposing payload content", as
   assert.ok(!failures[0]!.includes("PRIVATE"));
 });
 
-test("native membership changes are acknowledged only after parent persistence, without blocking the awaiting action", async context => {
+test("stderr diagnostics are sanitised without turning a successful operation into a failure", async context => {
+  const { root } = await fixture(context);
+  const diagnostics: string[] = [];
+  const warnings: string[] = [];
+  const owner = new WorkbenchNetworkProcess({
+    root, stateDirectory: path.join(root, "private"), status: () => assert.fail("Unexpected status"),
+    warn: message => warnings.push(message), diagnostic: message => diagnostics.push(message), failed: assert.fail,
+    spawnChild: (_executable, _args, options) => spawn(process.execPath, ["-e",
+      "process.stdin.on('data',data=>{const r=JSON.parse(data);process.stderr.write('PRIVATE');process.stdout.write(JSON.stringify({id:r.id,result:{kind:'ok'}})+'\\n');});",
+    ], { ...options, stdio: "pipe" }),
+  });
+  assert.deepEqual(await owner.request({ action: "pair-code" }), { kind: "ok" });
+  await owner.close();
+  assert.equal(warnings.length, 0);
+  assert.ok(diagnostics.length > 0);
+  assert.ok(diagnostics.every(message => !message.includes("PRIVATE")));
+});
+
+for (const event of ["persist-member", "persist-network"] as const) test(`${event} is acknowledged only after parent persistence without blocking the awaiting action`, async context => {
   const { root } = await fixture(context);
   let persisted = false;
   let rejectPersistence = true;
   let spawned = 0;
   const warnings: string[] = [];
   const member = { nodeId: "node", label: "desk", keyFingerprint: "a".repeat(64), addresses: ["100.64.1.2"] };
+  const configuration = { hostServe: { enabled: false, port: 8080 }, privateAccess: null, members: [member] };
   const owner = new WorkbenchNetworkProcess({
     root, stateDirectory: path.join(root, "private"), status: () => assert.fail("Unexpected status"), warn: message => warnings.push(message),
     persistMember: (previous, next) => {
       assert.equal(previous, null);
       assert.deepEqual(next, member);
+      if (rejectPersistence) throw new Error("PRIVATE persistence detail");
+      persisted = true;
+    },
+    persistNetwork: (previous, next) => {
+      assert.equal(previous, null);
+      assert.deepEqual(next, configuration);
       if (rejectPersistence) throw new Error("PRIVATE persistence detail");
       persisted = true;
     },
@@ -128,12 +153,14 @@ test("native membership changes are acknowledged only after parent persistence, 
       let action;
       lines.on("line", line => {
         const request = JSON.parse(line);
-        if(request.action === "persist-member-result") {
+        if(request.action === "${event}-result") {
           respond({id: request.id, result: {kind:"ok"}});
           respond(request.payload.accepted ? {id: action,result:{kind:"ok"}} : {id:action,error:"persistence declined"});
         } else {
           action = request.id;
-          respond({event:"persist-member",id:"persist-1",previous:null,member:${JSON.stringify(member)}});
+          respond(${JSON.stringify(event === "persist-member"
+            ? { event, id: "persist-1", previous: null, member }
+            : { event, id: "persist-1", previousRevision: null, configuration })});
         }
       });
     `], { ...options, stdio: "pipe" });

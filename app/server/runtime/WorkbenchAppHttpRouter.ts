@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
 import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
+import { WORKBENCH_APP_PORT_PATH } from "workbench-shared/http/workbench-app-port";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
@@ -80,7 +81,11 @@ export default class WorkbenchAppHttpRouter {
   }) {
     this.networkRoutes = options.network ? new WorkbenchNetworkRoutes(options.network) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
-      appPort: options.appPort,
+      appPort: {
+        read: () => options.appPort.read(),
+        update: port => options.network ? options.network.updateLocalPort(port) : options.appPort.update(port),
+      },
+      canUpdate: () => options.network?.canChangePort() ?? true,
       stableOrigin: request => {
         const forwarded = request.headers["x-workbench-network-origin"];
         const origin = typeof forwarded === "string" ? forwarded : `http://${request.headers.host ?? ""}`;
@@ -124,7 +129,10 @@ export default class WorkbenchAppHttpRouter {
   }
 
   async admitHttp(request: IncomingMessage, response: ServerResponse) {
-    if (isLoopbackConnection(request.socket)) return true;
+    const nativeHeaders = Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-")
+      && key !== "x-workbench-network-request");
+    if (isLoopbackConnection(request.socket)
+      && (!nativeHeaders || this.options.network?.ingress(request.headers))) return true;
     response.setHeader("Connection", "close");
     sendJson(response, 403, { error: "Workbench is available only through localhost or Tailscale." });
     return false;
@@ -133,6 +141,11 @@ export default class WorkbenchAppHttpRouter {
   async handle(request: IncomingMessage, response: ServerResponse) {
     if (!await this.admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
+    if (url.pathname === WORKBENCH_APP_PORT_PATH && request.method !== "GET"
+      && this.options.network && !this.options.network.ingress(request.headers)?.manageApp) {
+      sendJson(response, 403, { error: "This device cannot change the app's network port." });
+      return;
+    }
     if (this.networkRoutes && await this.networkRoutes.handle(request, response, url)) return;
     if (url.pathname === CLIENT_LOG_PATH) {
       await this.handleClientLogs(request, response);

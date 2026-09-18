@@ -8,6 +8,43 @@ import WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts
 import WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
 import { WorkbenchNetworkConfigurationSchema, type WorkbenchNetworkConfiguration } from "workbench-shared/http/workbench-network";
 
+test("network ownership, DNS selection and grants survive reopening independently", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-group-"));
+  const database = new WorkbenchAppStateRepository({ dataRootPath: root });
+  await database.start();
+  context.after(async () => { await database.close(); await rm(root, { recursive: true, force: true }); });
+  const network = new WorkbenchNetworkRepository(database);
+  const configuration = WorkbenchNetworkConfigurationSchema.parse({
+    ...network.read(),
+    privateAccess: { role: "authority", enabled: false, label: "desktop" },
+    members: [
+      { nodeId: "desktop-node", hostNodeId: "desktop-host", label: "desktop", keyFingerprint: "a".repeat(64), addresses: ["100.80.0.1"] },
+      { nodeId: "nas-node", hostNodeId: "nas-host", label: "nas", keyFingerprint: "b".repeat(64), addresses: ["100.80.0.2"] },
+    ],
+    group: {
+      id: "69d705df-44a9-4bde-94e2-591fb2a85ee4", revision: 1,
+      ownerNodeId: "desktop-node", dnsNodeId: "nas-node", access: "selected",
+      grants: [{ deviceNodeId: "phone-node", appNodeId: "nas-node" }],
+    },
+  });
+  network.write(configuration);
+  const reopened = new WorkbenchNetworkRepository(database).read();
+  assert.deepEqual(reopened.group, configuration.group);
+  assert.equal(reopened.members[0]?.hostNodeId, "desktop-host");
+  network.write({ ...reopened, members: [...reopened.members].reverse() });
+  assert.deepEqual(network.read(), reopened, "directory iteration order must not become a policy change");
+  assert.throws(() => network.write({
+    ...reopened,
+    group: { ...configuration.group!, revision: 2, dnsNodeId: "missing-node" },
+  }), /app|member|directory/iu);
+  assert.deepEqual(network.read().group, configuration.group);
+  assert.throws(() => network.write({
+    ...reopened,
+    group: { ...configuration.group!, revision: 0 },
+  }));
+  assert.deepEqual(network.read().group, configuration.group);
+});
+
 test("persists network state without changing browser revisions and refuses partial membership writes", async context => {
   const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-state-"));
   const database = new WorkbenchAppStateRepository({ dataRootPath: root });

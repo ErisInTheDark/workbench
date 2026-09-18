@@ -640,7 +640,7 @@ const projectAliasesHistory = defineTableHistory({
 });
 
 const histories = [
-  ...workbenchNetworkHistory(appStateReleases.privateNetworking.version, appStateReleases.networkModes.version),
+  ...workbenchNetworkHistory(appStateReleases.privateNetworking.version, appStateReleases.networkModes.version, appStateReleases.networkGroups.version),
   workbenchHarnessesHistory,
   modelPreferencesHistory,
   appStateMetadataHistory,

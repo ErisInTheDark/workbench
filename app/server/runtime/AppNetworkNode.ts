@@ -28,6 +28,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       stateDirectory: path.join(path.dirname(database.databasePath), "network"),
       warn: message => logger.error("http", message),
       localDaemon,
+      appPort: context.appPort,
       privateIssue: () => {
         const configured = process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim();
         if (!configured) return null;

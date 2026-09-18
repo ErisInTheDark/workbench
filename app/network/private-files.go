@@ -80,3 +80,12 @@ func writePrivateFile(name string, data []byte) (result error) {
 	}
 	return os.Rename(temporary, name)
 }
+
+func removePrivateFile(name string) error {
+	if err := ensurePrivateDirectory(filepath.Dir(name)); err != nil { return err }
+	info, err := os.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) { return nil }
+	if err != nil { return err }
+	if !info.Mode().IsRegular() { return errors.New("refusing non-regular private credential removal") }
+	return os.Remove(name)
+}

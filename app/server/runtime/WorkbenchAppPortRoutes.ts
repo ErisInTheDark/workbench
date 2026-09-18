@@ -60,6 +60,7 @@ export default class WorkbenchAppPortRoutes {
     appPort: WorkbenchAppPortControl;
     onDiagnostic?: (message: string) => void;
     stableOrigin?: (request: IncomingMessage) => string | null;
+    canUpdate?: () => boolean;
   }) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
@@ -74,7 +75,12 @@ export default class WorkbenchAppPortRoutes {
       return true;
     }
     try {
-      sendJson(response, 200, this.project(await this.options.appPort.update((await readUpdate(request)).port), request, url));
+      const update = await readUpdate(request);
+      if (this.options.canUpdate?.() === false) {
+        sendJson(response, 409, { error: "Finish or cancel the pending network settings change first." });
+        return true;
+      }
+      sendJson(response, 200, this.project(await this.options.appPort.update(update.port), request, url));
     } catch (error) {
       const expected = expectedUpdateFailure(error);
       if (expected) {

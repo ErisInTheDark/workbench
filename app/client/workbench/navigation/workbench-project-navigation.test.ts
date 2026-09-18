@@ -13,6 +13,19 @@ import WorkbenchProjectNavigation from "./workbench-project-navigation";
 
 const identities = ["remote://github.com/team/repo", "local:///C:/git/repo", "workspace://members"];
 
+test("catalogue addresses replace junction aliases without changing thread identity", () => {
+  const projectId = ProjectIdSchema.parse(identities[0]);
+  const alias = ".pnpm-store/v11/projects/hash";
+  const navigation = new WorkbenchProjectNavigation([{
+    id: projectId, relativePath: "web/repo", name: "repo", kind: "git", rootPath: "C:/git/repo",
+    roots: [], lastCommitTimeMs: null,
+  }], [{ alias, projectId }]);
+  const incoming = createThreadRoute(alias, "thread");
+  const resolved = navigation.resolveRoute(incoming);
+  assert.equal(navigation.href(resolved, incoming), "/web/repo/@/thread/thread");
+  assert.deepEqual(navigation.readRoute(navigation.href(resolved, incoming)!), resolved);
+});
+
 for (const identity of identities) {
   test(`public routes retain their address for ${identity}`, () => {
     const projectId = ProjectIdSchema.parse(identity);

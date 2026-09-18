@@ -10,7 +10,7 @@ import type WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
 export default class WorkbenchNetworkRoutes {
   private closed = false;
   private readonly responses = new Map<ServerResponse, () => void>();
-  constructor(private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection">) {}
+  constructor(private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress">) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
     const progress = url.pathname === `${WORKBENCH_NETWORK_PATH}/events`;
@@ -19,10 +19,27 @@ export default class WorkbenchNetworkRoutes {
       this.send(response, 503, { error: "Network settings are reloading." });
       return true;
     }
+    const capability = this.controller.ingress(request.headers);
+    if (!capability) {
+      this.send(response, 403, { error: "Authenticated network ingress is required." });
+      return true;
+    }
+    const snapshot = () => {
+      const current = this.controller.ingress(request.headers);
+      const { localPort, change, ...legacy } = this.controller.snapshot();
+      const version = url.searchParams.get("capabilities");
+      return { ...legacy,
+        ...(version === "3" ? { localPort, change } : {}),
+        capabilities: {
+          manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
+          ...(version === "2" || version === "3" ? { trustHost: current?.trustHost ?? false } : {}),
+          ...(version === "3" ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
+        } };
+    };
     if (request.method === "GET" && !progress) {
       if (url.searchParams.get("connection") === "1") {
         this.send(response, 200, this.controller.connection());
-      } else this.send(response, 200, this.controller.snapshot());
+      } else this.send(response, 200, snapshot());
       return true;
     }
     if (request.method === "GET" && progress) {
@@ -31,7 +48,7 @@ export default class WorkbenchNetworkRoutes {
         Connection: "keep-alive", "X-Accel-Buffering": "no",
       });
       const write = () => {
-        if (!response.write(`data: ${JSON.stringify(this.controller.snapshot())}\n\n`)) response.end();
+        if (!response.write(`data: ${JSON.stringify(snapshot())}\n\n`)) response.end();
       };
       const unsubscribe = this.controller.subscribe(write);
       this.own(response, unsubscribe);
@@ -66,14 +83,26 @@ export default class WorkbenchNetworkRoutes {
         this.send(response, 400, { error: "Network action is invalid." });
         return true;
       }
+      const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "create-setup"].includes(parsed.data.action);
+      const currentCapability = this.controller.ingress(request.headers);
+      if (!currentCapability?.manageApp || (networkAction && !currentCapability.manageNetwork)
+        || (parsed.data.action === "trust-host" && !currentCapability.trustHost)) {
+        this.send(response, 403, { error: "This device cannot manage these network settings." });
+        return true;
+      }
       if (this.closed) {
         this.send(response, 503, { error: "Network settings are reloading." });
+        return true;
+      }
+      if (currentCapability.deviceNodeId !== null
+        && ["mode", "host-serve", "tailnet-port", "machine-name", "private-access", "remove-registration"].includes(parsed.data.action)) {
+        this.send(response, 409, { error: "Refresh settings and use Apply to change this connection safely." });
         return true;
       }
       this.own(response, () => {});
       // The controller owns the operation, not an HTTP reload lease. Closing this
       // route ends its response; disposing the parent controller cancels the work.
-      void this.controller.action(parsed.data).then(
+      void this.controller.action(parsed.data, { deviceNodeId: currentCapability.deviceNodeId, origin: request.headers.origin! }).then(
         result => this.send(response, 200, result),
         () => this.send(response, 409, { error: this.controller.snapshot().failure ?? "Network action could not complete." }),
       );
@@ -118,6 +147,14 @@ export default class WorkbenchNetworkRoutes {
       const configuration = this.controller.snapshot().configuration.privateAccess;
       const privateHostname = configuration ? `${configuration.label}.wb.inthedark.boo` : null;
       if (parsed.origin !== origin || parsed.username || parsed.password) return false;
+      // ingress() has authenticated these native headers before admission.
+      // ReverseProxy rewrites Host to loopback; compare the original origin.
+      const forwarded = request.headers["x-workbench-network-origin"];
+      if (forwarded !== undefined) {
+        return typeof forwarded === "string" && forwarded === origin
+          && (parsed.protocol === "http:" && isIP(host) !== 0
+            || parsed.protocol === "https:" && host === privateHostname && parsed.port === "");
+      }
       if (parsed.protocol === "https:" && host === privateHostname && parsed.port === "") return true;
       return parsed.protocol === "http:"
         && (host === "localhost" || isIP(host) !== 0)

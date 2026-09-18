@@ -84,6 +84,22 @@ test("serves SPA and launch routes while unknown APIs return not found", async (
   assert.deepEqual(await missingApi.json(), { error: "Workbench app route not found." });
 });
 
+test("rejects unauthenticated native ingress headers instead of granting localhost authority", async context => {
+  const router = await fixtureRouter([]);
+  await router.start();
+  context.after(() => router.close());
+  const server = new HttpServer({ hostname: "127.0.0.1", handleRequest: (request, response) => router.handle(request, response) });
+  context.after(() => server.close());
+  const { url } = await server.start();
+  const response = await fetch(`${url}/launch`, { headers: {
+    "x-workbench-network-token": "forged",
+    "x-workbench-network-device": "owner",
+  } });
+  assert.equal(response.status, 403);
+  await response.text();
+  assert.equal((await fetch(`${url}/launch`)).status, 200);
+});
+
 test("rejects LAN clients before pages or APIs despite forged local headers", async (context) => {
   const errors: string[] = [];
   const router = await fixtureRouter(errors);

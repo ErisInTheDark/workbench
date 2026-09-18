@@ -48,10 +48,10 @@ export default class WorkbenchProjectNavigation {
   private address(projectId: string, preferred: readonly string[]): string | undefined {
     if (!projectId) return "";
     const identity = this.resolveProjectId(projectId);
-    const existing = preferred.find(address => address && !address.includes("://") && this.resolveProjectId(address) === identity);
-    if (existing) return existing;
     const project = this.projects.find(project => project.id === identity);
     if (project) return project.relativePath;
+    const existing = preferred.find(address => address && !address.includes("://") && this.resolveProjectId(address) === identity);
+    if (existing) return existing;
     const aliases = this.aliases.filter(alias => alias.projectId === identity && !alias.alias.includes("://"))
       .map(alias => alias.alias).sort();
     return aliases[0] ?? (projectId.includes("://") ? undefined : projectId);

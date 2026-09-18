@@ -52,6 +52,7 @@ type networkConfiguration struct {
 	PrivateAccess *privateConfiguration `json:"privateAccess"`
 	Members       []networkMember       `json:"members"`
 	Rename        *networkRename       `json:"rename,omitempty"`
+	Group         *networkGroup        `json:"group,omitempty"`
 }
 
 type networkRename struct {
@@ -62,11 +63,14 @@ type networkRename struct {
 }
 
 type hostIdentity struct {
+	NodeID *string `json:"nodeId,omitempty"`
 	Hostname *string `json:"hostname"`
 	Address *string `json:"address"`
 }
 
 type sidecarConfiguration struct {
+	RetainedHostPort uint16 `json:"retainedHostPort,omitempty"`
+	IngressToken string `json:"ingressToken,omitempty"`
 	Configuration networkConfiguration `json:"configuration"`
 	AppOrigin     string               `json:"appOrigin"`
 	DaemonOrigin  string               `json:"daemonOrigin"`
@@ -81,6 +85,10 @@ type modeStatus struct {
 }
 
 type privateStatus struct {
+	Discovery string `json:"discovery,omitempty"`
+	Networks []networkCandidate `json:"networks,omitempty"`
+	Devices []networkDevice `json:"devices,omitempty"`
+	PendingUpdates []string `json:"pendingUpdates,omitempty"`
 	modeStatus
 	Hostname             *string          `json:"hostname"`
 	LoginURL             *string          `json:"loginUrl"`
@@ -103,9 +111,81 @@ type networkRuntime struct {
 type actionResult struct {
 	Kind          string                `json:"kind"`
 	Code          string                `json:"code,omitempty"`
-	Data          string                `json:"data,omitempty"`
 	PrivateAccess *privateConfiguration `json:"privateAccess,omitempty"`
 	Members       *[]networkMember      `json:"members,omitempty"`
+	Group         *networkGroup         `json:"group,omitempty"`
+}
+
+type networkPersistence struct {
+	configuration networkConfiguration
+	result chan error
+}
+
+func (owner *networkProcess) persistNetwork(ctx context.Context, previousRevision *uint64, configuration networkConfiguration) error {
+	if err := ctx.Err(); err != nil { return err }
+	if err := owner.ctx.Err(); err != nil { return err }
+	owner.persistenceMu.Lock()
+	if owner.networkPersistence == nil { owner.networkPersistence = make(map[string]*networkPersistence) }
+	if len(owner.networkPersistence) >= 256 {
+		owner.persistenceMu.Unlock()
+		return errors.New("too many network changes are awaiting persistence")
+	}
+	owner.nextPersistence++
+	id := strconv.FormatUint(owner.nextPersistence, 10)
+	pending := &networkPersistence{configuration: configuration, result: make(chan error, 1)}
+	owner.networkPersistence[id] = pending
+	owner.persistenceMu.Unlock()
+	message := struct {
+		Event string `json:"event"`
+		ID string `json:"id"`
+		PreviousRevision *uint64 `json:"previousRevision"`
+		Configuration networkConfiguration `json:"configuration"`
+	}{"persist-network", id, previousRevision, configuration}
+	if err := json.NewEncoder(owner.output).Encode(message); err != nil {
+		owner.cancel()
+		return errors.New("network persistence request could not reach the parent")
+	}
+	select {
+	case <-ctx.Done(): return ctx.Err()
+	case <-owner.ctx.Done(): return owner.ctx.Err()
+	case err := <-pending.result: return err
+	}
+}
+
+func (owner *networkProcess) acknowledgeNetwork(payload []byte) (json.RawMessage, error) {
+	var acknowledgement struct {
+		RequestID string `json:"requestId"`
+		Accepted bool `json:"accepted"`
+	}
+	if err := decodePipeValue(payload, &acknowledgement); err != nil { return nil, err }
+	owner.persistenceMu.Lock()
+	pending := owner.networkPersistence[acknowledgement.RequestID]
+	delete(owner.networkPersistence, acknowledgement.RequestID)
+	owner.persistenceMu.Unlock()
+	if pending == nil { return nil, errors.New("unknown network persistence acknowledgement") }
+	var result error
+	if !acknowledgement.Accepted {
+		result = errors.New("parent declined durable network persistence")
+	} else {
+		owner.mu.Lock()
+		current := owner.config.Configuration.Group
+		next := pending.configuration.Group
+		if current == nil || (next != nil && current.ID == next.ID && current.Revision <= next.Revision) {
+			configuration := pending.configuration
+			local := owner.config.Configuration
+			configuration.Mode, configuration.HostServe, configuration.Rename = local.Mode, local.HostServe, local.Rename
+			if configuration.PrivateAccess != nil && local.PrivateAccess != nil {
+				settings := *configuration.PrivateAccess
+				settings.Label, settings.NodeLabel, settings.rename = local.PrivateAccess.Label, local.PrivateAccess.NodeLabel, local.Rename
+				settings.Enabled = local.Mode == "tailnet-service" && settings.Role != "unconfigured"
+				configuration.PrivateAccess = &settings
+			}
+			owner.config.Configuration = configuration
+		}
+		owner.mu.Unlock()
+	}
+	pending.result <- result
+	return json.RawMessage(`{"kind":"ok"}`), nil
 }
 
 type memberPersistence struct {
@@ -116,9 +196,10 @@ type memberPersistence struct {
 
 func sameMember(left, right *networkMember) bool {
 	if left == nil || right == nil { return left == right }
-	if left.NodeID != right.NodeID || left.Label != right.Label || left.KeyFingerprint != right.KeyFingerprint || !slices.Equal(left.Addresses, right.Addresses) {
+	if left.NodeID != right.NodeID || left.HostNodeID != right.HostNodeID || left.Label != right.Label || left.KeyFingerprint != right.KeyFingerprint || !slices.Equal(left.Addresses, right.Addresses) {
 		return false
 	}
+	if (left.Published == nil) != (right.Published == nil) || (left.Published != nil && *left.Published != *right.Published) { return false }
 	if left.Rename == nil || right.Rename == nil { return left.Rename == right.Rename }
 	return *left.Rename == *right.Rename
 }
@@ -179,6 +260,11 @@ func (owner *networkProcess) acknowledgeMember(payload []byte) (json.RawMessage,
 		// A newer configure message may already include a later durable value.
 		if sameMember(current, pending.previous) {
 			owner.config.Configuration.Members, result = replaceMember(owner.config.Configuration.Members, pending.member)
+			if result == nil && owner.config.Configuration.Group != nil {
+				group := *owner.config.Configuration.Group
+				group.Revision++
+				owner.config.Configuration.Group = &group
+			}
 		}
 		owner.mu.Unlock()
 	}

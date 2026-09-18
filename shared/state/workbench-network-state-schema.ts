@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - workbenchNetworkTables: typed app-local network configuration, issuer and authorised-member tables.
- * - workbenchNetworkHistory: preserve initial storage and append mode/identity/rename tables.
+ * - workbenchNetworkTables: typed app-local configuration, directory, grants and transfer tables.
+ * - workbenchNetworkHistory: append releases without changing historical table definitions.
  */
 import {
   booleanInteger, check, defineTable, enumText, foreignKey, integer, literal,
@@ -90,9 +90,43 @@ const modeTables = Object.freeze({
   networkMemberRenames: publishCurrentTable(reservations),
 });
 
-export const workbenchNetworkTables = Object.freeze({ ...originalTables, ...modeTables });
+const group = defineTable("network_group", {
+  id: enumText("singleton").primaryKey(),
+  network_id: text().notNull(),
+  revision: integer().notNull(),
+  owner_node_id: text().notNull(),
+  dns_node_id: text().notNull(),
+  access: enumText("all", "selected").notNull(),
+}, table => ({ constraints: [check(sql`${table.revision} >= ${literal(1)}`)] }));
+const memberHosts = defineTable("network_member_hosts", {
+  node_id: text().primaryKey().references("network_members", "node_id", { onDelete: "CASCADE" }),
+  host_node_id: text().notNull(),
+});
+const memberPublication = defineTable("network_member_publication", {
+  node_id: text().primaryKey().references("network_members", "node_id", { onDelete: "CASCADE" }),
+  published: booleanInteger().notNull(),
+});
+const grants = defineTable("network_grants", {
+  device_node_id: text().notNull(),
+  app_node_id: text().notNull().references("network_members", "node_id", { onDelete: "CASCADE" }),
+}, table => ({ constraints: [primaryKey([table.device_node_id, table.app_node_id])] }));
+const transfer = defineTable("network_owner_transfer", {
+  id: enumText("singleton").primaryKey().references("network_group", "id", { onDelete: "CASCADE" }),
+  operation_id: text().notNull(),
+  from_node_id: text().notNull(),
+  to_node_id: text().notNull(),
+  phase: enumText("prepare", "relinquished", "activated").notNull(),
+});
+const groupTables = Object.freeze({
+  networkGroup: publishCurrentTable(group),
+  networkMemberHosts: publishCurrentTable(memberHosts),
+  networkMemberPublication: publishCurrentTable(memberPublication),
+  networkGrants: publishCurrentTable(grants),
+  networkOwnerTransfer: publishCurrentTable(transfer),
+});
+export const workbenchNetworkTables = Object.freeze({ ...originalTables, ...modeTables, ...groupTables });
 
-export function workbenchNetworkHistory(schemaVersion: number, modeVersion: number) {
+export function workbenchNetworkHistory(schemaVersion: number, modeVersion: number, groupVersion: number) {
   return [
     ...Object.values(originalTables).map(table => defineTableHistory({
     current: table,
@@ -101,6 +135,10 @@ export function workbenchNetworkHistory(schemaVersion: number, modeVersion: numb
     ...Object.values(modeTables).map(table => defineTableHistory({
       current: table,
       versions: [tableVersion({ schemaVersion: modeVersion, table, migration: createTable(table) })],
+    })),
+    ...Object.values(groupTables).map(table => defineTableHistory({
+      current: table,
+      versions: [tableVersion({ schemaVersion: groupVersion, table, migration: createTable(table) })],
     })),
   ];
 }

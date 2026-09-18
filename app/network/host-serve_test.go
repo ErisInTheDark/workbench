@@ -7,6 +7,31 @@ import (
 	"tailscale.com/ipn"
 )
 
+func TestHostServeHandoffKeepsOldPortAndRejectsConflicts(t *testing.T) {
+	config := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{9000: {HTTPS: true}}}
+	configureHostServe(config, "workbench", 8080, "127.0.0.1:4200")
+	publication := configureHostMappings(config, "workbench", 8089, 8080, "127.0.0.1:4300", "127.0.0.1:32123")
+	if publication.appError != nil { t.Fatal(publication.appError) }
+	for _, port := range []uint16{8080, 8089} {
+		handler := config.Foreground["workbench"].TCP[port]
+		if handler == nil || handler.TCPForward != "127.0.0.1:4300" || handler.ProxyProtocol != 2 {
+			t.Fatal("handoff lost a reachable app entry")
+		}
+	}
+	publication = configureHostMappings(config, "workbench", 9000, 8089, "127.0.0.1:4300", "127.0.0.1:32123")
+	if publication.appError == nil || config.Foreground["workbench"].TCP[8080] == nil || config.Foreground["workbench"].TCP[8089] == nil {
+		t.Fatal("conflicting replacement removed working entries")
+	}
+	publication = configureHostMappings(config, "workbench", 8089, 0, "127.0.0.1:4300", "127.0.0.1:32123")
+	if publication.appError != nil || config.Foreground["workbench"].TCP[8080] != nil || config.Foreground["workbench"].TCP[daemonTailnetPort] == nil {
+		t.Fatal("completion failed to retire only the old app entry")
+	}
+	publication = configureHostMappings(config, "workbench", 9000, 0, "127.0.0.1:4300", "")
+	if publication.appError == nil || publication.daemonError == nil || config.Foreground["workbench"].TCP[8089] == nil || config.Foreground["workbench"].TCP[daemonTailnetPort] != nil {
+		t.Fatal("app conflict kept forwarding to a retired daemon listener")
+	}
+}
+
 func TestHostServePreservesOtherOwnersAndUpdatesOwnTarget(t *testing.T) {
 	other := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{9001: {TCPForward: "127.0.0.1:9002"}}}
 	config := &ipn.ServeConfig{

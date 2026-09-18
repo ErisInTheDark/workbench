@@ -38,7 +38,10 @@ type proxyTargets struct {
 
 type networkTargets struct {
 	current atomic.Pointer[proxyTargets]
+	ingressToken atomic.Pointer[string]
 }
+
+type networkDeviceContext struct{}
 
 func (targets *networkTargets) set(appOrigin, daemonOrigin string) error {
 	app, err := localProxyURL(appOrigin)
@@ -75,8 +78,20 @@ func (targets *networkTargets) proxy(daemon bool, transport http.RoundTripper, w
 		ErrorLog:  log.New(io.Discard, "", 0),
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(target)
-			request.Out.Header.Del("X-Workbench-Network-Origin")
-			request.Out.Header.Set("X-Workbench-Network-Origin", "https://"+request.In.Host)
+			for key := range request.Out.Header {
+				if strings.HasPrefix(strings.ToLower(key), "x-workbench-network-") && !strings.EqualFold(key, "X-Workbench-Network-Request") {
+					request.Out.Header.Del(key)
+				}
+			}
+			scheme := "http://"
+			if request.In.TLS != nil { scheme = "https://" }
+			request.Out.Header.Set("X-Workbench-Network-Origin", scheme+request.In.Host)
+			if device, ok := request.In.Context().Value(networkDeviceContext{}).(string); ok {
+				if token := targets.ingressToken.Load(); token != nil {
+					request.Out.Header.Set("X-Workbench-Network-Token", *token)
+					request.Out.Header.Set("X-Workbench-Network-Device", device)
+				}
+			}
 		},
 		ErrorHandler: func(response http.ResponseWriter, request *http.Request, err error) {
 			if request.Context().Err() == nil {
@@ -103,6 +118,7 @@ func localProxyURL(value string) (*url.URL, error) {
 }
 
 type privateNetwork struct {
+	group *networkGroupController
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -114,6 +130,8 @@ type privateNetwork struct {
 	port      uint16
 	targets   *networkTargets
 	control   http.Handler
+	directorySnapshot func() *networkDirectory
+	access *networkAccess
 	publish   func(privateStatus)
 	renew     func(context.Context) error
 	refresh   chan struct{}
@@ -321,6 +339,7 @@ func offlinePrivateStatus(directory string, settings *privateConfiguration) (pri
 func (node *privateNetwork) run() (result error) {
 	var workers sync.WaitGroup
 	var cleanup []func() error
+	directoryRefresh := make(chan struct{}, 1)
 	defer func() {
 		node.cancel()
 		for index := len(cleanup) - 1; index >= 0; index-- {
@@ -378,6 +397,13 @@ func (node *privateNetwork) run() (result error) {
 					status.Message = &message
 				})
 			}
+			if notification.NetMap != nil {
+				select {
+				case directoryRefresh <- struct{}{}:
+				default:
+					// One queued refresh reads the latest peer directory.
+				}
+			}
 		}
 	}()
 	status, err := node.server.Up(node.ctx)
@@ -427,6 +453,20 @@ func (node *privateNetwork) run() (result error) {
 		}
 		node.change(func(current *privateStatus) { current.Phase, current.Message = "failed", &message })
 		node.cancel()
+	}
+	if node.group != nil {
+		listener, err := node.server.Listen("tcp", ":"+groupControlPort)
+		if err != nil { return errors.New("private network control listener could not open") }
+		cleanup = append(cleanup, listener.Close)
+		server := &http.Server{Handler: node.group, BaseContext: func(net.Listener) context.Context { return node.ctx }}
+		cleanup = append(cleanup, server.Close)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				fail("Private network control listener failed.")
+			}
+		}()
 	}
 	tlsConfiguration := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		presentation := node.presentation.Load()
@@ -486,9 +526,24 @@ func (node *privateNetwork) run() (result error) {
 				http.Error(response, "Private Workbench access has not been enabled.", http.StatusServiceUnavailable)
 				return
 			}
+			if port == 443 && node.access != nil {
+				peer, err := node.local.WhoIs(request.Context(), request.RemoteAddr)
+				if err != nil || peer.Node == nil || peer.Node.StableID == "" {
+					http.Error(response, "Tailscale device identity could not be verified.", http.StatusForbidden)
+					return
+				}
+				device := string(peer.Node.StableID)
+				ctx, release, err := node.access.admit(request.Context(), device, nodeID, closeNetworkConnection(request.Context()))
+				if err != nil {
+					http.Error(response, "This device does not have access to this app.", http.StatusForbidden)
+					return
+				}
+				defer release()
+				request = request.WithContext(context.WithValue(ctx, networkDeviceContext{}, device))
+			}
 			proxy.ServeHTTP(response, request)
 		})
-		server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return node.ctx }}
+		server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return node.ctx }, ConnContext: networkConnection}
 		cleanup = append(cleanup, server.Close)
 		workers.Add(1)
 		go func() {
@@ -515,7 +570,29 @@ func (node *privateNetwork) run() (result error) {
 	for _, server := range dnsServers {
 		server.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
 			presentation := node.presentation.Load()
-			if err := writer.WriteMsg(dnsAnswer(presentation.hostname, status.TailscaleIPs, request, presentation.names...)); err != nil && node.ctx.Err() == nil {
+			answer := dnsAnswer(presentation.hostname, status.TailscaleIPs, request, presentation.names...)
+			if node.directorySnapshot != nil {
+				if directory := node.directorySnapshot(); directory != nil {
+					if directory.Group.DNSNodeID != nodeID {
+						answer = new(dns.Msg).SetRcode(request, dns.RcodeRefused)
+					} else {
+						resolver := directoryDNS{members: func() []networkMember { return directory.Members }, exchange: publicDNSExchange}
+						_, tcp := writer.RemoteAddr().(*net.TCPAddr)
+						var err error
+						answer, err = resolver.answer(node.ctx, request, tcp)
+						if err != nil && node.ctx.Err() == nil {
+							message := err.Error()
+							node.change(func(current *privateStatus) { current.Message = &message })
+						}
+						if !tcp {
+							size := uint16(512)
+							if opt := request.IsEdns0(); opt != nil { size = max(size, opt.UDPSize()) }
+							answer.Truncate(int(min(size, 1232)))
+						}
+					}
+				}
+			}
+			if err := writer.WriteMsg(answer); err != nil && node.ctx.Err() == nil {
 				message := "Private DNS response could not be sent."
 				node.change(func(current *privateStatus) { current.Message = &message })
 			}
@@ -542,6 +619,26 @@ func (node *privateNetwork) run() (result error) {
 		}
 	}
 	close(node.ready)
+	if node.group != nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				var err error
+				if node.settings.Load().Role == "authority" { err = node.group.initialise(node.ctx) }
+				if err == nil { err = node.group.reconnect(node.ctx) }
+				if err != nil && node.ctx.Err() == nil {
+					message := err.Error()
+					node.change(func(status *privateStatus) { status.Message = &message })
+				}
+				select {
+				case <-node.ctx.Done():
+					return
+				case <-directoryRefresh:
+				}
+			}
+		}()
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {

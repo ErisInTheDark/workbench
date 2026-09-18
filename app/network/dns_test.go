@@ -2,11 +2,51 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/netip"
 	"testing"
 
 	"github.com/miekg/dns"
 )
+
+func TestDirectoryDNS(t *testing.T) {
+	members := []networkMember{
+		{NodeID: "nas", Label: "nas", Addresses: []string{"100.64.0.9"}},
+		{NodeID: "desktop", Label: "desktop", Addresses: []string{"100.64.0.8"}},
+	}
+	forwards := 0
+	resolver := directoryDNS{
+		members: func() []networkMember { return members },
+		exchange: func(_ context.Context, query *dns.Msg, tcp bool) (*dns.Msg, error) {
+			forwards++
+			if query.Question[0].Name == "failed.wb.inthedark.boo." { return nil, errors.New("upstream failed") }
+			answer := new(dns.Msg).SetReply(query)
+			answer.Truncated = !tcp
+			return answer, nil
+		},
+	}
+	for _, name := range []string{"NAS.wb.inthedark.boo.", "desktop.wb.inthedark.boo."} {
+		answer, err := resolver.answer(context.Background(), new(dns.Msg).SetQuestion(name, dns.TypeA), false)
+		if err != nil || !answer.Authoritative || len(answer.Answer) != 1 { t.Fatalf("directory answer failed: %v %v", answer, err) }
+	}
+	if forwards != 0 { t.Fatal("known app leaked to public DNS") }
+	hidden := false
+	members[0].Published = &hidden
+	answer, err := resolver.answer(context.Background(), new(dns.Msg).SetQuestion("nas.wb.inthedark.boo.", dns.TypeA), false)
+	if err != nil || answer.Authoritative || forwards != 2 { t.Fatal("explicitly removed address remained in private DNS") }
+	members[0].Published = nil
+	forwards = 0
+	for _, name := range []string{"wb.inthedark.boo.", "docs.wb.inthedark.boo."} {
+		answer, err := resolver.answer(context.Background(), new(dns.Msg).SetQuestion(name, dns.TypeA), false)
+		if err != nil || answer.Truncated || answer.Authoritative { t.Fatalf("public fallback failed: %v %v", answer, err) }
+	}
+	if forwards != 4 { t.Fatal("truncated public responses must retry using TCP") }
+	answer, err = resolver.answer(context.Background(), new(dns.Msg).SetQuestion("failed.wb.inthedark.boo.", dns.TypeA), false)
+	if err == nil || answer.Rcode != dns.RcodeServerFailure { t.Fatal("upstream failure must not become a negative answer") }
+	answer, err = resolver.answer(context.Background(), new(dns.Msg).SetQuestion("example.com.", dns.TypeA), false)
+	if err != nil || answer.Rcode != dns.RcodeRefused { t.Fatal("private DNS must not become an unrestricted resolver") }
+}
 
 func TestDNSOwnership(t *testing.T) {
 	host := "desktop.wb.inthedark.boo"

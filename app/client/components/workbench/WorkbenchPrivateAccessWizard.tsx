@@ -1,143 +1,107 @@
 /*
  * Default export:
- * - WorkbenchPrivateAccessWizard: render enrolment, pairing, device trust, verification and authority recovery intents.
+ * - WorkbenchPrivateAccessWizard: show one actionable connection, DNS or device-trust step.
  */
 "use client";
 import { useState } from "react";
 import type { WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
-
-const buttonStyle = "rounded-lg px-3 py-2 text-sm text-text hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-40";
-const inputStyle = "w-full min-w-0 rounded-lg bg-transparent px-2 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent-soft";
+import privateAccessStep from "../../workbench/app/private-access-step";
+import PrimaryButton from "./PrimaryButton";
+import LoaderIcon from "./LoaderIcon";
+import WorkbenchCopyButton from "./WorkbenchCopyButton";
+import WorkbenchLinkButton from "./WorkbenchLinkButton";
+import { CheckIcon, ExternalLinkIcon, LockIcon, RefreshCwIcon, WarningIcon } from "./workbench-icons";
 
 export default function WorkbenchPrivateAccessWizard() {
   const network = useWorkbenchNetwork();
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [code, setCode] = useState("");
-  const [pairingCode, setPairingCode] = useState("");
-  const [password, setPassword] = useState("");
-  const [backup, setBackup] = useState("");
-  const [download, setDownload] = useState("");
-  const [error, setError] = useState("");
+  const [dnsConfirmed, setDnsConfirmed] = useState(false);
   const [working, setWorking] = useState(false);
-  const [verified, setVerified] = useState<{ hostname: string; nodeId: string; rootFingerprint: string | null } | null>(null);
+  const [error, setError] = useState<{ step: string; message: string } | null>(null);
   const snapshot = network.snapshot;
   if (!snapshot) return null;
-  const configuration = snapshot.configuration.privateAccess;
   const status = snapshot.runtime.privateAccess;
-  const busy = snapshot.busy || working;
-  const prepared = Boolean(status.nodeId);
-
-  async function act(action: WorkbenchNetworkAction) {
+  const configuration = snapshot.configuration.privateAccess;
+  const dnsApp = snapshot.configuration.members.find(member => member.nodeId === snapshot.configuration.group?.dnsNodeId);
+  const step = privateAccessStep(snapshot, Boolean(network.verified), dnsConfirmed);
+  const busy = working || snapshot.busy;
+  const editable = snapshot.capabilities?.manageApp ?? false;
+  async function run(operation: () => Promise<object>) {
     setWorking(true);
-    setError("");
-    try {
-      const result = await network.client.action(action);
-      if (result.kind === "pairing-code") setPairingCode(result.code);
-      if (result.kind === "backup") setDownload(result.data);
-      if (result.kind === "setup") { setClientSecret(""); setCode(""); setBackup(""); setPassword(""); }
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Private setup could not complete.");
-    } finally { setWorking(false); }
+    setError(null);
+    try { await operation(); }
+    catch (failure) { setError({ step, message: failure instanceof Error ? failure.message : "Private access could not be updated." }); }
+    finally { setWorking(false); }
   }
-
-  async function verify() {
-    setWorking(true);
-    setError("");
-    try {
-      setVerified(await network.client.verify());
-    } catch {
-      setError("This device could not verify private HTTPS. Check Tailscale DNS and install the setup certificate as a trusted root on this device, then retry.");
-    } finally { setWorking(false); }
-  }
-
-  return (
-    <div className="space-y-4">
-      <h4 className="m-0 font-medium text-text">Private HTTPS setup</h4>
-      <p role="status" className="m-0 text-sm text-fg/muted">{status.phase}{status.message ? ` · ${status.message}` : ""}</p>
-      {status.loginUrl ? <a className="text-accent underline" href={status.loginUrl} target="_blank" rel="noreferrer">Authorise this Workbench node in Tailscale</a> : null}
-      {configuration && !prepared ? <button className={buttonStyle} disabled={busy || !snapshot.executable.available}
-        onClick={() => { void act({ action: "prepare", label: configuration.label }); }}>Prepare / reconnect node</button> : null}
-      {prepared && configuration?.role === "unconfigured" ? (
-        <div className="space-y-4">
-          <details>
-            <summary className="cursor-pointer text-sm text-text">Create the first private setup</summary>
-            <form className="mt-3 space-y-2" onSubmit={event => { event.preventDefault(); void act({ action: "create-setup", clientId, clientSecret }); }}>
-              <p className="text-sm text-fg/muted">Once per setup, create a Tailscale OAuth client with DNS write permission. Only this installation keeps the credential and certificate authority key. Other machines join below.</p>
-              <label className="block text-sm text-text">Client ID<input value={clientId} onChange={event => setClientId(event.currentTarget.value)} required autoComplete="off" className={inputStyle} /></label>
-              <label className="block text-sm text-text">Client secret<input type="password" value={clientSecret} onChange={event => setClientSecret(event.currentTarget.value)} required autoComplete="off" className={inputStyle} /></label>
-              <button disabled={busy} className={buttonStyle}>Create setup and register DNS</button>
-            </form>
-          </details>
-          <p className="text-sm text-fg/muted">Already have a setup? Generate a pairing code on its setup installation, paste it below, then approve this machine there.</p>
-        </div>
-      ) : null}
-      {prepared && configuration?.role !== "authority" ? (
-        <form className="space-y-2" onSubmit={event => { event.preventDefault(); void act({ action: configuration?.role === "member" ? "reconnect" : "join", code }); }}>
-          <label className="block text-sm text-text">Pairing / issuer reconnection code<textarea value={code} onChange={event => setCode(event.currentTarget.value)} required maxLength={32768} rows={3} autoComplete="off" className={inputStyle} /></label>
-          <button className={buttonStyle} disabled={busy}>{configuration?.role === "member" ? "Reconnect to recovered issuer" : "Join existing setup"}</button>
-        </form>
-      ) : null}
-      {prepared && configuration?.role === "authority" ? (
-        <div className="space-y-2">
-          <button className={buttonStyle} disabled={busy} onClick={() => { void act({ action: "pair-code" }); }}>Generate single-use pairing code</button>
-          {pairingCode ? <label className="block text-sm text-text">Copy privately to the other installation<textarea readOnly value={pairingCode} rows={3} className={inputStyle} onFocus={event => event.currentTarget.select()} /></label> : null}
-          {status.pending.map(pending => <div key={pending.id} className="space-y-2 py-2">
-            <p className="break-all text-sm text-text">Approve {pending.member.label}?</p>
-            <p className="break-all font-mono text-xs text-fg/muted">Node {pending.member.nodeId}<br />Key {pending.member.keyFingerprint}</p>
-            <p className="text-sm text-fg/muted">Check this identity and key against the joining installation before approving.</p>
-            <button disabled={busy} className={buttonStyle} onClick={() => { void act({ action: "approve", requestId: pending.id, approved: true }); }}>Approve machine</button>
-            <button disabled={busy} className={buttonStyle} onClick={() => { void act({ action: "approve", requestId: pending.id, approved: false }); }}>Decline</button>
-          </div>)}
-        </div>
-      ) : null}
-      {status.nodeId ? <p className="break-all font-mono text-xs text-fg/muted">This node {status.nodeId}</p> : null}
-      {status.keyFingerprint ? <p className="break-all font-mono text-xs text-fg/muted">This key {status.keyFingerprint}</p> : null}
-      {status.rootCertificate ? (
-        <div className="space-y-2">
-          <h5 className="m-0 text-sm font-medium text-text">Trust once on each viewing device</h5>
-          <p className="text-sm text-fg/muted">Install this setup's certificate as a trusted root in the device or browser you use for Workbench. Only trust a setup you control. Pairing another machine does not require trusting a new root.</p>
-          <a className="text-sm text-accent underline" download="workbench-private-root.crt"
-            href={`data:application/x-x509-ca-cert,${encodeURIComponent(status.rootCertificate)}`}>Download public root certificate</a>
-          <p className="break-all font-mono text-xs text-fg/muted">SHA-256 {status.rootFingerprint}</p>
-          {snapshot.hostPlatform === "win32" ? <button className={buttonStyle} disabled={busy} onClick={() => { void act({ action: "trust-host" }); }}>
-            Trust root for current user on the Workbench Windows host
-          </button> : null}
-          <p className="text-sm text-fg/muted">The host button does not install trust on a remote phone or laptop.</p>
-          <button className={buttonStyle} disabled={busy || !prepared} onClick={() => { void verify(); }}>Verify HTTPS from this device</button>
-          {verified && verified.rootFingerprint === status.rootFingerprint && verified.hostname === status.hostname && verified.nodeId === status.nodeId
-            ? <p className="text-sm text-text" role="status">Private DNS, HTTPS trust and machine identity verified from this browser.</p> : null}
-          {status.certificateExpiresAt ? <p className="text-sm text-fg/muted">Leaf certificate expires {new Date(status.certificateExpiresAt).toLocaleDateString()}. Keep the setup installation available for renewal in its final 30 days.</p> : null}
-        </div>
-      ) : null}
-      {configuration && configuration.role !== "unconfigured" ? (
-        <div className="flex flex-wrap gap-2">
-          {status.url ? <a className={buttonStyle} href={status.url} target="_blank" rel="noreferrer">Open private Workbench</a> : null}
-          <button disabled={busy} className={buttonStyle} onClick={() => { void act({ action: "remove-registration" }); }}>Remove this machine's DNS registration and disable</button>
-        </div>
-      ) : null}
-      {configuration ? (
-        <details className="space-y-3">
-          <summary className="cursor-pointer text-sm text-text">Encrypted backup and recovery</summary>
-          <p className="text-sm text-fg/muted">A backup contains the setup's CA private key, DNS credential and approved members. Store it privately. Recovery retains the same root. If the issuer address changes, reconnect members using a new pairing code.</p>
-          <label className="block text-sm text-text">Backup password<input type="password" autoComplete="new-password" value={password} minLength={12} maxLength={1024} onChange={event => setPassword(event.currentTarget.value)} className={inputStyle} /></label>
-          {configuration.role === "authority" ? <button disabled={busy || password.length < 12} className={buttonStyle} onClick={() => { void act({ action: "backup", password }); }}>Create encrypted backup</button> : null}
-          {download ? <a className="text-sm text-accent underline" download="workbench-private.wbbackup" href={`data:text/plain;charset=utf-8,${encodeURIComponent(download)}`}>Save encrypted backup</a> : null}
-          <label className="block text-sm text-text">Recovery backup<input type="file" accept=".wbbackup,text/plain" className={inputStyle}
-            onChange={event => {
-              const file = event.currentTarget.files?.[0];
-              if (!file) return;
-              if (file.size > 6000000) { setError("Backup is too large."); return; }
-              void file.text().then(setBackup).catch(() => setError("Backup file could not be read."));
-            }} /></label>
-          <button disabled={busy || !prepared || !backup || password.length < 12} className={buttonStyle} onClick={() => { void act({ action: "restore", password, backup }); }}>Restore this setup authority</button>
-        </details>
-      ) : null}
-      <div className="flex flex-wrap gap-2">
-        <button className={buttonStyle} disabled={busy} onClick={() => { void act({ action: "retry" }); }}>Retry networking / renew registration</button>
-      </div>
-      {error ? <p className="text-sm text-danger" role="alert">{error}</p> : null}
+  const act = (action: WorkbenchNetworkAction) => { void run(() => network.client.action(action)); };
+  const waiting = step === "connecting" || step === "discovering";
+  const title = {
+    prepare: "Connect this app", connecting: "Connecting to your tailnet", discovering: "Finding your Workbench network",
+    signin: "Sign in to Tailscale", create: "Set up your Workbench network", choose: "Choose your Workbench network",
+    dns: "Add your Workbench nameserver", trust: "Trust HTTPS on this device", ready: "Private HTTPS is ready", failed: "Private access needs attention",
+  }[step];
+  return <section className="flex flex-col items-start gap-4 rounded-2xl bg-accent-soft/20 p-4 sm:p-5">
+    <div className="flex items-center gap-2 text-sm font-medium text-text" role="status">
+      {waiting ? <LoaderIcon className="size-4" /> : step === "ready" ? <CheckIcon className="size-4 text-success" />
+        : step === "failed" ? <WarningIcon className="size-4 text-danger" /> : <LockIcon className="size-4" />}
+      <h4 className="m-0 text-sm font-medium">{title}</h4>
     </div>
-  );
+    {waiting ? <p className="m-0 text-sm text-fg/muted">{step === "discovering" ? "Existing apps are found automatically. There is no pairing code to copy." : "Workbench is opening its own private connection. Your computer's normal ports stay untouched."}</p> : null}
+    {step === "prepare" && configuration ? <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "prepare", label: configuration.label })}>Connect app</PrimaryButton> : null}
+    {step === "signin" && status.loginUrl ? <WorkbenchLinkButton href={status.loginUrl} target="_blank" rel="noreferrer">
+      Sign in to connect this app<ExternalLinkIcon className="size-4" />
+    </WorkbenchLinkButton> : null}
+    {step === "create" ? <>
+      <p className="m-0 text-sm text-fg/muted">{status.message ?? "No existing network was found. Set it up here once. Later apps can join automatically."}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <PrimaryButton disabled={busy || !editable} pendingHalo={busy} onClick={() => act({ action: "create-setup" })}>Create network</PrimaryButton>
+        <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "discover" })}>Look again</PrimaryButton>
+      </div>
+    </> : null}
+    {step === "choose" ? <div className="flex flex-wrap gap-2">{status.networks?.map(candidate => <PrimaryButton key={candidate.id} disabled={busy || !editable}
+      onClick={() => act({ action: "select-network", id: candidate.id })}>{candidate.label}'s network</PrimaryButton>)}</div> : null}
+    {step === "dns" ? <>
+      <p className="m-0 text-sm text-fg/muted">In Tailscale DNS settings, add this nameserver and restrict it to <strong className="font-medium text-text">wb.inthedark.boo</strong>. This is one entry for every app, not one per computer.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="select-all text-sm text-text">{dnsApp?.addresses[0] ?? "Waiting for the DNS app address"}</code>
+        {dnsApp?.addresses[0] ? <WorkbenchCopyButton label="Copy nameserver address" text={dnsApp.addresses[0]} /> : null}
+        <WorkbenchLinkButton href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">Open Tailscale DNS<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+      </div>
+      <PrimaryButton onClick={() => setDnsConfirmed(true)}>I've added the entry</PrimaryButton>
+    </> : null}
+    {step === "trust" && status.rootCertificate ? <>
+      <p className="m-0 text-sm text-fg/muted">Install and trust this certificate on the device you're using now. You only need to do this once per device, not for every Workbench app.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        {snapshot.hostPlatform === "win32" && editable && snapshot.capabilities?.trustHost
+          ? <PrimaryButton disabled={busy} onClick={() => act({ action: "trust-host" })}><LockIcon className="mr-2 size-4" />Trust certificate on this PC</PrimaryButton>
+          : null}
+        <WorkbenchLinkButton download="workbench-private-root.crt" href={`data:application/x-x509-ca-cert,${encodeURIComponent(status.rootCertificate)}`}>Download certificate</WorkbenchLinkButton>
+      </div>
+      <details className="text-sm text-fg/muted">
+        <summary className="cursor-pointer text-text">How do I install it?</summary>
+        <div className="mt-3 flex flex-col items-start gap-2">
+          <p className="m-0">Open the downloaded certificate in your device's certificate settings and enable trust for websites. Only trust it if you recognise this Workbench network.</p>
+          <p className="m-0">On another Windows PC, import it into your Current User &gt; Trusted Root Certification Authorities store.</p>
+          <WorkbenchLinkButton href="https://learn.microsoft.com/en-us/windows-hardware/drivers/install/trusted-root-certification-authorities-certificate-store" target="_blank" rel="noreferrer">Windows certificate help<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+          <WorkbenchLinkButton href="https://support.apple.com/en-ie/102390" target="_blank" rel="noreferrer">iPhone and iPad instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+          <WorkbenchLinkButton href="https://support.apple.com/en-ie/guide/keychain-access/kyca11871/mac" target="_blank" rel="noreferrer">Mac instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+          <WorkbenchLinkButton href="https://support.google.com/pixelphone/answer/2844832?hl=en" target="_blank" rel="noreferrer">Android instructions<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+        </div>
+      </details>
+      <div className="flex flex-col items-start gap-2">
+        <p className="m-0 text-sm text-fg/muted">Once the certificate is trusted, check that this browser can open the HTTPS address.</p>
+        <PrimaryButton disabled={busy} pendingHalo={busy} onClick={() => { void run(() => network.client.verify()); }}>Check HTTPS connection</PrimaryButton>
+      </div>
+    </> : null}
+    {step === "ready" ? <p className="m-0 text-sm text-fg/muted">This browser verified the private address and the expected app.</p> : null}
+    {configuration?.role !== "unconfigured" && step !== "failed" && status.discovery === "failed" ? <div className="space-y-2">
+      <p className="m-0 text-sm text-fg/muted">{status.message ?? "Network updates could not be checked. Previously saved access settings remain in use."}</p>
+      <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "retry" })}><RefreshCwIcon className="mr-2 size-4" />Check network updates</PrimaryButton>
+    </div> : null}
+    {step === "failed" ? <>
+      <p className="m-0 text-sm text-fg/muted">{snapshot.executable.message ?? status.message ?? snapshot.failure ?? "The connection could not complete."}</p>
+      <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "retry" })}><RefreshCwIcon className="mr-2 size-4" />Reconnect</PrimaryButton>
+    </> : null}
+    {error?.step === step ? <p className="m-0 text-sm text-danger" role="alert">{error.message}</p> : null}
+  </section>;
 }

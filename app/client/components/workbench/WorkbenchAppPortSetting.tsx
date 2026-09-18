@@ -13,6 +13,8 @@ import {
   type WorkbenchAppPortClientSnapshot,
 } from "../../workbench/app/workbench-app-port-client";
 import { readWorkbenchBrowserStateTransferId } from "../../workbench/state/workbench-browser-state-identity";
+import WorkbenchTextField from "./WorkbenchTextField";
+import PrimaryButton from "./PrimaryButton";
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to read the Workbench app port.").slice(0, 500);
@@ -96,12 +98,12 @@ export default function WorkbenchAppPortSetting({ inline = false }: { inline?: b
       </div> : null}
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { void apply(event); }}>
         <label className={inline ? "w-24 text-sm text-text" : "sr-only"} htmlFor="workbench-app-port">{inline ? "Port" : "App port"}</label>
-        <input
+        <WorkbenchTextField
           id="workbench-app-port"
           aria-describedby={error ? "workbench-app-port-error" : undefined}
           aria-invalid={Boolean(error) || port === null || undefined}
           autoComplete="off"
-          className="h-10 w-36 rounded-xl border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent px-3 font-mono text-[0.9rem] text-text outline-none transition focus:border-[color-mix(in_srgb,var(--text)_22%,transparent)] focus:ring-2 focus:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-36"
           disabled={disabled}
           inputMode="numeric"
           maxLength={5}
@@ -112,13 +114,13 @@ export default function WorkbenchAppPortSetting({ inline = false }: { inline?: b
             if (error) setError("");
           }}
         />
-        <button
+        <PrimaryButton
           type="submit"
-          className="h-10 rounded-xl px-3 text-[0.84rem] font-medium text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg/muted"
+          pendingHalo={isApplying}
           disabled={disabled || port === null}
         >
           {isApplying ? "Applying..." : "Apply"}
-        </button>
+        </PrimaryButton>
       </form>
       {inline && snapshot?.source === "environment" ? <p className="m-0 text-sm text-fg/muted">{sourceDescription(snapshot)}</p> : null}
       {error ? (

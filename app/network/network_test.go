@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func testHTTPResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+}
+
 func TestRetiringPrivateNodeCannotOverwriteReplacementStatus(t *testing.T) {
 	var output bytes.Buffer
 	current, retired := &privateNetwork{}, &privateNetwork{}

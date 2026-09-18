@@ -60,7 +60,7 @@ type hostServe struct {
 	mu      sync.Mutex
 }
 
-func startHostServe(ctx context.Context, setup context.Context, port uint16, target, daemonTarget string, onFailure func(error)) (*hostServe, hostPublication, error) {
+func startHostServe(ctx context.Context, setup context.Context, port, retainedPort uint16, target, daemonTarget string, onFailure func(error)) (*hostServe, hostPublication, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stopSetupCancellation := context.AfterFunc(setup, cancel)
 	defer stopSetupCancellation()
@@ -76,7 +76,7 @@ func startHostServe(ctx context.Context, setup context.Context, port uint16, tar
 		return nil, hostPublication{}, errors.Join(errors.New("host Tailscale did not provide a foreground session"), watcher.Close())
 	}
 	owner := &hostServe{client: client, watcher: watcher, cancel: cancel, session: initial.SessionID, done: make(chan struct{})}
-	publication, err := owner.update(ctx, port, target, daemonTarget)
+	publication, err := owner.update(ctx, port, retainedPort, target, daemonTarget)
 	if err != nil {
 		cancel()
 		return nil, publication, errors.Join(err, watcher.Close())
@@ -105,7 +105,7 @@ func startHostServe(ctx context.Context, setup context.Context, port uint16, tar
 	return owner, publication, nil
 }
 
-func (owner *hostServe) update(ctx context.Context, port uint16, target, daemonTarget string) (hostPublication, error) {
+func (owner *hostServe) update(ctx context.Context, port, retainedPort uint16, target, daemonTarget string) (hostPublication, error) {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	configuration, err := owner.client.GetServeConfig(ctx)
@@ -115,23 +115,7 @@ func (owner *hostServe) update(ctx context.Context, port uint16, target, daemonT
 	if configuration == nil {
 		configuration = &ipn.ServeConfig{}
 	}
-	// Replace only this session's desired mappings, keeping the config ETag and
-	// every other owner intact. Individual conflicts do not cancel its sibling.
-	if configuration.Foreground == nil {
-		configuration.Foreground = make(map[string]*ipn.ServeConfig)
-	}
-	configuration.Foreground[owner.session] = &ipn.ServeConfig{}
-	publication := hostPublication{}
-	if port == daemonTailnetPort {
-		publication.appError = errors.New("the app port is reserved for daemon discovery")
-	} else {
-		publication.appError = configureHostServe(configuration, owner.session, port, target)
-	}
-	if daemonTarget == "" {
-		publication.daemonError = errors.New("local daemon is unavailable")
-	} else {
-		publication.daemonError = configureHostServe(configuration, owner.session, daemonTailnetPort, daemonTarget)
-	}
+	publication := configureHostMappings(configuration, owner.session, port, retainedPort, target, daemonTarget)
 	if err := owner.client.SetServeConfig(ctx, configuration); err != nil {
 		if local.IsPreconditionsFailedError(err) {
 			return publication, errors.New("Tailscale serve changed concurrently; retry without replacing the other configuration")
@@ -139,6 +123,39 @@ func (owner *hostServe) update(ctx context.Context, port uint16, target, daemonT
 		return publication, errors.New("host Tailscale rejected forwarding; check local API permissions and serve availability")
 	}
 	return publication, nil
+}
+
+func configureHostMappings(configuration *ipn.ServeConfig, session string, port, retainedPort uint16, target, daemonTarget string) hostPublication {
+	if configuration.Foreground == nil {
+		configuration.Foreground = make(map[string]*ipn.ServeConfig)
+	}
+	previous := configuration.Foreground[session]
+	configuration.Foreground[session] = &ipn.ServeConfig{}
+	publication := hostPublication{}
+	if port == daemonTailnetPort || retainedPort == daemonTailnetPort {
+		publication.appError = errors.New("the app port is reserved for daemon discovery")
+	} else {
+		publication.appError = configureHostServe(configuration, session, port, target)
+		if publication.appError == nil && retainedPort != 0 && retainedPort != port {
+			publication.appError = configureHostServe(configuration, session, retainedPort, target)
+		}
+		if publication.appError == nil {
+			for _, handler := range configuration.Foreground[session].TCP { handler.ProxyProtocol = 2 }
+		}
+	}
+	// A conflicting replacement must not remove either working app entry.
+	if publication.appError != nil {
+		configuration.Foreground[session] = previous
+	}
+	if current := configuration.Foreground[session]; current != nil {
+		delete(current.TCP, daemonTailnetPort)
+	}
+	if daemonTarget == "" {
+		publication.daemonError = errors.New("local daemon is unavailable")
+	} else {
+		publication.daemonError = configureHostServe(configuration, session, daemonTailnetPort, daemonTarget)
+	}
+	return publication
 }
 
 func (owner *hostServe) close() error {

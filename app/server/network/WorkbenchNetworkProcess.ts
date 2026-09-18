@@ -10,6 +10,7 @@ import { z } from "zod";
 import {
   WORKBENCH_NETWORK_PROTOCOL, WorkbenchNetworkCommandSchema, WorkbenchNetworkPipeResponseSchema,
   type WorkbenchNetworkCommand, type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkMember,
+  type WorkbenchNetworkConfiguration,
 } from "workbench-shared/http/workbench-network";
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -36,8 +37,10 @@ export default class WorkbenchNetworkProcess {
   constructor(private readonly options: {
     root: string;
     warn: (message: string) => void;
+    diagnostic?: (message: string) => void;
     failed?: (message: string) => void;
     persistMember?: (previous: WorkbenchNetworkMember | null, member: WorkbenchNetworkMember) => void;
+    persistNetwork?: (previousRevision: number | null, configuration: WorkbenchNetworkConfiguration) => void;
     spawnChild?: (executable: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
     stateDirectory: string;
     status: (snapshot: WorkbenchNetworkRuntime) => void;
@@ -94,7 +97,7 @@ export default class WorkbenchNetworkProcess {
   }
 
   async cancelPending() {
-    const targets = [...this.pending].filter(([, pending]) => pending.action !== "cancel" && pending.action !== "persist-member-result").map(([id]) => id);
+    const targets = [...this.pending].filter(([, pending]) => !["cancel", "persist-member-result", "persist-network-result"].includes(pending.action)).map(([id]) => id);
     await Promise.all(targets.map(async id => await this.send("cancel", { id })));
   }
 
@@ -144,7 +147,7 @@ export default class WorkbenchNetworkProcess {
     child.stdout.on("data", (chunk: string) => this.receive(chunk));
     child.stderr.on("data", (chunk: Buffer) => {
       // Dependency diagnostics are unstructured and may contain login secrets.
-      this.options.warn(`Network process emitted a diagnostic (${chunk.length} bytes); raw content was withheld.`);
+      (this.options.diagnostic ?? this.options.warn)(`Network process emitted a diagnostic (${chunk.length} bytes); raw content was withheld.`);
     });
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
@@ -184,13 +187,18 @@ export default class WorkbenchNetworkProcess {
           else {
             let accepted = false;
             try {
-              if (!this.options.persistMember) throw new Error("No membership persistence owner.");
-              this.options.persistMember(message.previous, message.member);
+              if (message.event === "persist-network") {
+                if (!this.options.persistNetwork) throw new Error("No network persistence owner.");
+                this.options.persistNetwork(message.previousRevision, message.configuration);
+              } else {
+                if (!this.options.persistMember) throw new Error("No membership persistence owner.");
+                this.options.persistMember(message.previous, message.member);
+              }
               accepted = true;
             } catch {
-              this.options.warn("Native membership change could not be persisted.");
+              this.options.warn("Native network change could not be persisted.");
             }
-            void this.send("persist-member-result", { requestId: message.id, accepted }).catch(error => {
+            void this.send(message.event === "persist-network" ? "persist-network-result" : "persist-member-result", { requestId: message.id, accepted }).catch(error => {
               if (!this.stopped) this.fail(error instanceof Error ? error : new Error("Membership persistence acknowledgement failed."));
             });
           }

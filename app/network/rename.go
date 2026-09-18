@@ -106,6 +106,14 @@ func (authority *networkAuthority) requestRename(ctx context.Context, phase stri
 }
 
 func (authority *networkAuthority) renameMember(ctx context.Context, phase, nodeID string, addresses []string, request []byte, rename networkRename) (certificateResponse, error) {
+	if group := authority.node.group; group != nil {
+		group.mu.Lock()
+		defer group.mu.Unlock()
+		directory := group.directory()
+		if directory != nil && directory.Group.Transfer != nil && directory.Group.Transfer.Phase != "activated" {
+			return certificateResponse{}, errors.New("finish ownership handover before renaming an app")
+		}
+	}
 	if err := validateRename(rename); err != nil { return certificateResponse{}, err }
 	if phase != "prepare" && phase != "retire" { return certificateResponse{}, errors.New("invalid issuer rename phase") }
 	proposed, err := memberFromRequest(nodeID, rename.To, addresses, request)
@@ -122,6 +130,9 @@ func (authority *networkAuthority) renameMember(ctx context.Context, phase, node
 	}
 	// A lost final acknowledgement must not remove an arbitrary old name again.
 	if existing.Label == rename.To && existing.Rename == nil && phase == "retire" {
+		if authority.publishDirectory != nil {
+			if err := authority.publishDirectory(ctx); err != nil { return certificateResponse{}, err }
+		}
 		return certificateResponse{}, nil
 	}
 	if existing.Label != rename.From || (existing.Rename != nil && *existing.Rename != rename) {
@@ -134,8 +145,6 @@ func (authority *networkAuthority) renameMember(ctx context.Context, phase, node
 		}
 	}
 	if authority.persist == nil { return certificateResponse{}, errors.New("durable membership owner is unavailable") }
-	api, err := authority.dnsAPI()
-	if err != nil { return certificateResponse{}, err }
 	oldHost, _ := machineHostname(rename.From)
 	newHost, _ := machineHostname(rename.To)
 	if phase == "prepare" {
@@ -152,12 +161,17 @@ func (authority *networkAuthority) renameMember(ctx context.Context, phase, node
 		}
 		certificate, err := ca.issue(request, newHost, time.Now(), aliases...)
 		if err != nil { return certificateResponse{}, err }
-		if err := api.replace(ctx, newHost, existing.Addresses, addresses, false); err != nil { return certificateResponse{}, err }
+		if authority.publishDirectory != nil {
+			if err := authority.publishDirectory(ctx); err != nil { return certificateResponse{}, err }
+		}
 		return certificateResponse{Certificate: certificate}, nil
 	}
 	if existing.Rename == nil { return certificateResponse{}, errors.New("prepare the rename before retiring its old address") }
-	if err := api.replace(ctx, newHost, existing.Addresses, addresses, false); err != nil { return certificateResponse{}, err }
-	if err := api.replace(ctx, oldHost, existing.Addresses, addresses, true); err != nil { return certificateResponse{}, err }
+	proposed.HostNodeID = existing.HostNodeID
+	proposed.Published = existing.Published
 	if err := authority.persist(ctx, existing, proposed); err != nil { return certificateResponse{}, err }
+	if authority.publishDirectory != nil {
+		if err := authority.publishDirectory(ctx); err != nil { return certificateResponse{}, err }
+	}
 	return certificateResponse{}, nil
 }

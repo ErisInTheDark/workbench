@@ -6,6 +6,7 @@ import { isIP } from "node:net";
 import { WorkbenchNetworkConfigurationSchema, workbenchNetworkMode, type WorkbenchNetworkConfiguration } from "workbench-shared/http/workbench-network";
 import { deleteRows, insertRow, selectRows, type WorkbenchDatabaseMutation } from "workbench-shared/database/workbench-database-statements";
 import { workbenchNetworkTables as tables } from "workbench-shared/state/workbench-network-state-schema";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 
 export default class WorkbenchNetworkRepository {
@@ -21,6 +22,11 @@ export default class WorkbenchNetworkRepository {
     const reservations = this.database.query(selectRows(tables.networkMemberRenames));
     const members = this.database.query(selectRows(tables.networkMembers, { orderBy: [{ column: "node_id" }] }));
     const addresses = this.database.query(selectRows(tables.networkMemberAddresses, { orderBy: [{ column: "family" }] }));
+    const hosts = this.database.query(selectRows(tables.networkMemberHosts));
+    const publications = this.database.query(selectRows(tables.networkMemberPublication));
+    const group = this.database.query(selectRows(tables.networkGroup))[0];
+    const grants = this.database.query(selectRows(tables.networkGrants, { orderBy: [{ column: "device_node_id" }, { column: "app_node_id" }] }));
+    const transfer = this.database.query(selectRows(tables.networkOwnerTransfer))[0];
     if (privateAccess?.role === "member" && !issuer) throw new Error("Private network issuer metadata is incomplete.");
     // Version 10 flags are only a read-repair input until the first mode write.
     const mode = selected?.mode ?? (privateAccess?.enabled === 1 ? "tailnet-service" : host?.enabled === 1 ? "tailnet-ip" : "localhost");
@@ -35,10 +41,23 @@ export default class WorkbenchNetworkRepository {
         ...(privateAccess.role === "member" && issuer ? { issuer: { address: issuer.address, hostname: issuer.hostname } } : {}),
       } : null,
       ...(rename ? { rename: { id: rename.operation_id, from: rename.previous_label, to: rename.next_label, phase: rename.phase } } : {}),
+      ...(group ? { group: {
+        id: group.network_id, revision: group.revision, ownerNodeId: group.owner_node_id,
+        dnsNodeId: group.dns_node_id, access: group.access,
+        grants: grants.map(grant => ({ deviceNodeId: grant.device_node_id, appNodeId: grant.app_node_id })),
+        ...(transfer ? { transfer: {
+          id: transfer.operation_id, fromNodeId: transfer.from_node_id,
+          toNodeId: transfer.to_node_id, phase: transfer.phase,
+        } } : {}),
+      } } : {}),
       members: members.map(member => {
         const reservation = reservations.find(item => item.node_id === member.node_id);
+        const host = hosts.find(item => item.node_id === member.node_id);
+        const publication = publications.find(item => item.node_id === member.node_id);
         return {
           nodeId: member.node_id,
+          ...(host ? { hostNodeId: host.host_node_id } : {}),
+          ...(publication ? { published: publication.published === 1 } : {}),
           label: member.label,
           keyFingerprint: member.key_fingerprint,
           addresses: addresses.filter(address => address.node_id === member.node_id).map(address => address.address),
@@ -61,6 +80,30 @@ export default class WorkbenchNetworkRepository {
       } : null,
     };
     const current = this.read();
+    if (current.group) {
+      if (!next.group || next.group.id !== current.group.id || next.group.revision < current.group.revision) {
+        throw new Error("The existing network identity and revision cannot be discarded.");
+      }
+      if (next.group.revision === current.group.revision
+        && !areDeeplyEqual(this.directoryValue(next), this.directoryValue(current))) {
+        throw new Error("A directory or policy change requires a new network revision.");
+      }
+      // Native authority verifies signed snapshots and owns handover ordering.
+      // A returning member can legitimately skip revisions while it was offline.
+    }
+    if (next.group) {
+      const ids = new Set(next.members.map(member => member.nodeId));
+      if (!ids.has(next.group.ownerNodeId) || !ids.has(next.group.dnsNodeId)
+        || next.group.grants.some(grant => !ids.has(grant.appNodeId))) {
+        throw new Error("The owner, DNS app and granted apps must belong to the directory.");
+      }
+      const transfer = next.group.transfer;
+      if (transfer && (!ids.has(transfer.fromNodeId) || !ids.has(transfer.toNodeId)
+        || transfer.fromNodeId === transfer.toNodeId
+        || next.group.ownerNodeId !== (transfer.phase === "activated" ? transfer.toNodeId : transfer.fromNodeId))) {
+        throw new Error("Ownership transfer does not match the network directory.");
+      }
+    }
     if (current.rename) {
       const previous = current.rename;
       const rename = next.rename;
@@ -105,6 +148,7 @@ export default class WorkbenchNetworkRepository {
       deleteRows(tables.networkMode, { id: "singleton" }),
       deleteRows(tables.networkHostServe, { id: "singleton" }),
       deleteRows(tables.networkPrivateAccess, { id: "singleton" }),
+      deleteRows(tables.networkGroup, { id: "singleton" }),
       ...current.members.map(member => deleteRows(tables.networkMembers, { node_id: member.nodeId })),
       insertRow(tables.networkMode, { id: "singleton", mode }),
       // Superseded flags no longer store independent intent.
@@ -131,6 +175,12 @@ export default class WorkbenchNetworkRepository {
       statements.push(insertRow(tables.networkMembers, {
         node_id: member.nodeId, label: member.label, key_fingerprint: member.keyFingerprint,
       }));
+      if (member.hostNodeId) statements.push(insertRow(tables.networkMemberHosts, {
+        node_id: member.nodeId, host_node_id: member.hostNodeId,
+      }));
+      if (member.published !== undefined) statements.push(insertRow(tables.networkMemberPublication, {
+        node_id: member.nodeId, published: member.published ? 1 : 0,
+      }));
       if (member.rename) statements.push(insertRow(tables.networkMemberRenames, {
         node_id: member.nodeId, operation_id: member.rename.id, previous_label: member.rename.from, next_label: member.rename.to,
       }));
@@ -138,6 +188,30 @@ export default class WorkbenchNetworkRepository {
         node_id: member.nodeId, family: isIP(address) === 4 ? "ipv4" : "ipv6", address,
       }));
     }
+    if (next.group) {
+      const group = next.group;
+      statements.push(insertRow(tables.networkGroup, {
+        id: "singleton", network_id: group.id, revision: group.revision,
+        owner_node_id: group.ownerNodeId, dns_node_id: group.dnsNodeId, access: group.access,
+      }));
+      for (const grant of group.grants) statements.push(insertRow(tables.networkGrants, {
+        device_node_id: grant.deviceNodeId, app_node_id: grant.appNodeId,
+      }));
+      if (group.transfer) statements.push(insertRow(tables.networkOwnerTransfer, {
+        id: "singleton", operation_id: group.transfer.id, from_node_id: group.transfer.fromNodeId,
+        to_node_id: group.transfer.toNodeId, phase: group.transfer.phase,
+      }));
+    }
     this.database.executeTransaction(statements);
+  }
+
+  private directoryValue(configuration: Pick<WorkbenchNetworkConfiguration, "group" | "members">) {
+    const group = configuration.group;
+    return {
+      group: group ? { ...group, grants: [...group.grants].sort((left, right) =>
+        left.deviceNodeId.localeCompare(right.deviceNodeId) || left.appNodeId.localeCompare(right.appNodeId)) } : undefined,
+      members: configuration.members.map(member => ({ ...member, addresses: [...member.addresses].sort() }))
+        .sort((left, right) => left.nodeId.localeCompare(right.nodeId)),
+    };
   }
 }

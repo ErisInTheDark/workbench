@@ -17,10 +17,11 @@ const current: WorkbenchAppPortSnapshot = {
   source: "random",
 };
 
-async function fixture(context: TestContext, appPort: WorkbenchAppPortControl, diagnostics: string[] = [], stableOrigin?: () => string | null) {
+async function fixture(context: TestContext, appPort: WorkbenchAppPortControl, diagnostics: string[] = [], stableOrigin?: () => string | null, canUpdate?: () => boolean) {
   const routes = new WorkbenchAppPortRoutes({
     appPort,
     stableOrigin,
+    canUpdate,
     onDiagnostic: (message) => diagnostics.push(message),
   });
   const server = new HttpServer({
@@ -36,6 +37,20 @@ async function fixture(context: TestContext, appPort: WorkbenchAppPortControl, d
   context.after(async () => await server.close());
   return await server.start();
 }
+
+test("combined networking changes exclude independent port writes", async context => {
+  let available = false;
+  let writes = 0;
+  const address = await fixture(context, { read: () => current, update: async () => { writes++; return current; } }, [], undefined, () => available);
+  const update = () => fetch(`${address.url}${WORKBENCH_APP_PORT_PATH}`, {
+    method: "PUT", body: JSON.stringify({ port: 43211 }),
+  });
+  assert.equal((await update()).status, 409);
+  assert.equal(writes, 0);
+  available = true;
+  assert.equal((await update()).status, 200);
+  assert.equal(writes, 1);
+});
 
 test("reads the active port and delegates a valid update", async (context) => {
   const updates: number[] = [];

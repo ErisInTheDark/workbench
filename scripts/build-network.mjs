@@ -81,7 +81,6 @@ export async function buildNetwork(executable) {
   }
   const destination = path.join(networkPaths.source, "bin", platform, name);
   await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.writeFile(destination, bytes, { mode: 0o755 });
   const manifestPath = path.join(networkPaths.source, "bin/manifest.json");
   let manifest = { protocol: 1, artifacts: {} };
   try { manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")); }
@@ -91,8 +90,46 @@ export async function buildNetwork(executable) {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     sourceHash,
   };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  await fs.unlink(candidate);
+  const retired = path.join(networkPaths.cache, `retired-${randomUUID()}-${name}`);
+  const manifestCandidate = `${candidate}.manifest.json`;
+  await fs.writeFile(manifestCandidate, `${JSON.stringify(manifest, null, 2)}\n`);
+  let retiredPrevious = false;
+  let publishedCandidate = false;
+  try {
+    try {
+      await fs.rename(destination, retired);
+      retiredPrevious = true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await fs.rename(candidate, destination);
+    publishedCandidate = true;
+    // A manifest is the publication receipt. Readers reject a mismatched pair
+    // during this short transition rather than launching an unverified image.
+    await fs.rename(manifestCandidate, manifestPath);
+  } catch (publicationError) {
+    const failures = [publicationError];
+    let destinationAvailable = !publishedCandidate;
+    if (publishedCandidate) {
+      try { await fs.rename(destination, candidate); destinationAvailable = true; }
+      catch (error) { failures.push(error); }
+    }
+    if (retiredPrevious && destinationAvailable) {
+      try { await fs.rename(retired, destination); }
+      catch (error) { failures.push(error); }
+    }
+    try { await fs.unlink(manifestCandidate); }
+    catch (error) { if (error.code !== "ENOENT") failures.push(error); }
+    if (failures.length > 1) throw new AggregateError(failures, "Network publication failed and recovery was incomplete.");
+    throw publicationError;
+  }
+  if (retiredPrevious) {
+    try { await fs.unlink(retired); }
+    catch (error) {
+      if (error.code !== "EBUSY" && error.code !== "EPERM") throw error;
+      console.warn(`Retained running network image: ${retired}`);
+    }
+  }
   console.log(`Published ${platform} network sidecar (${bytes.length} bytes).`);
 }
 

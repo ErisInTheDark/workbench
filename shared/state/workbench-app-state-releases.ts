@@ -19,6 +19,7 @@ const appStateReleases = Object.freeze({
   projectAliases: release(9, "07d88a8a4a529b75a97a80a3474b675ccc380dac13a732778985ec32c3aa666d"),
   privateNetworking: release(10, "fd0ba1ebb1fbd4d72302d4757b84b8db0c461adb9be52a172a10ee1c148c3fcd"),
   networkModes: release(11, "d613aaa087d4ba1701e3b5909bfb34a5c89c68ffc8839d235820209bdd6b7237"),
+  networkGroups: release(12, "76e73d35f255405ed42e3aa461214a53342d4c6182f75c32aa776aa6af39984e"),
 });
 
 export default appStateReleases;
