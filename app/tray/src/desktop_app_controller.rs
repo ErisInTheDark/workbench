@@ -516,6 +516,7 @@ impl DesktopAppController {
     fn spawn_replacement(&self) -> Result<(), String> {
         let launcher_path = self
             .repository_root_path
+            .join("app")
             .join("tray")
             .join("bin")
             .join("windows-x64")
