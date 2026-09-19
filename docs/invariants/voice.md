@@ -1,0 +1,3 @@
+- Microphone audio from browser -> daemon-owned native local recognizer. Recognizer output -> transformer model through harnesses -> private scratch document -> controlled editor.
+- Cancellation, disconnect, disposal, parent changes, and reload fence late voice work; preserve already-applied edits, and unlock only after native input, transcript delivery, document patches, and recording writes have drained.
+- Reject malformed editing markers without replacing the last valid document; escape literal `&`, `<`, and `>` before sending document metadata.
