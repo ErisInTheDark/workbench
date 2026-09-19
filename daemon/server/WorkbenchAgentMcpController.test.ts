@@ -42,7 +42,10 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
         cwd: result.thread.cwd,
       };
     },
-    shell: options.shell ?? new CodexShellController({ requestCodex: options.requestCodex }),
+    shell: options.shell ?? new CodexShellController({
+      readConfiguration: async () => ({ config: {} }),
+      executor: { execute: async () => { throw new Error("unexpected shell execution"); } },
+    }),
   });
   return new WorkbenchAgentMcpController({
     ...options,

@@ -29,14 +29,17 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         const thread = await threads.read(nativeThreadId);
         return { id: WorkbenchThreadIdSchema.parse(thread.id), cwd: thread.cwd };
       },
-      shell: new CodexShellController({ commandExec }),
+      shell: new CodexShellController({
+        executor: get("codexExecutor"),
+        readConfiguration: cwd => threads.requestNative("config/read", { cwd, includeLayers: false }),
+      }),
     });
     return { registrations: { codexTools: tools }, start: () => undefined, dispose: () => undefined };
   },
   description: "Reload Codex tool identity and sandbox execution.",
   lifecycle: "atomic",
   provides: ["codexTools"],
-  requires: ["codexThreadOperations"],
+  requires: ["codexThreadOperations", "codexExecutor"],
   safeAll: true,
   scope: "server:codex/tools",
   sources: [

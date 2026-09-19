@@ -1,19 +1,35 @@
 /*
- * No exports. Tests protect caller isolation, sandbox forwarding, launch transport, and fail-closed state handling.
+ * No exports. Tests protect caller isolation, sandbox forwarding and permission-safe native execution.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
-import type { CodexCommandExecRequest } from "./CodexCommandExecController";
+import type { CodexExecRequest } from "./codex-exec-protocol";
 import WorkbenchShellController from "./CodexShellController";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 const caller = { nativeThreadId: "native-session", workbenchThreadId: "workbench-thread" };
 
+test("shell delegates sandbox permissions to the persistent executor rather than launching another Codex process", async () => {
+  const executions: CodexExecRequest[] = [];
+  const controller = new WorkbenchShellController({
+    platform: "linux",
+    shellEnvironment: { SHELL: "/bin/bash" },
+    readConfiguration: async () => ({ config: {} }),
+    executor: { execute: async request => {
+      executions.push(request);
+      return { exitCode: 0, stdout: "ok", stderr: "" };
+    } },
+  });
+  await controller.execute({ command: "printf ok" }, sandboxMeta(process.cwd()), new AbortController().signal, caller);
+  assert.equal(executions[0]?.command[0], "/bin/bash", "execute the requested shell inside the persistent sandbox owner");
+});
+
 function sandboxMeta(cwd: string, permissionProfile: Record<string, unknown> = {
-  fileSystem: { entries: [], type: "restricted" },
-  network: { enabled: false },
+  file_system: { entries: [], type: "restricted" },
+  network: "restricted",
   type: "managed",
 }) {
   return {
@@ -26,20 +42,20 @@ function sandboxMeta(cwd: string, permissionProfile: Record<string, unknown> = {
   };
 }
 
-test("carries the exact sandbox state through Windows without cmd.exe argument limits", async () => {
-  const executions: CodexCommandExecRequest[] = [];
+test("carries sandbox permissions and the requested shell directly through Windows execution", async () => {
+  const executions: CodexExecRequest[] = [];
   const workspace = path.resolve("C:/workspace");
   const permissionProfile = {
-    fileSystem: {
-      entries: [{ access: "write", path: "C:/workspace with spaces" }],
-      payload: `quoted "value" ${"x".repeat(9_000)}`,
+    file_system: {
+      entries: [{ access: "write", path: { type: "path", path: pathToFileURL(workspace).href } }],
       type: "restricted",
     },
-    network: { enabled: false },
+    network: "restricted",
     type: "managed",
   };
   const controller = new WorkbenchShellController({
-    commandExec: {
+    readConfiguration: async () => ({ config: { windows: { sandbox: "elevated" } } }),
+    executor: {
       execute: async (request) => {
         executions.push(request);
         return { exitCode: 5, stderr: "denied\n", stdout: "partial\n" };
@@ -66,34 +82,24 @@ test("carries the exact sandbox state through Windows without cmd.exe argument l
   const execution = executions[0]!;
   assert.equal(execution.cwd, path.resolve(workspace, "child"));
   assert.equal(execution.timeoutMs, 4321);
-  assert.deepEqual(execution.sandboxPolicy, { type: "dangerFullAccess" });
-  assert.deepEqual(execution.command.slice(0, 3), ["pwsh", "-NoProfile", "-Command"]);
-  assert.doesNotMatch(execution.command.join(" "), /cmd\.exe/iu);
-  assert.match(execution.command[3]!, /SetEnvironmentVariable\("WORKBENCH_CODEX_SANDBOX_ARGS_JSON", \$null, "Process"\)/u);
-  assert.match(execution.command[3]!, /Get-Command codex -CommandType ExternalScript/u);
-
-  const encodedArgs = execution.env?.WORKBENCH_CODEX_SANDBOX_ARGS_JSON;
-  assert.equal(typeof encodedArgs, "string");
-  assert.ok(encodedArgs.length > 8_192);
-  const codexArgs = JSON.parse(encodedArgs) as string[];
-  assert.deepEqual(codexArgs.slice(0, 2), ["sandbox", "--sandbox-state-json"]);
-  assert.deepEqual(codexArgs.slice(3), [
-    "--",
+  assert.deepEqual(execution.permissions, permissionProfile);
+  assert.equal(execution.windowsSandboxLevel, "elevated");
+  assert.equal(execution.windowsSandboxPrivateDesktop, true);
+  assert.deepEqual(execution.command, [
     "pwsh",
     "-NoProfile",
     "-Command",
     "Get-Content 'quoted file.txt'",
   ]);
-  const forwardedState = JSON.parse(codexArgs[2]!);
-  assert.deepEqual(forwardedState.permissionProfile, permissionProfile);
-  assert.equal(fileURLToPath(forwardedState.sandboxCwd), path.resolve(workspace, "child"));
+  assert.deepEqual(execution.workspaceRoots, [workspace]);
 });
 
-test("launches Codex directly outside Windows", async () => {
-  const executions: CodexCommandExecRequest[] = [];
+test("preserves the selected POSIX shell and caller identity", async () => {
+  const executions: CodexExecRequest[] = [];
   const workspace = path.resolve("C:/workspace");
   const controller = new WorkbenchShellController({
-    commandExec: {
+    readConfiguration: async () => ({ config: {} }),
+    executor: {
       execute: async (request) => {
         executions.push(request);
         return { exitCode: 0, stderr: "", stdout: "safe\n" };
@@ -110,23 +116,22 @@ test("launches Codex directly outside Windows", async () => {
 
   assert.equal(result.shell, "bash");
   const execution = executions[0]!;
-  assert.deepEqual(execution.command.slice(0, 2), ["codex", "sandbox"]);
-  assert.deepEqual(execution.command.slice(4), [
-    "--",
+  assert.deepEqual(execution.command, [
     "/bin/bash",
     "-c",
     "printf '%s' 'quoted value'",
   ]);
   assert.equal(execution.env?.CODEX_THREAD_ID, caller.nativeThreadId);
   assert.equal(execution.env?.WORKBENCH_THREAD_ID, caller.workbenchThreadId);
-  assert.deepEqual(execution.sandboxPolicy, { type: "dangerFullAccess" });
-  assert.equal(fileURLToPath(JSON.parse(execution.command[3]!).sandboxCwd), workspace);
+  assert.equal(execution.permissions.type, "managed");
+  assert.equal(execution.cwd, workspace);
 });
 
 test("fails closed when Codex omits the effective sandbox state", async () => {
   let executionCount = 0;
   const controller = new WorkbenchShellController({
-    commandExec: {
+    readConfiguration: async () => ({ config: {} }),
+    executor: {
       execute: async () => {
         executionCount += 1;
         return { exitCode: 0, stderr: "", stdout: "" };
@@ -143,12 +148,13 @@ test("fails closed when Codex omits the effective sandbox state", async () => {
 
 for (const platform of ["win32", "linux"] as const) test(`shell installs distinct caller identities without leaking between calls on ${platform}`, async () => {
   const workspace = path.resolve("C:/workspace");
-  const executions: CodexCommandExecRequest[] = [];
+  const executions: CodexExecRequest[] = [];
   const environment = Object.freeze({ WORKBENCH_THREAD_ID: "stale-workbench", CODEX_THREAD_ID: "stale-native", WORKBENCH_HARNESS: "opencode" });
   const controller = new WorkbenchShellController({
     platform,
     shellEnvironment: environment,
-    commandExec: { execute: async (request) => {
+    readConfiguration: async () => ({ config: {} }),
+    executor: { execute: async (request) => {
       executions.push(request);
       return { exitCode: 0, stderr: "", stdout: "" };
     } },
@@ -167,9 +173,49 @@ for (const platform of ["win32", "linux"] as const) test(`shell installs distinc
     assert.equal(effectiveEnvironment.WORKBENCH_THREAD_ID, caller.workbenchThreadId);
     assert.equal(effectiveEnvironment.CODEX_THREAD_ID, caller.nativeThreadId);
     assert.equal(effectiveEnvironment.WORKBENCH_HARNESS, "codex");
-    if (platform === "win32") assert.ok(execution.env?.WORKBENCH_CODEX_SANDBOX_ARGS_JSON);
     assert.equal(execution.cwd, path.resolve(workspace, "child"));
   }
   assert.equal(environment.WORKBENCH_THREAD_ID, "stale-workbench");
   assert.equal(environment.CODEX_THREAD_ID, "stale-native");
+});
+
+test("external enforcement becomes locally enforced read-only permissions and keeps configured environment restrictions", async () => {
+  const calls: CodexExecRequest[] = [];
+  const controller = new WorkbenchShellController({
+    executor: { execute: async request => { calls.push(request); return { exitCode: 0, stdout: "", stderr: "" }; } },
+    readConfiguration: async () => ({ config: {
+      windows: { sandbox: "unelevated", sandbox_private_desktop: false },
+      shell_environment_policy: {
+        inherit: "core", ignore_default_excludes: false, filters: { "SECRET*": "exclude", "PATH": "include" }, set: { SAFE: "value" },
+      },
+    } }),
+  });
+  await controller.execute({ command: "read" }, sandboxMeta(process.cwd(), { type: "external", network: "enabled" }), new AbortController().signal, caller);
+  assert.deepEqual(calls[0]?.permissions, {
+    type: "managed", network: "restricted",
+    file_system: { type: "restricted", entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }] },
+  });
+  assert.equal(calls[0]?.windowsSandboxLevel, "restricted-token");
+  assert.equal(calls[0]?.windowsSandboxPrivateDesktop, false);
+  assert.deepEqual(calls[0]?.envPolicy, {
+    inherit: "core", ignoreDefaultExcludes: false, exclude: ["SECRET*"], includeOnly: ["PATH"], set: { SAFE: "value" },
+  });
+});
+
+test("admitted non-Codex calls use their own WB identity and only admitted permissions", async () => {
+  const calls: CodexExecRequest[] = [];
+  const controller = new WorkbenchShellController({
+    executor: { execute: async request => { calls.push(request); return { exitCode: 0, stdout: "", stderr: "" }; } },
+    readConfiguration: async () => ({ config: { windows: { sandbox: "elevated" } } }),
+  });
+  const input = {
+    caller: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("other"), cwd: process.cwd() },
+    command: ["echo"], cwd: process.cwd(),
+    permissions: { mode: "restricted" as const, writableRoots: [process.cwd()], network: false },
+  };
+  await controller.executeAdmitted(input, new AbortController().signal);
+  await controller.executeAdmitted({ ...input, permissions: { mode: "approved-unrestricted" } }, new AbortController().signal);
+  assert.equal(calls[0]?.permissions.type, "managed");
+  assert.equal(calls[1]?.permissions.type, "disabled");
+  assert.deepEqual(calls[0]?.env, { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "other", WORKBENCH_HARNESS: "opencode" });
 });

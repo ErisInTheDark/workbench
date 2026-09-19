@@ -19,6 +19,7 @@ const graph = (() => {
       require("./WorkbenchTurnLifecycleNode").default,
       require("./WorkbenchDatabaseNode").default,
       require("./CodexLifecycleNode").default,
+      require("./CodexExecServerNode").default,
     ]);
     const repoRoot = path.resolve(__dirname, "../..");
     const observations = completeReloadSourceGeneration(generation)

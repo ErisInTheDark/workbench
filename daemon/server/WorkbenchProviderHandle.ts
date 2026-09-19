@@ -133,6 +133,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   }
 
   readonly tools: NonNullable<WorkbenchProvider["tools"]> = {
+    execute: (request, signal) => this.tool(tools => {
+      if (!tools.execute) throw new Error(`Provider ${this.key} does not support admitted execution.`);
+      return tools.execute(request, signal);
+    }, "execute"),
     patchClaims: (input, check, signal) => this.tool(tools => tools.patchClaims(input, check, signal), "patchClaims"),
     executeReadOnly: (request, signal) => this.tool(tools => tools.executeReadOnly(request, signal), "executeReadOnly"),
     describe: () => this.tool(tools => tools.describe(), "describe"),

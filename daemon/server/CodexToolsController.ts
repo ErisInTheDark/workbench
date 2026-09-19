@@ -12,12 +12,16 @@ import {
 } from "workbench-shared/workbench/thread/workbench-file-change";
 
 export default class CodexToolsController implements WorkbenchProviderTools {
+  readonly execute: WorkbenchProviderTools["execute"];
+
   constructor(private readonly options: {
     readCallerThread(nativeThreadId: NativeThreadId): Promise<{ id: WorkbenchThreadId; cwd: string }>;
     resolvePatchCaller(threadId: string, cwd: string): Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId }>;
-    shell: Pick<CodexShellController, "execute">;
+    shell: Pick<CodexShellController, "execute"> & Partial<Pick<CodexShellController, "executeAdmitted">>;
     commandExec: Pick<CodexCommandExecController, "execute">;
-  }) {}
+  }) {
+    this.execute = options.shell.executeAdmitted?.bind(options.shell);
+  }
 
   async patchClaims(...[input, check, signal]: Parameters<WorkbenchProviderTools["patchClaims"]>) {
     try {

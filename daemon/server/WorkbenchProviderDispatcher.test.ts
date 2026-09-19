@@ -7,6 +7,7 @@ import ReloadableNode, { defineReloadableNodeGraph } from "../../shared/reload/R
 import ReloadableNodeHost from "../../shared/reload/ReloadableNodeHost";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchProvider from "./WorkbenchProvider";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 function deferred() {
   let resolve!: () => void;
@@ -21,6 +22,7 @@ function fixture() {
   let failStart = false;
   let read: WorkbenchProvider["configuration"]["modelContext"]["read"] | undefined;
   let singleFile: WorkbenchProvider["singleFile"];
+  let tools: WorkbenchProvider["tools"];
   const disposed: number[] = [];
   const started = deferred();
   const releaseStart = deferred();
@@ -36,6 +38,7 @@ function fixture() {
         return {
           registrations: { codexProvider: {
             singleFile,
+            tools,
             threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
             configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
             read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
@@ -68,6 +71,7 @@ function fixture() {
     hold: () => { holdStart = true; },
     setRead: (value: typeof read) => { read = value; },
     setSingleFile: (value: typeof singleFile) => { singleFile = value; },
+    setTools: (value: typeof tools) => { tools = value; },
   };
 }
 
@@ -88,6 +92,48 @@ test("optional single-file calls reject unsupported owners and follow replacemen
     await f.host.reload(["server:codex/def"]);
     await assert.rejects(capability.prepare(), /does not support single-file/);
   } finally { await f.host.dispose(); }
+});
+
+test("admitted execution retains its provider lease and later calls use replacement capability", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const finish = deferred();
+  const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
+  const tools: NonNullable<WorkbenchProvider["tools"]> = {
+    patchClaims: unused, executeReadOnly: unused, describe: unused, caller: unused, shell: unused,
+    execute: async () => {
+      entered.resolve();
+      await finish.promise;
+      return { exitCode: 0, stdout: "original", stderr: "" };
+    },
+  };
+  f.setTools(tools);
+  await f.host.start();
+  await f.host.reload(["server:codex/def"]);
+  const request = {
+    caller: { threadId: WorkbenchThreadIdSchema.parse("thread"), harness: "codex", cwd: "/project" },
+    command: ["echo"], cwd: "/project", permissions: { mode: "restricted" as const, writableRoots: ["/project"], network: false },
+  };
+  try {
+    const execute = f.providers.get("codex").tools.execute!;
+    const active = execute(request, new AbortController().signal);
+    await entered.promise;
+    f.setTools({ ...tools, execute: undefined });
+    f.hold();
+    const reload = f.host.reload(["server:codex/def"]);
+    await f.started.promise;
+    assert.equal(f.disposed.includes(2), false);
+    f.releaseStart.resolve();
+    finish.resolve();
+    assert.equal((await active).stdout, "original");
+    await reload;
+    assert.equal(f.disposed.includes(2), true);
+    await assert.rejects(execute(request, new AbortController().signal), /does not support admitted execution/);
+  } finally {
+    finish.resolve();
+    f.releaseStart.resolve();
+    await f.host.dispose();
+  }
 });
 
 test("saved provider handles resolve replacements and survive failed candidates", async () => {

@@ -4,6 +4,7 @@
  * - WorkbenchProviderCaller: validated WB identity and authoritative working directory.
  * - WorkbenchProviderTools: provider-owned MCP adaptation and sandbox execution.
  * - WorkbenchReadOnlyExecution: validated read-only command invocation.
+ * - WorkbenchAdmittedExecution: daemon-owned caller and resolved one-command permissions.
  * - WorkbenchPatchClaimCheck: shared claim policy called with validated WB ownership.
  */
 import { z } from "zod";
@@ -29,11 +30,22 @@ export interface WorkbenchReadOnlyExecution {
   env?: Record<string, string | null>;
 }
 
+export interface WorkbenchAdmittedExecution {
+  caller: WorkbenchProviderCaller;
+  command: string[];
+  cwd: string;
+  permissions:
+    | { mode: "restricted"; writableRoots: string[]; network: boolean }
+    | { mode: "approved-unrestricted" };
+  timeoutMs?: number;
+}
+
 export type WorkbenchPatchClaimCheck = (request: {
   cwd: string; harness: string; paths: string[]; threadId: WorkbenchThreadId;
 }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
 
 export interface WorkbenchProviderTools {
+  execute?(request: WorkbenchAdmittedExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
   patchClaims(input: { raw: string; callerThreadId: string | null }, check: WorkbenchPatchClaimCheck, signal: AbortSignal): Promise<string>;
   executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
   describe(): Promise<{

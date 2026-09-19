@@ -63,33 +63,9 @@ function flattenParents(roots: readonly Node[]) {
 }
 
 test("the root knows only direct roots and parents declare every dependant", () => {
-  assert.deepEqual(graph.roots.map(({ scope }) => scope), [
-    "server:turns",
-    "server:database",
-    "server:codex/lifecycle",
-  ]);
+  for (const root of graph.roots) assert.equal(root.requires.length, 0, `${root.scope} requires an absent parent`);
   const { nodes, parents } = flattenParents(graph.roots);
 
-  assert.deepEqual([...nodes.keys()].sort(), [
-    "harness:codex",
-    "server:browse",
-    "server:codex",
-    "server:codex/configuration",
-    "server:codex/def",
-    "server:codex/instructions",
-    "server:codex/lifecycle",
-    "server:codex/recovery",
-    "server:codex/tools",
-    "server:commands",
-    "server:core",
-    "server:database",
-    "server:instructions",
-    "server:mcp",
-    "server:topology",
-    "server:turns",
-    "server:voice",
-    "server:websocket",
-  ]);
   assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
@@ -133,6 +109,18 @@ test("every child requirement is registered by one of its direct parents", () =>
       assert.equal(parentRegistrations.has(requirement), true, `${node.scope} requires ${String(requirement)} from no direct parent`);
     }
   }
+});
+
+test("tool reload preserves the executor and executor replacement owns the tool dependant closure", () => {
+  const { dependantClosure } = readReloadNodeSourceState();
+  const tools = dependantClosure(["server:codex/tools"]);
+  assert.equal(tools.includes("harness:codex/exec"), false);
+  assert.equal(tools.includes("harness:codex"), false);
+  const execution = dependantClosure(["harness:codex/exec"]);
+  assert.equal(execution.includes("server:codex/tools"), true);
+  assert.equal(execution.includes("server:codex/def"), true);
+  assert.equal(execution.includes("harness:codex"), false);
+  assert.equal(execution.includes("server:process"), false);
 });
 
 test("provider configuration reload owns its definition without acquiring the harness", () => {

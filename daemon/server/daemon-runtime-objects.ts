@@ -195,6 +195,7 @@ export interface DaemonRuntimeObjects {
   codexThreadOperations: CodexThreadOperations;
   codexNativeConfiguration: CodexConfigurationController;
   codexTools: import("./CodexToolsController").default;
+  codexExecutor: import("./CodexExecServer").default;
   codexProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   browseExecution: DaemonBrowseExecution;
