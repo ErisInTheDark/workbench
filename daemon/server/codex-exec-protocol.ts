@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 
-const fileUri = z.string().url().refine(value => new URL(value).protocol === "file:");
+const fileUri = z.string().url().refine(value => URL.canParse(value) && new URL(value).protocol === "file:");
 const specialPath = z.discriminatedUnion("kind", [
   z.object({ kind: z.enum(["root", "minimal", "tmpdir", "slash_tmp"]) }),
   z.object({ kind: z.enum(["project_roots", "current_working_directory"]), subpath: z.string().optional() }),

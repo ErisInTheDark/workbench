@@ -47,13 +47,16 @@ test("carries sandbox permissions and the requested shell directly through Windo
   const workspace = path.resolve("C:/workspace");
   const permissionProfile = {
     file_system: {
-      entries: [{ access: "write", path: { type: "path", path: pathToFileURL(workspace).href } }],
+      entries: [{ access: "write", path: { type: "path", path: workspace } }],
       type: "restricted",
     },
     type: "managed",
   };
   const controller = new WorkbenchShellController({
-    readConfiguration: async () => ({ config: { windows: { sandbox: "elevated" } } }),
+    readConfiguration: async () => ({ config: {
+      features: { code_mode: { enabled: true }, elevated_windows_sandbox: true, network_proxy: null },
+      windows: { sandbox: "elevated" },
+    } }),
     executor: {
       execute: async (request) => {
         executions.push(request);
@@ -81,7 +84,14 @@ test("carries sandbox permissions and the requested shell directly through Windo
   const execution = executions[0]!;
   assert.equal(execution.cwd, path.resolve(workspace, "child"));
   assert.equal(execution.timeoutMs, 4321);
-  assert.deepEqual(execution.permissions, { ...permissionProfile, network: "restricted" });
+  assert.deepEqual(execution.permissions, {
+    ...permissionProfile,
+    file_system: {
+      ...permissionProfile.file_system,
+      entries: [{ access: "write", path: { type: "path", path: pathToFileURL(workspace).href } }],
+    },
+    network: "restricted",
+  });
   assert.equal(execution.windowsSandboxLevel, "elevated");
   assert.equal(execution.windowsSandboxPrivateDesktop, true);
   assert.deepEqual(execution.command, [
@@ -140,9 +150,27 @@ test("fails closed when Codex omits the effective sandbox state", async () => {
 
   await assert.rejects(
     controller.execute({ command: "echo safe" }, { threadId: "thread-1" }, new AbortController().signal, caller),
-    /valid MCP sandbox state/u,
+    /valid MCP sandbox state \(missing capability\)/u,
   );
   assert.equal(executionCount, 0);
+});
+
+test("rejects relative native permission paths instead of resolving them against Workbench", async () => {
+  const controller = new WorkbenchShellController({
+    readConfiguration: async () => ({ config: {} }),
+    executor: { execute: async () => ({ exitCode: 0, stderr: "", stdout: "" }) },
+  });
+  const permissionProfile = {
+    file_system: {
+      entries: [{ access: "write", path: { type: "path", path: "relative-root" } }],
+      type: "restricted",
+    },
+    type: "managed",
+  };
+  await assert.rejects(
+    controller.execute({ command: "echo unsafe" }, sandboxMeta(process.cwd(), permissionProfile), new AbortController().signal, caller),
+    /permissionProfile\.file_system\.entries\.0\.path\.path: custom/u,
+  );
 });
 
 for (const platform of ["win32", "linux"] as const) test(`shell installs distinct caller identities without leaking between calls on ${platform}`, async () => {

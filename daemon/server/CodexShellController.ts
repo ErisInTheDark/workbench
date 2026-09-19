@@ -18,15 +18,31 @@ import type CodexExecServer from "./CodexExecServer";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
 export const WORKBENCH_SHELL_SANDBOX_CAPABILITY = "codex/sandbox-state-meta";
-const SandboxPermissionProfileSchema = z.preprocess((value) => {
+function normalizeSandboxPermissionProfile(value: unknown) {
+  if (typeof value !== "object" || value === null) return value;
+  const profile = { ...value } as Record<string, unknown>;
   if (
-    typeof value === "object"
-    && value !== null
-    && "type" in value
-    && (value.type === "managed" || value.type === "external")
-    && !("network" in value)
-  ) return { ...value, network: "restricted" };
-  return value;
+    (profile.type === "managed" || profile.type === "external")
+    && !("network" in profile)
+  ) profile.network = "restricted";
+  if (profile.type !== "managed" || typeof profile.file_system !== "object" || profile.file_system === null) return profile;
+  const fileSystem = profile.file_system as Record<string, unknown>;
+  if (fileSystem.type !== "restricted" || !Array.isArray(fileSystem.entries)) return profile;
+  profile.file_system = {
+    ...fileSystem,
+    entries: fileSystem.entries.map((entry: unknown) => {
+      if (typeof entry !== "object" || entry === null) return entry;
+      const candidate = entry as Record<string, unknown>;
+      if (typeof candidate.path !== "object" || candidate.path === null) return entry;
+      const permissionPath = candidate.path as Record<string, unknown>;
+      if (permissionPath.type !== "path" || typeof permissionPath.path !== "string" || !path.isAbsolute(permissionPath.path)) return entry;
+      return { ...candidate, path: { ...permissionPath, path: pathToFileURL(permissionPath.path).href } };
+    }),
+  };
+  return profile;
+}
+const SandboxPermissionProfileSchema = z.preprocess((value) => {
+  return normalizeSandboxPermissionProfile(value);
 }, CodexExecPermissionSchema);
 const SandboxStateSchema = z.object({
   permissionProfile: SandboxPermissionProfileSchema,
@@ -39,7 +55,9 @@ const configurationSchema = z.object({
       sandbox: z.enum(["elevated", "unelevated"]).nullish(),
       sandbox_private_desktop: z.boolean().nullish(),
     }).nullish(),
-    features: z.record(z.string(), z.boolean()).nullish(),
+    features: z.object({
+      elevated_windows_sandbox: z.boolean().nullish(),
+    }).passthrough().nullish(),
     shell_environment_policy: z.object({
       inherit: z.enum(["all", "core", "none"]).nullish(),
       ignore_default_excludes: z.boolean().nullish(),
@@ -61,8 +79,16 @@ export interface CodexShellControllerOptions {
 }
 
 function readSandboxState(meta: Record<string, unknown> | undefined) {
-  const result = SandboxStateSchema.safeParse(meta?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
-  if (!result.success) throw new Error("Codex did not provide valid MCP sandbox state.");
+  const state = meta?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY];
+  const result = SandboxStateSchema.safeParse(state);
+  if (!result.success) {
+    const detail = state === undefined
+      ? "missing capability"
+      : result.error.issues.slice(0, 5).map(issue => (
+        `${issue.path.length ? issue.path.join(".") : "root"}: ${issue.code}`
+      )).join(", ");
+    throw new Error(`Codex did not provide valid MCP sandbox state (${detail}).`);
+  }
   return result.data;
 }
 
