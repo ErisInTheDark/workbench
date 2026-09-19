@@ -44,16 +44,16 @@ unpolished/unfinished/broken stuff (coming soon tm!!!!!):
 
 note: have tried to keep dependencies minimal for the most part
 
-`/package` — the entrypoint/installer, what actually gets published to npm
-`/daemon/host` — wake service
-`/daemon/server` — workbench harness
-`/daemon/voice` - vtt service (rust)
-`/instructions` — instructions for agents, copied into the user's `~/.workbench` folder whenever read
-`/app/server` — server for frontend app
-`/app/client` — frontend SPA
-`/app/tray` — system tray application for the frontend app (rust/tauri)
-`/app/network` — tailscale integration (go)
-`/shared` — shared stuff between the projects
-`/test` — test runner
-`/scripts` — stuff used by package scripts plus anything i didn't notice an agent left behind :3
+`/package` — the entrypoint/installer, what actually gets published to npm  
+`/daemon/host` — wake service  
+`/daemon/server` — workbench harness  
+`/daemon/voice` - vtt service (rust)  
+`/instructions` — instructions for agents, copied into the user's `~/.workbench` folder whenever read  
+`/app/server` — server for frontend app  
+`/app/client` — frontend SPA  
+`/app/tray` — system tray application for the frontend app (rust/tauri)  
+`/app/network` — tailscale integration (go)  
+`/shared` — shared stuff between the projects  
+`/test` — test runner  
+`/scripts` — stuff used by package scripts plus anything i didn't notice an agent left behind :3  
 `/docs` — help agents find things and not break them without eating all their tokens
