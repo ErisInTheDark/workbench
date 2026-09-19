@@ -174,6 +174,31 @@ test("dirty scopes carry dependant metadata from the source graph owner", async 
   await controller.dispose();
 });
 
+test("transferred dirt reconciles removed scope identities to the current graph", async () => {
+  const repository = new ControlledRepository();
+  const blocked = repository.blockNextWorktreeRead();
+  const renamed = { ...descriptor, scope: "server:codex/exec" };
+  const controller = new ReloadDirtController({
+    getSourceState: () => ({
+      dependantClosure: (scopes) => {
+        const unknown = scopes.find(scope => scope !== renamed.scope);
+        if (unknown) throw new Error(`Unknown reloadable feature scope: ${unknown}.`);
+        return [...scopes];
+      },
+      descriptors: [renamed],
+    }),
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, transferredState());
+  const refresh = controller.refresh();
+  await blocked.started;
+  blocked.release(["app/core.ts"]);
+  assert.deepEqual((await refresh).dirtyScopes.map(({ scope }) => scope), ["server:codex/exec"]);
+  await controller.dispose();
+});
+
 test("a user reload aborts stale reconciliation and rejects its late result", async () => {
   const repository = new ControlledRepository();
   const blocked = repository.blockNextWorktreeRead();

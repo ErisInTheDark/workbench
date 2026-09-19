@@ -295,6 +295,12 @@ export default class ReloadDirtController {
     try {
       if (signal?.aborted) throw signal.reason;
       const sourceState = this.options.getSourceState();
+      const currentScopes = new Set(sourceState.descriptors.map(({ scope }) => scope));
+      for (const scope of state.descriptors.keys()) {
+        if (currentScopes.has(scope)) continue;
+        state.descriptors.delete(scope);
+        state.baselines.delete(scope);
+      }
       for (const descriptor of sourceState.descriptors) {
         state.descriptors.set(
           descriptor.scope,
