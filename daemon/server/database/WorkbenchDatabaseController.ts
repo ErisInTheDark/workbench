@@ -5,61 +5,62 @@
  * WorkbenchDatabaseController: owns one worker and the complete database lifecycle.
  */
 import { Worker } from "node:worker_threads";
-import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
+import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
 
 import type {
-  WorkbenchDatabaseControllerState,
-  WorkbenchDatabaseInventory,
-  WorkbenchDatabaseMutationResult,
-  WorkbenchDatabaseRequest,
-  WorkbenchDatabaseRequestPayload,
-  WorkbenchDatabaseResponse,
-} from "./workbench-database-protocol";
-import type {
-  WorkbenchDatabaseMutation,
-  WorkbenchDatabaseQuery,
-  WorkbenchDatabaseRow,
+    WorkbenchDatabaseMutation,
+    WorkbenchDatabaseQuery,
+    WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
+import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
+import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
+import type { WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type {
-  WorkbenchTranscriptObservation,
-  WorkbenchTranscriptReadRequest,
-  WorkbenchTranscriptItemIdentityAdmission,
-  WorkbenchTranscriptItemIdentityLookup,
-} from "./transcript/workbench-transcript-types";
+    WorkbenchGitClaimImportCandidate,
+    WorkbenchGitClaimImportDiscovery,
+    WorkbenchGitClaimImportSettlement,
+    WorkbenchStatsUsageImportCandidate,
+    WorkbenchStatsUsageImportSettlement,
+} from "./stats/WorkbenchStatsImportRepository";
+import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
 import type {
-  WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit, WorkbenchSubagentRelationshipRead,
-  WorkbenchThreadStateProjectDocument, WorkbenchThreadStateGlobalDocument,
+    WorkbenchNativeThreadIdentity,
+    WorkbenchThreadIdentityLookup,
+    WorkbenchThreadIdentityMetadata,
+    WorkbenchTurnIdentityLookup,
+    WorkbenchTurnIdentityMetadata,
+} from "./thread-identity/workbench-thread-identity-types";
+import type {
+    WorkbenchSubagentRelationshipRead,
+    WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
+    WorkbenchThreadStateGlobalDocument,
+    WorkbenchThreadStateProjectDocument,
 } from "./thread-state/workbench-thread-state-persistence";
 import type { WorkbenchThreadLayoutOwner } from "./thread-state/WorkbenchThreadStateLayoutRepository";
-import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
-import type {
-  WorkbenchNativeThreadIdentity,
-  WorkbenchThreadIdentityLookup,
-  WorkbenchThreadIdentityMetadata,
-  WorkbenchTurnIdentityLookup,
-  WorkbenchTurnIdentityMetadata,
-} from "./thread-identity/workbench-thread-identity-types";
-import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import { TranscriptQueryError, type TranscriptQuery } from "./transcript/transcript-query-contract";
-import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
-import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
-import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchHarness, WorkbenchProjectOption, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
-import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
-import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
-import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type {
-  WorkbenchGitClaimImportCandidate,
-  WorkbenchGitClaimImportDiscovery,
-  WorkbenchGitClaimImportSettlement,
-  WorkbenchStatsUsageImportCandidate,
-  WorkbenchStatsUsageImportSettlement,
-} from "./stats/WorkbenchStatsImportRepository";
+    WorkbenchTranscriptItemIdentityAdmission,
+    WorkbenchTranscriptItemIdentityLookup,
+    WorkbenchTranscriptObservation,
+    WorkbenchTranscriptReadRequest,
+} from "./transcript/workbench-transcript-types";
+import type {
+    WorkbenchDatabaseControllerState,
+    WorkbenchDatabaseInventory,
+    WorkbenchDatabaseMutationResult,
+    WorkbenchDatabaseRequest,
+    WorkbenchDatabaseRequestPayload,
+    WorkbenchDatabaseResponse,
+} from "./workbench-database-protocol";
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
@@ -103,15 +104,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
   #suspension: DatabaseSuspension | null = null;
   #termination: Promise<number> | null = null;
 
-  constructor({ beforeMigration, prepareProjects, databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
+  constructor({ beforeMigration, prepareProjects, databasePath, workerUrl = new URL("./workbench-database-worker-bootstrap.mjs", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
     this.#beforeMigration = beforeMigration;
     this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
-    const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
-    const transformTypes = "--experimental-transform-types";
+    // const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
     const execArgv = [...process.execArgv];
-    if (!execArgv.includes(moduleWarning)) execArgv.push(moduleWarning);
-    if (!execArgv.includes(transformTypes)) execArgv.push(transformTypes);
+    // if (!execArgv.includes(moduleWarning)) execArgv.push(moduleWarning);
     this.#worker = new Worker(workerUrl, { execArgv });
     this.#worker.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
     this.#worker.on("error", (error) => this.#fail(error));
