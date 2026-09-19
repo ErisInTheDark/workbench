@@ -224,7 +224,7 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 ### Completion gate
 
-- Inspect complete `git_arc_diff`; follow every page. Apply universal change-review checks.
+- Inspect `git_arc_compare` to account for the complete changed set. Use targeted `git_arc_diff` paths for areas most likely to hide missed behavior, leftovers, or overcomplexity. Apply universal change-review checks.
 - Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
 - Only after checks pass, call `mcp__wbex__task_completed`, then enter Review.
 

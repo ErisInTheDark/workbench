@@ -1509,13 +1509,17 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.ok(diffResponse.stdout.includes('git_arc_diff {"paths":["src/giant.ts"]}'));
   assert.ok(diffResponse.stdout.includes('next git_arc_diff {"page":2}'));
   const terminalDiffResponse = adapt("git-arc-diff", {
+    binaryDiffPaths: ["assets/image.png"],
     checkpointCommit: planRef,
-    diff: "diff --git a/src/final.ts b/src/final.ts\n",
+    diff: "",
     nextPage: null,
     oversizedDiffPaths: [],
     scopePaths: ["src/final.ts"],
     unclaimedDirtPaths: [],
   }, { action: "diff" });
+  assert.match(terminalDiffResponse.stdout, /No text differences from this baseline\./u);
+  assert.match(terminalDiffResponse.stdout, /Binary diff omitted: assets\/image\.png/u);
+  assert.doesNotMatch(terminalDiffResponse.stdout, /GIT binary patch/u);
   assert.match(terminalDiffResponse.stdout, /end diff/u);
   const releaseResponse = adapt("git-arc-release", {
     checkpointCommit: planRef,

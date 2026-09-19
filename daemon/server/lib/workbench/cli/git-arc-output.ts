@@ -91,8 +91,12 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   }
   if (action === "diff") {
     const diff = string(payload, "diff");
-    // Diff bytes remain exact. Protocol facts precede them; pagination follows the existing trailer.
-    lines.push(diff || "No differences from this baseline.", GIT_ARC_DIFF_TRAILER_PREFIX);
+    const binaryDiffPaths = paths(payload, "binaryDiffPaths");
+    // Text diff bytes remain exact. Protocol facts precede them; binary omissions and pagination follow the existing trailer.
+    lines.push(diff || (binaryDiffPaths.length
+      ? "No text differences from this baseline."
+      : "No differences from this baseline."), GIT_ARC_DIFF_TRAILER_PREFIX);
+    for (const filePath of binaryDiffPaths) lines.push(`Binary diff omitted: ${escapeGitArcValue(filePath)}`);
     const selected = paths(request.body, "paths").length || rows(request.body, "roots").some((root) => paths(root, "paths").length);
     if (!selected) {
       const nextPage = number(payload, "nextPage");

@@ -121,9 +121,11 @@ The final diff is where promised behavior must be checked against what actually 
 
 Tests can pass because they encode the agent's chosen shape rather than the user's intended behavior. Red-first testing does not correct expectations that already embody the wrong interpretation. Validation must distinguish the requested outcome from plausible substitutes, rather than merely establish that the implementation behaves as written.
 
-Check original intent as well as the approved plan: an implementation can faithfully implement a bad plan. Walk distinguishing cases through the actual code while reading the complete diff, rather than reciting a checklist afterward. These rules belong in universal instructions because other workflows review diffs too; workflows own the trigger, not the substance of this verification.
+Check original intent as well as the approved plan: an implementation can faithfully implement a bad plan. Use the complete change inventory to choose high-risk diff areas, then walk distinguishing cases through actual code rather than reciting a checklist afterward. These rules belong in universal instructions because other workflows review diffs too; workflows own the trigger, not the substance of this verification.
 -->
-**Hard rule: review complete changes against intent, not just implementation.**
+**Hard rule: review changes against intent, not just implementation.**
+
+Focus diff inspection on code most likely to hide missed behavior, leftovers, or overcomplexity. Use the complete change inventory to keep review scope deliberate.
 
 During diff inspection, deliberately verify each:
 - **Intent:** Does implementation satisfy every intent of original request, approved plan and later steers? Map each to code/evidence; only explicit user changes narrow obligations.

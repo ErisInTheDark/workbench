@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT/GIT_ARC_DIFF_TRAILER_PREFIX: bound paged diff bodies and separate human notes from unified diff parsing. Keywords: git, arc, diff, page, trailer.
- * - GitArcDiffPageUnit/GitArcDiffPage: whole-file paging inputs and one rendered page result. Keywords: git, diff, file, page.
- * - createGitArcDiffPage: pack whole-file diff units into one deterministic bounded page. Keywords: git, diff, pagination, packing.
+ * - GitArcDiffPageUnit/GitArcDiffPage: whole-file paging inputs and one text-only rendered page result with omitted binary paths. Keywords: git, diff, file, page.
+ * - createGitArcDiffPage: exclude binary patches and pack text diff units into one deterministic bounded page. Keywords: git, diff, pagination, packing.
  */
 import type { GitCheckpointFileChange } from "./checkpoint-contracts.ts";
 
@@ -16,6 +16,7 @@ export interface GitArcDiffPageUnit {
 }
 
 export interface GitArcDiffPage {
+  binaryDiffPaths: string[];
   changes: GitCheckpointFileChange[];
   diff: string;
   nextPage: number | null;
@@ -56,10 +57,17 @@ export function createGitArcDiffPage(
   }
 
   const indexed = units.map((unit, index): IndexedUnit => ({ ...unit, index }));
+  const binary: IndexedUnit[] = [];
+  const text: IndexedUnit[] = [];
+  for (const unit of indexed) {
+    (/^GIT binary patch$/mu.test(unit.change.diff) ? binary : text).push(unit);
+  }
+  const binaryDiffPaths = binary.map(({ change }) => change.path);
   if (!options.paginate) {
     return {
-      changes: indexed.map(({ change }) => change),
-      diff: renderUnits(indexed),
+      binaryDiffPaths,
+      changes: text.map(({ change }) => change),
+      diff: renderUnits(text),
       nextPage: null,
       oversizedDiffPaths: [],
       page: 1,
@@ -67,8 +75,8 @@ export function createGitArcDiffPage(
     };
   }
 
-  const oversized = indexed.filter((unit) => renderUnits([unit]).length > maxCharacters);
-  const candidates = indexed
+  const oversized = text.filter((unit) => renderUnits([unit]).length > maxCharacters);
+  const candidates = text
     .filter((unit) => !oversized.includes(unit))
     .sort((left, right) => {
       const bySize = renderUnits([right]).length - renderUnits([left]).length;
@@ -95,6 +103,7 @@ export function createGitArcDiffPage(
   }
   const selected = pages[page - 1] ?? [];
   return {
+    binaryDiffPaths,
     changes: [...selected].sort((left, right) => left.index - right.index).map(({ change }) => change),
     diff: renderUnits(selected),
     nextPage: page < pageCount ? page + 1 : null,
