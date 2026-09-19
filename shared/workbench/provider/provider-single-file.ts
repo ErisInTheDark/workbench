@@ -20,6 +20,8 @@ export interface SingleFileStart {
   text: string;
   instructions: string;
   settings: Pick<WorkbenchComposerSettings, "harness" | "model">;
+  /** Throw a validation error to request draft repair without ending the session. */
+  validateDocument?: (text: string) => void;
   onEvent: (event: SingleFileEvent) => void;
 }
 export interface WorkbenchProviderSingleFile {

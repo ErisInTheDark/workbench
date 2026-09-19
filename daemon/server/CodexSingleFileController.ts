@@ -45,7 +45,7 @@ interface Session {
   turnAdmission: Promise<void> | null;
   reads: Promise<void>;
   recoveryInput: SingleFileInput | null;
-  recoveryRevision: number;
+  recoveryText: string | null;
   completedTurn: string | null;
   terminal: boolean;
   completion: Promise<Error | null>;
@@ -61,6 +61,48 @@ const waitCall = z.object({
   threadId: z.string(), turnId: z.string(), tool: z.string(),
   arguments: z.object({}).strict(),
 });
+// Suppress only understood empty/echo items. New fields and unfamiliar shapes
+// remain evidence; no buffering means interrupted output survives cancellation.
+const emptyText = z.string().refine(text => text.trim().length === 0);
+const routineJournalItem = z.union([
+  z.object({
+    type: z.literal("userMessage"), id: z.string(), clientId: z.string().nullish(),
+    content: z.array(z.unknown()),
+  }).strict(),
+  z.object({
+    type: z.literal("agentMessage"), id: z.string(), text: emptyText,
+    phase: z.string().nullish(), memoryCitation: z.null().optional(),
+    delivery: z.null().optional(), questions: z.array(z.never()).nullable().optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("reasoning"), id: z.string(),
+    summary: z.array(emptyText), content: z.array(emptyText),
+  }).strict(),
+]);
+const journalWaitItem = z.object({
+  type: z.literal("dynamicToolCall"), id: z.string(), namespace: z.null().optional(),
+  tool: z.literal("wait_for_transcript"), arguments: z.object({}).strict(),
+  status: z.enum(["inProgress", "completed"]), success: z.boolean().nullable(),
+  contentItems: z.array(z.unknown()).nullable(), durationMs: z.number().nullable(),
+}).strict();
+const journalWaitCall = waitCall.extend({
+  callId: z.string().optional(), namespace: z.null().optional(),
+}).strict();
+const journalPatchItem = z.object({
+  type: z.literal("fileChange"), id: z.string(), status: z.enum(["inProgress", "completed"]),
+  changes: z.array(z.object({
+    path: z.string(), kind: z.object({ type: z.literal("update"), move_path: z.null() }).strict(), diff: z.string(),
+  }).strict()).min(1),
+}).strict();
+const journalFinalTurn = z.object({
+  threadId: z.string(),
+  turn: z.object({
+    id: z.string(), status: z.literal("completed"), items: z.array(z.never()).optional(),
+    itemsView: z.literal("notLoaded").optional(), error: z.null().optional(),
+    startedAt: z.number().nullable().optional(), completedAt: z.number().nullable().optional(),
+    durationMs: z.number().nullable().optional(),
+  }).strict(),
+}).strict();
 
 export default class CodexSingleFileController implements WorkbenchProviderSingleFile {
   private readonly transport: SingleFileTransport;
@@ -120,7 +162,7 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
         start, document, threadId: response.thread.id, turnId: null,
         input: null, lastInput: null, closed: false, finalAdmitted: false,
         revision: 0, text: start.text, pendingWait: null, pumping: null, turnAdmission: null, reads: Promise.resolve(),
-        recoveryInput: null, recoveryRevision: -1, completedTurn: null, terminal: false, completion, complete,
+        recoveryInput: null, recoveryText: null, completedTurn: null, terminal: false, completion, complete,
       };
       this.session = session;
       await this.pump(session);
@@ -182,17 +224,22 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
     if (session.terminal || this.session !== session) return Promise.resolve();
     const run = async () => {
       while (!session.terminal && this.session === session) {
+        if (session.turnId && !session.pendingWait) break;
+        await session.reads;
+        const text = await session.document.read();
+        if (session.terminal || this.session !== session) break;
+        const issue = this.validationIssue(session, text);
+        // Read input after asynchronous draft reads so concurrent speech is not stranded.
         const input = session.input;
         if (!session.turnId) {
           if (session.completedTurn) {
-            if (!input && session.recoveryInput === session.lastInput && session.recoveryRevision === session.revision) break;
+            if (!input && session.recoveryInput === session.lastInput && session.recoveryText === text) break;
             session.recoveryInput = session.lastInput;
-            session.recoveryRevision = session.revision;
+            session.recoveryText = text;
           }
-          await session.reads;
-          const text = await session.document.read();
-          const message = this.message(input ?? session.lastInput, text);
+          const message = this.message(input ?? session.lastInput, text, issue);
           await session.document.append("agent-input", message);
+          if (session.terminal || this.session !== session) break;
           const admission = Promise.withResolvers<void>();
           session.turnAdmission = admission.promise;
           try {
@@ -210,11 +257,10 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
             admission.resolve();
           }
           if (session.terminal) break;
-        } else if (session.pendingWait && (input || session.finalAdmitted)) {
-          await session.reads;
-          if (session.terminal) break;
-          const message = this.message(input ?? session.lastInput);
-          await session.document.append("vtt", message);
+        } else if (session.pendingWait && (input || session.finalAdmitted || issue)) {
+          const speech = input ?? (session.finalAdmitted ? session.lastInput : null);
+          const message = this.message(speech, issue || speech?.final ? text : undefined, issue);
+          await session.document.append(speech ? "vtt" : "tool-response", message);
           if (session.terminal) break;
           const wait = session.pendingWait;
           session.pendingWait = null;
@@ -235,9 +281,22 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
     session.pumping = pumping;
     return pumping;
   }
-  private message(input: SingleFileInput | null, document?: string) {
+  private validationIssue(session: Session, text: string) {
+    try { session.start.validateDocument?.(text); return null; }
+    catch (error) {
+      return error instanceof Error && error.message ? error.message.slice(0, 512) : "Invalid scratch document.";
+    }
+  }
+  private message(input: SingleFileInput | null, document?: string, issue: string | null = null) {
+    const repair = issue === null ? "" : `Repair this draft without discarding its prose. The editor retains the last valid version. Fix the issue below, then continue.\n${issue}\n`;
     const current = document === undefined ? "" : `Current document.txt (line numbers are context only):\n${document.split("\n").map((line, index) => `${index + 1} | ${line}`).join("\n")}\nContinue from this actual state and existing history; do not reapply completed edits.\n`;
-    return `${current}${input ? `Transcript input: ${input.final ? "FINAL - no more packets; finish edits and end the turn" : "OPEN - patch then wait_for_transcript(), do not end"}\nLatest recognition context (replaces earlier uncertainty, not repeated commands):\n${input.transcript}` : "Speech input is open. Call wait_for_transcript() to receive it. Do not end the turn."}`;
+    return `${repair}${current}${input ? `Transcript input: ${input.final ? "FINAL - review the entire draft against the speech, fix clear mistakes, then end" : "OPEN - patch then wait_for_transcript(), do not end"}\nLatest recognition context (replaces earlier uncertainty, not repeated commands):\n${input.transcript}` : "Speech input is open. Call wait_for_transcript() to receive it. Do not end the turn."}`;
+  }
+  private journalOutput(session: Session, message: unknown) {
+    // Queue synchronously; the document owner orders and drains evidence writes.
+    void session.document.append("agent-output", JSON.stringify(message, null, 2)).catch(error => {
+      this.fail(error instanceof Error ? error : new Error("Unable to retain agent output."));
+    });
   }
   private async observe(message: unknown) {
     const parsed = envelope.safeParse(message);
@@ -245,12 +304,24 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
     const { method, params, id } = parsed.data;
     const session = this.session;
     if (!session || session.terminal) return;
-    if (method.startsWith("item/") || method === "error" || method === "turn/completed" || id !== undefined) {
-      // Admission stays synchronous so cancellation cannot miss an already observed
-      // file completion. The document owner orders and drains all evidence writes.
-      void session.document.append("agent-output", JSON.stringify(message, null, 2)).catch(error => {
-        this.fail(error instanceof Error ? error : new Error("Unable to retain agent output."));
-      });
+    const itemLifecycle = method === "item/started" || method === "item/completed";
+    const waitItem = itemLifecycle ? journalWaitItem.safeParse(params.item) : null;
+    const routineWait = waitItem?.success && (method === "item/started"
+      ? waitItem.data.status === "inProgress" && waitItem.data.success === null && waitItem.data.contentItems === null
+      : waitItem.data.status === "completed" && waitItem.data.success === true);
+    const patchItem = itemLifecycle ? journalPatchItem.safeParse(params.item) : null;
+    const routinePatch = patchItem?.success
+      && patchItem.data.status === (method === "item/started" ? "inProgress" : "completed")
+      && patchItem.data.changes.every(change => change.path === session.document.file);
+    const routineItem = id === undefined && params.threadId === session.threadId && itemLifecycle
+      && (routineJournalItem.safeParse(params.item).success || routineWait || routinePatch);
+    const completion = method === "turn/completed" ? completed.safeParse(params) : null;
+    const ownedCompletion = completion?.success && completion.data.threadId === session.threadId
+      && (!session.turnId || completion.data.turn.id === session.turnId);
+    const toolRequest = method === "item/tool/call" && id !== undefined;
+    if (!routineItem && !ownedCompletion && !toolRequest
+      && (method.startsWith("item/") || method === "error" || method === "turn/completed" || id !== undefined)) {
+      this.journalOutput(session, message);
     }
     if (method === "item/tool/call" && id !== undefined) {
       if (session.turnAdmission) {
@@ -259,6 +330,10 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
         if (session.terminal || this.session !== session) return;
       }
       const call = waitCall.safeParse(params);
+      if (!journalWaitCall.safeParse(params).success || !call.success || call.data.threadId !== session.threadId
+        || call.data.turnId !== session.turnId || call.data.tool !== "wait_for_transcript" || session.pendingWait) {
+        this.journalOutput(session, message);
+      }
       if (!call.success || call.data.threadId !== session.threadId || call.data.turnId !== session.turnId || call.data.tool !== "wait_for_transcript") {
         this.rejectTool(session, id, "Unsupported tool call.");
         return;
@@ -278,12 +353,21 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
         const text = await session.document.read();
         await session.document.append("patch-applied", text);
         if (session.terminal || this.session !== session) return;
-        if (text !== session.text) {
+        const issue = this.validationIssue(session, text);
+        if (issue) {
+          console.warn("[voice-transformer] draft requires repair", issue.replace(/\s+/g, " ").slice(0, 300));
+        } else if (text !== session.text) {
           session.text = text;
           session.start.onEvent({ type: "document", sessionId: session.start.sessionId, revision: ++session.revision, text });
         }
         if (item.data.item.status === "failed") throw new Error("Native document edit failed.");
       }).catch(error => this.fail(error instanceof Error ? error : new Error("Unable to read edited document.")));
+      // Wake a wait that arrived before the patch without making the read queue
+      // depend on the pump (which itself drains that queue).
+      void session.reads.then(async () => {
+        await session.pumping;
+        if (session.pendingWait) await this.pump(session);
+      }).catch(error => this.fail(error instanceof Error ? error : new Error("Unable to deliver draft repair.")));
     } else if (method === "turn/completed") {
       const result = completed.safeParse(params);
       if (!result.success || result.data.threadId !== session.threadId) return;
@@ -291,12 +375,12 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
       session.turnId = null;
       session.pendingWait = null;
       session.completedTurn = result.data.turn.id;
-      await this.afterCompletion(session, result.data.turn.id, result.data.turn.status);
+      await this.afterCompletion(session, result.data.turn.id, result.data.turn.status, message, params);
     } else if (id !== undefined) {
       this.fail(new Error("Voice transformer requested unsupported interaction or permissions."));
     }
   }
-  private async afterCompletion(session: Session, turnId: string, status: string) {
+  private async afterCompletion(session: Session, turnId: string, status: string, message: unknown, params: z.infer<typeof envelope>["params"]) {
     try {
       await session.pumping;
       await session.reads;
@@ -304,8 +388,15 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
       // Admission may have recovered into a different turn while this completion
       // waited. Only the latest completed turn can close the final-input drain.
       if (session.turnId !== null || session.completedTurn !== turnId) return;
-      if (status === "failed" || status === "interrupted") throw new Error("Voice transformer turn failed.");
-      if (session.finalAdmitted) {
+      if (status === "failed" || status === "interrupted") {
+        this.journalOutput(session, message);
+        throw new Error("Voice transformer turn failed.");
+      }
+      const text = await session.document.read();
+      if (session.terminal || this.session !== session || session.turnId !== null || session.completedTurn !== turnId) return;
+      const final = session.finalAdmitted && this.validationIssue(session, text) === null;
+      if (!final || !journalFinalTurn.safeParse(params).success) this.journalOutput(session, message);
+      if (final) {
         await session.document.append("completed", "Final input processed; native turn completed.");
         session.terminal = true;
         session.complete(null);

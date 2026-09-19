@@ -7,6 +7,7 @@ import type { VoiceModelSelection } from "workbench-shared/workbench/voice/voice
 import type { VoiceEvent, VoiceRequest } from "workbench-shared/workbench/voice/voice-contract";
 import type { VoiceAudio, VoiceSessionEvent, VoiceStart } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { SingleFileEvent, WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
+import { decodeVoiceDocument } from "workbench-shared/workbench/voice/voice-document";
 import VoiceTranscriptDelivery from "./VoiceTranscriptDelivery";
 import VoiceAudioRecording from "./VoiceAudioRecording";
 
@@ -56,7 +57,10 @@ export default class WorkbenchVoiceController {
         session.provider = provider;
         const [instructions] = await Promise.all([this.options.instructions(settings), this.options.recognizer.prepare()]);
         if (!this.isActive(session)) return;
-        const files = await provider.start({ sessionId: session.id, text: input.text, settings, instructions, onEvent: event => this.transformer(session, event) });
+        const files = await provider.start({
+          sessionId: session.id, text: input.text, settings, instructions,
+          validateDocument: decodeVoiceDocument, onEvent: event => this.transformer(session, event),
+        });
         if (!this.isActive(session)) { await provider.cancel(session.id); return; }
         if (input.recordAudio) {
           session.recording = this.options.recording?.(files.directory) ?? new VoiceAudioRecording(files.directory);
