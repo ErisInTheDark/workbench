@@ -98,6 +98,7 @@ export interface DaemonCodexAppServerRuntime {
   detachBridge(bridge: CodexStdioBridge, options?: Parameters<CodexStdioBridge["detachForReload"]>[0]): Promise<CodexStdioBridgeReloadState>;
   isAvailable(): boolean;
   isTransitioning(): boolean;
+  waitUntilReady(): Promise<void>;
 }
 
 export interface DaemonBrowseExecution {

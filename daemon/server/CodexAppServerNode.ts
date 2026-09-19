@@ -12,7 +12,6 @@ import { log, logError } from "./process-helpers";
 
 interface CodexServerHandoff {
   appServer: CodexAppServer;
-  retire(): Promise<void>;
 }
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
@@ -30,12 +29,12 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     };
     return {
       afterCommit: () => {
-        void previous?.retire().catch(reportRetirement);
+        void runtime.retirePrevious().catch(reportRetirement);
       },
       beginHandoff: () => ({
         waitForIdle: async () => {},
         expire: () => {},
-        detach: () => ({ appServer: runtime.appServer, retire: () => runtime.stop() } satisfies CodexServerHandoff),
+        detach: () => ({ appServer: runtime.appServer } satisfies CodexServerHandoff),
         resume: () => {},
         commit: () => runtime.stop(),
       }),

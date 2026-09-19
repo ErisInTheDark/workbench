@@ -83,6 +83,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   children: [CodexProvider, CodexToolsNode],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
+    const restartingAppServer = build.isReplacing("harness:codex");
     const lifecycle = build.get("codexLifecycle");
     const toolRevision = build.get("toolRevision");
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(() => toolRevision.revision);
@@ -279,7 +280,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         await transcript.record(observations, recordingContext);
       },
       onTranscriptLiveUpdate: update => transcript.acceptLiveUpdate?.(update),
-      restartingAppServer: build.isReplacing("harness:codex"),
+      restartingAppServer,
     });
     const threadOperations = new CodexThreadOperations({
       questionnaires,
@@ -340,7 +341,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
         health.start({ armed: true });
         const signal = generation.signal;
-        void parent.appServer.retirePrevious().then(async () => {
+        void parent.waitUntilReady().then(async () => {
           if (!signal.aborted) await lifecycle.ready(bridge);
         }).then(() => {
           if (!signal.aborted) startRecovery();
@@ -349,8 +350,8 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
         });
       },
       beginHandoff: (replacement) => {
-        const restartingAppServer = replacement.isReplacing("harness:codex");
-        const handoff = parent.beginBridgeHandoff(bridge, { restartingAppServer });
+        const nextAppServerRestart = replacement.isReplacing("harness:codex");
+        const handoff = parent.beginBridgeHandoff(bridge, { restartingAppServer: nextAppServerRestart });
         const suspend = () => {
           health.dispose();
           generation.abort(new Error("Codex bridge node retired."));

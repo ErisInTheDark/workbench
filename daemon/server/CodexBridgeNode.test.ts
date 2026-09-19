@@ -163,17 +163,21 @@ test("managed steering interrupts only the mapped WB thread wait before returnin
   }
 });
 
-for (const mode of ["initial", "replacement"] as const) {
-  test(`${mode} bridge recovery runs without holding readiness and cancels on retirement`, async (t) => {
+for (const scenario of [
+  { name: "initial", mode: "initial", replacesHarness: false },
+  { name: "bridge replacement", mode: "replacement", replacesHarness: false },
+  { name: "harness replacement", mode: "replacement", replacesHarness: true },
+] as const) {
+  test(`${scenario.name} recovery runs without holding readiness and cancels on retirement`, async (t) => {
     const entered = deferred();
     const release = deferred();
     const failures: object[] = [];
     t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
     let bridge!: CodexStdioBridge;
     let cancelled = false;
+    let readinessChecks = 0;
     const parent = {
       appServer: {
-        async retirePrevious() {},
         send(request: JsonRpcRequest) {
           if (request.method === "initialize") {
             queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result: {} }));
@@ -184,6 +188,7 @@ for (const mode of ["initial", "replacement"] as const) {
       deactivateBridge() {},
       isAvailable: () => true,
       isTransitioning: () => false,
+      async waitUntilReady() { readinessChecks++; },
       beginBridgeHandoff(value: CodexStdioBridge) {
         return {
           waitForIdle: () => value.waitForIdle(),
@@ -213,8 +218,9 @@ for (const mode of ["initial", "replacement"] as const) {
       get: (key) => registrations[key],
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
       getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
-      handoffState: undefined, isReplacing: () => false,
-      lease: { isCurrent: () => true }, mode,
+      handoffState: undefined,
+      isReplacing: (scope) => scope === "harness:codex" && scenario.replacesHarness,
+      lease: { isCurrent: () => true }, mode: scenario.mode,
     });
     bridge = instance.registrations.codexBridge!;
     bridge.recoverSqliteTranscriptThread = async (_id, signal?: AbortSignal) => {
@@ -228,7 +234,7 @@ for (const mode of ["initial", "replacement"] as const) {
       await instance.start();
       await instance.activate?.();
       instance.afterCommit?.();
-      if (mode === "initial") {
+      if (scenario.mode === "initial") {
         await bridge.ensureInitialized({ method: "initialize", params: {} });
       } else {
         let activated = false;
@@ -238,6 +244,7 @@ for (const mode of ["initial", "replacement"] as const) {
         assert.equal(activated, true, "provider recovery must not keep reload activation pending");
       }
       await entered.promise;
+      assert.equal(readinessChecks, 1, "every bridge generation waits on parent-owned process readiness");
       const handoff = instance.beginHandoff!({ isReplacing: () => false });
       handoff.expire();
       const retirement = handoff.detach();

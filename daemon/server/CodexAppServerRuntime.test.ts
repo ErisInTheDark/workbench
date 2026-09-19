@@ -64,6 +64,32 @@ test("shutdown retains failures from both current and predecessor retirement", a
     && error.errors.includes(current) && error.errors.includes(previous));
 });
 
+test("failed predecessor readiness can be retried before the process generation becomes ready", async () => {
+  const failure = new Error("predecessor retirement failed");
+  let attempts = 0;
+  const appServer = {
+    async retirePrevious() {
+      attempts++;
+      if (attempts === 1) throw failure;
+    },
+    async stopAsync() {},
+  } as unknown as CodexAppServer;
+  const runtime = new CodexAppServerRuntime({
+    appServer: { projectRoot: "C:/repo" },
+    onFatalExit() {},
+  }, {
+    createAppServer: () => appServer,
+    previousAppServer: {} as CodexAppServer,
+  });
+  const firstReadiness = runtime.waitUntilReady();
+  await assert.rejects(runtime.retirePrevious(), error => error === failure);
+  await assert.rejects(firstReadiness, error => error === failure);
+  const retryReadiness = runtime.waitUntilReady();
+  await runtime.retirePrevious();
+  await retryReadiness;
+  assert.equal(attempts, 2);
+});
+
 test("process retirement is not held hostage by an old message handler", async () => {
   let stopped = false;
   const { deliver, runtime } = runtimeOwner(async () => { stopped = true; });

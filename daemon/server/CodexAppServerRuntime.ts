@@ -21,8 +21,12 @@ export interface CodexAppServerRuntimePorts {
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
-  return { promise, resolve };
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
 }
 
 export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntime {
@@ -33,12 +37,15 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
   private handoffGate: ReturnType<typeof deferred> | null = null;
   private messageTail = Promise.resolve();
   private messageGeneration = new AbortController();
+  private previousRetirement: ReturnType<typeof deferred> | null;
+  private previousRetirementAttempt: Promise<void> | null = null;
 
   constructor(
     ports: CodexAppServerRuntimePorts,
     { createAppServer = (options) => new CodexAppServer(options), previousAppServer }: CodexAppServerRuntimeOptions = {},
   ) {
     this.ports = ports;
+    this.previousRetirement = previousAppServer ? deferred() : null;
     this.appServer = createAppServer({
       ...ports.appServer,
       previousAppServer,
@@ -126,12 +133,40 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
     return this.handoffGate !== null;
   }
 
+  retirePrevious() {
+    const retirement = this.previousRetirement;
+    if (!retirement) return Promise.resolve();
+    if (this.previousRetirementAttempt) return this.previousRetirementAttempt;
+    const attempt = this.appServer.retirePrevious().then(() => {
+      if (this.previousRetirement !== retirement) return;
+      retirement.resolve();
+      this.previousRetirement = null;
+    }, (error: unknown) => {
+      if (this.previousRetirement === retirement) {
+        retirement.reject(error);
+        this.previousRetirement = deferred();
+      }
+      throw error;
+    }).finally(() => {
+      if (this.previousRetirementAttempt === attempt) this.previousRetirementAttempt = null;
+    });
+    this.previousRetirementAttempt = attempt;
+    return attempt;
+  }
+
+  waitUntilReady() {
+    return this.previousRetirement?.promise ?? Promise.resolve();
+  }
+
   async stop() {
     this.acceptingMessages = false;
     this.messageGeneration.abort(new Error("Codex app-server retired."));
     this.releaseHandoffGate();
     this.bridge = null;
-    const results = await Promise.allSettled([this.appServer.retirePrevious(), this.appServer.stopAsync()]);
+    const retirePrevious = this.previousRetirement
+      ? this.retirePrevious()
+      : this.appServer.retirePrevious();
+    const results = await Promise.allSettled([retirePrevious, this.appServer.stopAsync()]);
     const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
     if (errors.length) throw new AggregateError(errors, "Codex runtime shutdown failed.");
   }
