@@ -100,7 +100,7 @@ test("same-version startup does not inspect retained backups", async context => 
   assert.equal(backupReads, 0, "A current schema must not scan backup history");
 });
 
-test("retention verifies only a replacement checkpoint needed to discard expired duplicates", async context => {
+test("retention prunes only expired duplicates protected by the fresh verified checkpoint", async context => {
   const { database, backups } = await fixture(context, 2);
   await fs.mkdir(backups, { recursive: true });
   const now = Date.now();
@@ -108,7 +108,7 @@ test("retention verifies only a replacement checkpoint needed to discard expired
   for (let index = 0; index < 6; index++) {
     const file = path.join(backups, `${randomUUID()}.sqlite3`);
     const backup = new Database(file);
-    applyWorkbenchDatabaseSchema(backup, schema, { targetVersion: 1 });
+    applyWorkbenchDatabaseSchema(backup, schema, { targetVersion: 2 });
     backup.close();
     const time = new Date(now - 10 * day + index);
     await fs.utimes(file, time, time);
@@ -121,39 +121,32 @@ test("retention verifies only a replacement checkpoint needed to discard expired
     return pragma.apply(this, args);
   });
   await migrateWorkbenchDatabase(database, retentionSchema, { now: () => now });
-  assert.deepEqual(checked, [history.at(-1)], "only the surviving checkpoint for the pruned schema needs content verification");
+  assert.deepEqual(checked, [], "retention must trust the checkpoint verified by this migration instead of rescanning history");
   assert.equal((await completedBackups(backups)).length, 5);
 });
 
-test("retention does not scan recent backup contents and keeps duplicates if their replacement is corrupt", async context => {
-  const { database, backups } = await fixture(context);
-  const older = await preserveWorkbenchDatabaseBackup(database, backups);
-  const replacement = await preserveWorkbenchDatabaseBackup(database, backups);
+test("retention leaves expired duplicates from historical schema generations untouched", async context => {
+  const { database, backups } = await fixture(context, 2);
+  await fs.mkdir(backups, { recursive: true });
+  const history: string[] = [];
+  const expiredAt = Date.now() - 10 * day;
+  for (let index = 0; index < 6; index++) {
+    const file = path.join(backups, `${randomUUID()}.sqlite3`);
+    const backup = new Database(file);
+    applyWorkbenchDatabaseSchema(backup, schema, { targetVersion: 1 });
+    backup.close();
+    await fs.utimes(file, new Date(expiredAt + index), new Date(expiredAt + index));
+    history.push(file);
+  }
   const pragma = Database.prototype.pragma;
   const checked: string[] = [];
   context.mock.method(Database.prototype, "pragma", function (this: Database.Database, ...args: Parameters<typeof pragma>) {
-    if (args[0] === "quick_check" && [older, replacement].includes(this.name)) {
-      checked.push(this.name);
-      if (this.name === replacement) return [{ quick_check: "injected corrupt checkpoint" }];
-    }
+    if (args[0] === "quick_check" && history.includes(this.name)) checked.push(this.name);
     return pragma.apply(this, args);
   });
-  const warnings = context.mock.method(console, "warn", () => {});
-  await migrateWorkbenchDatabase(database, schema);
-  assert.deepEqual(checked, [], "recent retained backups must not trigger content scans");
-  const expiredAt = Date.now() - 10 * day;
-  for (const name of await completedBackups(backups)) {
-    const file = path.join(backups, name);
-    if (file !== older && file !== replacement) await fs.utimes(file, new Date(expiredAt), new Date(expiredAt));
-  }
-  await fs.utimes(older, new Date(expiredAt + 1_000), new Date(expiredAt + 1_000));
-  await fs.utimes(replacement, new Date(expiredAt + 2_000), new Date(expiredAt + 2_000));
-  for (let index = 0; index < 4; index++) await preserveWorkbenchDatabaseBackup(database, backups);
   await migrateWorkbenchDatabase(database, retentionSchema);
-  assert.deepEqual(checked, [replacement]);
-  assert.ok(warnings.mock.calls.length > 0);
-  assert.ok((await fs.stat(older)).isFile());
-  assert.ok((await fs.stat(replacement)).isFile());
+  assert.deepEqual(checked, [], "an unrelated upgrade must not inspect historical checkpoint contents");
+  for (const file of history) assert.ok((await fs.stat(file)).isFile());
 });
 
 test("explicit same-version backups capture WAL data without migrating or changing the source", async context => {

@@ -4,7 +4,7 @@
  * - preserveWorkbenchDatabaseBackup: publish a verified complete snapshot without migrating the source.
  * - restoreWorkbenchDatabaseBackup: restore a verified checkpoint after every destination connection is closed.
  * - readWorkbenchDatabaseBackups: read verified ordinary checkpoints newest-first, excluding archives and scratch files.
- * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune expired backups.
+ * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune its expired duplicates.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -123,31 +123,31 @@ function verifyBackup(filePath: string, version: number, databaseName = path.bas
   console.info(formatDatabaseLog("verify", "ok", detail, performance.now() - startedAt));
 }
 
-async function pruneBackups(directory: string, now: number) {
+async function pruneBackups(directory: string, verifiedBackupPath: string, now: number) {
   const startedAt = performance.now();
   try {
     const backups = await readBackupInventory(directory);
     if (!backups.length) return;
-    const retainedVersions = new Map<number, typeof backups[number]>();
+    const verified = backups.find(backup => backup.filePath === verifiedBackupPath);
+    if (!verified) throw new Error("Freshly verified checkpoint is missing from retention inventory.");
     const expired = backups.filter((backup, index) => {
-      const firstForVersion = !retainedVersions.has(backup.version);
-      if (firstForVersion) retainedVersions.set(backup.version, backup);
-      return index >= 5 && !firstForVersion && now - backup.modifiedAt > retentionAgeMs;
+      return backup.filePath !== verified.filePath
+        && backup.version === verified.version
+        && index >= 5
+        && now - backup.modifiedAt > retentionAgeMs;
     });
     const databaseName = path.basename(directory);
     if (expired.length) console.info(formatDatabaseLog("retention", "pending",
       `${databaseName}, ${backups.length} checkpoints, ${expired.length} expired duplicates`));
-    // Only a checkpoint replacing deleted history needs content verification.
-    // Validate every replacement before the first deletion, failing closed.
-    for (const version of new Set(expired.map(backup => backup.version))) {
-      const retained = retainedVersions.get(version)!;
-      verifyBackup(retained.filePath, retained.version);
+    if (!expired.length) return;
+    // The caller just verified, synced and atomically published this checkpoint.
+    // Historical schema generations have no equally fresh survivor and remain untouched.
+    const survivor = await fs.lstat(verified.filePath);
+    if (!survivor.isFile() || survivor.mtimeMs !== verified.modifiedAt) {
+      throw new Error("Freshly verified checkpoint changed during cleanup.");
     }
     let removed = 0;
     for (const backup of expired) {
-      const retained = retainedVersions.get(backup.version)!;
-      const survivor = await fs.lstat(retained.filePath);
-      if (!survivor.isFile() || survivor.mtimeMs !== retained.modifiedAt) throw new Error("Retained checkpoint changed during cleanup.");
       const current = await fs.lstat(backup.filePath);
       if (!current.isFile() || current.mtimeMs !== backup.modifiedAt) continue;
       await fs.unlink(backup.filePath);
@@ -200,10 +200,11 @@ export default async function migrateWorkbenchDatabase(
   const directory = database.memory || !database.name
     ? null
     : path.join(path.dirname(path.resolve(database.name)), "backups", path.basename(database.name));
+  let verifiedBackupPath: string | null = null;
   if (directory && installedVersion < targetVersion
     && database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
-    const backupPath = await preserveWorkbenchDatabaseBackup(database, directory);
-    await options.beforeMigration?.(backupPath);
+    verifiedBackupPath = await preserveWorkbenchDatabaseBackup(database, directory);
+    await options.beforeMigration?.(verifiedBackupPath);
   }
   const reportUpgrade = directory && installedVersion > 0 && installedVersion < targetVersion;
   const startedAt = performance.now();
@@ -211,5 +212,7 @@ export default async function migrateWorkbenchDatabase(
   if (reportUpgrade) console.info(formatDatabaseLog("migrate", "pending", detail));
   applyWorkbenchDatabaseSchema(database, schema, options);
   if (reportUpgrade) console.info(formatDatabaseLog("migrate", "ok", detail, performance.now() - startedAt));
-  if (directory && installedVersion < targetVersion) await pruneBackups(directory, (options.now ?? Date.now)());
+  if (directory && verifiedBackupPath) {
+    await pruneBackups(directory, verifiedBackupPath, (options.now ?? Date.now)());
+  }
 }
