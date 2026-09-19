@@ -50,7 +50,6 @@ test("carries sandbox permissions and the requested shell directly through Windo
       entries: [{ access: "write", path: { type: "path", path: pathToFileURL(workspace).href } }],
       type: "restricted",
     },
-    network: "restricted",
     type: "managed",
   };
   const controller = new WorkbenchShellController({
@@ -82,7 +81,7 @@ test("carries sandbox permissions and the requested shell directly through Windo
   const execution = executions[0]!;
   assert.equal(execution.cwd, path.resolve(workspace, "child"));
   assert.equal(execution.timeoutMs, 4321);
-  assert.deepEqual(execution.permissions, permissionProfile);
+  assert.deepEqual(execution.permissions, { ...permissionProfile, network: "restricted" });
   assert.equal(execution.windowsSandboxLevel, "elevated");
   assert.equal(execution.windowsSandboxPrivateDesktop, true);
   assert.deepEqual(execution.command, [

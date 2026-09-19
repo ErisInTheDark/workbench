@@ -7,12 +7,11 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexSingleFileController from "./CodexSingleFileController";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
-import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import path from "node:path";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [WorkbenchVoiceNode],
+  children: [],
   create: (context, { get }) => {
     const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime(
       path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),

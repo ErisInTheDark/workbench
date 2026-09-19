@@ -10,7 +10,7 @@ import CodexToolsNode from "./CodexToolsNode";
 import { logError } from "./process-helpers";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
-  access: "cli",
+  access: "agent",
   children: [CodexToolsNode],
   create: context => {
     const executor = new CodexExecServer({ cwd: context.daemonPackageRoot });
@@ -18,25 +18,25 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       registrations: { codexExecutor: executor },
       start: () => undefined,
       beginHandoff: () => ({
-        waitForIdle: () => executor.cancelAll(new Error("Codex executor replacement cancelled the command.")),
+        waitForIdle: async () => {},
         expire: () => {
           void executor.dispose().catch(error => logError("codex-exec", `Executor retirement failed: ${String(error).slice(0, 400)}`));
         },
         detach: () => undefined,
-        resume: () => executor.resume(),
+        resume: () => undefined,
         commit: () => executor.dispose(),
       }),
       dispose: () => executor.dispose(),
       shutdown: () => executor.dispose(),
     };
   },
-  description: "Replace the persistent sandbox executor and cancel its owned commands.",
+  description: "Reload the sandbox executor after graph-owned operations drain.",
+  destructive: false,
   lifecycle: "handoff",
   provides: ["codexExecutor"],
   requires: [],
-  safeAll: false,
-  destructive: true,
-  scope: "harness:codex/exec",
+  safeAll: true,
+  scope: "server:codex/exec",
   sources: [
     "daemon/server/CodexExecServerNode.ts",
     "daemon/server/CodexExecServer.ts",

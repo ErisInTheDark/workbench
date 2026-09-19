@@ -18,8 +18,18 @@ import type CodexExecServer from "./CodexExecServer";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
 export const WORKBENCH_SHELL_SANDBOX_CAPABILITY = "codex/sandbox-state-meta";
+const SandboxPermissionProfileSchema = z.preprocess((value) => {
+  if (
+    typeof value === "object"
+    && value !== null
+    && "type" in value
+    && (value.type === "managed" || value.type === "external")
+    && !("network" in value)
+  ) return { ...value, network: "restricted" };
+  return value;
+}, CodexExecPermissionSchema);
 const SandboxStateSchema = z.object({
-  permissionProfile: CodexExecPermissionSchema,
+  permissionProfile: SandboxPermissionProfileSchema,
   sandboxCwd: z.string().url().refine((value) => new URL(value).protocol === "file:", "sandboxCwd must be a file URL"),
   useLegacyLandlock: z.boolean().optional(),
 });
