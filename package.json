@@ -19,5 +19,12 @@
     "better-sqlite3": "13.0.3",
     "tsx": "4.23.13",
     "typescript": "^7.0.2"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "26.9.0",
+      "onFail": "download"
+    }
   }
 }
