@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - ReloadDirtSnapshotRepositoryPort: narrow Git tree and ref operations required by reload dirt reconciliation. Keywords: reload, Git, snapshot, port.
- * - default ReloadDirtSnapshotRepository: compare reload sources and materialize durable baselines without touching the real index. Keywords: reload, Git, worktree, baseline, command length.
+ * - ReloadDirtSnapshotRepositoryPort: Git tree and ref operations for reload dirt reconciliation.
+ * - default ReloadDirtSnapshotRepository: compare selected sources and store baselines without touching the real index.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -12,6 +12,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const WORKBENCH_TRANSCRIPT_EXCLUSION = ":(top,glob,exclude).workbench/transcripts/**";
+// Leave space for Git's executable, fixed arguments and Windows argument quoting.
+const PATH_ARGUMENT_BUDGET = 8_000;
 
 function parseNullPaths(output: string) {
   return output.split("\0").filter(Boolean);
@@ -24,12 +26,23 @@ function hasExitCode(error: unknown, code: number) {
     && error.code === code;
 }
 
-function matchesSelectedPath(candidate: string, selectedPaths: ReadonlySet<string>) {
-  if (selectedPaths.has(candidate) || selectedPaths.has(".")) return true;
-  for (const selectedPath of selectedPaths) {
-    if (candidate.startsWith(selectedPath.endsWith("/") ? selectedPath : `${selectedPath}/`)) return true;
+function pathBatches(paths: readonly string[]) {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let length = 0;
+  for (const sourcePath of new Set(paths)) {
+    const argumentLength = sourcePath.length * 2 + 3;
+    if (argumentLength > PATH_ARGUMENT_BUDGET) throw new Error("Reload source path exceeds the Git argument budget.");
+    if (length + argumentLength > PATH_ARGUMENT_BUDGET) {
+      batches.push(batch);
+      batch = [];
+      length = 0;
+    }
+    batch.push(sourcePath);
+    length += argumentLength;
   }
-  return false;
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 export interface ReloadDirtSnapshotRepositoryPort {
@@ -55,17 +68,20 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   async listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal) {
+    const batches = pathBatches(paths);
+    if (!batches.length) return [];
     return await this.withTemporaryIndex(async (indexPath) => {
-      const selectedPaths = new Set(paths);
       const env = { ...process.env, GIT_INDEX_FILE: indexPath, GIT_OPTIONAL_LOCKS: "0" };
       await this.run(["read-tree", baseTreeish], env, signal);
-      const [tracked, untracked] = await Promise.all([
-        this.run(["diff", "--name-only", "-z", "--no-renames", "--"], env, signal),
-        this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
-      ]);
-      return [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
-        .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
-        .sort((left, right) => left.localeCompare(right));
+      const changed = new Set<string>();
+      for (const batch of batches) {
+        const [tracked, untracked] = await Promise.all([
+          this.run(["--literal-pathspecs", "diff", "--name-only", "-z", "--no-renames", "--", ...batch], env, signal),
+          this.run(["--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", ...batch], env, signal),
+        ]);
+        for (const sourcePath of [...parseNullPaths(tracked), ...parseNullPaths(untracked)]) changed.add(sourcePath);
+      }
+      return [...changed].sort((left, right) => left.localeCompare(right));
     });
   }
 

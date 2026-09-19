@@ -5,7 +5,7 @@
  * - ReloadDirtExternalSource/ReloadDirtControllerOptions: snapshot, watcher and dynamic-source ports.
  * - default ReloadDirtController: reconcile source content against per-scope Git baselines.
  */
-import { watch, type FSWatcher } from "node:fs";
+import { type watch } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 
@@ -18,6 +18,7 @@ import ReloadDirtSnapshotRepository, {
   type ReloadDirtSnapshotRepositoryPort,
 } from "./ReloadDirtSnapshotRepository.ts";
 import { createGitignoreMatcher } from "../source-pattern-matcher.ts";
+import ReloadSourceWatcher from "./ReloadSourceWatcher.ts";
 
 const MAX_ERROR_LENGTH = 500;
 
@@ -113,7 +114,7 @@ export default class ReloadDirtController {
   private readonly listeners = new Set<() => void>();
   private snapshot: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
   private tail: Promise<void>;
-  private watcher: FSWatcher | null = null;
+  private watcher: ReloadSourceWatcher | null = null;
   private watcherRefreshPending = false;
   private watcherRefreshRunning = false;
 
@@ -143,7 +144,8 @@ export default class ReloadDirtController {
     const state = this.requireState();
     state.refreshAbort = this.refreshAbort;
     this.connectSourceObserver();
-    this.connectWatcher();
+    await this.connectWatcher();
+    if (!this.attached) return;
     if (state.pendingScopes.length) {
       this.publish({ dirtyScopes: [], error: state.error, pendingScopes: state.pendingScopes });
     } else {
@@ -227,7 +229,7 @@ export default class ReloadDirtController {
     if (this.attached) return;
     this.attached = true;
     this.connectSourceObserver();
-    this.connectWatcher();
+    void this.connectWatcher().catch(error => this.publishError(error));
   }
 
   async dispose() {
@@ -244,6 +246,7 @@ export default class ReloadDirtController {
       ...descriptor,
       paths: [...descriptor.paths, sourcePath].sort(),
     });
+    void this.watcher?.refresh().catch(error => this.publishError(error));
     this.queueRefresh();
   }
 
@@ -254,21 +257,23 @@ export default class ReloadDirtController {
     }) ?? null;
   }
 
-  private connectWatcher() {
+  private async connectWatcher() {
     this.watcher?.close();
-    this.watcher = (this.options.watchSource ?? watch)(
-      this.options.repoRoot,
-      { recursive: true },
-      (_event, filename) => {
-        const sourcePath = filename ? String(filename).replace(/\\/gu, "/") : null;
-        if (
-          !sourcePath
-          || this.isObservedPath(sourcePath)
-          || this.options.isPotentialSourcePath?.(sourcePath)
-        ) this.queueRefresh();
-      },
-    );
-    this.watcher.on("error", (error) => this.publishError(error));
+    this.watcher = new ReloadSourceWatcher({
+      root: this.options.repoRoot,
+      getScopes: () => [
+        ...[...this.requireState().descriptors.values()].map(descriptor => ({
+          paths: descriptor.paths,
+          patterns: descriptor.boundaryPatterns,
+        })),
+        { paths: (this.options.externalDirtSources ?? []).map(source => source.path) },
+      ],
+      onChange: () => this.queueRefresh(),
+      onError: error => this.publishError(error),
+      watchSource: this.options.watchSource,
+      isPotentialSourcePath: this.options.isPotentialSourcePath,
+    });
+    await this.watcher.refresh();
   }
 
   private disconnectRuntimeOwners() {
@@ -296,6 +301,8 @@ export default class ReloadDirtController {
           mergeDescriptorSources(state.descriptors.get(descriptor.scope), descriptor),
         );
       }
+      await this.watcher?.refresh();
+      if (signal?.aborted) throw signal.reason;
       const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()];
       const hasBoundaryPatterns = descriptors.some(({ boundaryPatterns }) => boundaryPatterns?.length);
@@ -361,14 +368,6 @@ export default class ReloadDirtController {
       if (signal?.aborted) throw signal.reason;
       this.publishError(error);
     }
-  }
-
-  private isObservedPath(sourcePath: string) {
-    return [...this.requireState().descriptors.values()].some((descriptor) => (
-      descriptor.paths.includes(sourcePath)
-      || boundaryMatcher(descriptor)?.matchesPathOrDescendant(sourcePath)
-    ))
-      || (this.options.externalDirtSources ?? []).some(({ path: externalPath }) => externalPath === sourcePath);
   }
 
   private async writeSnapshot(message: string) {

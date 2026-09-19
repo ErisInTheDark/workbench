@@ -1,6 +1,6 @@
 /*
- * Default export:
- * - AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles.
+ * Exports:
+ * - default AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import type { WorkbenchFrontendGeneration } from "workbench-shared/frontend-generation";
@@ -56,6 +56,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   sources: [
     "app/server/runtime/AppCompilerNode.ts",
     "app/server/WorkbenchFrontendCompiler.ts",
+    "app/server/WorkbenchFrontendWatcher.ts",
     "shared/frontend-generation.ts",
     "static/**",
   ].join("\n"),

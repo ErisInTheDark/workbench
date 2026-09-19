@@ -68,6 +68,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/server/runtime/WorkbenchAppReloadController.ts",
     "app/server/runtime/WorkbenchAppReloadDirtController.ts",
     "shared/reload/ReloadDirtController.ts",
+    "shared/reload/ReloadSourceWatcher.ts",
     "shared/reload/ReloadDirtSnapshotRepository.ts",
   ].join("\n"),
 });

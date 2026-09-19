@@ -33,6 +33,9 @@ importers:
 
   app:
     dependencies:
+      '@parcel/watcher':
+        specifier: 2.5.1
+        version: 2.5.1
       '@tailwindcss/cli':
         specifier: 4.3.3
         version: 4.3.3

@@ -80,6 +80,36 @@ function transferredState(pendingScopes: string[] = []): ReloadDirtControllerSta
   };
 }
 
+test("internal repository churn cannot wake source watchers through recursive overflow", async (context) => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-watch-boundary-"));
+  await fs.mkdir(path.join(repoRoot, "app"));
+  await fs.writeFile(path.join(repoRoot, "app", "core.ts"), "source");
+  const repository = new ControlledRepository();
+  const recursiveRootNotifications: Array<() => void> = [];
+  const controller = new ReloadDirtController({
+    getSourceState: sourceState,
+    repoRoot,
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: ((root, options, listener) => {
+      if (String(root) === repoRoot && typeof options === "object" && options?.recursive) {
+        recursiveRootNotifications.push(() => (listener as (event: string, filename: null) => void)("change", null));
+      }
+      return { close() {}, on() {} } as unknown as FSWatcher;
+    }) as typeof fsWatch,
+  }, transferredState());
+  context.after(async () => {
+    await controller.dispose();
+    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+  });
+  await controller.start();
+  const reads = repository.worktreeReads;
+  for (const notify of recursiveRootNotifications) notify();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(repository.worktreeReads, reads, "internal churn must not trigger a source comparison");
+});
+
 test("a transferred batch stays pending without starting stale reconciliation", async () => {
   const repository = new ControlledRepository();
   const controller = new ReloadDirtController({
@@ -93,6 +123,22 @@ test("a transferred batch stays pending without starting stale reconciliation", 
   assert.deepEqual(controller.getSnapshot().pendingScopes, ["client:core"]);
   assert.equal(repository.worktreeReads, 0);
   await controller.dispose();
+});
+
+test("detaching while source subscriptions attach prevents a retired comparison", async () => {
+  const repository = new ControlledRepository();
+  const controller = new ReloadDirtController({
+    getSourceState: sourceState,
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close() {}, on() {} })) as never,
+  }, transferredState());
+  const starting = controller.start();
+  controller.detachForReload();
+  await starting;
+  await controller.dispose();
+  assert.equal(repository.worktreeReads, 0);
 });
 
 test("dirty scopes carry dependant metadata from the source graph owner", async () => {

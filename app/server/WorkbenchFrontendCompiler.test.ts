@@ -2,10 +2,11 @@
  * No production exports. Node tests protect real Workbench browser-graph compilation without Next runtime or browser refresh machinery.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import type * as esbuild from "esbuild";
+import * as esbuild from "esbuild";
+import type parcelWatcher from "@parcel/watcher";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,6 +32,7 @@ function compilerTools() {
   let outputPaths: string[] = [];
   let watches = 0;
   let disposals = 0;
+  const sourceObservers = new Map<string, parcelWatcher.SubscribeCallback>();
   const context = {
     async rebuild() {
       await onStart();
@@ -47,6 +49,15 @@ function compilerTools() {
   } as esbuild.BuildContext;
   return {
     context,
+    async subscribeSources(directory: string, callback: parcelWatcher.SubscribeCallback) {
+      sourceObservers.set(directory, callback);
+      return { async unsubscribe() { sourceObservers.delete(directory); } };
+    },
+    sourceEvent(root: string, relative: string, type: parcelWatcher.EventType = "update") {
+      const callback = sourceObservers.get(root);
+      assert.ok(callback, "the compiler must have an active source subscription");
+      callback(null, [{ path: path.join(root, relative), type }]);
+    },
     get watches() { return watches; },
     get disposals() { return disposals; },
     async createContext(options: esbuild.BuildOptions) {
@@ -80,6 +91,64 @@ function compilerTools() {
   };
 }
 
+test("frontend watching starts without enabling esbuild content polling", async context => {
+  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-no-poll-"));
+  const tools = compilerTools();
+  tools.context.watch = async () => { throw new Error("esbuild content polling was enabled"); };
+  const compiler = new WorkbenchFrontendCompiler({
+    logger: quietLogger(), outputDirectoryPath, createContext: tools.createContext, spawnTailwind: tools.spawnTailwind, subscribeSources: tools.subscribeSources,
+  });
+  context.after(async () => await compiler.close());
+  await compiler.startWatching();
+  assert.ok(compiler.getFrontendGeneration());
+});
+
+test("a native source event rebuilds real esbuild output after creating a missing import", async context => {
+  const repositoryRootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-native-rebuild-"));
+  const client = path.join(repositoryRootPath, "app/client");
+  await mkdir(path.join(client, "static"), { recursive: true });
+  await mkdir(path.join(client, "workbench/voice"), { recursive: true });
+  await writeFile(path.join(client, "static/index.html"), "<main></main>");
+  await writeFile(path.join(client, "browser-entry.tsx"), "console.log('initial');");
+  await writeFile(path.join(client, "workbench/voice/voice-capture-worklet.ts"), "console.log('voice');");
+  const tools = compilerTools();
+  const failed = Promise.withResolvers<void>();
+  let built = Promise.withResolvers<void>();
+  const compiler = new WorkbenchFrontendCompiler({
+    repositoryRootPath,
+    outputDirectoryPath: path.join(repositoryRootPath, ".workbench/frontend"),
+    logger: quietLogger(),
+    subscribeSources: tools.subscribeSources,
+    spawnTailwind: tools.spawnTailwind,
+    onDiagnostic: () => failed.resolve(),
+    createContext: async options => esbuild.context({
+      ...options,
+      plugins: [
+        ...options.plugins ?? [],
+        { name: "observe-test-build", setup(build) { build.onEnd(result => { if (!result.errors.length) built.resolve(); }); } },
+      ],
+    }),
+  });
+  context.after(async () => {
+    await compiler.close();
+    await rm(repositoryRootPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  await compiler.startWatching();
+  const previous = compiler.getFrontendGeneration();
+  await writeFile(path.join(client, "browser-entry.tsx"), "import { message } from './new-module'; console.log(message);");
+  tools.sourceEvent(repositoryRootPath, "app/client/browser-entry.tsx");
+  await failed.promise;
+  assert.deepEqual(compiler.getFrontendGeneration(), previous, "failed compilation must preserve the last published output");
+
+  built = Promise.withResolvers<void>();
+  await writeFile(path.join(client, "new-module.ts"), "export const message = 'recovered native rebuild';");
+  tools.sourceEvent(repositoryRootPath, "app/client/new-module.ts", "create");
+  await built.promise;
+  const javascript = await readFile(path.join(compiler.outputDirectoryPath, "assets/app.js"), "utf8");
+  assert.match(javascript, /recovered native rebuild/u);
+  assert.notEqual(compiler.getFrontendGeneration()?.javascript, previous?.javascript);
+});
+
 test("terminal compiler shutdown completes even when stopping the service leaves disposal unanswered", async t => {
   const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-shutdown-"));
   const tools = compilerTools();
@@ -90,6 +159,7 @@ test("terminal compiler shutdown completes even when stopping the service leaves
   tools.context.dispose = () => pending;
   const compiler = new WorkbenchFrontendCompiler({
     logger: quietLogger(), outputDirectoryPath, createContext: tools.createContext,
+    subscribeSources: tools.subscribeSources,
     spawnTailwind: tools.spawnTailwind,
     stopService: () => { stopped = true; },
   });
@@ -111,7 +181,7 @@ test("suspended compiler output stays private until its owner resumes publicatio
   await writeFile(javascriptPath, "last successful javascript");
   const tools = compilerTools();
   const compiler = new WorkbenchFrontendCompiler({
-    logger: quietLogger(), outputDirectoryPath, createContext: tools.createContext, spawnTailwind: tools.spawnTailwind,
+    logger: quietLogger(), outputDirectoryPath, createContext: tools.createContext, spawnTailwind: tools.spawnTailwind, subscribeSources: tools.subscribeSources,
   });
   context.after(async () => await compiler.close());
   await compiler.suspend();
@@ -130,6 +200,7 @@ test("retirement fences context creation that completes after the compiler was r
   const gate = new Promise<void>(resolve => { release = resolve; });
   const compiler = new WorkbenchFrontendCompiler({
     logger: quietLogger(), outputDirectoryPath, spawnTailwind: tools.spawnTailwind,
+    subscribeSources: tools.subscribeSources,
     createContext: async options => { const created = await tools.createContext(options); enter(); await gate; return created; },
   });
   context.after(async () => { release(); await compiler.close(); });

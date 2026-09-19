@@ -18,12 +18,11 @@ const { default: GitTestFixtureCache } = createRequire(import.meta.url)(
 async function fixture(context: test.TestContext) {
   const { root: repositoryRootPath, dispose } = await new GitTestFixtureCache().copy(APP_RELOAD_DIRT_FIXTURE);
 
-  let closed = 0;
-  let observe: ((event: string, filename: string | Buffer | null) => void) | null = null;
-  const watcher = {
-    close: () => { closed += 1; },
-    on: () => watcher,
-  } as unknown as FSWatcher;
+  const observers = new Map<string, (event: string, filename: string | Buffer | null) => void>();
+  const observe = (filename: string | null) => {
+    const directory = filename === null ? "" : path.posix.dirname(filename).replace(/^\.$/u, "");
+    observers.get(directory)?.("change", filename === null ? null : path.posix.basename(filename));
+  };
   const controller = new WorkbenchAppReloadDirtController({
     getSourceState: () => ({
       descriptors: [
@@ -38,8 +37,14 @@ async function fixture(context: test.TestContext) {
         : [...scopes],
     }),
     repositoryRootPath,
-    watchSource: ((_root, _options, listener) => {
-      observe = listener as typeof observe;
+    watchSource: ((root, _options, listener) => {
+      const relative = path.relative(repositoryRootPath, String(root)).replaceAll("\\", "/");
+      const callback = listener as (event: string, filename: string | Buffer | null) => void;
+      observers.set(relative, callback);
+      const watcher = {
+        close: () => { if (observers.get(relative) === callback) observers.delete(relative); },
+        on: () => watcher,
+      } as unknown as FSWatcher;
       return watcher;
     }) as typeof fs.watch,
   });
@@ -50,8 +55,8 @@ async function fixture(context: test.TestContext) {
   await controller.start();
   return {
     controller,
-    get closed() { return closed; },
-    observe: (filename: string | null) => observe?.("change", filename),
+    get activeWatchers() { return observers.size; },
+    observe,
     observeRefresh: async (...filenames: Array<string | null>) => {
       const completed = Promise.withResolvers<Awaited<ReturnType<typeof controller.refresh>>>();
       const originalRefresh = controller.refresh.bind(controller);
@@ -66,7 +71,7 @@ async function fixture(context: test.TestContext) {
         }
       }, { times: 1 });
       try {
-        for (const filename of filenames) observe?.("change", filename);
+        for (const filename of filenames) observe(filename);
         return await completed.promise;
       } finally {
         refresh.mock.restore();
@@ -117,7 +122,7 @@ async function checkSourceOwners(target: Awaited<ReturnType<typeof fixture>>) {
   target.observe("app/server/runtime/ignored.test.ts");
   assert.deepEqual((await target.controller.refresh()).dirtyScopes, []);
   await target.controller.dispose();
-  assert.equal(target.closed, 1);
+  assert.equal(target.activeWatchers, 0);
 }
 
 test("app reload dirt shares one source and baseline history", async (context) => {

@@ -97,6 +97,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   scope: "server:turns",
   sources: [
     "daemon/server/WorkbenchTurnLifecycleNode.ts",
+    "shared/reload/ReloadSourceWatcher.ts",
     "daemon/server/WorkbenchTurnRecoveryController.ts",
     "daemon/server/WorkbenchToolRevisionController.ts",
     "daemon/server/WorkbenchTurnRecovery*.test.ts",

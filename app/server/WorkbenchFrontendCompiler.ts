@@ -1,8 +1,7 @@
 /*
- * Keywords: frontend, installation, compilation, watch, output.
  * Exports:
- * - WorkbenchFrontendCompilerOptions: repository, output, environment, and diagnostic seams. Keywords: frontend, compiler, configuration.
- * - default WorkbenchFrontendCompiler: own frontend output, generation identity, and esbuild/Tailwind watch lifecycles. Keywords: frontend, compiler, watch, generation, controller.
+ * - WorkbenchFrontendCompilerOptions: repository, output, environment and compiler boundary configuration.
+ * - default WorkbenchFrontendCompiler: own frontend output, generation identity and compiler lifecycles.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -20,10 +19,12 @@ import {
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
 } from "workbench-shared/frontend-generation";
 import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
+import WorkbenchFrontendWatcher, { type WorkbenchFrontendWatcherOptions } from "./WorkbenchFrontendWatcher.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
   createContext?: (options: esbuild.BuildOptions) => Promise<esbuild.BuildContext>;
   stopService?: () => void | Promise<void>;
+  subscribeSources?: WorkbenchFrontendWatcherOptions["subscribe"];
   environment?: NodeJS.ProcessEnv;
   logger?: WorkbenchProcessLogger;
   onDiagnostic?: (message: string) => void;
@@ -90,6 +91,8 @@ export default class WorkbenchFrontendCompiler {
   private stylesheetGeneration: string | null = null;
   private stylesheetGenerationTail = Promise.resolve();
   private esbuildContext: esbuild.BuildContext | null = null;
+  private sourceWatcher: WorkbenchFrontendWatcher | null = null;
+  private readonly subscribeSources: WorkbenchFrontendWatcherOptions["subscribe"];
   private javascriptGeneration: string | null = null;
   private tailwindWatcher: ChildProcess | null = null;
 
@@ -104,6 +107,7 @@ export default class WorkbenchFrontendCompiler {
     this.workingDirectoryPath = `${this.outputDirectoryPath}.build-${randomUUID()}`;
     this.createContext = options.createContext ?? esbuild.context;
     this.stopService = options.stopService ?? esbuild.stop;
+    this.subscribeSources = options.subscribeSources;
     this.spawnTailwind = options.spawnTailwind ?? ((args, spawnOptions) => spawn(process.execPath, args, spawnOptions));
     this.readReactDevelopmentMode = options.readReactDevelopmentMode ?? (() => false);
     this.logger = options.logger ?? new WorkbenchProcessLogger();
@@ -146,14 +150,25 @@ export default class WorkbenchFrontendCompiler {
         signal.throwIfAborted();
       }
       this.esbuildContext = context;
+      const sourceWatcher = new WorkbenchFrontendWatcher({
+        root: this.repositoryRootPath,
+        outputs: [this.outputDirectoryPath, this.workingDirectoryPath],
+        subscribe: this.subscribeSources,
+        rebuild: async () => {
+          signal.throwIfAborted();
+          await context.rebuild();
+        },
+        onError: error => {
+          if (!signal.aborted) this.onDiagnostic(`Frontend watching failed: ${boundedOutput(error.message, 500)}`);
+        },
+      });
+      this.sourceWatcher = sourceWatcher;
       await Promise.all([
-        context.rebuild(),
+        sourceWatcher.start(),
         this.runTailwindOnce(),
       ]);
       signal.throwIfAborted();
       await this.refreshStylesheetGeneration();
-      signal.throwIfAborted();
-      await context.watch();
       signal.throwIfAborted();
       this.tailwindWatcher = this.startTailwindWatcher();
       return this.outputDirectoryPath;
@@ -168,14 +183,17 @@ export default class WorkbenchFrontendCompiler {
     this.generation.abort(new Error("Workbench frontend compiler is retired."));
     this.publishing = false;
     const context = this.esbuildContext;
+    const sourceWatcher = this.sourceWatcher;
     const children = [...this.children];
     this.esbuildContext = null;
+    this.sourceWatcher = null;
     this.tailwindWatcher = null;
 
     for (const child of children) {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
     this.retirement = Promise.allSettled([
+      sourceWatcher?.close(),
       context ? this.disposeContext(context) : undefined,
       ...children.map(child => waitForExit(child).catch((error: unknown) => {
         if (child.killed) return;
@@ -269,6 +287,7 @@ export default class WorkbenchFrontendCompiler {
         ".svg": "file",
       },
       logLevel: "silent",
+      metafile: true,
       outdir: path.join(this.outputDirectoryPath, "assets"),
       platform: "browser",
       plugins: [this.esbuildLifecyclePlugin()],
@@ -281,12 +300,28 @@ export default class WorkbenchFrontendCompiler {
   private esbuildLifecyclePlugin(): esbuild.Plugin {
     let candidateGeneration = "";
     let startedAt = 0;
+    let resolutionDirectories = new Set<string>();
     return {
       name: "workbench-app-lifecycle",
       setup: (build) => {
         build.onStart(() => {
           candidateGeneration = randomUUID();
           startedAt = performance.now();
+          resolutionDirectories = new Set();
+        });
+        build.onResolve({ filter: /.*/ }, args => {
+          if (args.kind === "entry-point" || !args.resolveDir) return;
+          // Observe resolution locations even when an import does not exist yet.
+          if (args.path.startsWith(".") || path.isAbsolute(args.path)) {
+            const candidate = path.resolve(args.resolveDir, args.path);
+            resolutionDirectories.add(path.dirname(candidate));
+            resolutionDirectories.add(candidate);
+          }
+          const relative = path.relative(this.repositoryRootPath, args.resolveDir);
+          if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+            resolutionDirectories.add(args.resolveDir);
+          }
+          return undefined;
         });
         build.onResolve({ filter: /^workbench-shared\/frontend-generation$/ }, () => {
           return { namespace: FRONTEND_GENERATION_NAMESPACE, path: FRONTEND_GENERATION_MODULE_SPECIFIER };
@@ -304,6 +339,12 @@ export default class WorkbenchFrontendCompiler {
           ],
         }));
         build.onEnd(async (result) => {
+          if (this.generation.signal.aborted) return;
+          await this.sourceWatcher?.updateDependencies(
+            Object.keys(result.metafile?.inputs ?? {}),
+            [...resolutionDirectories],
+            result.errors.length === 0,
+          );
           if (this.generation.signal.aborted) return;
           if (!result.errors.length && result.outputFiles) {
             this.javascriptOutput = { generation: candidateGeneration, files: result.outputFiles };
