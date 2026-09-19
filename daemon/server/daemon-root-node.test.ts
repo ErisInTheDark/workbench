@@ -67,6 +67,9 @@ test("the root knows only direct roots and parents declare every dependant", () 
   const { nodes, parents } = flattenParents(graph.roots);
 
   assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
+  assert.equal(parents.has("server:cli"), false);
+  assert.deepEqual(nodes.get("server:cli")!.provides, []);
+  assert.deepEqual(nodes.get("server:cli")!.requires, []);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/lifecycle", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
@@ -162,6 +165,9 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.equal(descriptors.get("server:core")!.paths.includes("daemon/server/WorkbenchGitArcFeature.ts"), true);
   assert.equal(descriptors.get("server:core")!.paths.includes("daemon/server/stats/WorkbenchStatsController.ts"), true);
   assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/server/WorkbenchAgentCommandController.ts"), true);
+  assert.deepEqual(owners("wb"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/server/WorkbenchAgentCliEnvironment.ts"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/server/lib/workbench/cli/workbench-agent-cli.sh"), ["server:cli"]);
   assert.deepEqual(owners("daemon/server/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
   assert.deepEqual(
     owners("daemon/server/database/transcript/WorkbenchTranscriptRepository.ts"),
@@ -196,4 +202,12 @@ test("server branch and topology closures never acquire harness roots", () => {
     dependantClosure(["server:process"]),
     descriptors.map(({ scope }) => scope),
   );
+});
+
+test("CLI shim reload stays isolated from domain and provider nodes", () => {
+  const { dependantClosure, descriptors } = readReloadNodeSourceState();
+  const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
+  assert.deepEqual(dependantClosure(["server:cli"]), ["server:cli"]);
+  assert.equal(catalog.get("server:cli")!.safeAll, true);
+  assert.notEqual(catalog.get("server:cli")!.destructive, true);
 });

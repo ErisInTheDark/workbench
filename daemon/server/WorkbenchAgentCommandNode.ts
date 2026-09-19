@@ -165,7 +165,9 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/WorkbenchTranscriptCommandController*.ts",
     "daemon/server/transcript-command-markdown.ts",
     "daemon/server/lib/workbench/commands/**",
-    "daemon/server/lib/workbench/cli/**",
+    "daemon/server/lib/workbench/cli/git-arc-output.ts",
+    "daemon/server/lib/workbench/cli/workbench-agent-cli-commands.ts",
+    "daemon/server/lib/workbench/cli/workbench-agent-cli-responses.ts",
     "daemon/server/lib/workbench/thread/WorkbenchThreadRecallController.ts",
   ].join("\n"),
 });

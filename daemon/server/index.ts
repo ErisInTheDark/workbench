@@ -23,7 +23,6 @@ import { DAEMON_PROCESS_REQUIRED_REGISTRATIONS, type DaemonProcessContext } from
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
 import ReloadableNodeHost from "./ReloadableNodeHost";
-import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchDaemonReloadController";
 import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -553,13 +552,6 @@ async function startDaemon() {
     log("daemon", "CODEX_APP_SERVER_URL no longer selects a local listener; the bound endpoint is published automatically.");
   }
   const endpoint = await startBridgeServer();
-  if (shuttingDown) return;
-  const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
-    origin: endpoint.origin,
-    runtimeDirectoryPath: path.join(DAEMON_PACKAGE_ROOT, "node_modules", ".bin"),
-    shellSourcePath: path.join(DAEMON_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
-  });
-  await workbenchAgentCliEnvironment.install();
   if (shuttingDown) return;
   featureHost = createFeatureHost(endpoint);
   await ensureWorkbenchPromptFiles();

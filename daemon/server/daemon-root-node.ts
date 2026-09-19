@@ -11,11 +11,13 @@ import {
   cancelReloadSourceGeneration,
   completeReloadSourceGeneration,
 } from "./lib/workbench/reload-source-observer";
+import WorkbenchAgentCliNode from "./WorkbenchAgentCliNode";
 
 const generation = beginReloadSourceGeneration();
 const graph = (() => {
   try {
     const graph = defineReloadableNodeGraph<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>([
+      WorkbenchAgentCliNode,
       require("./WorkbenchTurnLifecycleNode").default,
       require("./WorkbenchDatabaseNode").default,
       require("./CodexLifecycleNode").default,

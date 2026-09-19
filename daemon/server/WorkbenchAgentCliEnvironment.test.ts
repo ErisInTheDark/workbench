@@ -14,7 +14,7 @@ test("generated shims dispatch local tests only from their owning repository", a
   const temporary = await mkdtemp(path.join(os.tmpdir(), "wb-test-shim-"));
   try {
     const installed = await new WorkbenchAgentCliEnvironment({
-      origin: "http://127.0.0.1:1",
+      resolverSourcePath: path.join(root, "daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"),
       runtimeDirectoryPath: temporary,
       shellSourcePath: path.join(root, "daemon/server/lib/workbench/cli/workbench-agent-cli.sh"),
     }).install({});

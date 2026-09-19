@@ -29,7 +29,7 @@ if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || { (( "$#" > 0 )) && (( short
     printf '%s\n' "Workbench daemon CLI is unavailable: $daemon_cli" >&2
     exit 1
   fi
-  export WORKBENCH_ORIGIN="${WORKBENCH_ORIGIN:-http://127.0.0.1:4500}"
+  export WORKBENCH_DAEMON_ORIGIN_RESOLVER="$workbench_root/daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"
   exec bash "$daemon_cli" "$@"
 fi
 

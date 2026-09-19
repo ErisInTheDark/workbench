@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -28,6 +29,7 @@ import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-ar
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
+import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
 
 const execFileAsync = promisify(execFile);
 
@@ -212,11 +214,14 @@ const reloadCatalog = [
   { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
 ];
 const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
+const resolverSourcePath = fileURLToPath(new URL("./resolve-workbench-daemon-origin.mts", import.meta.url));
+const rootLauncherPath = fileURLToPath(new URL("../../../../../wb", import.meta.url));
 const requests: Array<{ body: string; method: string; url: string }> = [];
 let agentCommandController: WorkbenchAgentCommandController;
 let origin = "";
 let server: http.Server;
 let temporaryDirectoryPath = "";
+let temporaryDataRootPath = "";
 let reloadStatusReadCount = 0;
 
 test("canonical command descriptors are immutable and unique", () => {
@@ -397,6 +402,13 @@ before(async () => {
     getReloadScopeCatalog: () => reloadCatalog,
   }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
+  temporaryDataRootPath = path.join(temporaryDirectoryPath, "data");
+  await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
+    version: 1,
+    instanceId: randomUUID(),
+    pid: process.pid,
+    origin,
+  });
 });
 
 after(async () => {
@@ -1286,9 +1298,9 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
 
   if (process.platform === "win32") {
     const shimDirectoryPath = path.join(temporaryDirectoryPath, "hook-shims");
-    const shimEnv = { ...env };
+    const shimEnv: NodeJS.ProcessEnv = { ...env, WORKBENCH_DATA_ROOT: temporaryDataRootPath };
     await new WorkbenchAgentCliEnvironment({
-      origin,
+      resolverSourcePath,
       runtimeDirectoryPath: shimDirectoryPath,
       shellSourcePath,
     }).install(shimEnv);
@@ -1308,7 +1320,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   const shimDirectoryPath = path.join(temporaryDirectoryPath, "shims");
   const env = { ...process.env };
   const installed = await new WorkbenchAgentCliEnvironment({
-    origin,
+    resolverSourcePath,
     runtimeDirectoryPath: shimDirectoryPath,
     shellSourcePath,
   }).install(env);
@@ -1317,7 +1329,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   if (process.platform !== "win32") {
     assert.notEqual((await stat(installed.posixShimPath)).mode & 0o111, 0);
   }
-  assert.equal(env.WORKBENCH_ORIGIN, origin);
+  assert.equal(env.WORKBENCH_ORIGIN, process.env.WORKBENCH_ORIGIN);
   assert.equal(env.PATH?.split(path.delimiter)[0], shimDirectoryPath);
 
   if (process.platform !== "win32") {
@@ -1325,6 +1337,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     return;
   }
   delete env.WORKBENCH_ORIGIN;
+  env.WORKBENCH_DATA_ROOT = temporaryDataRootPath;
   env.WORKBENCH_THREAD_ID = "";
   env.CODEX_THREAD_ID = "";
   reloadStatusReadCount = 0;
@@ -1359,20 +1372,26 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
     const workbenchRoot = path.join(temporaryDirectoryPath, "cwd-workbench");
     const cwdRuntimePath = path.join(workbenchRoot, "daemon", "node_modules", ".bin");
     const pathRuntimePath = path.join(temporaryDirectoryPath, "path-workbench-bin");
+    const cwdResolverPath = path.join(temporaryDirectoryPath, "cwd-resolver.mjs");
+    const pathResolverPath = path.join(temporaryDirectoryPath, "path-resolver.mjs");
+    await Promise.all([
+      writeFile(cwdResolverPath, `process.stdout.write(${JSON.stringify(`http://127.0.0.1:${cwdAddress.port}`)});\n`, "utf8"),
+      writeFile(pathResolverPath, `process.stdout.write(${JSON.stringify(origin)});\n`, "utf8"),
+    ]);
     const cwdEnv = { ...process.env };
     await new WorkbenchAgentCliEnvironment({
-      origin: `http://127.0.0.1:${cwdAddress.port}`,
+      resolverSourcePath: cwdResolverPath,
       runtimeDirectoryPath: cwdRuntimePath,
       shellSourcePath,
     }).install(cwdEnv);
     await new WorkbenchAgentCliEnvironment({
-      origin: `http://127.0.0.1:${cwdAddress.port}`,
+      resolverSourcePath: cwdResolverPath,
       runtimeDirectoryPath: path.join(workbenchRoot, "node_modules", ".bin"),
       shellSourcePath,
     }).install({ ...process.env });
     const pathEnv = { ...process.env };
     const pathInstall = await new WorkbenchAgentCliEnvironment({
-      origin,
+      resolverSourcePath: pathResolverPath,
       runtimeDirectoryPath: pathRuntimePath,
       shellSourcePath,
     }).install(pathEnv);
@@ -1388,6 +1407,53 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
     assert.match(cwdRequests[0], /(?:^|&)cwd=.*cwd-workbench(?:&|$)/u);
   } finally {
     await new Promise<void>((resolve, reject) => cwdServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("generated and root launchers follow endpoint publication instead of inherited origin", async () => {
+  const rotatedRequests: string[] = [];
+  const rotatedServer = http.createServer((request, response) => {
+    rotatedRequests.push(request.url ?? "");
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.end("rotated\n");
+  });
+  await new Promise<void>((resolve) => rotatedServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const rotatedAddress = rotatedServer.address();
+    assert(rotatedAddress && typeof rotatedAddress === "object");
+    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
+      version: 1,
+      instanceId: randomUUID(),
+      pid: process.pid,
+      origin: `http://127.0.0.1:${rotatedAddress.port}`,
+    });
+    const shimDirectoryPath = path.join(temporaryDirectoryPath, "rotated-shims");
+    const installed = await new WorkbenchAgentCliEnvironment({
+      resolverSourcePath,
+      runtimeDirectoryPath: shimDirectoryPath,
+      shellSourcePath,
+    }).install({});
+    const env = {
+      ...process.env,
+      WORKBENCH_DATA_ROOT: temporaryDataRootPath,
+      WORKBENCH_ORIGIN: origin,
+    };
+    for (const launcher of [installed.posixShimPath, rootLauncherPath]) {
+      const result = await execFileAsync("bash", [launcher, "subagent", "list"], {
+        cwd: temporaryDirectoryPath,
+        env,
+      });
+      assert.equal(result.stdout, "rotated\n");
+    }
+    assert.deepEqual(rotatedRequests, ["/daemon/agent-command", "/daemon/agent-command"]);
+  } finally {
+    await new Promise<void>((resolve, reject) => rotatedServer.close((error) => error ? reject(error) : resolve()));
+    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
+      version: 1,
+      instanceId: randomUUID(),
+      pid: process.pid,
+      origin,
+    });
   }
 });
 

@@ -22,6 +22,31 @@ if [[ "${1:-}" == "test" ]]; then
   exec node --disable-warning=ExperimentalWarning --import tsx "$test_entry" "$@"
 fi
 
+hook_mode=0
+if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
+  hook_mode=1
+elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
+  hook_mode=1
+fi
+
+if [[ -n "${WORKBENCH_DAEMON_ORIGIN_RESOLVER:-}" ]]; then
+  if [[ ! -f "$WORKBENCH_DAEMON_ORIGIN_RESOLVER" ]]; then
+    printf '%s\n' 'Workbench daemon endpoint resolver is unavailable.' >&2
+    if (( hook_mode == 1 )); then
+      printf '%s\n' '{}'
+      exit 0
+    fi
+    exit 1
+  fi
+  if ! WORKBENCH_ORIGIN="$(node --disable-warning=ExperimentalWarning "$WORKBENCH_DAEMON_ORIGIN_RESOLVER")"; then
+    if (( hook_mode == 1 )); then
+      printf '%s\n' '{}'
+      exit 0
+    fi
+    exit 1
+  fi
+fi
+
 if [[ -z "${WORKBENCH_ORIGIN:-}" ]]; then
   printf '%s\n' 'WORKBENCH_ORIGIN is unavailable. Run wb from a Workbench-managed agent process.' >&2
   exit 1
@@ -72,12 +97,10 @@ curl_args=(
   --data-urlencode "callerHarness=${WORKBENCH_HARNESS:-codex}"
   --data-urlencode "workbenchOrigin=$WORKBENCH_ORIGIN"
 )
-hook_mode=0
 if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
-  hook_mode=1
   curl_args+=(--data-urlencode "arg=__hook" --data-urlencode "arg=apply-patch-claim")
 elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
-  hook_mode=1
+  :
 fi
 for argument in "$@"; do
   curl_args+=(--data-urlencode "arg=$argument")

@@ -9,7 +9,7 @@ import path from "node:path";
 const SHIM_MARKER = "workbench-agent-cli-shim-v1";
 
 export interface WorkbenchAgentCliEnvironmentOptions {
-  origin: string;
+  resolverSourcePath: string;
   runtimeDirectoryPath: string;
   shellSourcePath: string;
 }
@@ -19,12 +19,12 @@ function quotePosixSingle(value: string) {
 }
 
 export default class WorkbenchAgentCliEnvironment {
-  private readonly origin: string;
+  private readonly resolverSourcePath: string;
   private readonly runtimeDirectoryPath: string;
   private readonly shellSourcePath: string;
 
-  constructor({ origin, runtimeDirectoryPath, shellSourcePath }: WorkbenchAgentCliEnvironmentOptions) {
-    this.origin = origin;
+  constructor({ resolverSourcePath, runtimeDirectoryPath, shellSourcePath }: WorkbenchAgentCliEnvironmentOptions) {
+    this.resolverSourcePath = path.resolve(resolverSourcePath);
     this.runtimeDirectoryPath = path.resolve(runtimeDirectoryPath);
     this.shellSourcePath = path.resolve(shellSourcePath);
   }
@@ -43,8 +43,8 @@ export default class WorkbenchAgentCliEnvironment {
       assertManagedOrMissing(windowsShimPath),
     ]);
     await Promise.all([
-      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_ORIGIN=" + quotePosixSingle(this.origin) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
-      fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
+      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_DAEMON_ORIGIN_RESOLVER=" + quotePosixSingle(this.resolverSourcePath) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
+      fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_DAEMON_ORIGIN_RESOLVER=${this.resolverSourcePath.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
     ]);
     // PowerShell consumes unquoted -- for .ps1 commands; let it resolve wb.cmd instead.
     await fs.rm(powershellShimPath, { force: true });
@@ -56,7 +56,6 @@ export default class WorkbenchAgentCliEnvironment {
     env.PATH = hasRuntimePath
       ? currentPath
       : [this.runtimeDirectoryPath, currentPath].filter(Boolean).join(path.delimiter);
-    env.WORKBENCH_ORIGIN = this.origin;
 
     return {
       posixShimPath,
