@@ -11,6 +11,12 @@ async function fixture(context: TestContext) {
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   return { root, owner: new CodexSingleFileDocuments(root) };
 }
+test("creates timestamped session directories", async context => {
+  const { owner } = await fixture(context);
+  const document = await owner.create("timestamped");
+  assert.match(path.basename(document.directory), /^session-\d{6}-\d{6}$/u);
+  await document.dispose();
+});
 test("journal preserves complete escaped events in append order after disposal", async context => {
   const { owner } = await fixture(context);
   const document = await owner.create("before </original> & after");

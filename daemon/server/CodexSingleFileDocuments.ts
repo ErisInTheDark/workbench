@@ -10,6 +10,26 @@ import type { SingleFileDocument } from "./CodexSingleFileController";
 
 export type SingleFileJournalTag = "original" | "instructions" | "tools" | "agent-input" | "agent-output" | "tool-response" | "vtt" | "patch-applied" | "completed" | "cancelled" | "error";
 
+function hasErrorCode(error: unknown, code: string) {
+  return error instanceof Error && "code" in error && error.code === code;
+}
+
+function timestampedSessionName() {
+  const timestamp = new Date().toISOString();
+  return `session-${timestamp.slice(2, 10).replaceAll("-", "")}-${timestamp.slice(11, 19).replaceAll(":", "")}`;
+}
+
+async function createSessionDirectory(root: string) {
+  const directory = path.join(root, timestampedSessionName());
+  try {
+    await fs.mkdir(directory);
+    return directory;
+  } catch (error) {
+    if (!hasErrorCode(error, "EEXIST")) throw error;
+    return fs.mkdtemp(`${directory}-`);
+  }
+}
+
 export default class CodexSingleFileDocuments {
   private readonly active = new Set<string>();
   private pruning: Promise<void> = Promise.resolve();
@@ -19,7 +39,7 @@ export default class CodexSingleFileDocuments {
     await fs.mkdir(this.root, { recursive: true });
     const root = await fs.realpath(this.root);
     if ((await fs.lstat(this.root)).isSymbolicLink()) throw new Error("Voice history directory must not be a symbolic link.");
-    const directory = await fs.mkdtemp(path.join(root, "session-"));
+    const directory = await createSessionDirectory(root);
     this.active.add(directory);
     const file = path.join(directory, "document.txt");
     const journal = path.join(directory, "transcript.md");
@@ -69,7 +89,7 @@ export default class CodexSingleFileDocuments {
   private async pruneCurrent(root: string) {
     const entries = await fs.readdir(root, { withFileTypes: true });
     const sessions = await Promise.all(entries
-      .filter(entry => entry.isDirectory() && /^session-[A-Za-z0-9]+$/u.test(entry.name))
+      .filter(entry => entry.isDirectory() && /^session-(?:\d{6}-\d{6}(?:-[A-Za-z0-9]+)?|[A-Za-z0-9]+)$/u.test(entry.name))
       .map(async entry => {
         const directory = path.resolve(root, entry.name);
         if (path.dirname(directory) !== root) throw new Error("Invalid voice history path.");
