@@ -48,7 +48,7 @@ test("one provider ingress publishes admitted references without rewriting conte
       kind: "item", threadId: native.nativeThreadId, turnId: nativeTurnId, item, lifecycle: "streaming", observedAt: 1,
     }]);
     const turnId = threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
-    const itemId = items.itemIdForSource(thread.threadId, { turnId, sourceId: item.id, kind: "provisional" });
+    const itemId = items.itemIdForSource(thread.threadId, { turnId, reference: item.id, kind: "provisional" });
     const edge = new CodexProviderObservations(owners);
     const nativeEvent = { method: "item/started", params: { threadId: native.nativeThreadId, turnId: nativeTurnId, item, startedAtMs: 1 } };
     const publication = edge.native(nativeEvent);

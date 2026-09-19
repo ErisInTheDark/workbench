@@ -34,7 +34,13 @@ export async function seedLifecycleTranscript(project: string, databasePath: str
       state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
     });
     const item = new WorkbenchTranscriptIdentityRepository(database).admit({
-      threadId: thread.threadId, sources: [{ turnId: turn.turnId, sourceId: "image", kind: "stable" }], legacyAliases: [],
+      threadId: thread.threadId,
+      sources: [{
+        turnId: turn.turnId,
+        reference: "image",
+        kind: "stable",
+        component: { kind: "item", index: 0 },
+      }],
     });
     const bytes = Buffer.from("isolated transcript image");
     const image = await externalizeCodexTranscriptInlineImages({

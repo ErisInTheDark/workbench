@@ -16,8 +16,41 @@ function snapshot(): WorkbenchTranscriptSnapshot {
     },
     turns: [], loadedTurnIds: [], hasPreviousTurns: false,
     rows: {
+      itemIdentities: [{
+        id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+        thread_id: "thread",
+      }],
+      itemSourceAliases: [{
+        id: 1,
+        turn_id: "turn",
+        source_kind: "provisional",
+        reference: "item-1",
+        component_kind: "item",
+        component_index: 0,
+        thread_id: "thread",
+        item_identity_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+      }, {
+        id: 2,
+        turn_id: "turn",
+        source_kind: "stable",
+        reference: "fco_one",
+        component_kind: "item",
+        component_index: 0,
+        thread_id: "thread",
+        item_identity_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+      }, {
+        id: 3,
+        turn_id: "turn",
+        source_kind: "client",
+        reference: "client-one",
+        component_kind: "item",
+        component_index: 0,
+        thread_id: "thread",
+        item_identity_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+      }],
       threadItems: [{
-        id: 1, source_id: "fco_one", thread_id: "thread", turn_id: "turn", item_position: 0,
+        id: 1, public_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+        thread_id: "thread", turn_id: "turn", item_position: 0,
         type: "functionCallOutput", created_at: 1, updated_at: 2,
       }],
       threadItemToolOutputs: [{
@@ -34,7 +67,7 @@ test("old-client projection preserves the same item as opaque context without ch
   const original = snapshot();
   const wire = transcriptSnapshotForProtocol(original, 1)!;
   assert.equal(wire.rows.threadItems[0]?.type, "unknown");
-  assert.equal(wire.rows.threadItems[0]?.source_id, original.rows.threadItems[0]?.source_id);
+  assert.equal((wire.rows.threadItems[0] as { source_id?: string } | undefined)?.source_id, "fco_one");
   assert.equal(original.rows.threadItems[0]?.type, "functionCallOutput");
   const conformed = conformWorkbenchTranscriptSnapshot(wire);
   assert.ok(conformed.success);
@@ -46,6 +79,6 @@ test("old-client projection preserves the same item as opaque context without ch
     id: "fco_one", type: "functionCallOutput", name: "context", namespace: "workbench",
     output: "retained content", workbenchInjectionAcceptedAt: 2,
   });
-  assert.equal(transcriptSnapshotForProtocol(original, 2), original);
+  assert.equal(transcriptSnapshotForProtocol(original, 4), original);
   assert.equal(transcriptSnapshotForProtocol(null), null);
 });

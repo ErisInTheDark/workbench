@@ -29,7 +29,6 @@ import type {
 export const transcriptSnapshotTables = Object.freeze({
   itemIdentities: transcriptIdentityTables.itemIdentities,
   itemSourceAliases: transcriptIdentityTables.itemSourceAliases,
-  itemLegacyAliases: transcriptIdentityTables.itemLegacyAliases,
   threadItems: itemTables.threadItems,
   threadItemTimelines: itemTables.threadItemTimelines,
   threadItemTimelineAliases: itemTables.threadItemTimelineAliases,
@@ -79,7 +78,7 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
-  protocolVersion?: 1 | 2 | 3;
+  protocolVersion?: 1 | 2 | 3 | 4;
   threadId: string;
   turnIds?: string[];
   turnLimit: number;
@@ -133,7 +132,8 @@ export function conformWorkbenchTranscriptSnapshot(
   }
   if (typeof value.hasPreviousTurns !== "boolean") issues.push(invalidValue(["hasPreviousTurns"]));
 
-  const rowsValue = isRecord(value.rows) ? value.rows : {};
+  const rawRowsValue = isRecord(value.rows) ? value.rows : {};
+  const rowsValue = normalizeLegacyTranscriptRows(rawRowsValue, repairedPaths);
   if (!isRecord(value.rows)) issues.push(invalidValue(["rows"]));
   for (const key of Object.keys(rowsValue)) {
     if (!(key in transcriptSnapshotTables)) repairedPaths.push(["rows", key]);
@@ -281,7 +281,13 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const turnLimit = value.turnLimit;
   const beforeTurnIndex = value.beforeTurnIndex;
   const turnIds = value.turnIds;
-  if (value.protocolVersion !== undefined && value.protocolVersion !== 1 && value.protocolVersion !== 2 && value.protocolVersion !== 3) {
+  if (
+    value.protocolVersion !== undefined
+    && value.protocolVersion !== 1
+    && value.protocolVersion !== 2
+    && value.protocolVersion !== 3
+    && value.protocolVersion !== 4
+  ) {
     return { success: false, message: "Unsupported transcript protocol version." };
   }
   if (!threadId || typeof turnLimit !== "number" || !Number.isSafeInteger(turnLimit) || turnLimit <= 0) {
@@ -304,7 +310,12 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const data: WorkbenchTranscriptReadRequest = { threadId, turnLimit };
   if (typeof beforeTurnIndex === "number") data.beforeTurnIndex = beforeTurnIndex;
   if (Array.isArray(turnIds)) data.turnIds = turnIds;
-  if (value.protocolVersion === 1 || value.protocolVersion === 2 || value.protocolVersion === 3) data.protocolVersion = value.protocolVersion;
+  if (
+    value.protocolVersion === 1
+    || value.protocolVersion === 2
+    || value.protocolVersion === 3
+    || value.protocolVersion === 4
+  ) data.protocolVersion = value.protocolVersion;
   return { success: true, data };
 }
 
@@ -458,7 +469,7 @@ export interface WorkbenchTranscriptUpdatedParams {
   subscriptionId: string;
 }
 
-export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 3;
+export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 4;
 
 export interface WorkbenchTranscriptCapabilities {
   protocolVersion: number;
@@ -473,6 +484,29 @@ export const workbenchTranscriptNotifications = Object.freeze({
 export interface WorkbenchTranscriptStreamedParams {
   subscriptionId: string;
   update: TranscriptStreamUpdate;
+}
+
+function normalizeLegacyTranscriptRows(
+  rows: Record<string, unknown>,
+  repairedPaths: DatabaseConformancePath[],
+): Record<string, unknown> {
+  const sourceRows = rows.itemSourceAliases;
+  if (!Array.isArray(sourceRows)) return rows;
+  let repaired = false;
+  const itemSourceAliases = sourceRows.map((row, index) => {
+    if (!isRecord(row) || typeof row.source_id !== "string" || "reference" in row) return row;
+    repaired = true;
+    repairedPaths.push(["rows", "itemSourceAliases", index, "source_id"]);
+    const { source_id: reference, ...rest } = row;
+    return {
+      ...rest,
+      id: index + 1,
+      reference,
+      component_kind: "item",
+      component_index: 0,
+    };
+  });
+  return repaired ? { ...rows, itemSourceAliases } : rows;
 }
 
 function isNonnegativeInteger(value: unknown): value is number {

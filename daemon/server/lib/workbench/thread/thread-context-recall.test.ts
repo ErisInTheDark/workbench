@@ -106,8 +106,12 @@ test("native incoming agent recall preserves identity and excludes passive outpu
     const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 });
     assert.ok(snapshot);
     const records = buildSqliteWorkbenchThreadRecallRecords(snapshot);
+    const publicIdByReference = new Map(snapshot.rows.itemSourceAliases.map(
+      ({ item_identity_id, reference }) => [reference, item_identity_id],
+    ));
     assert.deepEqual(records.map(({ ref }) => readSqliteWorkbenchThreadRecallRef(ref)?.itemId), [
-      "native-agent", "native-agent-again",
+      publicIdByReference.get("native-agent"),
+      publicIdByReference.get("native-agent-again"),
     ]);
     assert.equal(legacyRecords.length, 2);
     assert.equal(new Set(legacyRecords.map(({ ref }) => ref)).size, 2);

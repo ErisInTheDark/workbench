@@ -542,9 +542,15 @@ test("schema constraints reject invalid thread state and mismatched item augment
         id,thread_id,turn_index,harness_id,native_location,native_thread_id,state,created_at
       ) VALUES ('terminal-without-provider-times','thread',1,'codex','C:/project','native','completed',1)
     `).run();
+    database.exec(`
+      INSERT INTO workbench_transcript_item_identities(id,thread_id) VALUES
+        ('00000000-0000-4000-8000-000000000001','thread'),
+        ('00000000-0000-4000-8000-000000000002','thread'),
+        ('00000000-0000-4000-8000-000000000003','thread');
+    `);
     const itemId = Number(database.prepare(`
-      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
-      VALUES ('item','thread','turn',0,'reasoning',1,1)
+      INSERT INTO thread_items(public_id,thread_id,turn_id,item_position,type,created_at,updated_at)
+      VALUES ('00000000-0000-4000-8000-000000000001','thread','turn',0,'reasoning',1,1)
     `).run().lastInsertRowid);
     assert.throws(
       () => database.prepare("INSERT INTO thread_item_assistant_messages(item_id,state,phase,text) VALUES (?,'completed','commentary','nope')").run(itemId),
@@ -552,8 +558,8 @@ test("schema constraints reject invalid thread state and mismatched item augment
     );
 
     const operationId = Number(database.prepare(`
-      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
-      VALUES ('operation','thread','turn',1,'operation',1,1)
+      INSERT INTO thread_items(public_id,thread_id,turn_id,item_position,type,created_at,updated_at)
+      VALUES ('00000000-0000-4000-8000-000000000002','thread','turn',1,'operation',1,1)
     `).run().lastInsertRowid);
     database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES (?,'tool',2)").run(operationId);
     assert.throws(() => database.prepare(`
@@ -572,8 +578,8 @@ test("schema constraints reject invalid thread state and mismatched item augment
     `).run(operationId), /CHECK constraint failed/);
 
     const processId = Number(database.prepare(`
-      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
-      VALUES ('process','thread','turn',2,'operation',1,1)
+      INSERT INTO thread_items(public_id,thread_id,turn_id,item_position,type,created_at,updated_at)
+      VALUES ('00000000-0000-4000-8000-000000000003','thread','turn',2,'operation',1,1)
     `).run().lastInsertRowid);
     database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES (?,'process',0)").run(processId);
     database.prepare(`

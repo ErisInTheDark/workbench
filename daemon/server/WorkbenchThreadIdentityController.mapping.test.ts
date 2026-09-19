@@ -456,8 +456,7 @@ test("repeated provider catalogues admit only new identity evidence without hidi
     assert.equal(fixture.admissions(), initialAdmissions + 1);
 
     await owners.items.admit([{
-      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "client", sourceId: "other-client" }],
-      legacyAliases: [],
+      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "client", reference: "other-client" }],
     }]);
     const otherClientId = repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse("other-client") })!.itemId;
     message.clientId = "other-client";
@@ -470,29 +469,29 @@ test("repeated provider catalogues admit only new identity evidence without hidi
 });
 
 for (const route of ["catalogue", "event", "recorder"] as const) {
-  for (const evidence of ["recorded-client", "structural-client", "retained-alias"] as const) {
+  for (const evidence of ["recorded-client", "structural-client"] as const) {
   test(`correlated identity refreshes warm projection references through ${route} admission (${evidence})`, async (context) => {
     const fixture = await setup();
     const { database, owners, native, parent, turn } = fixture;
     const warnings = context.mock.method(console, "warn", () => undefined);
     try {
       const sourceId = evidence === "recorded-client" ? "native-message" : "item-1";
-      const message: ThreadItem = evidence === "retained-alias"
-        ? { type: "contextCompaction", id: sourceId }
-        : { type: "userMessage", id: sourceId, clientId: "submitted",
-          content: [{ type: "text", text: "preserve my input", text_elements: [] }] };
-      const clientSource = { turnId: turn.turnId, kind: "client" as const, sourceId: "submitted" };
+      const message: ThreadItem = {
+        type: "userMessage", id: sourceId, clientId: "submitted",
+        content: [{ type: "text", text: "preserve my input", text_elements: [] }],
+      };
+      const clientSource = { turnId: turn.turnId, kind: "client" as const, reference: "submitted" };
       const [structural] = await owners.items.admit([
         { threadId: parent.threadId, sources: [
-          { turnId: turn.turnId, kind: "stable", sourceId: "native-message" },
+          { turnId: turn.turnId, kind: "stable", reference: "native-message" },
           ...(evidence === "structural-client" ? [clientSource] : []),
-        ], legacyAliases: [] },
+        ] },
       ]);
       const recorded = new WorkbenchTranscriptIdentityRepository(database).admit(
         { threadId: parent.threadId, sources: [
-          { turnId: turn.turnId, kind: "provisional", sourceId: "item-1" },
+          { turnId: turn.turnId, kind: "provisional", reference: "item-1" },
           ...(evidence === "recorded-client" ? [clientSource] : []),
-        ], legacyAliases: [] },
+        ] },
       );
       const repository = new WorkbenchTranscriptRepository(database);
       repository.settle([{
@@ -503,9 +502,6 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
         kind: "item", threadId: parent.threadId, turnId: turn.turnId, publicItemId: recorded!.itemId,
         lifecycle: "completed", observedAt: 3, item: { ...message, id: "item-1" },
       }]);
-      if (evidence === "retained-alias") database.prepare(`
-        INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id) VALUES (?, ?, ?, ?)
-      `).run(parent.threadId, turn.turnId, "item-1", structural!.itemId);
       const before = database.prepare("SELECT * FROM thread_items").all();
       const event = { method: "item/completed" as const, params: {
         threadId: native.nativeThreadId, turnId: native.nativeTurnId, item: message, completedAtMs: 2_000,
@@ -536,17 +532,29 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       const admissions = fixture.admissions();
       await admit();
       assert.equal(fixture.admissions(), admissions, "The repaired evidence must stop scheduling duplicate admission.");
-      for (const reference of [structural!.itemId, recorded!.itemId, "native-message", "item-1",
-        ...(evidence === "retained-alias" ? [] : ["submitted"])]) {
-        assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(reference)), recorded!.itemId);
+      const canonicalItemId = owners.items.itemIdForReference(
+        parent.threadId,
+        turn.turnId,
+        fixtureIdentitySchemas.ItemReferenceSchema.parse("submitted"),
+      );
+      assert.ok(canonicalItemId);
+      for (const reference of ["native-message", "item-1", "submitted"]) {
+        assert.equal(
+          owners.items.itemIdForReference(
+            parent.threadId,
+            turn.turnId,
+            fixtureIdentitySchemas.ItemReferenceSchema.parse(reference),
+          ),
+          canonicalItemId,
+        );
       }
-      assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, recorded!.itemId);
+      assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, canonicalItemId);
       const mappedEvent = mapProviderNotification(owners, native, event);
       assert.equal(mappedEvent.method, "item/completed");
-      if (mappedEvent.method === "item/completed") assert.equal(mappedEvent.params.item.id, recorded!.itemId);
+      if (mappedEvent.method === "item/completed") assert.equal(mappedEvent.params.item.id, canonicalItemId);
       const mappedObservation = mapNativeTranscriptObservation(owners, native, observation);
       assert.equal(mappedObservation.kind, "item");
-      if (mappedObservation.kind === "item") assert.equal(mappedObservation.publicItemId, recorded!.itemId);
+      if (mappedObservation.kind === "item") assert.equal(mappedObservation.publicItemId, canonicalItemId);
       assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
       assert.deepEqual(database.pragma("foreign_key_check"), []);
       assert.equal(warnings.mock.callCount(), 0);
@@ -805,7 +813,7 @@ test("provider item admission preserves opaque content and enables synchronous p
     assert.deepEqual((projected[2] as Extract<ThreadItem, { type: "dynamicToolCall" }>).arguments,
       (source[2] as Extract<ThreadItem, { type: "dynamicToolCall" }>).arguments);
     assert.equal(owners.items.itemIdForSource(parent.threadId, {
-      turnId: turn.turnId, kind: "client", sourceId: "client-id",
+      turnId: turn.turnId, kind: "client", reference: "client-id",
     }), projected[1]!.id);
     assert.deepEqual(await admitProviderThreadItems(owners, native, source), projected);
     assert.deepEqual(database.prepare("SELECT id FROM thread_items").all(), []);
@@ -1018,8 +1026,7 @@ for (const evidence of ["provisional", "retained-collision", "client-only"] as c
       if (evidence === "retained-collision") {
         const [wrong] = await owners.items.admit([{
           threadId: parent.threadId,
-          sources: [{ turnId: turn.turnId, kind: "stable", sourceId: source.id }],
-          legacyAliases: [],
+          sources: [{ turnId: turn.turnId, kind: "stable", reference: source.id }],
         }]);
         retainedWrongId = wrong!.itemId;
         assert.notEqual(retainedWrongId, message!.id);
@@ -1080,7 +1087,7 @@ test("live provisional references retain their source kind when another identity
     const item: ThreadItem = { type: "reasoning", id: "item-1", summary: [], content: [] };
     const [message] = await admitProviderThreadItems(owners, native, [item]);
     await owners.items.admit([{
-      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", sourceId: item.id }], legacyAliases: [],
+      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", reference: item.id }],
     }]);
     const event = mapProviderNotification(owners, native, {
       method: "item/reasoning/summaryTextDelta",
@@ -1102,8 +1109,8 @@ test("canonical recording maps structural references without changing evidence, 
       contentItems: null, success: true, durationMs: null,
     };
     const [item] = await admitProviderThreadItems(owners, native, [sourceItem]);
-    const [questionnaire, steer] = await owners.items.admit(["native-questionnaire", "native-steer"].map((alias) => ({
-      threadId: parent.threadId, sources: [], legacyAliases: [{ turnId: turn.turnId, alias }],
+    const [questionnaire, steer] = await owners.items.admit(["native-questionnaire", "native-steer"].map((reference) => ({
+      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", reference }],
     })));
     const observations: NativeTranscriptAtomicObservation[] = [
       { kind: "thread", threadId: native.nativeThreadId, projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "C:/repo",
@@ -1161,8 +1168,13 @@ test("canonical recording maps structural references without changing evidence, 
       itemId: null, insertAfterItemId: null,
     };
     await owners.items.admit([{
-      threadId: parent.threadId, itemId: questionnaire!.itemId, sources: [],
-      legacyAliases: [{ turnId: turn.turnId, alias: resolveQuestionnaireHistoryItemId(legacyQuestionnaire) }],
+      threadId: parent.threadId,
+      itemId: questionnaire!.itemId,
+      sources: [{
+        turnId: turn.turnId,
+        kind: "stable",
+        reference: resolveQuestionnaireHistoryItemId(legacyQuestionnaire),
+      }],
     }]);
     const context = { questionnaireEntries: [legacyQuestionnaire], steerEntries: [], browseResultEntries: [] };
     const response = await mapNativeProviderResponse(owners, "codex", {

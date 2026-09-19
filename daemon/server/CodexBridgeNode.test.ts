@@ -35,7 +35,7 @@ test("node serves saved history while refresh initialisation stalls and retires 
   };
   const admitted = await fixture.identities.threads.observeTurn(turn);
   const [item] = await fixture.identities.items.admit([{
-    threadId: identity.threadId, sources: [{ turnId: admitted.turnId, kind: "stable", sourceId: "message" }], legacyAliases: [],
+    threadId: identity.threadId, sources: [{ turnId: admitted.turnId, kind: "stable", reference: "message" }],
   }]);
   const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
   repository.settle([

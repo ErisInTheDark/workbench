@@ -9,6 +9,10 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptQueryRepository from "./WorkbenchTranscriptQueryRepository";
 import { TranscriptQuerySchema, type TranscriptQuery } from "./transcript-query-contract";
 
+function itemPublicId(id: number) {
+  return `00000000-0000-4000-8000-${String(id).padStart(12, "0")}`;
+}
+
 test("read exposes canonical item data rather than database field snippets", () => {
   const { db, read } = fixture();
   try {
@@ -47,15 +51,30 @@ function fixture() {
       VALUES (?, ?, 0, 'codex', '/', ?, 'completed', 1)`).run(`${id}-turn`, id, `native-${index}`);
   }
   db.prepare("INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at) VALUES ('wb-one-turn', 'wb-one', 1)").run();
+  const addRoot = (id: number, thread: string, reference: string, type: string, position = id) => {
+    const publicId = itemPublicId(id);
+    db.prepare("INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)").run(publicId, thread);
+    db.prepare(`INSERT INTO workbench_transcript_item_source_aliases(
+      turn_id, source_kind, reference, component_kind, component_index, thread_id, item_identity_id
+    ) VALUES (?, 'stable', ?, 'item', 0, ?, ?)`).run(`${thread}-turn`, reference, thread, publicId);
+    db.prepare(`INSERT INTO thread_items(id, public_id, thread_id, turn_id, item_position, type, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(id, publicId, thread, `${thread}-turn`, position, type, id, id);
+    return publicId;
+  };
   const add = (id: number, thread: string, value: string, position = id) => {
-    db.prepare(`INSERT INTO thread_items(id, source_id, thread_id, turn_id, item_position, type, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'assistantMessage', ?, ?)`).run(id, `source-${id}`, thread, `${thread}-turn`, position, id, id);
+    addRoot(id, thread, `source-${id}`, "assistantMessage", position);
     db.prepare("INSERT INTO thread_item_assistant_messages(item_id, state, phase, text) VALUES (?, 'completed', 'commentary', ?)").run(id, value);
   };
   add(1, "wb-one", "first 100%_literal Éclair");
   add(2, "wb-two", "second 100%_literal");
   add(3, "wb-one", "third needle");
-  return { db, add, read: (input: Partial<TranscriptQuery>) => new WorkbenchTranscriptQueryRepository(db).read(TranscriptQuerySchema.parse({ action: "search", queries: ["100%_literal"], ...input })) };
+  return {
+    db,
+    add,
+    addRoot,
+    read: (input: Partial<TranscriptQuery>) => new WorkbenchTranscriptQueryRepository(db)
+      .read(TranscriptQuerySchema.parse({ action: "search", queries: ["100%_literal"], ...input })),
+  };
 }
 
 test("stored transcript queries isolate wb ids, include archived bodies and report incomplete storage without writing", () => {
@@ -123,10 +142,9 @@ test("history context follows turn positions and long expansion remains traversa
 });
 
 test("secret answers are neither searchable nor revealed by expansion", () => {
-  const { db, read } = fixture();
+  const { db, read, addRoot } = fixture();
   try {
-    db.prepare(`INSERT INTO thread_items(id, source_id, thread_id, turn_id, item_position, type, created_at, updated_at)
-      VALUES (10, 'secret', 'wb-one', 'wb-one-turn', 10, 'questionnaire', 10, 10)`).run();
+    addRoot(10, "wb-one", "secret", "questionnaire");
     db.prepare(`INSERT INTO thread_item_interactions(item_id, item_type, thread_id, request_key, request_id, title, summary, submit_label, state, resolved_at)
       VALUES (10, 'questionnaire', 'wb-one', 'q', 'q', 'question', '', '', 'answered', 10)`).run();
     db.prepare(`INSERT INTO thread_interaction_questions(item_id, question_index, question_id, header, question, allow_other, is_secret)
@@ -149,10 +167,9 @@ test("secret answers are neither searchable nor revealed by expansion", () => {
 });
 
 test("item expansion honours intersecting project filters and packs small fields into one page", () => {
-  const { db, read } = fixture();
+  const { db, read, addRoot } = fixture();
   try {
-    db.prepare(`INSERT INTO thread_items(id, source_id, thread_id, turn_id, item_position, type, created_at, updated_at)
-      VALUES (10, 'process', 'wb-one', 'wb-one-turn', 10, 'operation', 10, 10)`).run();
+    addRoot(10, "wb-one", "process", "operation");
     db.prepare("INSERT INTO thread_item_operations(item_id, source_kind, source_revision) VALUES (10, 'process', 0)").run();
     db.prepare(`INSERT INTO thread_operation_process_sources(item_id, source_revision, state, command, cwd, output_text, error_text)
       VALUES (10, 0, 'failed', 'run tool', '/work', 'output needle', 'error needle')`).run();
@@ -183,11 +200,9 @@ test("catalogues and stats preserve placement, coverage and exact turn selection
 });
 
 test("multipart tool results and patches match once per item, with explicit opaque opt-in", () => {
-  const { db, read } = fixture();
+  const { db, read, addRoot } = fixture();
   try {
-    const base = db.prepare(`INSERT INTO thread_items(id, source_id, thread_id, turn_id, item_position, type, created_at, updated_at)
-      VALUES (?, ?, 'wb-one', 'wb-one-turn', ?, ?, 10, 10)`);
-    base.run(10, "output", 10, "functionCallOutput");
+    addRoot(10, "wb-one", "output", "functionCallOutput");
     db.prepare("INSERT INTO thread_item_tool_outputs(item_id, name, body_kind) VALUES (10, 'inspect', 'parts')").run();
     const part = db.prepare("INSERT INTO thread_tool_output_parts(item_id, part_index, part_type, text) VALUES (10, ?, 'text', ?)");
     part.run(0, "left needle");
@@ -196,13 +211,13 @@ test("multipart tool results and patches match once per item, with explicit opaq
     assert.equal(read({ queries: ["needle"], tool: "other" }).rows.length, 0);
     assert.equal(read({ queries: ["needle"], tool: "inspect" }).rows.length, 1);
 
-    base.run(11, "patch", 11, "fileChange");
+    addRoot(11, "wb-one", "patch", "fileChange");
     db.prepare("INSERT INTO thread_item_file_changes(item_id, state) VALUES (11, 'completed')").run();
     db.prepare("INSERT INTO thread_file_changes(item_id, change_index, path, change_kind, diff) VALUES (11, 0, 'src/owner.ts', 'update', '+replacement')").run();
     assert.equal(read({ queries: ["replacement"], file: "owner.ts" }).rows.length, 1);
     assert.equal(read({ queries: ["replacement"], file: "other.ts" }).rows.length, 0);
 
-    base.run(12, "opaque", 12, "unknown");
+    addRoot(12, "wb-one", "opaque", "unknown");
     db.prepare(`INSERT INTO thread_item_unknown(item_id, native_type, safe_json) VALUES (12, 'extension', '{"text":"opaque-marker"}')`).run();
     assert.equal(read({ queries: ["opaque-marker"] }).rows.length, 0);
     assert.equal(read({ queries: ["opaque-marker"], opaque: true }).rows.length, 1);
@@ -223,6 +238,6 @@ test("a sparse query yields resumable batches and follows canonical order rather
     assert.equal(second.nextCursor, null);
     db.prepare("UPDATE thread_items SET created_at = 9999 WHERE id = 1").run();
     const oldest = read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", limit: 1 });
-    assert.equal(oldest.rows[0]?.id, "source-1");
+    assert.equal(oldest.rows[0]?.id, itemPublicId(1));
   } finally { db.close(); }
 });

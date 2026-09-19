@@ -336,7 +336,7 @@ export function buildSqliteWorkbenchThreadRecallRecords(
   for (const { item, root } of projection.data) {
     const turnIndex = turnIndexes.get(root.turn_id);
     if (turnIndex === undefined) {
-      throw new Error(`SQLite Thread Recall item ${root.source_id} references an unknown turn.`);
+      throw new Error(`SQLite Thread Recall item ${root.public_id} references an unknown turn.`);
     }
     const sortKey = createWorkbenchThreadContextSortKey(
       turnIndex,

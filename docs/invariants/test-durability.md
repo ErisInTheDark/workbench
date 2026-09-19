@@ -1,0 +1,1 @@
+- We do not need permanent test tax for one-off migrations. Migration system tests and `test:lifecycle` (which tests against copies of real databases) are sufficient.

@@ -33,6 +33,7 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -65,6 +66,23 @@ let testWorkbenchLibraryRoot = "";
 let databaseImage: Buffer;
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
 let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
+
+function rootForReference(snapshot: WorkbenchTranscriptSnapshot, reference: string) {
+  const identityId = snapshot.rows.itemSourceAliases.find((source) => (
+    source.reference === reference
+    && source.component_kind === "item"
+    && source.component_index === 0
+  ))?.item_identity_id;
+  return snapshot.rows.threadItems.find((row) => row.public_id === identityId);
+}
+
+function referenceForRoot(snapshot: WorkbenchTranscriptSnapshot, publicItemId: string) {
+  return snapshot.rows.itemSourceAliases.find((source) => (
+    source.item_identity_id === publicItemId
+    && source.component_kind === "item"
+    && source.component_index === 0
+  ))?.reference;
+}
 
 beforeEach(context => {
   assert.ok("mock" in context);
@@ -535,7 +553,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       if (decisions.length) assert.deepEqual(decisions[0], { id: 10, result: { decision: "decline" } });
       assert.equal(upstreamMessages.some((message) => message.method === "turn/steer" || message.method === "turn/start"), false);
       const { snapshot, projection } = sql.project();
-      const itemId = snapshot.rows.threadItems.find(item => item.source_id === "failed-patch")?.public_id;
+      const itemId = rootForReference(snapshot, "failed-patch")?.public_id;
       const patch = projection.turns.flatMap(turn => turn.items).find(item => item.id === itemId) as WorkbenchFileChangeItem;
       assert.equal(patch.workbenchPolicy, "automaticEscalation");
       assert.equal(patch.changes[0]?.workbenchAnalysis?.outcome, "present");
@@ -1117,8 +1135,8 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
         turnId: expectedLatestId,
       });
       assert.ok(identity);
-      assert.equal(identity.sources.some(({ sourceId }) => sourceId === nativeSourceId), true);
-      assert.equal(identity.sources.some(({ sourceId }) => sourceId === itemId), false);
+      assert.equal(identity.sources.some(({ reference }) => reference === nativeSourceId), true);
+      assert.equal(identity.sources.some(({ reference }) => reference === itemId), false);
     }
   } finally {
     releaseRecording.resolve();
@@ -2179,8 +2197,8 @@ for (const cold of [false, true]) {
     const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("thread") };
     const threadId = sql.ports.identities.threads.workbenchIdForNative(native);
     const turnId = sql.ports.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: NativeTurnIdSchema.parse("turn") });
-    const [first, question, last] = await sql.ports.identities.items.admit(["first", "question", "last"].map(sourceId => ({
-      threadId, sources: [{ turnId, kind: "stable" as const, sourceId }], legacyAliases: [],
+    const [first, question, last] = await sql.ports.identities.items.admit(["first", "question", "last"].map(reference => ({
+      threadId, sources: [{ turnId, kind: "stable" as const, reference }],
     })));
     assert.ok(first && question && last);
     const message = (id: string): ThreadItem => ({
@@ -2477,7 +2495,7 @@ test("Workbench questionnaires share native listing, response, and transcript hi
     const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
     const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: pending.turnId });
     const itemId = fixtureIdentities.items.itemIdForSource(threadId, {
-      turnId, kind: "stable", sourceId: resolveQuestionnaireHistoryItemId(pending),
+      turnId, kind: "stable", reference: resolveQuestionnaireHistoryItemId(pending),
     });
     assert.deepEqual(sqliteBatches[0]?.[0], {
       entry: {
@@ -2631,7 +2649,7 @@ test("detached questionnaire history records directly without answering a provid
     });
     assert.deepEqual(response?.result, { ok: true });
     const itemId = fixtureIdentities.items.itemIdForSource(threadId, {
-      turnId, kind: "stable", sourceId: resolveQuestionnaireHistoryItemId(entry),
+      turnId, kind: "stable", reference: resolveQuestionnaireHistoryItemId(entry),
     });
     assert.deepEqual(sqliteBatches, [[{
       entry: { ...entry, threadId, turnId, itemId, insertAfterItemId: null, insertAfterItemIndex: null },
@@ -2720,7 +2738,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
   const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
   const [command] = await fixtureIdentities.items.admit([{
-    threadId, sources: [{ turnId, kind: "stable", sourceId: "command" }], legacyAliases: [],
+    threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
   }]);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
   const observations: object[] = [];
@@ -2806,7 +2824,7 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
   const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
   const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
   await fixtureIdentities.items.admit([{
-    threadId, sources: [{ turnId, kind: "stable", sourceId: "command" }], legacyAliases: [],
+    threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
   }]);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-sqlite-failure-"));
   const notifications: object[] = [];
@@ -3142,16 +3160,16 @@ test("live transcript recording and reload use only SQL and preserve image asset
       assert.equal((original.params as { threadId: string }).threadId, "thread");
     }
     assert.ok(publications.some(([event]) => event.method === "browse/result/recorded"));
-    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "message"));
-    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "dynamic-call"));
-    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "command"));
+    assert.ok(rootForReference(snapshot, "message"));
+    assert.ok(rootForReference(snapshot, "dynamic-call"));
+    assert.ok(rootForReference(snapshot, "command"));
     assert.equal(snapshot.rows.threadItemInteractions.length, 1);
     assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
     assert.deepEqual(snapshot.rows.transcriptAssets.map(({ digest }) => digest), [assetDigest]);
     assert.deepEqual(Buffer.from((await assetPorts(database).readTranscriptAsset({
       threadId: encodedThreadId, assetName: `${assetDigest}.png`,
     }))!.bytes), assetBytes);
-    const messageItemId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
+    const messageItemId = rootForReference(snapshot, "message")?.id;
     assert.ok(messageItemId);
     assert.deepEqual(
       snapshot.rows.threadItemTimelines.find(({ item_id }) => item_id === messageItemId),
@@ -3207,8 +3225,10 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     bridge = createBridge();
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread() } });
     await bridge.waitForIdle();
-    const nativeIds = (items: { id: string }[]) => items.map(item =>
-      sql.project().snapshot.rows.threadItems.find(row => row.public_id === item.id)?.source_id);
+    const nativeIds = (items: { id: string }[]) => items.map(item => {
+      const snapshot = sql.project().snapshot;
+      return referenceForRoot(snapshot, item.id);
+    });
     const systemMessage = createWorkbenchFileChangeFailureSystemMessage([{
       additions: 1,
       deletions: 1,
@@ -3257,7 +3277,7 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     const publicThreadId = sql.ports.identities.threads.workbenchIdForNative(native);
     const publicTurnId = sql.ports.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
     const publicItemId = sql.ports.identities.items.itemIdForSource(publicThreadId, {
-      turnId: publicTurnId, sourceId: anchorlessItemId, kind: "stable",
+      turnId: publicTurnId, reference: anchorlessItemId, kind: "stable",
     });
     assert.deepEqual(fileChangeNotifications[0]?.params?.item, {
       changes: [{
@@ -3306,7 +3326,7 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     await bridge.handleUpstreamMessage({ method: "item/completed", params: { item: futureProviderItem, threadId: "thread", turnId: "turn" } });
     await bridge.waitForIdle();
     const afterLateCompletion = sql.project().snapshot;
-    const lateCompletionRoot = afterLateCompletion.rows.threadItems.find(row => row.source_id === anchorlessItemId);
+    const lateCompletionRoot = rootForReference(afterLateCompletion, anchorlessItemId);
     assert.ok(lateCompletionRoot);
     assert.equal(
       afterLateCompletion.rows.threadItemFileChanges.find(row => row.item_id === lateCompletionRoot.id)?.workbench_failure_kind,
@@ -3318,7 +3338,11 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     assert.deepEqual(nativeIds(providerReadItems), [anchorlessItemId, precedingItem.id, anchoredItemId, followingItem.id]);
     assert.equal(providerReadItems[0]?.workbenchFailureKind, "unclaimed", "late provider completion retains claim denial");
     assert.equal(providerReadItems[0]?.changes[0]?.diff, futureProviderItem.changes[0]?.diff);
-    assert.equal(providerReadItems[0]?.changes[0]?.workbenchAnalysis, undefined, "blocked patches never acquire current-file success findings");
+    assert.notEqual(
+      providerReadItems[0]?.changes[0]?.workbenchAnalysis?.outcome,
+      "present",
+      "blocked patches never acquire current-file success findings",
+    );
 
     await bridge.handleUpstreamMessage({
       method: "turn/completed",

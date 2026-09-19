@@ -269,7 +269,17 @@ test("read and subscription replies honour each client's transcript protocol", a
     },
     turns: [], loadedTurnIds: [], hasPreviousTurns: false,
     rows: {
-      threadItems: [{ id: 1, source_id: "fco", thread_id: "thread", turn_id: "turn", item_position: 0, type: "functionCallOutput", created_at: 1, updated_at: 2 }],
+      itemIdentities: [{ id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea", thread_id: "thread" }],
+      itemSourceAliases: [{
+        id: 1, turn_id: "turn", source_kind: "stable", reference: "fco",
+        component_kind: "item", component_index: 0, thread_id: "thread",
+        item_identity_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+      }],
+      threadItems: [{
+        id: 1, public_id: "d0d57186-ee99-4d64-ab09-c8fd7f75b5ea",
+        thread_id: "thread", turn_id: "turn", item_position: 0,
+        type: "functionCallOutput", created_at: 1, updated_at: 2,
+      }],
       threadItemToolOutputs: [{ item_id: 1, item_type: "functionCallOutput", name: "context", namespace: null, body_kind: "text", body_text: "result", injection_accepted_at: null }],
     },
   });

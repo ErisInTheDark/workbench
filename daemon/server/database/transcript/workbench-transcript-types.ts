@@ -12,8 +12,7 @@
  * - WorkbenchTranscriptSnapshot: hydrated transcript result.
  * - WorkbenchTranscriptContextSnapshot: interaction bodies with full item-order metadata.
  * - WorkbenchTranscriptSnapshotRows: typed canonical rows.
- * - WorkbenchTranscriptItemSource: provider-scoped item identity evidence.
- * - WorkbenchTranscriptItemLegacyAlias: turn-scoped reference retained from an older projection.
+ * - WorkbenchTranscriptItemSource: provider-scoped item identity evidence with relational component coordinates.
  * - WorkbenchTranscriptItemIdentityAdmission: one structural identity admission, independent of body recording.
  * - WorkbenchTranscriptItemIdentityLookup: public-first, thread-scoped item lookup.
  * - WorkbenchTranscriptItemIdentity: resolved public identity and private alias evidence.
@@ -52,19 +51,17 @@ export type WorkbenchTranscriptItemLifecycle = "streaming" | "completed" | "inte
 export interface WorkbenchTranscriptItemSource {
   turnId: WorkbenchTurnId;
   kind: "stable" | "provisional" | "client";
-  sourceId: string;
-}
-
-export interface WorkbenchTranscriptItemLegacyAlias {
-  turnId: WorkbenchTurnId;
-  alias: string;
+  reference: string;
+  component?: {
+    kind: "item" | "text" | "reasoning";
+    index: number;
+  };
 }
 
 export interface WorkbenchTranscriptItemIdentityAdmission {
   threadId: WorkbenchThreadId;
   itemId?: WorkbenchItemId;
   sources: readonly WorkbenchTranscriptItemSource[];
-  legacyAliases: readonly WorkbenchTranscriptItemLegacyAlias[];
 }
 
 export interface WorkbenchTranscriptItemIdentityLookup {
@@ -77,7 +74,6 @@ export interface WorkbenchTranscriptItemIdentity {
   threadId: WorkbenchThreadId;
   itemId: WorkbenchItemId;
   sources: readonly WorkbenchTranscriptItemSource[];
-  legacyAliases: readonly WorkbenchTranscriptItemLegacyAlias[];
 }
 
 export interface WorkbenchTranscriptIdentityDatabase {

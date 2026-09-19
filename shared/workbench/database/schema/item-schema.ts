@@ -41,7 +41,10 @@ import {
   tableVersion,
 } from "../../../database/schema/schema-history.ts";
 import { evidenceTables } from "./evidence-schema.ts";
-import { transcriptIdentityTables } from "./transcript-identity-schema.ts";
+import {
+  retiredTranscriptIdentityTables,
+  transcriptIdentityTables,
+} from "./transcript-identity-schema.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion: number = databaseReleases.initialTranscript.version) {
   return defineTableHistory({
@@ -123,8 +126,27 @@ const threadItemsV4 = evolveTable(threadItemsV3, {
     "webSearch", "questionnaire", "approval", "contextCompaction", "unknown", "functionCallOutput",
   ).notNull() },
 });
+const threadItemsV5 = evolveTable(threadItemsV4, {
+  drop: ["source_id", "public_id"],
+  add: { public_id: text().notNull() },
+  extras: (table) => ({
+    constraints: [
+      unique([table.public_id]),
+      unique([table.turn_id, table.item_position]),
+      unique([table.id, table.type]),
+      unique([table.id, table.thread_id, table.type]),
+      unique([table.id, table.thread_id, table.turn_id]),
+      foreignKey([table.turn_id, table.thread_id], {
+        table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+      foreignKey([table.public_id, table.thread_id], {
+        table: "workbench_transcript_item_identities", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+    ],
+  }),
+});
 const threadItemsHistory = defineTableHistory({
-  current: threadItemsV4,
+  current: threadItemsV5,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemsV1, migration: createTable(threadItemsV1) }),
     tableVersion({ schemaVersion: databaseReleases.toolOutputParts.version, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
@@ -140,8 +162,8 @@ const threadItemsHistory = defineTableHistory({
           )`,
         ),
         deleteRows(
-          transcriptIdentityTables.itemLegacyAliases.name,
-          sql`${tableColumns(transcriptIdentityTables.itemLegacyAliases).item_identity_id} IN (
+          retiredTranscriptIdentityTables.itemLegacyAliases.name,
+          sql`${tableColumns(retiredTranscriptIdentityTables.itemLegacyAliases).item_identity_id} IN (
             SELECT public_id FROM thread_items WHERE type = 'plan' AND public_id IS NOT NULL
           )`,
         ),
@@ -178,6 +200,11 @@ const threadItemsHistory = defineTableHistory({
         deleteRows(threadItemsV3.name, sql`${tableColumns(threadItemsV3).type} = ${literal("plan")}`),
         rebuildTable({ from: threadItemsV3, to: threadItemsV4 }),
       ],
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.relationalTranscriptSources.version,
+      table: threadItemsV5,
+      migration: rebuildTable({ from: threadItemsV4, to: threadItemsV5 }),
     }),
   ],
 });

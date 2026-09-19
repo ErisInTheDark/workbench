@@ -62,6 +62,11 @@ test("SQL reads select the exact window and retain answered interactions without
   try {
     repository.settle([{ kind: "canonicalWindow", threadId, contentVersion: 3,
       materializedTurnIds: [older, newer], observations }]);
+    const stored = repository.read({ threadId, turnLimit: 2 });
+    assert.ok(stored);
+    const firstMessageId = stored.rows.itemSourceAliases
+      .find(({ reference }) => reference === "message-0")?.item_identity_id;
+    assert.ok(firstMessageId);
     const reader = new CodexSqliteTranscriptReader(async input => repository.read(input), async id => repository.readContext(id),
       async (id, turns) => repository.readMaterializedTurnIds(id, turns));
     const metadata: Thread = {
@@ -78,7 +83,7 @@ test("SQL reads select the exact window and retain answered interactions without
     const previous = await reader.read(metadata, { mode: "previous", beforeTurnId: "provider-newer" });
     assert.deepEqual(previous?.thread.turns.map(turn => turn.id), [older]);
     assert.deepEqual(previous?.questionnaireEntries[0]?.response, { answers: { choice: { answers: ["yes"] } } });
-    assert.equal(previous?.questionnaireEntries[0]?.insertAfterItemId, "message-0");
+    assert.equal(previous?.questionnaireEntries[0]?.insertAfterItemId, firstMessageId);
     assert.equal(previous?.steerEntries[0]?.status, "interrupted");
     const history = await reader.history(threadId);
     assert.equal(history.questionnaireEntries.length, 1);

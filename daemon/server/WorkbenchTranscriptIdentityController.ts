@@ -39,10 +39,7 @@ export default class WorkbenchTranscriptIdentityController {
     this.assertActive();
     const references = this.referencesByThread.get(input.threadId);
     if (!references) return false;
-    const keys = [
-      ...input.sources.map((source) => this.sourceKey(source)),
-      ...input.legacyAliases.map(({ turnId, alias }) => this.sourceKey({ turnId, kind: "legacy", sourceId: alias })),
-    ];
+    const keys = input.sources.map((source) => this.sourceKey(source));
     const itemId = input.itemId ?? references.get(keys[0]!);
     return itemId !== undefined && keys.length > 0 && keys.every((key) => references.get(key) === itemId);
   }
@@ -70,8 +67,13 @@ export default class WorkbenchTranscriptIdentityController {
     const direct = references?.get(this.publicKey(reference));
     if (direct) return direct;
     const candidates = new Set(
-      (["stable", "provisional", "client", "legacy"] as const)
-        .flatMap((kind) => references?.get(this.sourceKey({ turnId, kind, sourceId: reference })) ?? []),
+      (["stable", "provisional", "client"] as const)
+        .flatMap((kind) => references?.get(this.sourceKey({
+          turnId,
+          kind,
+          reference,
+          component: { kind: "item", index: 0 },
+        })) ?? []),
     );
     if (candidates.size > 1) throw new Error("Transcript item reference has conflicting admitted identities.");
     return candidates.values().next().value;
@@ -85,8 +87,10 @@ export default class WorkbenchTranscriptIdentityController {
   private remember(identity: WorkbenchTranscriptItemIdentity) {
     const committed = Object.freeze({
       ...identity,
-      sources: Object.freeze(identity.sources.map((source) => Object.freeze({ ...source }))),
-      legacyAliases: Object.freeze(identity.legacyAliases.map((alias) => Object.freeze({ ...alias }))),
+      sources: Object.freeze(identity.sources.map((source) => Object.freeze({
+        ...source,
+        component: source.component ? Object.freeze({ ...source.component }) : undefined,
+      }))),
     });
     let references = this.referencesByThread.get(committed.threadId);
     if (!references) {
@@ -95,11 +99,6 @@ export default class WorkbenchTranscriptIdentityController {
     }
     references.set(this.publicKey(committed.itemId), committed.itemId);
     for (const source of committed.sources) references.set(this.sourceKey(source), committed.itemId);
-    for (const legacy of committed.legacyAliases) {
-      references.set(this.sourceKey({ turnId: legacy.turnId, kind: "legacy", sourceId: legacy.alias }), committed.itemId);
-      const publicKey = this.publicKey(legacy.alias);
-      if (references.has(publicKey)) references.set(publicKey, committed.itemId);
-    }
     return committed;
   }
 
@@ -107,8 +106,14 @@ export default class WorkbenchTranscriptIdentityController {
     return TranscriptIdentityKeySchema.parse(JSON.stringify(["public", reference]));
   }
 
-  private sourceKey(source: { turnId: WorkbenchTurnId; kind: WorkbenchTranscriptItemSource["kind"] | "legacy"; sourceId: string }) {
-    return TranscriptIdentityKeySchema.parse(JSON.stringify([source.turnId, source.kind, source.sourceId]));
+  private sourceKey(source: WorkbenchTranscriptItemSource) {
+    return TranscriptIdentityKeySchema.parse(JSON.stringify([
+      source.turnId,
+      source.kind,
+      source.reference,
+      source.component?.kind ?? "item",
+      source.component?.index ?? 0,
+    ]));
   }
 
   private assertActive() {

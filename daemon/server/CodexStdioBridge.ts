@@ -1963,7 +1963,13 @@ export default class CodexStdioBridge {
           const canonicalThreadId = this.identities.threads.workbenchIdForNative(native);
           const turnId = this.identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: NativeTurnIdSchema.parse(nativeTurnId) });
           await this.persistTranscript(() => this.identities!.items.admit([{
-            threadId: canonicalThreadId, sources: [{ turnId, kind: "stable", sourceId: itemId }], legacyAliases: [],
+            threadId: canonicalThreadId,
+            sources: [{
+              turnId,
+              kind: "stable",
+              reference: itemId,
+              component: { kind: "item", index: 0 },
+            }],
           }]), signal);
         }
       }

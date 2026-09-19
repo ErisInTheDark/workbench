@@ -409,7 +409,6 @@ export default class WorkbenchThreadIdentityRepository {
       updateRows(usageTables.threadTurnUsage, { turn_id: turnId }, { turn_id: row.id }),
       updateRows(transcriptIdentityTables.turnLegacyAliases, { turn_id: turnId }, { turn_id: row.id }),
       updateRows(transcriptIdentityTables.itemSourceAliases, { turn_id: turnId }, { turn_id: row.id }),
-      updateRows(transcriptIdentityTables.itemLegacyAliases, { turn_id: turnId }, { turn_id: row.id }),
       updateRows(coreTables.threadTurns, { id: turnId, identity_origin: "workbench" }, { id: row.id }),
     ];
     for (const statement of statements) {
@@ -475,7 +474,6 @@ export default class WorkbenchThreadIdentityRepository {
       updateRows(transcriptIdentityTables.turnLegacyAliases, { thread_id: threadId }, { thread_id: previousId }),
       updateRows(transcriptIdentityTables.itemIdentities, { thread_id: threadId }, { thread_id: previousId }),
       updateRows(transcriptIdentityTables.itemSourceAliases, { thread_id: threadId }, { thread_id: previousId }),
-      updateRows(transcriptIdentityTables.itemLegacyAliases, { thread_id: threadId }, { thread_id: previousId }),
       updateRows(operationSourceTables.threadOperationCollaborationToolSources,
         { sender_thread_id: threadId }, { sender_thread_id: previousId }),
       updateRows(operationSourceTables.threadCollaborationReceivers,

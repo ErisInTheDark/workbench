@@ -58,27 +58,24 @@ export default class WorkbenchTranscriptIdentityRepository {
       throw new Error("Transfer the transcript body before reconciling its item identity.");
     }
     const evidence = this.read(source);
-    const turns = new Set([input.turnId, ...evidence.sources.map(({ turnId }) => turnId),
-      ...evidence.legacyAliases.map(({ turnId }) => turnId)]);
+    const turns = new Set([input.turnId, ...evidence.sources.map(({ turnId }) => turnId)]);
     this.prepare(`
-      UPDATE workbench_transcript_item_source_aliases SET item_identity_id = ? WHERE item_identity_id = ?
-    `).run(target.id, source.id);
+      DELETE FROM workbench_transcript_item_source_aliases AS source
+      WHERE source.item_identity_id = @sourceId AND EXISTS (
+        SELECT 1 FROM workbench_transcript_item_source_aliases AS target
+        WHERE target.item_identity_id = @targetId
+          AND target.turn_id = source.turn_id
+          AND target.source_kind = source.source_kind
+          AND target.reference = source.reference
+          AND target.component_kind = source.component_kind
+          AND target.component_index = source.component_index
+      )
+    `).run({ sourceId: source.id, targetId: target.id });
     this.prepare(`
-      UPDATE workbench_transcript_item_legacy_aliases SET item_identity_id = ? WHERE item_identity_id = ?
+      UPDATE workbench_transcript_item_source_aliases
+      SET item_identity_id = ?
+      WHERE item_identity_id = ?
     `).run(target.id, source.id);
-    for (const turnId of turns) {
-      const existing = this.prepare(`
-        SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
-        WHERE thread_id = ? AND turn_id = ? AND alias = ?
-      `).get(input.threadId, turnId, source.id) as { item_identity_id: string } | undefined;
-      if (existing && existing.item_identity_id !== target.id) {
-        throw new Error("Item identity reconciliation has a conflicting legacy reference.");
-      }
-      this.prepare(`
-        INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id)
-        VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, turn_id, alias) DO NOTHING
-      `).run(input.threadId, turnId, source.id, target.id);
-    }
     if (this.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_thread_questionnaires'").get()) {
       this.prepare("UPDATE workbench_thread_questionnaires SET item_id = ? WHERE item_id = ?")
         .run(target.id, source.id);
@@ -93,11 +90,10 @@ export default class WorkbenchTranscriptIdentityRepository {
     const direct = this.row(input.itemId);
     if (direct) return direct.thread_id === input.threadId ? this.read(direct) : null;
     const candidates = this.prepare(`
-      SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
-      WHERE thread_id = @threadId AND alias = @itemId AND (@turnId IS NULL OR turn_id = @turnId)
-      UNION
       SELECT item_identity_id FROM workbench_transcript_item_source_aliases
-      WHERE thread_id = @threadId AND source_id = @itemId AND (@turnId IS NULL OR turn_id = @turnId)
+      WHERE thread_id = @threadId AND reference = @itemId
+        AND component_kind = 'item' AND component_index = 0
+        AND (@turnId IS NULL OR turn_id = @turnId)
     `).all({ ...input, turnId: input.turnId ?? null }) as Array<{ item_identity_id: string }>;
     const itemId = this.selectOwner(input.threadId, candidates.map((row) => row.item_identity_id));
     return itemId ? this.read(this.row(itemId)!) : null;
@@ -117,18 +113,6 @@ export default class WorkbenchTranscriptIdentityRepository {
       this.assertTurnOwner(input.threadId, source.turnId);
       candidates.push(...this.sourceOwners(input.threadId, source));
     }
-    for (const legacy of input.legacyAliases) {
-      this.assertTurnOwner(input.threadId, legacy.turnId);
-      const existing = this.prepare(`
-        SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
-        WHERE thread_id = ? AND turn_id = ? AND alias = ?
-        UNION
-        SELECT item_identity_id FROM workbench_transcript_item_source_aliases
-        WHERE thread_id = ? AND turn_id = ? AND source_id = ? AND source_kind <> 'client'
-      `).all(input.threadId, legacy.turnId, legacy.alias,
-        input.threadId, legacy.turnId, legacy.alias) as Array<{ item_identity_id: string }>;
-      candidates.push(...existing.map((row) => row.item_identity_id));
-    }
     const itemId = this.reconcileBodylessAlias(input, candidates)
       ?? this.selectOwner(input.threadId, candidates) ?? randomUUID();
     this.prepare(`
@@ -138,16 +122,18 @@ export default class WorkbenchTranscriptIdentityRepository {
     for (const source of input.sources) {
       this.prepare(`
         INSERT INTO workbench_transcript_item_source_aliases
-          (turn_id, source_kind, source_id, thread_id, item_identity_id) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(turn_id, source_kind, source_id) DO NOTHING
-      `).run(source.turnId, source.kind, source.sourceId, input.threadId, itemId);
-    }
-    for (const legacy of input.legacyAliases) {
-      this.prepare(`
-        INSERT INTO workbench_transcript_item_legacy_aliases
-          (thread_id, turn_id, alias, item_identity_id) VALUES (?, ?, ?, ?)
-        ON CONFLICT(thread_id, turn_id, alias) DO NOTHING
-      `).run(input.threadId, legacy.turnId, legacy.alias, itemId);
+          (turn_id, source_kind, reference, component_kind, component_index, thread_id, item_identity_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(turn_id, source_kind, reference, component_kind, component_index) DO NOTHING
+      `).run(
+        source.turnId,
+        source.kind,
+        source.reference,
+        source.component?.kind ?? "item",
+        source.component?.index ?? 0,
+        input.threadId,
+        itemId,
+      );
     }
     return this.read(this.row(itemId)!);
   }
@@ -163,35 +149,26 @@ export default class WorkbenchTranscriptIdentityRepository {
     const body = bodies[0];
     if (bodies.length !== 1 || !body) return null;
     const turnId = WorkbenchTurnIdSchema.parse(body.turn_id);
-    if (input.sources.some((source) => source.turnId !== turnId)
-      || input.legacyAliases.some((alias) => alias.turnId !== turnId)) return null;
+    if (input.sources.some((source) => source.turnId !== turnId)) return null;
     const identities = owners.map((id) => this.row(id)).map((row) => row ? this.read(row) : null);
     if (identities.some((identity) => !identity || identity.threadId !== input.threadId
-      || identity.sources.some((source) => source.turnId !== turnId)
-      || identity.legacyAliases.some((alias) => alias.turnId !== turnId))) return null;
+      || identity.sources.some((source) => source.turnId !== turnId))) return null;
     const target = identities.find((identity) => identity?.itemId === body.public_id);
     const source = identities.find((identity) => identity?.itemId !== body.public_id);
     if (!source || !target) return null;
     const evidence = [...input.sources, ...source.sources, ...target.sources];
     if (evidence.some((entry) => entry.kind === "client"
-      && (body.type !== "userMessage" || entry.sourceId !== body.client_id))) return null;
+      && (body.type !== "userMessage" || entry.reference !== body.client_id))) return null;
     const suppliedSource = (identity: WorkbenchTranscriptItemIdentity) => identity.sources.some((known) => (
-      input.sources.some((entry) => entry.kind === known.kind && entry.sourceId === known.sourceId)
+      input.sources.some((entry) => entry.kind === known.kind
+        && entry.reference === known.reference
+        && (entry.component?.kind ?? "item") === (known.component?.kind ?? "item")
+        && (entry.component?.index ?? 0) === (known.component?.index ?? 0))
     ));
     const clientMatch = body.client_id !== null
-      && input.sources.some((entry) => entry.kind === "client" && entry.sourceId === body.client_id)
+      && input.sources.some((entry) => entry.kind === "client" && entry.reference === body.client_id)
       && suppliedSource(source) && suppliedSource(target);
-    const aliasLinks = (from: WorkbenchTranscriptItemIdentity, to: WorkbenchTranscriptItemIdentity) => (
-      [...from.legacyAliases, ...(suppliedSource(from) ? input.legacyAliases : [])].some(({ alias }) => (
-        alias === to.itemId || to.sources.some((entry) => entry.kind !== "client" && entry.sourceId === alias)
-      ))
-    );
-    if (!clientMatch && !aliasLinks(source, target) && !aliasLinks(target, source)) return null;
-    const priorReference = this.prepare(`
-      SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
-      WHERE thread_id = ? AND turn_id = ? AND alias = ?
-    `).get(input.threadId, turnId, source.itemId) as { item_identity_id: string } | undefined;
-    if (priorReference && !owners.includes(priorReference.item_identity_id)) return null;
+    if (!clientMatch && (!suppliedSource(source) || !suppliedSource(target))) return null;
     // The recorded body stays untouched. Only its proven bodyless alias moves.
     this.merge({ threadId: input.threadId, turnId, fromItemId: source.itemId, toItemId: target.itemId });
     return target.itemId;
@@ -202,7 +179,8 @@ export default class WorkbenchTranscriptIdentityRepository {
       SELECT DISTINCT a.item_identity_id FROM workbench_transcript_item_source_aliases a
       JOIN thread_turns recorded ON recorded.id = a.turn_id
       JOIN thread_turns incoming ON incoming.id = @turnId AND incoming.thread_id = @threadId
-      WHERE a.thread_id = @threadId AND a.source_kind = @kind AND a.source_id = @sourceId
+      WHERE a.thread_id = @threadId AND a.source_kind = @kind AND a.reference = @reference
+        AND a.component_kind = @componentKind AND a.component_index = @componentIndex
         AND (
           a.turn_id = @turnId
           OR (@kind <> 'provisional'
@@ -210,10 +188,14 @@ export default class WorkbenchTranscriptIdentityRepository {
             AND recorded.native_location = incoming.native_location
             AND recorded.native_thread_id = incoming.native_thread_id)
         )
-      UNION
-      SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
-      WHERE thread_id = @threadId AND turn_id = @turnId AND alias = @sourceId
-    `).all({ threadId, ...source }) as Array<{ item_identity_id: string }>;
+    `).all({
+      threadId,
+      turnId: source.turnId,
+      kind: source.kind,
+      reference: source.reference,
+      componentKind: source.component?.kind ?? "item",
+      componentIndex: source.component?.index ?? 0,
+    }) as Array<{ item_identity_id: string }>;
     return rows.map((row) => row.item_identity_id);
   }
 
@@ -241,19 +223,26 @@ export default class WorkbenchTranscriptIdentityRepository {
 
   private read(row: IdentityRow): WorkbenchTranscriptItemIdentity {
     const sources = this.prepare(`
-      SELECT turn_id AS turnId, source_kind AS kind, source_id AS sourceId
+      SELECT turn_id AS turnId, source_kind AS kind, reference,
+        component_kind AS componentKind, component_index AS componentIndex
       FROM workbench_transcript_item_source_aliases WHERE item_identity_id = ?
-      ORDER BY turn_id, source_kind, source_id
-    `).all(row.id) as Array<{ turnId: string; kind: WorkbenchTranscriptItemSource["kind"]; sourceId: string }>;
-    const legacyAliases = this.prepare(`
-      SELECT turn_id AS turnId, alias FROM workbench_transcript_item_legacy_aliases
-      WHERE item_identity_id = ? ORDER BY turn_id, alias
-    `).all(row.id) as Array<{ turnId: string; alias: string }>;
+      ORDER BY turn_id, source_kind, reference, component_kind, component_index
+    `).all(row.id) as Array<{
+      turnId: string;
+      kind: WorkbenchTranscriptItemSource["kind"];
+      reference: string;
+      componentKind: WorkbenchTranscriptItemSource["component"]["kind"];
+      componentIndex: number;
+    }>;
     return {
       itemId: WorkbenchItemIdSchema.parse(row.id),
       threadId: WorkbenchThreadIdSchema.parse(row.thread_id),
-      sources: sources.map(source => ({ ...source, turnId: WorkbenchTurnIdSchema.parse(source.turnId) })),
-      legacyAliases: legacyAliases.map(alias => ({ ...alias, turnId: WorkbenchTurnIdSchema.parse(alias.turnId) })),
+      sources: sources.map(({ turnId, kind, reference, componentKind, componentIndex }) => ({
+        turnId: WorkbenchTurnIdSchema.parse(turnId),
+        kind,
+        reference,
+        component: { kind: componentKind, index: componentIndex },
+      })),
     };
   }
 }

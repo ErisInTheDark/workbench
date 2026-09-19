@@ -93,7 +93,13 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
       if (!questionnaire) continue;
       if (questionnaire.turnId) admitTurn(record, questionnaire.turnId);
       for (const itemId of [questionnaire.itemId, "insertAfterItemId" in questionnaire ? questionnaire.insertAfterItemId : null]) {
-        if (typeof itemId === "string" && itemId) items.admit({ threadId: record.identity.threadId, itemId: WorkbenchItemIdSchema.parse(itemId), sources: [], legacyAliases: [] });
+        if (typeof itemId === "string" && itemId) {
+          items.admit({
+            threadId: record.identity.threadId,
+            itemId: WorkbenchItemIdSchema.parse(itemId),
+            sources: [],
+          });
+        }
       }
     }
   };

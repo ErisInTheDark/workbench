@@ -142,13 +142,22 @@ export default class CodexSqliteTranscriptReader {
     if (!catalog || !turn) return null;
     const snapshot = await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [turn.id], turnLimit: 1 });
     if (!snapshot) return null;
-    const root = snapshot.rows.threadItems.find(candidate => (
-      candidate.turn_id === turn.id && (candidate.public_id === itemId || candidate.source_id === itemId)
+    const directRoot = snapshot.rows.threadItems.find(candidate => (
+      candidate.turn_id === turn.id && candidate.public_id === itemId
+    ));
+    const source = directRoot ? null : snapshot.rows.itemSourceAliases.find(candidate => (
+      candidate.turn_id === turn.id
+      && candidate.reference === itemId
+      && candidate.component_kind === "item"
+      && candidate.component_index === 0
+    ));
+    const root = directRoot ?? snapshot.rows.threadItems.find(candidate => (
+      candidate.turn_id === turn.id && candidate.public_id === source?.item_identity_id
     ));
     if (!root) return null;
     const projection = projectWorkbenchTranscript(snapshot);
     if (!projection.success) throw new Error("Stored SQL transcript could not be projected.");
-    const projectedId = root.public_id ?? root.source_id;
+    const projectedId = root.public_id;
     const item = projection.data.turns.flatMap(candidate => candidate.items).find(candidate => candidate.id === projectedId);
     return item?.type === "fileChange" ? item : null;
   }
@@ -159,7 +168,7 @@ export default class CodexSqliteTranscriptReader {
     const projection = projected.data;
     const questionnaireEntries: CodexThreadContextReadResponse["questionnaireEntries"] = [];
     const steerEntries: CodexThreadContextReadResponse["steerEntries"] = [];
-    const roots = new Map(snapshot.rows.threadItems.map(root => [root.public_id ?? root.source_id, root]));
+    const roots = new Map(snapshot.rows.threadItems.map(root => [root.public_id, root]));
     const inputs = new Map(snapshot.rows.threadItemUserMessages.map(row => [row.item_id, row]));
     const turns = projection.turns.map(turn => {
       const items: ThreadItem[] = [];

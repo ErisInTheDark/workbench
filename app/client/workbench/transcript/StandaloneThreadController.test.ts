@@ -17,6 +17,7 @@ import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcrip
 import StandaloneThreadController from "./StandaloneThreadController";
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+const assistantItemId = "7df1ce67-97f5-42ba-89f9-a509ed80b863";
 
 function fixture() {
   const threadId = WorkbenchThreadIdSchema.parse(randomUUID());
@@ -91,8 +92,12 @@ test("standalone uses bounded pages and shared SQL text projection without provi
       loadedTurnIds: ["latest"], hasPreviousTurns: true,
       rows: Object.fromEntries(Object.keys(transcriptSnapshotTables).map(name => [name, []])) as unknown as WorkbenchTranscriptSnapshotRows,
     };
-    snapshot.rows.threadItems = [{ id: 1, public_id: null, source_id: "message", thread_id: f.threadId, turn_id: "latest",
+    snapshot.rows.threadItems = [{ id: 1, public_id: assistantItemId, thread_id: f.threadId, turn_id: "latest",
       item_position: 0, type: "assistantMessage", created_at: 1, updated_at: 1 }];
+    snapshot.rows.itemIdentities = [{
+      id: assistantItemId,
+      thread_id: f.threadId,
+    }];
     snapshot.rows.threadItemAssistantMessages = [{
       item_id: 1, item_type: "assistantMessage", state: "streaming", phase: "commentary", text: "start",
     }];
@@ -101,9 +106,9 @@ test("standalone uses bounded pages and shared SQL text projection without provi
     f.stream({ kind: "structure", reset: true, snapshot, removedItemIds: [], hasPreviousTurns: true,
       layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)) });
     assert.equal(f.owner.getSnapshot().source.status, "ready");
-    f.stream({ kind: "text", threadId: f.threadId, turnId: "latest", itemId: "message", field: "agentMessageText", index: null, append: true, text: " end" });
+    f.stream({ kind: "text", threadId: f.threadId, turnId: "latest", itemId: assistantItemId, field: "agentMessageText", index: null, append: true, text: " end" });
     assert.equal(f.owner.text.getSnapshot({
-      source: { kind: "sqlite", sourceKey: `codex:${f.threadId}` }, threadId: f.threadId, turnId: "latest", itemId: "message", field: "agentMessageText", index: null,
+      source: { kind: "sqlite", sourceKey: `codex:${f.threadId}` }, threadId: f.threadId, turnId: "latest", itemId: assistantItemId, field: "agentMessageText", index: null,
     }), "start end");
     await f.owner.loadPrevious();
     await flush();

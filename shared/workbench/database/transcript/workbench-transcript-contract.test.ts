@@ -34,7 +34,8 @@ test("read and subscription decoding retain supported protocol versions and reje
     assert.equal((decoded.data.params as { protocolVersion?: number }).protocolVersion, 2);
     assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 0 })?.success, false);
     assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 3 })?.success, true);
-    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 4 })?.success, false);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 4 })?.success, true);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 5 })?.success, false);
   }
 });
 

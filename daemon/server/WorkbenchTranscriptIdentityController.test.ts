@@ -29,8 +29,7 @@ const fixtureIdentityValues = {
 
 const identity: WorkbenchTranscriptItemIdentity = {
   threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], itemId: fixtureIdentityValues.WorkbenchItemId["997ac72d-b3a2-4bdb-b887-9fdd306767b3"],
-  sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], kind: "stable", sourceId: "native-source" }],
-  legacyAliases: [],
+  sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], kind: "stable", reference: "native-source" }],
 };
 
 test("structural admission enables every delta without another database lookup", async () => {
@@ -75,12 +74,12 @@ test("failed or late identity admission cannot become a live mapping", async () 
   failed.dispose();
 });
 
-test("refreshed aliases redirect cached public references to the surviving item without database reads", async () => {
+test("refreshed structured sources resolve to the surviving item without repeated database reads", async () => {
   const survivor: WorkbenchTranscriptItemIdentity = {
     ...identity, itemId: fixtureIdentityValues.WorkbenchItemId["35e4cbed-9ef3-4b78-b7d0-e5533240999e"],
-    legacyAliases: [
-      { turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], alias: identity.itemId },
-      { turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], alias: "legacy-item" },
+    sources: [
+      ...identity.sources,
+      { turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], kind: "provisional", reference: "item-1" },
     ],
   };
   let calls = 0;
@@ -91,11 +90,11 @@ test("refreshed aliases redirect cached public references to the surviving item 
   await controller.admit([identity]);
   assert.equal(controller.itemIdForReference(fixtureIdentityValues.WorkbenchThreadId["thread"], fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), identity.itemId), identity.itemId);
   await controller.resolve({ threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], itemId: identity.itemId });
-  for (const reference of [identity.itemId, survivor.itemId, "native-source", "legacy-item"]) {
+  for (const reference of [survivor.itemId, "native-source", "item-1"]) {
     assert.equal(controller.itemIdForReference(fixtureIdentityValues.WorkbenchThreadId["thread"], fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), fixtureIdentitySchemas.ItemReferenceSchema.parse(reference)), survivor.itemId);
   }
   assert.equal(calls, 1);
-  assert.throws(() => controller.itemIdForReference(fixtureIdentityValues.WorkbenchThreadId["thread"], fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("other-turn"), fixtureIdentitySchemas.ItemReferenceSchema.parse("legacy-item")), /not been admitted/iu);
+  assert.throws(() => controller.itemIdForReference(fixtureIdentityValues.WorkbenchThreadId["thread"], fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("other-turn"), fixtureIdentitySchemas.ItemReferenceSchema.parse("item-1")), /not been admitted/iu);
   assert.throws(() => controller.itemIdForReference(fixtureIdentityValues.WorkbenchThreadId["other-thread"], fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), survivor.itemId), /not been admitted/iu);
   controller.dispose();
 });

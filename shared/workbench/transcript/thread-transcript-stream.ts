@@ -146,7 +146,7 @@ export function applyTranscriptStructure(
   }
   for (const turn of incoming.turns) turns.set(turn.id, turn);
   for (const turn of incoming.turnHistory) history.set(turn.turnId, turn);
-  const touched = new Set(update.snapshot.rows.threadItems.map(item => item.public_id ?? item.source_id));
+  const touched = new Set(update.snapshot.rows.threadItems.map(item => item.public_id));
   for (const [key, entry] of browse) {
     if (entry.commandItemId && (removed.has(entry.commandItemId) || touched.has(entry.commandItemId))) browse.delete(key);
   }

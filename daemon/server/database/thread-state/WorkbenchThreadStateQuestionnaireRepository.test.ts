@@ -38,7 +38,7 @@ function fixture() {
     createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
   });
   const { itemId } = new WorkbenchTranscriptIdentityRepository(database).admit({
-    threadId, sources: [], legacyAliases: [],
+    threadId, sources: [],
   });
   database.prepare(`
     INSERT INTO workbench_thread_states(thread_id, thread_kind, harness_id, title, activity_at, provider_observed)

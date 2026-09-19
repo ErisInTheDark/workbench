@@ -33,18 +33,26 @@ type ObservationMappers = {
     (input: Extract<NativeTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
 };
 
+function wholeItemSource(
+  turnId: WorkbenchTurnId,
+  kind: WorkbenchTranscriptItemSource["kind"],
+  reference: string,
+): WorkbenchTranscriptItemSource {
+  return { turnId, kind, reference, component: { kind: "item", index: 0 } };
+}
+
 function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: WorkbenchTurnId, classify: typeof getWorkbenchThreadItemIdentityKind): WorkbenchTranscriptItemSource[] {
   if (entry.status === "sent") {
     const sources: WorkbenchTranscriptItemSource[] = [];
     if (entry.canonicalItemId) {
-      sources.push({ turnId, sourceId: entry.canonicalItemId, kind: classify({ id: entry.canonicalItemId }) });
+      sources.push(wholeItemSource(turnId, classify({ id: entry.canonicalItemId }), entry.canonicalItemId));
     }
     if (entry.clientUserMessageId) {
-      sources.push({ turnId, sourceId: entry.clientUserMessageId, kind: "client" });
+      sources.push(wholeItemSource(turnId, "client", entry.clientUserMessageId));
     }
     if (sources.length) return sources;
   }
-  return [{ turnId, sourceId: resolveSteerTranscriptSourceId(entry), kind: "stable" }];
+  return [wholeItemSource(turnId, "stable", resolveSteerTranscriptSourceId(entry))];
 }
 
 function steerAttemptReference(entry: WorkbenchSteerHistoryEntry, publicItemId?: string) {
@@ -88,26 +96,27 @@ export async function admitNativeTranscriptObservations(
     const native = owners.threads.knownNativeBinding(provider, nativeThreadId);
     const threadId = owners.threads.workbenchIdForNative(native);
     const turnId = owners.threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
-    const sourceId = fact.kind === "item" ? fact.item.id
+    const sourceReference = fact.kind === "item" ? fact.item.id
       : fact.kind === "questionnaire" ? resolveQuestionnaireHistoryItemId(fact.entry)
         : resolveSteerTranscriptSourceId(fact.entry);
     const sources: WorkbenchTranscriptItemSource[] = fact.kind === "steer" ? steerSources(fact.entry, turnId, classify) : [
-      { turnId, sourceId, kind: fact.kind === "item" ? classify(fact.item) : "stable" },
+      wholeItemSource(turnId, fact.kind === "item" ? classify(fact.item) : "stable", sourceReference),
       ...(fact.kind === "item" && fact.item.type === "userMessage" && fact.item.clientId
-        ? [{ turnId, kind: "client" as const, sourceId: fact.item.clientId }] : []),
+        ? [wholeItemSource(turnId, "client", fact.item.clientId)] : []),
+      ...(fact.kind === "item" ? (fact.timeline?.aliases ?? []).map((alias) => (
+        wholeItemSource(turnId, classify({ id: alias }), alias)
+      )) : []),
     ];
-    const reference = fact.kind === "item" ? fact.publicItemId
+    const itemReference = fact.kind === "item" ? fact.publicItemId
       : fact.kind === "steer" ? steerAttemptReference(fact.entry, fact.publicItemId)
         : fact.publicItemId ?? fact.entry.itemId ?? undefined;
-    const itemId = z.uuid().safeParse(reference).success ? WorkbenchItemIdSchema.parse(reference) : undefined;
+    const itemId = z.uuid().safeParse(itemReference).success ? WorkbenchItemIdSchema.parse(itemReference) : undefined;
     const known = owners.items.findItemIdForSource(threadId, sources[0]!);
     if (known && (!itemId || itemId === known)
       && sources.every((source) => owners.items.findItemIdForSource(threadId, source) === known)) continue;
     items.push({
       threadId, ...(itemId ? { itemId } : {}),
       sources,
-      legacyAliases: fact.kind === "item"
-        ? (fact.timeline?.aliases ?? []).map((alias) => ({ turnId, alias })) : [],
     });
   }
   if (items.length) await owners.items.admit(items);
@@ -162,9 +171,10 @@ export function mapNativeTranscriptObservation(
       };
       const mapped = mapItem?.(destination, input.item) ?? {
         ...input.item,
-        id: owners.items.itemIdForSource(threadId(input.threadId), {
-          turnId: turnId(input.threadId, input.turnId), sourceId: input.item.id, kind: classify(input.item),
-        }),
+        id: owners.items.itemIdForSource(
+          threadId(input.threadId),
+          wholeItemSource(turnId(input.threadId, input.turnId), classify(input.item), input.item.id),
+        ),
       };
       const publicItemId = WorkbenchItemIdSchema.parse(mapped.id);
       return {
@@ -199,7 +209,7 @@ export function mapNativeTranscriptObservation(
         entry: {
           ...entry, threadId: ownerThreadId, turnId: ownerTurnId, itemId: id,
           canonicalItemId: entry.canonicalItemId === null ? null : owners.items.itemIdForSource(ownerThreadId, {
-            turnId: ownerTurnId, sourceId: entry.canonicalItemId, kind: classify({ id: entry.canonicalItemId }),
+            ...wholeItemSource(ownerTurnId, classify({ id: entry.canonicalItemId }), entry.canonicalItemId),
           }),
         },
       };

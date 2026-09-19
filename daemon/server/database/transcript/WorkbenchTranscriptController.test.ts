@@ -308,7 +308,8 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     await projectionCompleted.promise;
     assert.deepEqual(published, [0, 1]);
     const snapshot = await controller.read({ threadId: "thread", turnLimit: 10 });
-    const messageItemId = snapshot?.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
+    const messageIdentityId = snapshot?.rows.itemSourceAliases.find(({ reference }) => reference === "message")?.item_identity_id;
+    const messageItemId = snapshot?.rows.threadItems.find(({ public_id }) => public_id === messageIdentityId)?.id;
     assert.ok(messageItemId);
     assert.deepEqual(
       snapshot?.rows.threadItemAssistantMessages,

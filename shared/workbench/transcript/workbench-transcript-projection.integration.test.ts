@@ -236,20 +236,24 @@ test("real SQLite rows project the renderer facts used by current command, file,
     const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows);
     assert.equal(itemProjection.success, true);
     if (!itemProjection.success) return;
+    const itemIdByReference = new Map(snapshot.rows.itemSourceAliases.map((source) => (
+      [source.reference, source.item_identity_id]
+    )));
+    const itemId = (reference: string) => itemIdByReference.get(reference)!;
+    assert.ok(itemProjection.data.every(({ item: projectedItem, root }) => projectedItem.id === root.public_id));
     assert.deepEqual(
-      itemProjection.data.map(({ item: projectedItem, root }) => [
-        projectedItem.id,
-        root.source_id,
+      itemProjection.data.map(({ root }) => [
+        snapshot.rows.itemSourceAliases.find((source) => source.item_identity_id === root.public_id)?.reference,
         root.item_position,
       ]),
       [
-        ["user", "user", 0],
-        ["reasoning", "reasoning", 1],
-        ["command", "command", 2],
-        ["mcp", "mcp", 3],
-        ["file", "file", 4],
-        ["workbench-questionnaire:thread:turn-1:request-key", "workbench-questionnaire:thread:turn-1:request-key", 5],
-        ["opaque", "opaque", 6],
+        ["user", 0],
+        ["reasoning", 1],
+        ["command", 2],
+        ["mcp", 3],
+        ["file", 4],
+        ["workbench-questionnaire:thread:turn-1:request-key", 5],
+        ["opaque", 6],
       ],
     );
     const result = projectWorkbenchTranscript(snapshot);
@@ -268,13 +272,13 @@ test("real SQLite rows project the renderer facts used by current command, file,
       itemIds: items.map(({ id }) => id),
       turnId,
     })), [
-      { itemIds: ["user", "reasoning", "command", "mcp", "file", "workbench-questionnaire:thread:turn-1:request-key", "opaque"], turnId: "turn-1" },
+      { itemIds: ["user", "reasoning", "command", "mcp", "file", "workbench-questionnaire:thread:turn-1:request-key", "opaque"].map(itemId), turnId: "turn-1" },
     ]);
     assert.deepEqual(result.data.turns[0]?.itemTimeline, [{
       aliases: ["user-alias"],
       completedAt: 2_000,
       firstSeenAt: 1_900,
-      itemId: "user",
+      itemId: itemId("user"),
       lastSeenAt: 2_000,
       startedAt: 1_950,
     }]);
@@ -282,7 +286,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       action: "snapshot",
       actionIndex: 0,
       assetUrl: "/api/transcript-assets/codex/dGhyZWFk/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
-      commandItemId: "command",
+      commandItemId: itemId("command"),
       detailKind: "result",
       detailLabel: "Snapshot",
       detailText: "Captured",
@@ -295,18 +299,18 @@ test("real SQLite rows project the renderer facts used by current command, file,
       turnId: "turn-1",
     }]);
     const projected = result.data.turns[0]!.items;
-    assert.deepEqual(projected.find(({ id }) => id === "reasoning"), {
+    assert.deepEqual(projected.find(({ id }) => id === itemId("reasoning")), {
       content: [],
-      id: "reasoning",
+      id: itemId("reasoning"),
       summary: ["visible"],
       type: "reasoning",
     });
-    assert.deepEqual(projected.find(({ id }) => id === "mcp"), {
+    assert.deepEqual(projected.find(({ id }) => id === itemId("mcp")), {
       appContext: null,
       arguments: { path: "src" },
       durationMs: 30,
       error: null,
-      id: "mcp",
+      id: itemId("mcp"),
       pluginId: null,
       readOnlyHint: true,
       result: {
@@ -319,9 +323,12 @@ test("real SQLite rows project the renderer facts used by current command, file,
       tool: "shell",
       type: "mcpToolCall",
     });
-    assert.deepEqual(projected.find(({ id }) => id === "file"), fileChange);
+    assert.deepEqual(projected.find(({ id }) => id === itemId("file")), {
+      ...fileChange,
+      id: itemId("file"),
+    });
     assert.deepEqual(projected.at(-1), {
-      id: "opaque",
+      id: itemId("opaque"),
       nativeType: "imageView",
       safeValue: { id: "opaque", path: "C:/project/image.png", type: "imageView" },
       type: "generic",
@@ -379,13 +386,14 @@ test("projection preserves distinct questionnaire items with one reused provider
     assert.equal(result.success, true);
     if (!result.success) return;
 
+    const projectedItems = result.data.turns.flatMap(({ items }) => items);
+    assert.equal(new Set(projectedItems.map(({ id }) => id)).size, 2);
+    const sourceByItemId = new Map(snapshot.rows.itemSourceAliases.map((source) => (
+      [source.item_identity_id, source.reference]
+    )));
+    assert.deepEqual(projectedItems.map(({ id }) => sourceByItemId.get(id)), ["question-older", "question-newer"]);
     assert.deepEqual(
-      result.data.turns.flatMap(({ items }) => items).map(({ id }) => id),
-      ["question-older", "question-newer"],
-    );
-    assert.deepEqual(
-      result.data.turns.flatMap(({ items }) => items)
-        .flatMap((item) => item.type === "questionnaire" ? [item.requestKey] : []),
+      projectedItems.flatMap((item) => item.type === "questionnaire" ? [item.requestKey] : []),
       ["reused", "reused"],
     );
   } finally {

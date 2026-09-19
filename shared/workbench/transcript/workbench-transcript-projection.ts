@@ -113,7 +113,7 @@ function browseEntries(
         assetUrl: address?.surface === "api" && snapshot.thread.identity_origin === "workbench"
           ? createTranscriptAssetAddress(snapshot.thread.id, address.assetName)
           : asset?.storage_key ?? null,
-        commandItemId: root.public_id ?? root.source_id,
+        commandItemId: root.public_id,
         detailKind: entry.detail_kind,
         detailLabel: entry.detail_label,
         detailText: entry.detail_text,
@@ -141,8 +141,8 @@ export function projectWorkbenchTranscript(
     const itemRootsById = new Map(snapshot.rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
     for (const root of snapshot.rows.threadItems) {
-      if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.source_id);
-      if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.source_id);
+      if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.public_id);
+      if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.public_id);
     }
     const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows);
     if ("issues" in itemProjection) {

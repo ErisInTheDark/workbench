@@ -78,7 +78,7 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.equal(admittedQuestionnaire.projectId, thread.projectId);
     assert.equal(admittedQuestionnaire.turnId, null);
     await assert.rejects(ports.resolveThread("/foreign", thread.threadId));
-    const [question] = await items.admit([{ threadId: thread.threadId, sources: [], legacyAliases: [] }]);
+    const [question] = await items.admit([{ threadId: thread.threadId, sources: [] }]);
     const source: WorkbenchThreadObservationSnapshot = {
       projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",
       target: { kind: "provider", harness: "codex", threadId: thread.threadId },
@@ -137,8 +137,8 @@ test("observation requests validate canonical ownership and outbound state needs
       harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"],
       nativeTurnId: childTurnId,
     });
-    assert.ok(items.findItemIdForSource(child.threadId, { turnId: childTurn, sourceId: "item-123", kind: "stable" }));
-    assert.equal(items.findItemIdForSource(child.threadId, { turnId: childTurn, sourceId: "item-123", kind: "provisional" }), undefined);
+    assert.ok(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "stable" }));
+    assert.equal(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "provisional" }), undefined);
     const childRequest = await mapWorkbenchThreadStateRequest(owners, {
       method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: source.subscriptionId, version: 1,
       target: { kind: "subagent", harness: "opencode", threadId: child.threadId, parentThreadId: thread.threadId },

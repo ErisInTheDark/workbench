@@ -54,7 +54,7 @@ export function createWorkbenchQuestionnaireStatePorts(
       if (questionnaire.itemId !== null) {
         const [item] = await items.admit([{
           itemId: WorkbenchItemIdSchema.parse(questionnaire.itemId), threadId: thread.threadId,
-          sources: [], legacyAliases: [],
+          sources: [],
         }]);
         if (!item) throw new Error("The questionnaire item identity was not admitted.");
         itemId = item.itemId;
@@ -130,8 +130,12 @@ export async function mapNativeQuestionnaire(owners: NativeTranscriptIdentityOwn
       const [admitted] = await owners.items.admit([{
         threadId: thread.threadId,
         ...(z.uuid().safeParse(itemId).success ? { itemId: WorkbenchItemIdSchema.parse(itemId) } : {}),
-        sources: turnId ? [{ turnId, kind: "stable", sourceId: itemId }] : [],
-        legacyAliases: [],
+        sources: turnId ? [{
+          turnId,
+          kind: "stable",
+          reference: itemId,
+          component: { kind: "item", index: 0 },
+        }] : [],
       }]);
       itemId = admitted!.itemId;
     }

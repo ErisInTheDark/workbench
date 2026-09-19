@@ -49,7 +49,7 @@ function conformanceReportSignature(report: WorkbenchTranscriptConformanceReport
 }
 
 export default class WorkbenchTranscriptClient {
-  private protocolVersion: 1 | 2 | 3 | null = null;
+  private protocolVersion: 1 | 2 | 3 | 4 | null = null;
   private readonly availabilityListeners = new Set<(available: boolean) => void>();
   private readonly listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   private readonly streamListeners = new Map<string, (update: TranscriptStreamUpdate) => void>();
@@ -64,7 +64,7 @@ export default class WorkbenchTranscriptClient {
   }
 
   get incremental() {
-    return this.protocolVersion === 3;
+    return this.protocolVersion !== null && this.protocolVersion >= 3;
   }
 
   constructor({
@@ -93,7 +93,11 @@ export default class WorkbenchTranscriptClient {
 
   async read(params: WorkbenchTranscriptReadRequest) {
     return (await this.request(workbenchTranscriptOperations.read, {
-      ...params, ...(this.protocolVersion !== null && this.protocolVersion >= 2 ? { protocolVersion: 2 as const } : {}),
+      ...params, ...(this.protocolVersion !== null && this.protocolVersion >= 4
+        ? { protocolVersion: 4 as const }
+        : this.protocolVersion !== null && this.protocolVersion >= 2
+          ? { protocolVersion: 2 as const }
+          : {}),
     })).snapshot;
   }
 
@@ -106,8 +110,10 @@ export default class WorkbenchTranscriptClient {
     if (streamListener) this.streamListeners.set(params.subscriptionId, streamListener);
     try {
       await this.request(workbenchTranscriptOperations.subscribe, {
-        ...params, ...(streamListener && this.protocolVersion === 3
-          ? { protocolVersion: 3 as const }
+        ...params, ...(streamListener && this.protocolVersion !== null && this.protocolVersion >= 4
+          ? { protocolVersion: 4 as const }
+          : streamListener && this.protocolVersion === 3
+            ? { protocolVersion: 3 as const }
           : this.protocolVersion !== 1 ? { protocolVersion: 2 as const } : {}),
       });
     } catch (error) {
@@ -155,7 +161,11 @@ export default class WorkbenchTranscriptClient {
           issues: "data" in conformed ? [] : conformed.issues,
         });
       }
-      if ("data" in conformed) this.setProtocolVersion(conformed.data.protocolVersion >= 3 ? 3 : conformed.data.protocolVersion >= 2 ? 2 : 1);
+      if ("data" in conformed) {
+        this.setProtocolVersion(conformed.data.protocolVersion >= 4
+          ? 4
+          : conformed.data.protocolVersion >= 3 ? 3 : conformed.data.protocolVersion >= 2 ? 2 : 1);
+      }
       return;
     }
     if (notification.method === workbenchTranscriptNotifications.streamed.method) {
@@ -182,7 +192,7 @@ export default class WorkbenchTranscriptClient {
     this.listeners.get(conformed.data.subscriptionId)?.(conformed.data.snapshot);
   }
 
-  private setProtocolVersion(version: 1 | 2 | 3 | null) {
+  private setProtocolVersion(version: 1 | 2 | 3 | 4 | null) {
     const wasAvailable = this.available;
     this.protocolVersion = version;
     if (wasAvailable === this.available) return;

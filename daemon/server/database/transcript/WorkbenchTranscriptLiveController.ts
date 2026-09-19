@@ -81,7 +81,7 @@ export default class WorkbenchTranscriptLiveController {
       projection: projected.data,
       items: new Map(projected.data.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const))),
       publish,
-      roots: new Map(snapshot.rows.threadItems.map(root => [root.public_id ?? root.source_id, root])),
+      roots: new Map(snapshot.rows.threadItems.map(root => [root.public_id, root])),
       turns: new Map(snapshot.turns.map(turn => [turn.id, turn])),
     };
     this.#views.set(id, view);
@@ -172,7 +172,7 @@ export default class WorkbenchTranscriptLiveController {
   #settleFields(snapshot: WorkbenchTranscriptSnapshot, removed: readonly string[], completedIds: readonly string[], replaceLiveText = false) {
     const fields = this.#fields.get(snapshot.thread.id) ?? new Map<string, TranscriptTextUpdate>();
     const active = liveFields(snapshot);
-    const touched = new Map(snapshot.rows.threadItems.map(root => [root.public_id ?? root.source_id, root]));
+    const touched = new Map(snapshot.rows.threadItems.map(root => [root.public_id, root]));
     const projected = projectWorkbenchTranscript(snapshot);
     if (!projected.success) throw new Error("Committed transcript fields could not be projected.");
     const items = new Map(projected.data.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const)));
@@ -235,7 +235,7 @@ export default class WorkbenchTranscriptLiveController {
     }
     for (const id of removedItemIds) view.roots.delete(id);
     for (const root of snapshot.rows.threadItems) {
-      if (loaded.has(root.turn_id)) view.roots.set(root.public_id ?? root.source_id, root);
+      if (loaded.has(root.turn_id)) view.roots.set(root.public_id, root);
     }
     const payloads = new Map(view.projection.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const)));
     for (const turn of incoming.data.turns) for (const item of turn.items) payloads.set(item.id, item);

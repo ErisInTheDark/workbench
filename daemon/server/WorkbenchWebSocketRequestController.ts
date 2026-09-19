@@ -109,7 +109,7 @@ export interface WorkbenchWebSocketReloadDirtObserverState {
 interface WorkbenchWebSocketTranscriptSubscriptionState {
   client: BridgeClient;
   connectionId: string;
-  protocolVersion?: 1 | 2 | 3;
+  protocolVersion?: 1 | 2 | 3 | 4;
   subscriptionId: string;
   threadId: string;
   turnIds?: string[];
@@ -721,7 +721,7 @@ export default class WorkbenchWebSocketRequestController {
             },
           });
         },
-        ...(subscription.protocolVersion === 3 ? {
+        ...(subscription.protocolVersion !== undefined && subscription.protocolVersion >= 3 ? {
           publishStream: (update: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptStreamUpdate) => {
             if (signal.aborted || this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
             void this.sendJsonToClient(subscription.client, {

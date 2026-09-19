@@ -477,7 +477,7 @@ function projectItem(
   root: Rows["threadItems"][number],
   indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedTranscriptItem {
-  const itemId = root.public_id ?? root.source_id;
+  const itemId = root.public_id;
   switch (root.type) {
     case "functionCallOutput":
       return projectWorkbenchToolOutput(
@@ -608,7 +608,7 @@ export function projectWorkbenchTranscriptItems(
   try {
     const itemRootsById = new Map(rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== rows.threadItems.length) fail("duplicateRow", "threadItems");
-    const sourceIdsByItemId = new Map(rows.threadItems.map((item) => [item.id, item.public_id ?? item.source_id]));
+    const sourceIdsByItemId = new Map(rows.threadItems.map((item) => [item.id, item.public_id]));
     if (new Set(sourceIdsByItemId.values()).size !== rows.threadItems.length) fail("duplicateRow", "threadItems");
     const identities = new Map(rows.itemIdentities.map((identity) => [identity.id, identity]));
     if (identities.size !== rows.itemIdentities.length) fail("duplicateRow", "itemIdentities");

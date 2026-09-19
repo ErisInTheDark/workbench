@@ -38,14 +38,30 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
       !table.name.startsWith("workbench_thread_state_")
       && !table.name.startsWith("workbench_git_arc_proposal_diff")
       && database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table.name));
-    const columns = new Map(retained.map(table => [table.name,
-      (database.prepare(`PRAGMA table_info("${table.name}")`).all() as Array<{ name: string }>).map(column => column.name),
-    ]));
+    const sourceReferenceTable = "workbench_transcript_item_source_aliases";
+    const sourceReferenceColumns = [
+      "turn_id", "source_kind", "reference", "component_kind", "component_index", "thread_id", "item_identity_id",
+    ];
+    const columns = new Map(retained.map(table => {
+      const existing = new Set(
+        (database.prepare(`PRAGMA table_info("${table.name}")`).all() as Array<{ name: string }>)
+          .map(column => column.name),
+      );
+      return [table.name, table.name === sourceReferenceTable
+        ? sourceReferenceColumns
+        : Object.keys(table.columns).filter(column => existing.has(column))];
+    }));
     type Row = Record<string, string | number | bigint | Buffer | null>;
     const rows = (table: typeof retained[number]) => database.prepare(
       `SELECT ${columns.get(table.name)!.map(column => `"${column}"`).join(", ")} FROM "${table.name}"`,
     ).all() as Row[];
-    const before = retained.map(table => rows(table));
+    const before = retained.map(table => table.name === sourceReferenceTable
+      ? database.prepare(`
+          SELECT turn_id, source_kind, source_id AS reference, 'item' AS component_kind, 0 AS component_index,
+            thread_id, item_identity_id
+          FROM workbench_transcript_item_source_aliases
+        `).all() as Row[]
+      : rows(table));
     const version = database.pragma("user_version", { simple: true }) as number;
     if (version < databaseReleases.stableProjectPreparation.version) {
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, { targetVersion: databaseReleases.stableProjectPreparation.version });

@@ -175,7 +175,7 @@ export default class WorkbenchTranscriptQueryRepository {
   }
 
   private selectItems(query: TranscriptQuery, where: string) {
-    return `SELECT i.id, COALESCE(i.public_id, i.source_id) AS publicId, i.thread_id AS threadId,
+    return `SELECT i.id, i.public_id AS publicId, i.thread_id AS threadId,
       i.turn_id AS turnId, th.project_id AS projectId, th.title, ${transcriptQueryKindSql} AS kind,
       i.created_at AS createdAt, ${query.threads.length === 1 ? "0" : "tr.created_at"} AS ordTime,
       tr.turn_index AS turnIndex, i.item_position AS position ${itemJoins} WHERE ${where}`;
@@ -184,7 +184,7 @@ export default class WorkbenchTranscriptQueryRepository {
   private locate(query: TranscriptQuery, item: string): ItemRow {
     const bindings: Bindings = { item };
     const where = this.filters(query, bindings, true);
-    const row = this.database.prepare(this.selectItems(query, `${where} AND (i.public_id = @item OR (i.public_id IS NULL AND (i.source_id = @item OR CAST(i.id AS TEXT) = @item)))`))
+    const row = this.database.prepare(this.selectItems(query, `${where} AND i.public_id = @item`))
       .get(bindings) as ItemRow | undefined;
     if (!row) throw new TranscriptQueryError("Unknown item in the selected Workbench thread.");
     return row;

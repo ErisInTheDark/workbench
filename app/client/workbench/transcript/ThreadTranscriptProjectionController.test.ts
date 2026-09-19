@@ -23,6 +23,10 @@ import {
   createTranscriptLayout, createTranscriptLayoutPatch, type TranscriptPatchUpdate, type TranscriptStreamUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
+const baselineItemId = "fd2a624b-b53b-4de7-860a-6d34f0c9d88c";
+const deliveredItemId = "7d29f440-0770-471a-8c55-b672c8181cf0";
+const patchItemId = "74f09044-d6df-4676-b42f-07178befebbc";
+
 function flush() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -114,8 +118,12 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
   }];
   snapshot.loadedTurnIds = ["turn"];
   snapshot.rows.threadItems = [{
-    id: 1, public_id: null, source_id: "message:turn", thread_id: threadId, turn_id: "turn",
+    id: 1, public_id: baselineItemId, thread_id: threadId, turn_id: "turn",
     item_position: 0, type: "assistantMessage", created_at: 1, updated_at: 1,
+  }];
+  snapshot.rows.itemIdentities = [{
+    id: baselineItemId,
+    thread_id: threadId,
   }];
   snapshot.rows.threadItemAssistantMessages = [{
     item_id: 1, item_type: "assistantMessage", state: "streaming", phase: "commentary", text: "stored",
@@ -135,7 +143,15 @@ function patchBaseline(
   const update = streamBaseline("thread");
   assert.ok(update.kind === "structure");
   update.snapshot.rows.threadItems.push({
-    ...update.snapshot.rows.threadItems[0]!, id: 2, source_id: "patch", item_position: 1, type: "fileChange",
+    ...update.snapshot.rows.threadItems[0]!,
+    id: 2,
+    public_id: patchItemId,
+    item_position: 1,
+    type: "fileChange",
+  });
+  update.snapshot.rows.itemIdentities.push({
+    id: patchItemId,
+    thread_id: "thread",
   });
   update.snapshot.rows.threadItemFileChanges.push({
     item_id: 2, item_type: "fileChange", state: status, error_text: null,
@@ -175,7 +191,7 @@ async function patchViewer() {
       assert.ok(state.status === "ready");
       return state.projection;
     },
-    patch: (diff: string, itemId = "patch"): TranscriptPatchUpdate => ({
+    patch: (diff: string, itemId = patchItemId): TranscriptPatchUpdate => ({
       kind: "patch", threadId: "thread", turnId: "turn", itemId,
       changes: [{ path: "file.ts", kind: { type: "add" }, diff }],
     }),
@@ -200,8 +216,8 @@ test("patch previews appear before admission, grow immutably and become one cano
     const previous = first.turns[0]!.items.find(item => item.type === "fileChange");
     assert.ok(previous?.type === "fileChange");
     assert.deepEqual(previous.changes.map(change => change.diff), ["+first"], "Previously published snapshots must not change under subscribers");
-    assert.equal(view.projection().display.orderedItems.some(item => item.itemId === "patch"), false);
-    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === "patch").length, 1);
+    assert.equal(view.projection().display.orderedItems.some(item => item.itemId === patchItemId), false);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === patchItemId).length, 1);
 
     const unrelated = streamBaseline("thread");
     assert.ok(unrelated.kind === "structure");
@@ -221,8 +237,8 @@ test("patch previews appear before admission, grow immutably and become one cano
     view.receive(admitted);
     view.receive(grown);
     assert.equal(fileItems().length, 1);
-    assert.equal(view.projection().display.orderedItems.filter(item => item.itemId === "patch").length, 1);
-    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === "patch").length, 1);
+    assert.equal(view.projection().display.orderedItems.filter(item => item.itemId === patchItemId).length, 1);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === patchItemId).length, 1);
     view.receive(patchBaseline("completed", admitted.snapshot));
     assert.equal(fileItems().length, 1);
     assert.equal(fileItems()[0]!.status, "completed");
@@ -251,7 +267,7 @@ test("server withdrawal removes only the transient tail and preserves canonical 
     assert.equal(view.projection().turns[0]!.items.some(item => item.id === "preview"), false);
     assert.equal(view.projection().display.segments.flatMap(segment => segment.items).some(item => item.id === "preview"), false);
     view.receive({ ...view.patch(""), changes: [] });
-    const canonical = view.projection().turns[0]!.items.find(item => item.id === "patch");
+    const canonical = view.projection().turns[0]!.items.find(item => item.id === patchItemId);
     assert.ok(canonical?.type === "fileChange");
     assert.equal(canonical.changes[0]?.diff, "+canonical");
     assert.ok(view.projection().turns[0]!.items.some(item => item.id === steer.handle));
@@ -300,7 +316,7 @@ test(`unadmitted previews are cleared on ${boundary}`, async () => {
   try {
     view.receive(streamBaseline("thread"));
     view.receive(view.patch("+preview"));
-    assert.ok(view.projection().turns[0]!.items.some(item => item.id === "patch"));
+    assert.ok(view.projection().turns[0]!.items.some(item => item.id === patchItemId));
     if (boundary === "selection") {
       view.controller.select({ thread: thread("other") });
       await flush();
@@ -322,13 +338,13 @@ test(`unadmitted previews are cleared on ${boundary}`, async () => {
         update.reset = false;
         update.layout = {};
         update.snapshot.rows = emptyRows();
-        if (boundary === "removed") update.removedItemIds = ["patch"];
+        if (boundary === "removed") update.removedItemIds = [patchItemId];
         else update.snapshot.turns[0] = { ...update.snapshot.turns[0]!, state: boundary };
       }
       view.receive(update);
     }
-    assert.equal(view.projection().turns.flatMap(turn => turn.items).some(item => item.id === "patch"), false);
-    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).some(item => item.id === "patch"), false);
+    assert.equal(view.projection().turns.flatMap(turn => turn.items).some(item => item.id === patchItemId), false);
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).some(item => item.id === patchItemId), false);
     assert.deepEqual(view.errors, []);
   } finally { await view.controller.dispose(); }
 });
@@ -366,10 +382,10 @@ for (const correlation of ["item", "client"] as const) {
       const first = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
       const second = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
       select();
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
       assert.deepEqual(projection().display.segments.flatMap(segment => segment.items.map(item => item.id)),
-        ["message:turn", first.handle, second.handle]);
+        [baselineItemId, first.handle, second.handle]);
       assert.equal(projection().display.segments[0]!.id, canonicalSegment);
       assert.equal(projection().turns[0]!.itemTimeline.find(entry => entry.itemId === first.handle)?.firstSeenAt, 42);
       const pendingHistory = [{
@@ -380,18 +396,18 @@ for (const correlation of ["item", "client"] as const) {
       controller.select({
         thread: inputs.apply(applySteerHistoryToThread(source, pendingHistory), pendingHistory),
       });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
       assert.ok(inputs.movePending(first.handle, "turn"));
       select();
       assert.equal(inputStates()[1]?.status, "pending", "Admission is not delivery");
       const publications = states.length;
-      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: baselineItemId,
         field: "agentMessageText", index: null, text: " delta", append: true });
       select();
       assert.equal(states.length, publications, "Provider text must not republish local input");
       receive(streamBaseline("thread"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", first.handle, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       const unsent = correlation === "item" ? "failed" : "interrupted";
       inputs.transition(second.handle, unsent);
       select();
@@ -399,9 +415,17 @@ for (const correlation of ["item", "client"] as const) {
 
       const delivered = streamBaseline("thread");
       assert.ok(delivered.kind === "structure");
-      const deliveredId = correlation === "item" ? first.handle : "delivered";
+      const deliveredId = correlation === "item" ? first.handle : deliveredItemId;
       delivered.snapshot.rows.threadItems.push({
-        ...delivered.snapshot.rows.threadItems[0]!, id: 2, source_id: deliveredId, item_position: 1, type: "userMessage",
+        ...delivered.snapshot.rows.threadItems[0]!,
+        id: 2,
+        public_id: deliveredId,
+        item_position: 1,
+        type: "userMessage",
+      });
+      delivered.snapshot.rows.itemIdentities.push({
+        id: deliveredId,
+        thread_id: "thread",
       });
       delivered.snapshot.rows.threadItemUserMessages.push({
         item_id: 2, item_type: "userMessage", input_kind: "steer", delivery_state: "delivered",
@@ -414,9 +438,9 @@ for (const correlation of ["item", "client"] as const) {
       assert.ok(canonical.success);
       delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
       receive(delivered);
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", deliveredId, second.handle]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, deliveredId, second.handle]);
       assert.equal(inputStates()[1]?.status, "sent");
-      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), ["message:turn", deliveredId]);
+      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), [baselineItemId, deliveredId]);
       assert.equal(subscriptions, 1, "Local input changes must not resubscribe");
 
       const retained = applySteerHistoryToThread(source, [{
@@ -427,11 +451,11 @@ for (const correlation of ["item", "client"] as const) {
       controller.select({ thread: retained });
       assert.equal(inputStates().at(-1)?.status, unsent);
       controller.select({ thread: source });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn", deliveredId], "Removing local state must remove its presentation");
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, deliveredId], "Removing local state must remove its presentation");
       controller.select({ thread: thread("other") });
       await flush();
       receive(streamBaseline("other"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), ["message:turn"]);
+      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId]);
       assert.deepEqual(errors, []);
     } finally { await controller.dispose(); }
   });
@@ -484,10 +508,10 @@ test(`admitted initial input stays before provider output until canonical delive
   controller.select({ thread: inputs.apply(source, []) });
   await flush();
   receive(streamBaseline("thread"));
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "message:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, baselineItemId]);
   assert.deepEqual(
     projection().display.segments.flatMap(segment => segment.items.map(({ id }) => id)),
-    [initial.handle, "message:turn"],
+    [initial.handle, baselineItemId],
   );
 
   const nativeInitial = {
@@ -504,7 +528,7 @@ test(`admitted initial input stays before provider output until canonical delive
   const nativeProjected = inputs.apply(source, []);
   assert.equal(nativeProjected.turns[0]!.items.some(item => item.id === initial.handle), false);
   controller.select({ thread: nativeProjected });
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, "message:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, baselineItemId]);
 
   const delivered = streamBaseline("thread");
   assert.ok(delivered.kind === "structure");
@@ -515,9 +539,13 @@ test(`admitted initial input stays before provider output until canonical delive
   delivered.snapshot.rows.threadItems.push({
     ...delivered.snapshot.rows.threadItems[0]!,
     id: 2,
+    public_id: deliveredItemId,
     item_position: 0,
-    source_id: "delivered",
     type: "userMessage",
+  });
+  delivered.snapshot.rows.itemIdentities.push({
+    id: "7d29f440-0770-471a-8c55-b672c8181cf0",
+    thread_id: "thread",
   });
   delivered.snapshot.rows.threadItemUserMessages.push({
     client_id: initial.handle,
@@ -541,9 +569,9 @@ test(`admitted initial input stays before provider output until canonical delive
   assert.ok(canonical.success);
   delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
   receive(delivered);
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "message:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [deliveredItemId, baselineItemId]);
   controller.select({ thread: nativeProjected });
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), ["delivered", "message:turn"]);
+  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [deliveredItemId, baselineItemId]);
   assert.equal(subscriptions, 1);
   await controller.dispose();
 });
@@ -570,7 +598,7 @@ test("incremental SQL never reconciles provider-live state and text does not rep
     await flush();
     receive(streamBaseline("thread"));
     const count = states.length;
-    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+    receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: baselineItemId,
       field: "agentMessageText", index: null, append: true, text: " delta" });
     controller.select({ thread: thread("thread") });
     assert.deepEqual(text, ["stored delta"]);
@@ -583,7 +611,7 @@ test("incremental SQL never reconciles provider-live state and text does not rep
     controller.select({ thread: thread("other") });
     await flush();
     receive(streamBaseline("other"));
-    obsolete({ kind: "text", threadId: "thread", turnId: "turn", itemId: "message:turn",
+    obsolete({ kind: "text", threadId: "thread", turnId: "turn", itemId: baselineItemId,
       field: "agentMessageText", index: null, append: true, text: " stale" });
     assert.deepEqual(text, ["stored delta"]);
   } finally {
@@ -862,8 +890,12 @@ test("malformed SQL data becomes a source-local failure", async () => {
   await flush();
   const invalid = emptySnapshot("thread");
   invalid.rows.threadItems.push({
-    id: 1, public_id: null, source_id: "orphan", thread_id: "thread", turn_id: "missing", type: "assistantMessage",
+    id: 1, public_id: "c89ef7fa-6557-4bf5-9e6d-529190dfc8e5", thread_id: "thread", turn_id: "missing", type: "assistantMessage",
     item_position: 0, created_at: 1, updated_at: 1,
+  });
+  invalid.rows.itemIdentities.push({
+    id: "c89ef7fa-6557-4bf5-9e6d-529190dfc8e5",
+    thread_id: "thread",
   });
   [...listeners.values()][0]?.(invalid);
 

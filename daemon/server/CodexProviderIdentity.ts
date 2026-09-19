@@ -27,6 +27,14 @@ import type { WorkbenchTranscriptItemSource } from "./database/transcript/workbe
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 
+function wholeItemSource(
+  turnId: WorkbenchTurnId,
+  kind: WorkbenchTranscriptItemSource["kind"],
+  reference: string,
+): WorkbenchTranscriptItemSource {
+  return { turnId, kind, reference, component: { kind: "item", index: 0 } };
+}
+
 export interface WorkbenchProviderIdentityOwners {
   threads: Pick<WorkbenchThreadIdentityController, "workbenchIdForNative" | "workbenchTurnIdForNative" | "knownNativeBinding">;
   items: Pick<WorkbenchTranscriptIdentityController, "admit" | "hasAdmitted" | "findItemIdForSource" | "itemIdForSource" | "itemIdForReference">;
@@ -97,9 +105,8 @@ export async function admitProviderNotifications(
         threadId,
         sources: [
           providerItemSource({ ...native, nativeTurnId }, turnId, item),
-          ...(item.type === "userMessage" && item.clientId ? [{ turnId, kind: "client" as const, sourceId: item.clientId }] : []),
+          ...(item.type === "userMessage" && item.clientId ? [wholeItemSource(turnId, "client", item.clientId)] : []),
         ],
-        legacyAliases: [],
       };
     }).filter((input) => !owners.items.hasAdmitted(input));
     if (admissions.length) await owners.items.admit(admissions);
@@ -109,8 +116,11 @@ export async function admitProviderNotifications(
       || !("itemId" in params) || typeof params.itemId !== "string") continue;
     const threadId = owners.threads.workbenchIdForNative(native);
     const turnId = owners.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: NativeTurnIdSchema.parse(params.turnId) });
-    const source = { turnId, sourceId: params.itemId,
-      kind: native.harness === "codex" ? getCodexItemIdentityKind({ id: params.itemId }) : "stable" as const };
+    const source = wholeItemSource(
+      turnId,
+      native.harness === "codex" ? getCodexItemIdentityKind({ id: params.itemId }) : "stable",
+      params.itemId,
+    );
     if (!owners.items.findItemIdForSource(threadId, source)
       && !owners.items.findItemIdForReference(threadId, turnId, NativeItemIdSchema.parse(params.itemId))) {
       await owners.items.resolve({ threadId, turnId, itemId: NativeItemIdSchema.parse(params.itemId) });
@@ -150,17 +160,23 @@ export async function admitProviderThreads(
     const items = new Map((loaded.get(entry.turnId)?.items ?? []).map((item) => [item.id, item]));
     const timelines = new Map((entry.itemTimeline ?? []).map((timeline) => [timeline.itemId, timeline]));
     const references = new Set([...items.keys(), ...entry.itemIds ?? [], ...timelines.keys()]);
-    return [...references].map((sourceId) => {
-      const item = items.get(sourceId);
+    return [...references].map((reference) => {
+      const item = items.get(reference);
+      const aliases = timelines.get(reference)?.aliases ?? [];
       return {
         threadId: identity.threadId,
         sources: [
-          { turnId, sourceId, kind: metadata.native.harness === "codex"
-            ? getCodexItemIdentityKind(item ?? { id: sourceId }) : "stable" as const },
+          wholeItemSource(turnId, metadata.native.harness === "codex"
+            ? getCodexItemIdentityKind(item ?? { id: reference }) : "stable", reference),
           ...(item?.type === "userMessage" && item.clientId
-            ? [{ turnId, kind: "client" as const, sourceId: item.clientId }] : []),
+            ? [wholeItemSource(turnId, "client", item.clientId)] : []),
+          ...aliases.map((alias) => wholeItemSource(
+            turnId,
+            metadata.native.harness === "codex"
+              ? getCodexItemIdentityKind({ id: alias }) : "stable",
+            alias,
+          )),
         ],
-        legacyAliases: (timelines.get(sourceId)?.aliases ?? []).map((alias) => ({ turnId, alias })),
       };
     });
   })).filter((input) => !owners.items.hasAdmitted(input));
@@ -276,10 +292,9 @@ export async function admitProviderThreadItems(
     sources: [
       providerItemSource(native, turnId, item),
       ...(item.type === "userMessage" && item.clientId
-        ? [{ turnId, kind: "client" as const, sourceId: item.clientId }]
+        ? [wholeItemSource(turnId, "client", item.clientId)]
         : []),
     ],
-    legacyAliases: [],
   })));
   return items.map((item) => mapProviderThreadItem(owners, native, item));
 }
@@ -330,9 +345,11 @@ function providerReferenceId(
   reference: string,
   item?: ThreadItem,
 ) {
-  const source = { turnId, sourceId: reference,
-    kind: harness === "codex" ? getCodexItemIdentityKind(item ?? { id: reference }) : "stable" as const };
-  // Native references retain their namespace. Only old aliases lack typed source evidence.
+  const source = wholeItemSource(
+    turnId,
+    harness === "codex" ? getCodexItemIdentityKind(item ?? { id: reference }) : "stable",
+    reference,
+  );
   return owners.items.findItemIdForSource(threadId, source)
     ?? owners.items.itemIdForReference(threadId, turnId, NativeItemIdSchema.parse(reference));
 }
@@ -345,6 +362,7 @@ function providerItemSource(
   return {
     turnId,
     kind: native.harness === "codex" ? getCodexItemIdentityKind(item) : "stable",
-    sourceId: item.id,
+    reference: item.id,
+    component: { kind: "item", index: 0 },
   };
 }
