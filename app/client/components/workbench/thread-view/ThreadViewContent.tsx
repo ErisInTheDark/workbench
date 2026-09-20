@@ -69,7 +69,11 @@ import ThreadLiveActivity from "./ThreadLiveActivity";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
-import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
+import ThreadEntryMotionController, { getThreadEntryMotionIdentities } from "./ThreadEntryMotionController";
+import {
+  ThreadScrollViewportContext,
+  useThreadScrollViewportContext,
+} from "./thread-scroll-viewport-context";
 import { isThreadScrollAtEnd } from "./thread-scroll-snap";
 import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
@@ -346,6 +350,33 @@ export default memo(function ThreadViewContent ({
   const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
   const relatedThreadsById = rootThreadController.state.relatedDocuments;
   const activeThread = activeThreadController.state.document;
+  const entryMotionOwnerKey = activeTarget.kind === "subagent"
+    ? `${viewInstanceKey}:subagent:${activeThreadId}`
+    : viewInstanceKey;
+  const entryMotionOwnerRef = useRef<{
+    controller: ThreadEntryMotionController;
+    key: string;
+    seeded: boolean;
+  } | null>(null);
+  if (entryMotionOwnerRef.current?.key !== entryMotionOwnerKey) {
+    entryMotionOwnerRef.current = {
+      controller: new ThreadEntryMotionController(
+        activeThread?.turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities)),
+      ),
+      key: entryMotionOwnerKey,
+      seeded: Boolean(activeThread),
+    };
+  } else if (!entryMotionOwnerRef.current.seeded && activeThread) {
+    entryMotionOwnerRef.current.controller.seed(
+      activeThread.turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities)),
+    );
+    entryMotionOwnerRef.current.seeded = true;
+  }
+  const entryMotionController = entryMotionOwnerRef.current.controller;
+  const entryMotionContext = useMemo(() => ({
+    ...threadScrollViewport,
+    entryMotion: entryMotionController,
+  }), [entryMotionController, threadScrollViewport]);
   const activeProvider = activeThread?.harness ?? thread.harness;
   const activeSidebarEntry = activeThreadController.state.entry;
   const activeGitArcSelection = useMemo<{
@@ -989,6 +1020,7 @@ export default memo(function ThreadViewContent ({
   );
 
   return (
+    <ThreadScrollViewportContext.Provider value={entryMotionContext}>
     <ProjectFilePathDisplayProvider
       disambiguationIndex={projectFilePathDisambiguationIndex}
       disambiguationKey={projectFileIndexId}
@@ -1215,5 +1247,6 @@ export default memo(function ThreadViewContent ({
       </ThreadGitArcPresentationContext.Provider>
       </ThreadGitArcObservationProvider>
     </ProjectFilePathDisplayProvider>
+    </ThreadScrollViewportContext.Provider>
   );
 });

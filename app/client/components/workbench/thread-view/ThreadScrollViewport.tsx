@@ -147,6 +147,7 @@ function ActiveThreadScrollViewport ({
   }, [forwardedRef, placeInitialViewportAtEnd, syncScrollProximity]);
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
+    entryMotion: null,
     getViewport: () => viewportRef.current,
     observeContent: (element, listener, range = "viewport") => {
       const root = viewportRef.current;

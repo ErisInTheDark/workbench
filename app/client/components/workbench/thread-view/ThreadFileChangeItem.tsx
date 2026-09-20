@@ -23,6 +23,8 @@ import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import { getThreadFileChangeMotionIdentity } from "./ThreadEntryMotionController";
+import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 type FileChangeItem = WorkbenchFileChangeItem;
@@ -381,28 +383,30 @@ function ThreadFileChangeRows ({
       label={content}
       onChange={selection.onChange}
     /> : content;
-    return change.detailsAvailable ? (
-      <ThreadDisclosure
-        key={key}
-        className={animateEntries ? "thread-file-change-enter py-0.5" : "py-0.5"}
-        contentClassName="mt-2 pl-6"
-        summary={summary}
-        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      >
-        <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
-      </ThreadDisclosure>
-    ) : change.staticMarker ? (
-      <ThreadDisclosureStaticRow
-        key={key}
-        className={animateEntries ? "thread-file-change-enter !py-0.5" : "!py-0.5"}
-        markerClassName={change.danger ? "text-danger" : undefined}
-        summary={summary}
-        summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
-      />
-    ) : (
-      <div key={key} className={`${animateEntries ? "thread-file-change-enter " : ""}py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
-        {summary}
-      </div>
+    return (
+      <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
+        {(animate) => change.detailsAvailable ? (
+          <ThreadDisclosure
+            className={animate ? "thread-file-change-enter py-0.5" : "py-0.5"}
+            contentClassName="mt-2 pl-6"
+            summary={summary}
+            summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+          >
+            <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
+          </ThreadDisclosure>
+        ) : change.staticMarker ? (
+          <ThreadDisclosureStaticRow
+            className={animate ? "thread-file-change-enter !py-0.5" : "!py-0.5"}
+            markerClassName={change.danger ? "text-danger" : undefined}
+            summary={summary}
+            summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
+          />
+        ) : (
+          <div className={`${animate ? "thread-file-change-enter " : ""}py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
+            {summary}
+          </div>
+        )}
+      </ThreadEntryMotion>
     );
   });
 }

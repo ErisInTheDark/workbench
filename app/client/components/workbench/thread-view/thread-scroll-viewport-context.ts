@@ -1,16 +1,19 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, end target, bottom-return notifications, and layout preservation.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, entry motion, end target, bottom-return notifications, and layout preservation.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
+ * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, type ReactNode } from "react";
+import type ThreadEntryMotionController from "./ThreadEntryMotionController";
 import type {
   ThreadContentVisibility,
   ThreadContentVisibilityRange,
 } from "./ThreadViewportVisibilityController";
 
 export interface ThreadScrollViewportContextValue {
+  readonly entryMotion: ThreadEntryMotionController | null;
   readonly getViewport: () => HTMLDivElement | null;
   readonly observeContent: (
     element: HTMLElement,
@@ -23,6 +26,7 @@ export interface ThreadScrollViewportContextValue {
 }
 
 const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue = {
+  entryMotion: null,
   getViewport: () => null,
   observeContent: () => () => {},
   preserveOffscreenLayout: () => () => {},
@@ -36,4 +40,24 @@ export const ThreadScrollViewportContext = createContext<ThreadScrollViewportCon
 
 export function useThreadScrollViewportContext() {
   return useContext(ThreadScrollViewportContext);
+}
+
+export function ThreadEntryMotion({
+  children,
+  enabled,
+  identity,
+}: {
+  children: (animate: boolean) => ReactNode;
+  enabled: boolean;
+  identity: string;
+}) {
+  const controller = useThreadScrollViewportContext().entryMotion;
+  const animateRef = useRef(false);
+  if (!animateRef.current && enabled && controller?.shouldAnimate(identity)) {
+    animateRef.current = true;
+  }
+  useLayoutEffect(() => {
+    if (animateRef.current) controller?.commit(identity);
+  }, [controller, identity]);
+  return children(animateRef.current);
 }

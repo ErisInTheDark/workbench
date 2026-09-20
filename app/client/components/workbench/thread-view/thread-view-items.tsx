@@ -84,6 +84,8 @@ import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
+import { getThreadEntryMotionIdentity } from "./ThreadEntryMotionController";
+import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import {
   createThreadGitArcCompareSummaryRows,
   createThreadGitArcDiffSummaryRows,
@@ -2433,44 +2435,55 @@ export function ThreadTranscriptItemsDetails ({
   ))?.id
     ?? null;
 
-  const renderEntry = (entry: RenderEntry, index: number) => <div
-    className={animateEntries && !(entry.kind === "block" && entry.block.kind === "fileChangeSequence")
-      ? "thread-item-enter"
-      : undefined}
-    key={entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
-      ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
-      : `${getRenderableBlockKey(entry.block)}:${index}`}>
-    <ThreadMeasuredContent>
-      {entry.kind === "generic" ? (
-        <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
-      ) : (
-        <ThreadRenderableBlockView
-          animateEntries={animateEntries}
-          block={entry.block}
-          browseResultEntries={browseResultEntries}
-          finalAgentMessageId={finalAgentMessageId}
-          inlineMentionSources={inlineMentionSources}
-          itemTimeline={renderItemTimeline}
-          isMostRecentBlock={index === entries.length - 1}
-          knownSkills={knownSkills}
-          presentationSource={presentationSource}
-          primaryUserBlock={primaryUserBlock}
-          threadCwdPath={threadCwdPath}
-          threadId={threadId}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          relatedThreadsById={relatedThreadsById}
-          subagents={subagents}
-          turnCompletedAt={turnCompletedAt}
-          turnId={turnId}
-          turnStartedAt={turnStartedAt}
-          turnStatus={turnStatus}
-          workspaceRoots={workspaceRoots}
-        />
-      )}
-    </ThreadMeasuredContent>
-  </div>;
+  const renderEntry = (entry: RenderEntry, index: number) => {
+    const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
+    const identity = entry.kind === "generic"
+      ? `item:${entry.item.id}`
+      : firstItem
+        ? getThreadEntryMotionIdentity(firstItem)
+        : `empty:${turnId}:${index}`;
+    const key = entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
+      ? `${entry.block.kind}:${firstItem?.id}`
+      : `${getRenderableBlockKey(entry.block)}:${index}`;
+    return <ThreadEntryMotion
+      enabled={animateEntries && !(entry.kind === "block" && entry.block.kind === "fileChangeSequence")}
+      identity={identity}
+      key={key}
+    >
+      {(animate) => <div className={animate ? "thread-item-enter" : undefined}>
+        <ThreadMeasuredContent>
+          {entry.kind === "generic" ? (
+            <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
+          ) : (
+            <ThreadRenderableBlockView
+              animateEntries={animateEntries}
+              block={entry.block}
+              browseResultEntries={browseResultEntries}
+              finalAgentMessageId={finalAgentMessageId}
+              inlineMentionSources={inlineMentionSources}
+              itemTimeline={renderItemTimeline}
+              isMostRecentBlock={index === entries.length - 1}
+              knownSkills={knownSkills}
+              presentationSource={presentationSource}
+              primaryUserBlock={primaryUserBlock}
+              threadCwdPath={threadCwdPath}
+              threadId={threadId}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              relatedThreadsById={relatedThreadsById}
+              subagents={subagents}
+              turnCompletedAt={turnCompletedAt}
+              turnId={turnId}
+              turnStartedAt={turnStartedAt}
+              turnStatus={turnStatus}
+              workspaceRoots={workspaceRoots}
+            />
+          )}
+        </ThreadMeasuredContent>
+      </div>}
+    </ThreadEntryMotion>;
+  };
   if (!initialInactiveItemIds) return <div className="space-y-2">{entries.map(renderEntry)}</div>;
   let offset = 0;
   return <div className="space-y-2">{partitionWorkedRows(entries).map(group => {
@@ -2657,8 +2670,9 @@ function ThreadTurnDetailsComponent ({
     blockList: ThreadRenderableBlock[],
     primaryUserBlock: ThreadRenderableBlock | null,
   ) => (
-    <div
-      className={animateEntries && block.kind !== "fileChangeSequence" ? "thread-item-enter" : undefined}
+    <ThreadEntryMotion
+      enabled={animateEntries && block.kind !== "fileChangeSequence"}
+      identity={getThreadEntryMotionIdentity(getRenderableBlockItems(block)[0]!)}
       key={block.kind === "commandSequence"
         ? `commands:${block.items[0]?.id ?? index}`
         : block.kind === "fileChangeSequence"
@@ -2670,33 +2684,35 @@ function ThreadTurnDetailsComponent ({
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}>
-      <ThreadMeasuredContent>
-        <ThreadRenderableBlockView
-          animateEntries={animateEntries}
-          block={block}
-          browseResultEntries={turnBrowseResultEntries}
-          finalAgentMessageId={finalAgentMessageId}
-          inlineMentionSources={inlineMentionSources}
-          itemTimeline={itemTimeline}
-          isMostRecentBlock={block === blockList[blockList.length - 1]}
-          knownSkills={knownSkills}
-          presentationSource={presentationSource}
-          primaryUserBlock={primaryUserBlock}
-          threadCwdPath={threadCwdPath}
-          threadId={threadId}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          relatedThreadsById={relatedThreadsById}
-          subagents={subagents}
-          turnCompletedAt={turn.completedAt}
-          turnId={turn.id}
-          turnStartedAt={turn.startedAt}
-          turnStatus={turn.status}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadMeasuredContent>
-    </div>
+      {(animate) => <div className={animate ? "thread-item-enter" : undefined}>
+        <ThreadMeasuredContent>
+          <ThreadRenderableBlockView
+            animateEntries={animateEntries}
+            block={block}
+            browseResultEntries={turnBrowseResultEntries}
+            finalAgentMessageId={finalAgentMessageId}
+            inlineMentionSources={inlineMentionSources}
+            itemTimeline={itemTimeline}
+            isMostRecentBlock={block === blockList[blockList.length - 1]}
+            knownSkills={knownSkills}
+            presentationSource={presentationSource}
+            primaryUserBlock={primaryUserBlock}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            turnCompletedAt={turn.completedAt}
+            turnId={turn.id}
+            turnStartedAt={turn.startedAt}
+            turnStatus={turn.status}
+            workspaceRoots={workspaceRoots}
+          />
+        </ThreadMeasuredContent>
+      </div>}
+    </ThreadEntryMotion>
   );
 
   const buildBlocksForItems = (items: ThreadItem[]) => buildRenderableBlocks(items, hiddenItemIds, threadCwdPath);
