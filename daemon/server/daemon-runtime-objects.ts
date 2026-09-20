@@ -198,6 +198,9 @@ export interface DaemonRuntimeObjects {
   codexTools: import("./CodexToolsController").default;
   codexExecutor: import("./CodexExecServer").default;
   codexProvider: WorkbenchProvider;
+  openCodeService: import("./providers/opencode/OpenCodeServiceController").default;
+  openCodeThreadOperations: import("./providers/opencode/OpenCodeThreadOperations").default;
+  openCodeProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   browseExecution: DaemonBrowseExecution;
   browseSessionCleanup: BrowseSessionCleanupSupervisor;

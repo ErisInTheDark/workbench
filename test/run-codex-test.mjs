@@ -1,5 +1,5 @@
 /*
- * No exports. Runs only the explicitly named live scenario through the project runner.
+ * No exports. Admits only the explicitly named paid Codex scenario through the trusted daemon.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,16 +12,27 @@ if (args.length !== 1 || args[0] !== file) {
   console.error(`Real Codex usage required. Run: pnpm test:codex -- ${file}`);
   process.exitCode = 1;
 } else {
-  process.chdir(path.join(projectRoot, "daemon"));
-  process.env.WORKBENCH_CODEX_TEST_FILE = file;
   console.log("Paid live scenario: five short luna.low turns and compaction, isolated runtime, exact created-thread cleanup.");
-  const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
-  // The test owns twenty minutes of work. Allow its independent exact-thread
-  // and process cleanup budgets before treating the test process as wedged.
-  const result = await new ProjectTestRunner(projectRoot, {
-    testConcurrency: 1, testTimeoutMs: 1_320_000,
-    spawnProcess: (command, args, options) => spawn(command, args.map((arg) => arg.startsWith("--test-reporter=") ? "--test-reporter=spec" : arg), options),
-  }).run([file]);
-  if (result.signal !== null) process.kill(process.pid, result.signal);
-  else process.exitCode = result.exitCode ?? 1;
+  const executable = path.join(projectRoot, "daemon", "node_modules", ".bin", "wb");
+  const child = spawn(process.platform === "win32" ? "bash" : executable, [
+    ...(process.platform === "win32" ? [executable] : []),
+    "test",
+    "live",
+    "codex",
+    "--",
+    file,
+  ], {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  child.once("error", error => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+  child.once("exit", (exitCode, signal) => {
+    if (signal !== null) process.kill(process.pid, signal);
+    else process.exitCode = exitCode ?? 1;
+  });
 }

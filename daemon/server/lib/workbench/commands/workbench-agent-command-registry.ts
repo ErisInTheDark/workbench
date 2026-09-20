@@ -6,6 +6,7 @@
 import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
+import { WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS } from "./live-provider-test-command-definition";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
@@ -33,6 +34,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_GIT_COMMANDS,
   ...WORKBENCH_GIT_ARC_COMMANDS,
   ...WORKBENCH_BROWSE_COMMANDS,
+  ...WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS,
 ]);
 
 export function listWorkbenchAgentCommands(

@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect runner-owned temp routing, daemon-compatible child cwd, and fixture/test-run disposal order.
+ * No exports. Tests protect runner-owned temp routing, daemon-compatible child cwd, timeout policy, and fixture/test-run disposal order.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -77,4 +77,31 @@ test("routes fixtures and test children through the acquired temp root before di
   assert.equal(childEnvironment?.[WORKBENCH_TEMPORARY_ROOT_ENV], temporaryRootPath);
   assert.equal(childEnvironment?.WORKBENCH_FIXTURE_SENTINEL, "ready");
   assert.deepEqual(disposed, ["fixtures", "run"]);
+});
+
+test("live runners can omit the test timeout without changing the ordinary default", async () => {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const temporaryRootPath = path.join(projectRoot, "test", "runner-timeout-root");
+  const invocations: string[][] = [];
+  const run = async (testTimeoutMs?: number | null) => {
+    const runner = new ProjectTestRunner(projectRoot, {
+      acquireTestRun: async () => ({ dispose: async () => undefined, temporaryRootPath }),
+      prepareTestFixtures: async () => ({ dispose: async () => undefined, environment: {} }),
+      spawnProcess: (_command, args) => {
+        invocations.push([...args]);
+        const child = new EventEmitter() as ChildProcess;
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      },
+      testConcurrency: 1,
+      ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+    });
+    await runner.run([fileURLToPath(import.meta.url)]);
+  };
+
+  await run();
+  await run(null);
+
+  assert.ok(invocations[0]?.includes("--test-timeout=30000"));
+  assert.equal(invocations[1]?.some(argument => argument.startsWith("--test-timeout=")), false);
 });

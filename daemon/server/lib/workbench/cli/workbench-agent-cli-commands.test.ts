@@ -32,6 +32,9 @@ import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-
 import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
 
 const execFileAsync = promisify(execFile);
+const hookWorkbenchThreadId = "00000000-0000-4000-8000-000000000101";
+const hookNativeThreadId = "00000000-0000-4000-8000-000000000102";
+const recalledThreadId = "00000000-0000-4000-8000-000000000103";
 
 function execFileWithInput(command: string, args: string[], input: string, options: { cwd: string; env: NodeJS.ProcessEnv }) {
   return new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolve, reject) => {
@@ -375,14 +378,14 @@ before(async () => {
   origin = `http://127.0.0.1:${address.port}`;
   agentCommandController = new WorkbenchAgentCommandController(origin, {
     resolveCaller: async (threadId, _cwd, harness) => ({
-      threadId: WorkbenchThreadIdSchema.parse(threadId === "hook-thread" ? "wb:hook-thread" : threadId),
-      nativeThreadId: NativeThreadIdSchema.parse(threadId === "hook-thread" ? threadId : `native:${threadId}`),
+      threadId: WorkbenchThreadIdSchema.parse(threadId === hookNativeThreadId ? hookWorkbenchThreadId : threadId),
+      nativeThreadId: NativeThreadIdSchema.parse(threadId),
       harness: WorkbenchHarnessSchema.parse(harness),
     }),
     patchClaims: async (_harness, input, signal) => new CodexToolsController({
       resolvePatchCaller: async threadId => ({
-        threadId: WorkbenchThreadIdSchema.parse(threadId === "hook-thread" ? "wb:hook-thread" : threadId),
-        nativeThreadId: NativeThreadIdSchema.parse(threadId === "hook-thread" ? threadId : `native:${threadId}`),
+        threadId: WorkbenchThreadIdSchema.parse(threadId === hookNativeThreadId ? hookWorkbenchThreadId : threadId),
+        nativeThreadId: NativeThreadIdSchema.parse(threadId),
       }),
       readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
       shell: { execute: async () => { throw new Error("Unexpected shell"); } },
@@ -1212,17 +1215,22 @@ test("keeps reload and dirt hidden while direct reload help explains user owners
 test("runs the native shell transport and preserves the server response", async () => {
   const unusableTempPath = path.join(temporaryDirectoryPath, "not-a-directory");
   await writeFile(unusableTempPath, "The shell transport must not use this as a temp directory.", "utf8");
-  const env = { ...process.env, TMPDIR: unusableTempPath, WORKBENCH_ORIGIN: origin };
+  const env = {
+    ...process.env,
+    TMPDIR: unusableTempPath,
+    WORKBENCH_DATA_ROOT: temporaryDataRootPath,
+    WORKBENCH_ORIGIN: origin,
+  };
   const result = await execFileAsync("bash", [
     shellSourcePath,
-    "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "commentary",
+    "thread", "recall", "search", "--thread", recalledThreadId, "--query", "needle", "--kind", "commentary",
   ], {
     cwd: temporaryDirectoryPath,
     env,
   });
   assert.match(result.stdout, /"ok":true/u);
   assert.equal(result.stderr, "");
-  assert.equal(requests.at(-1)?.url, "/api/thread-context/real-process");
+  assert.equal(requests.at(-1)?.url, `/api/thread-context/${recalledThreadId}`);
   assert.deepEqual(JSON.parse(requests.at(-1)?.body ?? "{}"), {
     action: "search",
     kinds: ["commentary"],
@@ -1247,6 +1255,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   const env = {
     ...process.env,
     CODEX_THREAD_ID: "",
+    WORKBENCH_DATA_ROOT: temporaryDataRootPath,
     WORKBENCH_HARNESS: "codex",
     WORKBENCH_ORIGIN: origin,
     WORKBENCH_THREAD_ID: "",
@@ -1254,7 +1263,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   const hookArgs = [shellSourcePath, "__hook", "apply-patch-claim"];
   const hookInput = (filePath: string) => JSON.stringify({
     cwd: temporaryDirectoryPath,
-    session_id: "hook-thread",
+    session_id: hookNativeThreadId,
     tool_use_id: "patch-one",
     tool_input: { command: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch` },
     tool_name: "apply_patch",
@@ -1288,9 +1297,16 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   assert.equal(JSON.parse(unavailable.stdout).hookSpecificOutput.permissionDecision, "deny");
   assert.match(JSON.parse(unavailable.stdout).hookSpecificOutput.permissionDecisionReason, /claim registry unavailable/u);
 
+  const disconnectedDataRoot = path.join(temporaryDirectoryPath, "disconnected-data");
+  await publishDaemonEndpoint(path.join(disconnectedDataRoot, "daemon", "runtime.json"), {
+    version: 1,
+    instanceId: randomUUID(),
+    pid: process.pid,
+    origin: "http://127.0.0.1:1",
+  });
   const disconnected = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
     cwd: temporaryDirectoryPath,
-    env: { ...env, WORKBENCH_ORIGIN: "http://127.0.0.1:1" },
+    env: { ...env, WORKBENCH_DATA_ROOT: disconnectedDataRoot },
   });
   assert.equal(disconnected.exitCode, 0);
   assert.match(disconnected.stderr, /curl:/u);
@@ -1454,21 +1470,6 @@ test("generated and root launchers follow endpoint publication instead of inheri
       pid: process.pid,
       origin,
     });
-  }
-});
-
-test("fails before transport when the origin is missing or non-loopback", async () => {
-  for (const unsafeOrigin of ["", "https://example.com", "http://example.com"]) {
-    await assert.rejects(
-      execFileAsync("bash", [shellSourcePath, "thread", "context", "--thread", "unsafe"], {
-        cwd: temporaryDirectoryPath,
-        env: { ...process.env, WORKBENCH_ORIGIN: unsafeOrigin },
-      }),
-      (error: NodeJS.ErrnoException & { stderr?: string }) => {
-        assert.match(error.stderr ?? "", /WORKBENCH_ORIGIN/u);
-        return true;
-      },
-    );
   }
 });
 

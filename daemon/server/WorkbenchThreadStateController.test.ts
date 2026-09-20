@@ -3347,6 +3347,12 @@ test("proper questionnaires and late-response history survive controller restart
   }, "Persisted questionnaire was not restored after controller restart.");
   const restored = (await second.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(restored?.entryKind === "thread" ? restored.pendingQuestionnaire?.requestKey : null, "request-key");
+  assert.deepEqual(second.listPendingQuestionnaires("codex"), [{
+    harness: "codex",
+    ...questionnaire,
+    threadId: fixtureThreadIds["thread"],
+  }]);
+  assert.deepEqual(second.listPendingQuestionnaires("opencode"), []);
   const rejectedDismissal = await second.handleRequest("second", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     method: "workbench/thread-state/questionnaire/dismiss",

@@ -14,6 +14,7 @@ import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
+import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type {
   DaemonDatabaseRegistration,
@@ -379,7 +380,7 @@ function createWorkbenchCoreFeature(
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>({
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing }) => createWorkbenchCoreFeature(
     context,
     run,

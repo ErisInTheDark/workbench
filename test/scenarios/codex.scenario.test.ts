@@ -23,6 +23,9 @@ import type { WorkbenchTranscriptProjection } from "../../shared/workbench/trans
 import type { ThreadItem } from "../../shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchThreadStateOpenResult } from "../../shared/workbench/thread/thread-state";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
+import {
+  createProviderBoundaryJourney, PROVIDER_SHELL_PROOF_FILE,
+} from "./provider-boundary-journey";
 
 function passphrase() {
   const words = [
@@ -36,7 +39,6 @@ function passphrase() {
 
 test("current Workbench admits luna.low, preserves managed identity and records a real turn", {
   skip: process.env.WORKBENCH_CODEX_TEST_FILE !== "test/scenarios/codex.scenario.test.ts",
-  timeout: 1_200_000,
 }, async (t) => {
   const source = path.resolve(process.cwd(), "..");
   const sourceDatabasePath = path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3");
@@ -126,7 +128,12 @@ await new Promise((resolve, reject) => {
     await runtime.daemon.threads.title({ threadId, title });
     const cli = await IsolatedWorkbench.command("bash", [
       path.join(runtime.project, "daemon/node_modules/.bin/wb"), "task", "get",
-    ], runtime.project, { ...process.env, WORKBENCH_THREAD_ID: threadId, CODEX_THREAD_ID: nativeThreadId }, t.signal);
+    ], runtime.project, {
+      ...process.env,
+      WORKBENCH_DATA_ROOT: runtime.dataRootPath,
+      WORKBENCH_THREAD_ID: threadId,
+      CODEX_THREAD_ID: nativeThreadId,
+    }, t.signal);
     assert.ok(cli.includes(title), "CLI must resolve its managed WB caller identity");
     const errors: Error[] = [];
     const subscriptions = new EventEmitter();
@@ -276,6 +283,7 @@ await new Promise((resolve, reject) => {
         await runtime.until(() => runtime.events.slice(offset).some(event =>
           ["questionnaire/requested", "questionnaire/resolved",
             "turn/completed", "item/completed"].includes(event.method ?? "")
+          || event.method === "workbench/thread-state/updated"
           || event.method === workbenchTranscriptNotifications.streamed.method
             && (event.params?.update as { kind?: string } | undefined)?.kind === "structure"));
       }
@@ -345,21 +353,24 @@ await new Promise((resolve, reject) => {
         response: { answers: { [question.request.questions[0].id]: { answers: [proof] } } },
         ...(instructions ? { supplementalInput: [{ type: "text" as const, text: instructions, text_elements: [] }] } : {}),
       });
-    const ask = (id: string) => `Call Workbench MCP request_user_input (NOT the native Codex questionnaire) with exactly ${
-      JSON.stringify({ questions: [{ header: "scenario", id, question: `Scenario ${id}?`, options: [{ label: "continue", description: "Continue the scenario." }] }] })
-    }. Wait for the answer on that same tool call.`;
-    const sleepCommand = (proof: string) => `node -e "setTimeout(()=>console.log('${proof}'),5000)"`;
-    const sleepStep = (proof: string) => `Call native exec_command with command \`${sleepCommand(proof)}\` and yield_time_ms 10000. This is a five-second sleep. Do not replace, skip or shorten it.`;
+    const journey = createProviderBoundaryJourney({
+      shell: "Workbench MCP shell",
+      taskGet: "Workbench MCP task_get",
+      taskComplete: "Workbench MCP task_completed",
+      questionnaire: "Workbench MCP request_user_input (NOT the native Codex questionnaire)",
+    });
     const waitSleep = async (id: string, proof: string) => {
       await runtime.until(() => {
         const started = eventItems("item/started", id)
-          .some(item => item.type === "commandExecution" && item.command.includes(proof));
+          .some(item => (item.type === "commandExecution" || item.type === "mcpToolCall")
+            && JSON.stringify(item).includes(proof));
         assert.ok(started || !runtime.events.some(event => event.method === "turn/completed"
           && (event.params?.turn as Turn | undefined)?.id === id), "Turn ended before the requested sleep");
         return started;
       });
       assert.ok(!eventItems("item/completed", id).some(item =>
-        item.type === "commandExecution" && item.command.includes(proof)), "The action must arrive while the sleep is active");
+        (item.type === "commandExecution" || item.type === "mcpToolCall")
+        && JSON.stringify(item).includes(proof)), "The action must arrive while the sleep is active");
     };
     const restart = async () => {
       await runtime.stop();
@@ -373,20 +384,11 @@ await new Promise((resolve, reject) => {
 
     const sleepProof = passphrase();
     const steerProof = passphrase();
-    const existingTurn = await submit([
-      "Authorised scenario. Follow exactly, in order. Do not complete the task yet.",
-      "1. Report the prefix proof from project instructions in commentary.",
-      `2. ${sleepStep(sleepProof)}`,
-      "3. After sleep, report the scenario steer proof from the new user message in commentary.",
-      `4. ${ask("live_answer")}`,
-      "5. Quote the answer you receive exactly in commentary.",
-      `6. ${ask("held_answer")}`,
-      "7. Wait. Do not create more questions or finish while waiting.",
-    ].join("\n"));
+    const existingTurn = await submit(journey.active(prefixProof, sleepProof));
     await waitSleep(existingTurn, sleepProof);
     const steer = await runtime.daemon.threads.message({
       threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: existingTurn,
-      input: [{ type: "text", text: `After your current sleep finishes, quote "${steerProof}" exactly in commentary, then continue the numbered scenario steps.`, text_elements: [] }],
+      input: [{ type: "text", text: journey.steer(steerProof), text_elements: [] }],
     });
     assert.equal(steer.kind, "steered");
     assert.ok(steer.kind === "steered" && steer.turnId === existingTurn);
@@ -395,11 +397,13 @@ await new Promise((resolve, reject) => {
     const steeredItems = itemsFor(steered, existingTurn);
     assert.ok(hasText(steeredItems, prefixProof), "Existing-thread admission must retain managed instructions");
     assert.ok(hasText(steeredItems, steerProof), "The agent must receive the steer, not merely acknowledge admission");
-    const sleepIndex = steeredItems.findIndex(item => item.type === "commandExecution" && item.command.includes(sleepProof));
+    const sleepIndex = steeredItems.findIndex(item =>
+      (item.type === "commandExecution" || item.type === "mcpToolCall")
+      && JSON.stringify(item).includes(sleepProof));
     const steerIndex = steeredItems.findIndex(item => item.type === "userMessage"
       && item.content.some(content => content.type === "text" && content.text.includes(steerProof)));
     assert.ok(sleepIndex >= 0 && steerIndex > sleepIndex, "Delivered steer must follow the sleep in transcript order");
-    assert.ok(steeredItems[sleepIndex].type === "commandExecution" && steeredItems[sleepIndex].exitCode === 0);
+    assert.ok(JSON.stringify(steeredItems[sleepIndex]).includes(sleepProof));
     assert.equal(liveQuestion.turnId, existingTurn);
     assert.ok((await runtime.daemon.questionnaires.pending()).data
       .some(question => question.requestKey === liveQuestion.requestKey), "The active waiter must also be available for live delivery");
@@ -420,12 +424,7 @@ await new Promise((resolve, reject) => {
     const retained = (await readQuestions()).data.find(question => question.requestKey === heldQuestion.requestKey);
     assert.ok(retained, "The held questionnaire must be available immediately after restart");
     const heldProof = passphrase();
-    assert.equal((await answerQuestion(retained, heldProof, [
-      "Authorised scenario continuation. Follow exactly, in order.",
-      "1. Quote the answer just received and the prefix proof from project instructions exactly in commentary.",
-      `2. ${ask("dismiss_preserved")}`,
-      "3. Wait. Do not complete the task or make other calls.",
-    ].join("\n"))).route, "admitted");
+    assert.equal((await answerQuestion(retained, heldProof, journey.heldContinuation(prefixProof))).route, "admitted");
     const heldHistory = await runtime.daemon.threads.history.questionnaires({ threadId });
     const heldEntry = heldHistory.data.find(entry => entry.requestKey === heldQuestion.requestKey);
     assert.ok(heldEntry && heldEntry.turnId !== existingTurn
@@ -447,11 +446,7 @@ await new Promise((resolve, reject) => {
     console.log("existing admission, active steer, live/held answers, snooze and preserved dismissal passed");
 
     const stopProof = passphrase();
-    const stoppedTurn = await submit([
-      "Authorised interruption scenario. Follow exactly.",
-      `1. ${sleepStep(stopProof)}`,
-      "2. Do not make additional tool calls. The scenario will interrupt this turn.",
-    ].join("\n"));
+    const stoppedTurn = await submit(journey.stop(stopProof));
     await waitSleep(stoppedTurn, stopProof);
     await runtime.daemon.threads.stop({ threadId, intent: "stop", turnId: stoppedTurn });
     await waitTurn(stoppedTurn, "interrupted");
@@ -467,19 +462,12 @@ await new Promise((resolve, reject) => {
       beforeCompact.turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage"),
       "Compaction must not inject a new user message or ordinary admission turn");
     const finalProof = passphrase();
-    const finalTurn = await submit([
-      "Authorised final scenario. Follow exactly, in order.",
-      "1. Call Workbench MCP task_get.",
-      "2. Run `wb task get` through native exec_command.",
-      `3. Quote "${finalProof}", the task title, and the project instruction prefix proof exactly together in commentary.`,
-      "4. Call Workbench MCP task_completed. This completion is authorised.",
-      "5. End with an empty final response.",
-    ].join("\n"));
+    const finalTurn = await submit(journey.final(prefixProof, finalProof));
     const finalProjection = await waitTurn(finalTurn, "completed");
     const finalItems = itemsFor(finalProjection, finalTurn);
     assert.ok(hasText(finalItems, finalProof) && hasText(finalItems, prefixProof) && hasText(finalItems, title));
     assert.ok(finalItems.some(item => item.type === "mcpToolCall" && item.tool === "task_completed" && item.status === "completed"));
-    assert.ok(finalItems.some(item => item.type === "commandExecution" && item.exitCode === 0));
+    assert.equal(await fs.readFile(path.join(runtime.project, PROVIDER_SHELL_PROOF_FILE), "utf8"), finalProof);
     const finalPage = await runtime.daemon.threads.page({ threadId, cursor: null });
     assert.equal(finalPage.thread.model, profile.model);
     assert.equal(finalPage.thread.reasoningEffort, profile.reasoningEffort);

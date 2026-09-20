@@ -19,6 +19,7 @@ import CodexConfigurationNode from "./CodexConfigurationNode";
 import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
+import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
@@ -95,7 +96,7 @@ export default new ReloadableNode<
     "daemon/server/lib/workbench/project/project-identity.ts",
     "daemon/server/workbench-thread-state-record.ts",
   ].join("\n"),
-  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
+  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
     const {
       CaptureGapController,

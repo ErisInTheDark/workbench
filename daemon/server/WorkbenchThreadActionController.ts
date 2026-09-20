@@ -21,7 +21,10 @@ export interface WorkbenchThreadActionOwners {
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
   profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile">;
-  state: Pick<WorkbenchThreadStateController, "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest">;
+  state: Pick<
+    WorkbenchThreadStateController,
+    "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
+  >;
   warn(message: string): void;
 }
 
@@ -76,9 +79,21 @@ export default class WorkbenchThreadActionController {
   }
 
   private readonly actions: Actions = {
-    "questionnaires/pending/read": async () => ({
-      data: (await Promise.all(installedProviderKeys.map(key => this.owners.providers.get(key).interactions?.pending() ?? []))).flat(),
-    }),
+    "questionnaires/pending/read": async () => {
+      const providerPending = (await Promise.all(installedProviderKeys.map(
+        key => this.owners.providers.get(key).interactions?.pending() ?? [],
+      ))).flat();
+      const data = [...this.owners.state.listPendingQuestionnaires()];
+      for (const request of providerPending) {
+        if (!data.some(candidate =>
+          candidate.harness === request.harness
+          && candidate.threadId === request.threadId
+          && candidate.requestKey === request.requestKey)) {
+          data.push(request);
+        }
+      }
+      return { data };
+    },
     "thread/questionnaires/read": async input => {
       const target = await this.target(input.threadId);
       return { data: await target.provider.threads.history.questionnaires(target.identity.threadId) };

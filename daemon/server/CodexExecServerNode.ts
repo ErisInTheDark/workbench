@@ -7,11 +7,12 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexExecServer from "./CodexExecServer";
 import CodexToolsNode from "./CodexToolsNode";
+import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
 import { logError } from "./process-helpers";
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
-  children: [CodexToolsNode],
+  children: [CodexToolsNode, OpenCodeProvider],
   create: context => {
     const executor = new CodexExecServer({ cwd: context.daemonPackageRoot });
     return {
@@ -36,7 +37,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
   provides: ["codexExecutor"],
   requires: [],
   safeAll: true,
-  scope: "server:codex/exec",
+  scope: "server:commands/exec",
   sources: [
     "daemon/server/CodexExecServerNode.ts",
     "daemon/server/CodexExecServer.ts",

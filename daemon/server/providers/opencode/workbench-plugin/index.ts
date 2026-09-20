@@ -1,0 +1,313 @@
+/*
+ * Exports:
+ * - connectLifecycleOwnedCompanionTools: connect MCP tools without the SDK's manufactured request deadline.
+ * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
+ * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
+ * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
+ */
+import http from "node:http";
+import path from "node:path";
+import { Buffer } from "node:buffer";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  CallToolResultSchema,
+  InitializeResultSchema,
+  LATEST_PROTOCOL_VERSION,
+  type CallToolResult,
+  type JSONRPCMessage,
+  type RequestId,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { Plugin } from "@opencode/plugin/promise/plugin";
+import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
+import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+
+const WORKBENCH_PLUGIN_ID = "workbench";
+const WORKBENCH_MCP_NAME = "wb";
+const NATIVE_MUTATION_TOOLS = new Set(["apply_patch", "bash", "edit", "patch", "shell", "write"]);
+const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
+
+interface CompanionProxy {
+  url: string;
+  close: () => Promise<void>;
+}
+
+interface CompanionToolClient {
+  callTool(input: {
+    name: string;
+    arguments?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  }): Promise<CallToolResult>;
+  close(): Promise<void>;
+}
+
+interface CompanionTransport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: (message: JSONRPCMessage) => void;
+  close(): Promise<void>;
+  send(message: JSONRPCMessage): Promise<void>;
+  setProtocolVersion(version: string): void;
+  start(): Promise<void>;
+  terminateSession(): Promise<void>;
+}
+
+export interface OpenCodeWorkbenchPluginOptions {
+  connectTools?: (url: string) => Promise<CompanionToolClient>;
+  createProxy?: () => Promise<CompanionProxy>;
+  isManagedSession?: (sessionID: string) => Promise<boolean>;
+  resolveDaemonOrigin?: () => Promise<string>;
+}
+
+export async function connectLifecycleOwnedCompanionTools(
+  transport: CompanionTransport,
+): Promise<CompanionToolClient> {
+  let nextId = 1;
+  let closed = false;
+  const pending = new Map<RequestId, {
+    parse(value: unknown): unknown;
+    reject(error: Error): void;
+    resolve(value: unknown): void;
+  }>();
+  const fail = (error: Error) => {
+    if (closed) return;
+    closed = true;
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+  };
+  transport.onclose = () => fail(new Error("Workbench companion MCP transport closed."));
+  transport.onerror = error => fail(error);
+  transport.onmessage = message => {
+    if (!("id" in message) || "method" in message) return;
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if ("error" in message) {
+      request.reject(new Error(message.error.message.slice(0, 500)));
+      return;
+    }
+    try {
+      request.resolve(request.parse(message.result));
+    } catch (error) {
+      request.reject(error instanceof Error ? error : new Error("Workbench companion returned an invalid MCP response."));
+    }
+  };
+  const request = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+    parse: (value: unknown) => T,
+  ): Promise<T> => {
+    if (closed) throw new Error("Workbench companion MCP transport is closed.");
+    const id = nextId++;
+    const response = new Promise<T>((resolve, reject) => {
+      pending.set(id, { parse, resolve: value => resolve(value as T), reject });
+    });
+    try {
+      await transport.send({ jsonrpc: "2.0", id, method, params });
+    } catch (error) {
+      pending.delete(id);
+      throw error;
+    }
+    return response;
+  };
+
+  await transport.start();
+  const initialised = await request("initialize", {
+    protocolVersion: LATEST_PROTOCOL_VERSION,
+    capabilities: {},
+    clientInfo: { name: "workbench-opencode", version: "1.0.0" },
+  }, value => InitializeResultSchema.parse(value));
+  transport.setProtocolVersion(initialised.protocolVersion);
+  await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+
+  return {
+    callTool: input => request("tools/call", input, value => CallToolResultSchema.parse(value)),
+    close: async () => {
+      fail(new Error("Workbench companion MCP client closed."));
+      try {
+        await transport.terminateSession();
+      } finally {
+        await transport.close();
+      }
+    },
+  };
+}
+
+async function connectCompanionTools(url: string): Promise<CompanionToolClient> {
+  return connectLifecycleOwnedCompanionTools(new StreamableHTTPClientTransport(new URL(url)));
+}
+
+function adaptToolResult(result: Awaited<ReturnType<CompanionToolClient["callTool"]>>) {
+  const content = result.content.flatMap(part => {
+    if (part.type === "text") return [part.text];
+    if (part.type === "resource" && "text" in part.resource) return [part.resource.text];
+    return [];
+  }).join("\n");
+  if (result.isError) throw new Error(content || "Workbench tool failed.");
+  return {
+    content,
+    output: result.structuredContent ?? result,
+  };
+}
+
+async function callCompanionTool(
+  connect: (url: string) => Promise<CompanionToolClient>,
+  url: string,
+  input: Parameters<CompanionToolClient["callTool"]>[0],
+) {
+  const client = await connect(url);
+  let failed = false;
+  let failure: unknown;
+  let result: ReturnType<typeof adaptToolResult> | undefined;
+  try {
+    result = adaptToolResult(await client.callTool(input));
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  try {
+    await client.close();
+  } catch (closeError) {
+    if (failed) {
+      throw new AggregateError([failure, closeError], "Workbench companion tool call and cleanup both failed.");
+    }
+    throw closeError;
+  }
+  if (failed) throw failure;
+  return result!;
+}
+
+function isWorkbenchTool(tool: string) {
+  return tool === WORKBENCH_MCP_NAME || tool.startsWith(`${WORKBENCH_MCP_NAME}_`);
+}
+
+function isManagedMetadata(metadata: Record<string, unknown> | undefined) {
+  const workbench = metadata?.workbench;
+  return Boolean(workbench && typeof workbench === "object"
+    && "managed" in workbench && workbench.managed === true);
+}
+
+async function createCompanionProxy(resolveDaemonOrigin?: () => Promise<string>): Promise<CompanionProxy> {
+  const server = http.createServer(async (request, response) => {
+    const method = request.method;
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (!method || !["DELETE", "GET", "POST"].includes(method) || pathname !== "/mcp") {
+      response.writeHead(404).end();
+      return;
+    }
+    const abort = new AbortController();
+    request.once("aborted", () => abort.abort(new Error("OpenCode closed the MCP request.")));
+    response.once("close", () => {
+      if (!response.writableEnded) abort.abort(new Error("OpenCode closed the MCP response."));
+    });
+    try {
+      const body: Buffer[] = [];
+      if (method === "POST") {
+        for await (const chunk of request) body.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const origin = resolveDaemonOrigin ? await resolveDaemonOrigin() : await (async () => {
+        const dataRoot = resolveWorkbenchDataRoot();
+        const endpoint = await readDaemonEndpoint(path.join(dataRoot, "daemon", "runtime.json"));
+        if (!endpoint) throw new Error("Workbench daemon is unavailable.");
+        return endpoint.origin;
+      })();
+      const headers = new Headers();
+      for (const name of ["accept", "content-type", "last-event-id", "mcp-protocol-version", "mcp-session-id"]) {
+        const value = request.headers[name];
+        if (typeof value === "string") headers.set(name, value);
+      }
+      if (!headers.has("accept")) headers.set("accept", "application/json, text/event-stream");
+      const upstream = await fetch(new URL("/daemon/mcp?provider=opencode", origin), {
+        method,
+        headers,
+        ...(method === "POST" ? { body: Buffer.concat(body) } : {}),
+        signal: abort.signal,
+      });
+      const responseHeaders = Object.fromEntries([...upstream.headers.entries()]
+        .filter(([name]) => !["connection", "content-length", "transfer-encoding"].includes(name.toLowerCase())));
+      response.writeHead(upstream.status, responseHeaders);
+      if (!upstream.body) response.end();
+      else await pipeline(Readable.fromWeb(upstream.body), response);
+    } catch (error) {
+      if (response.destroyed || response.headersSent) return;
+      const message = error instanceof Error ? error.message : "Unknown Workbench companion failure.";
+      response.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+      response.end(`${message.slice(0, 500)}\n`);
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    throw new Error("OpenCode Workbench companion did not bind a loopback listener.");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
+  };
+}
+
+export function createOpenCodeWorkbenchPlugin(
+  options: OpenCodeWorkbenchPluginOptions = {},
+): Plugin {
+  return {
+    id: WORKBENCH_PLUGIN_ID,
+    setup: async context => {
+      const proxy = await (options.createProxy ?? (() => createCompanionProxy(options.resolveDaemonOrigin)))();
+      const connectTools = options.connectTools ?? connectCompanionTools;
+      const isManagedSession = options.isManagedSession ?? (async sessionID =>
+        isManagedMetadata((await context.session.get({ sessionID })).metadata));
+      const registrations = await Promise.all([
+        context.mcp.transform(editor => {
+          editor.set(WORKBENCH_MCP_NAME, { type: "remote", url: proxy.url });
+        }),
+        context.tool.transform(editor => {
+          for (const tool of editor.list()) {
+            if (!isWorkbenchTool(tool.id)) continue;
+            editor.update(tool.id, value => {
+              value.execute = async (input, toolContext) => callCompanionTool(connectTools, proxy.url, {
+                name: tool.id.slice(`${WORKBENCH_MCP_NAME}_`.length),
+                arguments: input as Record<string, unknown>,
+                _meta: { sessionID: toolContext.sessionID },
+              });
+            });
+          }
+        }),
+        context.session.hook("context", async input => {
+          const managed = await isManagedSession(input.sessionID);
+          for (const tool of Object.keys(input.tools)) {
+            if (managed ? NATIVE_MUTATION_TOOLS.has(tool) : isWorkbenchTool(tool)) {
+              delete input.tools[tool];
+            }
+          }
+        }),
+        context.session.hook("http.request", input => {
+          if (OPENCODE_HOSTED_PROVIDERS.has(input.model.providerID)) {
+            const headers = new Headers(input.request.headers);
+            headers.set("x-opencode-session", input.sessionID);
+            headers.set("user-agent", `opencode/${context.app.version}`);
+            input.request = new Request(input.request, { headers });
+          }
+        }),
+        context.tool.hook("execute.before", async input => {
+          if (NATIVE_MUTATION_TOOLS.has(input.tool) && await isManagedSession(input.sessionID)) {
+            throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
+          }
+        }),
+      ]);
+      return async () => {
+        await Promise.allSettled(registrations.map(registration => registration.dispose()));
+        await proxy.close();
+      };
+    },
+  };
+}
+
+export default createOpenCodeWorkbenchPlugin();

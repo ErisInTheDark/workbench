@@ -14,7 +14,7 @@ allowBuilds:
   protobufjs: false
   sharp: true
 minimumReleaseAgeExclude:
-  - "@opencode-ai/*"
+  - "@opencode/*"
   - "@github/copilot"
   - "@github/copilot-sdk"
   - "@github/copilot-linux-x64"

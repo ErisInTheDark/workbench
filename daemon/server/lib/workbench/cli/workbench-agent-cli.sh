@@ -11,7 +11,7 @@ if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
 fi
 unset WORKBENCH_CWD_REDIRECTED
 
-if [[ "${1:-}" == "test" ]]; then
+if [[ "${1:-}" == "test" && "${2:-}" != "live" ]]; then
   shift
   test_entry="${WORKBENCH_TEST_ENTRY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)/test/run-claimed-tests.mjs}"
   test_root="$(cd -- "$(dirname -- "$test_entry")/.." && pwd)"

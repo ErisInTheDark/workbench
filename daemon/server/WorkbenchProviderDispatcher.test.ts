@@ -17,7 +17,11 @@ function deferred() {
 
 function fixture() {
   const unused = async (): Promise<never> => { throw new Error("This fixture exercises only model context."); };
-  type Objects = { codexProvider: WorkbenchProvider; providers: WorkbenchProviderDispatcher };
+  type Objects = {
+    codexProvider: WorkbenchProvider;
+    openCodeProvider: WorkbenchProvider;
+    providers: WorkbenchProviderDispatcher;
+  };
   let generation = 0;
   let failStart = false;
   let read: WorkbenchProvider["configuration"]["modelContext"]["read"] | undefined;
@@ -30,19 +34,28 @@ function fixture() {
   const graph = () => defineReloadableNodeGraph([
     new ReloadableNode<object, Objects, never>({
       access: "agent", children: [], description: "Provider fixture", lifecycle: "atomic",
-      provides: ["codexProvider"], requires: [], safeAll: true,
+      provides: ["codexProvider", "openCodeProvider"], requires: [], safeAll: true,
       scope: "server:codex/def", sources: "",
       create: () => {
         const current = ++generation;
         const currentRead = read;
         return {
-          registrations: { codexProvider: {
-            singleFile,
-            tools,
-            threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
-            configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
-            read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
-          } } } },
+          registrations: {
+            codexProvider: {
+              singleFile,
+              tools,
+              threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+              configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
+                read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
+              } },
+            },
+            openCodeProvider: {
+              threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+              configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
+                read: async () => [{ model: "opencode", defaultTokens: 1000, maximumTokens: 2000 }],
+              } },
+            },
+          },
           start: async () => {
             if (failStart) throw new Error("candidate failed");
           },

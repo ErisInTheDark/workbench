@@ -744,6 +744,43 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);
 });
 
+test("late same-turn intent admission preserves an unresolved questionnaire", () => {
+  const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
+  const pendingInput = reduceWorkbenchThreadLifecycle(
+    reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId }),
+    { kind: "pendingInput", requestKey: "request", turnId },
+  );
+
+  assert.equal(
+    reduceWorkbenchThreadLifecycle(pendingInput, { kind: "acceptedIntent", turnId }),
+    pendingInput,
+  );
+  assert.deepEqual(
+    reduceWorkbenchThreadLifecycle(pendingInput, {
+      kind: "acceptedIntent",
+      turnId: fixtureIdentityValues.WorkbenchTurnId["new"],
+    }),
+    {
+      agent: {
+        agentStatus: "working",
+        turnId: fixtureIdentityValues.WorkbenchTurnId["new"],
+      },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    },
+  );
+
+  const uncorrelatedPendingInput = reduceWorkbenchThreadLifecycle(
+    null,
+    { kind: "pendingInput", requestKey: "request" },
+  );
+  assert.equal(
+    reduceWorkbenchThreadLifecycle(uncorrelatedPendingInput, { kind: "acceptedIntent", turnId }),
+    uncorrelatedPendingInput,
+  );
+});
+
 test("grouping keeps terminal status while settlement moves it to other", () => {
   const entry = {
     activityAt: 1,

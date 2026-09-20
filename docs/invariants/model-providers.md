@@ -1,0 +1,1 @@
+- Prefer provider integrations that reuse the user's existing installation, preferences, credentials, sessions, and other provider-owned state so Workbench and native clients stay synchronized.

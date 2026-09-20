@@ -1008,7 +1008,7 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
   };
   const mcpItem: ThreadItem = {
     appContext: null,
-    arguments: { path: "docs/invariants/ownership.md" },
+    arguments: { path: "docs/invariants/universal.md" },
     durationMs: null,
     error: null,
     id: "exec-native",

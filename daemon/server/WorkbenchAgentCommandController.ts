@@ -19,6 +19,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import WorkbenchAgentCommandLiveTestController from "./WorkbenchAgentCommandControllerLiveTest";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
@@ -144,6 +145,7 @@ export default class WorkbenchAgentCommandController {
   private acceptingRequests = true;
   private readonly markdownToc = new WorkbenchMarkdownTocController();
   private readonly ripgrep: Pick<WorkbenchRipgrepController, "execute">;
+  private readonly liveProviderTests: WorkbenchAgentCommandLiveTestController | null;
 
   constructor(
     private readonly daemonOrigin: string,
@@ -152,6 +154,9 @@ export default class WorkbenchAgentCommandController {
     ripgrep?: Pick<WorkbenchRipgrepController, "execute">,
     private readonly commandLogger = new WorkbenchAgentCommandLogger(),
   ) {
+    this.liveProviderTests = direct.workbenchProjectRoot
+      ? new WorkbenchAgentCommandLiveTestController(direct.workbenchProjectRoot)
+      : null;
     this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({
       execute: async (harness, request, signal) => {
         if (!this.direct.executeReadOnly) throw new Error("Provider command execution is not configured.");
@@ -357,6 +362,14 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/stats/claims" && request.body) {
       if (!this.direct.executeClaimStats) throw new Error("Claim statistics are not configured.");
       return await this.direct.executeClaimStats(request.body, signal);
+    }
+    if (request.path === "/internal/test/live-provider" && request.body) {
+      if (!this.liveProviderTests) throw new Error("Live provider testing is not configured.");
+      return await this.liveProviderTests.execute(request.body, signal);
+    }
+    if (request.path === "/internal/test/live-provider/cancel") {
+      if (!this.liveProviderTests) throw new Error("Live provider testing is not configured.");
+      return Response.json({ cancelled: this.liveProviderTests.cancel() });
     }
     if (request.path === "/api/daemon/dirt") {
       if (!this.direct.readReloadDirtSnapshot) throw new Error("Reload dirt is not configured.");

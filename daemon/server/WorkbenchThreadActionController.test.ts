@@ -54,6 +54,7 @@ function fixture(providerWarning?: string) {
         return unused();
       },
       getCanonicalThreadEntry: async () => null,
+      listPendingQuestionnaires: () => [],
       handleRequest: async (connectionId, request) => {
         connections.push(connectionId);
         mutations.push(request);

@@ -978,6 +978,24 @@ export default class WorkbenchThreadStateController {
     return null;
   }
 
+  listPendingQuestionnaires(harness?: WorkbenchHarnessId) {
+    return [...this.projects.values()].flatMap(state =>
+      [...state.entries.values()].flatMap(entry =>
+        entry.entryKind === "thread"
+          && (!harness || entry.identity.harness === harness)
+          && !entry.metadata.archived
+          && entry.pendingQuestionnaire
+          ? [{
+            harness: entry.identity.harness,
+            ...entry.pendingQuestionnaire,
+            itemId: entry.pendingQuestionnaire.itemId ?? null,
+            threadId: entry.identity.threadId,
+            turnId: entry.pendingQuestionnaire.turnId ?? null,
+          }]
+          : []),
+    );
+  }
+
   async getThreadEntry(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
     projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);

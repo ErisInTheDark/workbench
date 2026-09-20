@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ProjectTestRunner: validate test discovery and own fixtures and Node test-runner children.
- * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and timeout.
+ * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and optional timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse explicit discovery inputs.
  * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
@@ -39,7 +39,7 @@ export interface ProjectTestRunnerOptions {
     options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "inherit" },
   ) => ChildProcess;
   testConcurrency?: number;
-  testTimeoutMs?: number;
+  testTimeoutMs?: number | null;
 }
 
 export type PreparedTestFixtures = WorkbenchPreparedTestFixtures;
@@ -63,7 +63,7 @@ export default class ProjectTestRunner {
   private readonly prepareTestFixtures: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
-  private readonly testTimeoutMs: number;
+  private readonly testTimeoutMs: number | null;
 
   constructor(
     private readonly projectRoot = process.cwd(),
@@ -77,8 +77,8 @@ export default class ProjectTestRunner {
       throw new Error("Test concurrency must be a positive integer.");
     }
     this.testConcurrency = requestedConcurrency;
-    const requestedTimeoutMs = options.testTimeoutMs ?? TEST_TIMEOUT_MS;
-    if (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1) {
+    const requestedTimeoutMs = Object.hasOwn(options, "testTimeoutMs") ? options.testTimeoutMs ?? null : TEST_TIMEOUT_MS;
+    if (requestedTimeoutMs !== null && (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1)) {
       throw new Error("Test timeout must be a positive integer of milliseconds.");
     }
     this.testTimeoutMs = requestedTimeoutMs;
@@ -146,7 +146,7 @@ export default class ProjectTestRunner {
         "tsx",
         "--test",
         `--test-concurrency=${concurrency}`,
-        `--test-timeout=${this.testTimeoutMs}`,
+        ...(this.testTimeoutMs === null ? [] : [`--test-timeout=${this.testTimeoutMs}`]),
         `--test-reporter=${reporter}`,
         ...testArguments,
       ], {

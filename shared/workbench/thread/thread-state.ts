@@ -955,6 +955,11 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
   const currentTurnId = getWorkbenchLifecycleTurnId(current);
   switch (event.kind) {
     case "acceptedIntent":
+      if (
+        current?.kind === "needsAttention"
+        && current.reason === "pendingInput"
+        && (currentTurnId === null || currentTurnId === event.turnId)
+      ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
     case "userInputDelivered":
       if (

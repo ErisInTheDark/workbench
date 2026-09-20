@@ -1,5 +1,7 @@
 /*
  * Exports:
+ * - IsolatedWorkbenchOptions: select optional external identities shared with an isolated runtime.
+ * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
  */
@@ -11,7 +13,7 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
-import { createSpawnOptions } from "../../daemon/server/process-helpers";
+import { createSpawnOptions, killProcessTreeAsync } from "../../daemon/server/process-helpers";
 import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient";
 import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
@@ -20,6 +22,77 @@ import type { WorkbenchComposerProfile } from "../../shared/types";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
+
+export interface IsolatedWorkbenchOptions {
+  codexIdentity?: boolean;
+  openCodeIdentity?: {
+    configDirectory: string;
+    database: string;
+  };
+  stateHome?: string;
+}
+
+interface IsolatedWorkbenchSignalTarget {
+  on(event: NodeJS.Signals, listener: () => void): unknown;
+  off(event: NodeJS.Signals, listener: () => void): unknown;
+}
+
+type IsolatedWorkbenchCleanup = () => Promise<void>;
+
+export class IsolatedWorkbenchSignalCleanup {
+  private readonly cleanups = new Set<IsolatedWorkbenchCleanup>();
+  private attached = false;
+  private handling = false;
+  private readonly interrupt = () => { void this.handle("SIGINT"); };
+  private readonly terminate = () => { void this.handle("SIGTERM"); };
+
+  constructor(
+    private readonly target: IsolatedWorkbenchSignalTarget,
+    private readonly exit: (code: number) => void,
+    private readonly report: (error: unknown) => void = error => console.error("Isolated scenario signal cleanup failed", error),
+  ) {}
+
+  register(cleanup: IsolatedWorkbenchCleanup) {
+    this.cleanups.add(cleanup);
+    this.attach();
+    return () => {
+      this.cleanups.delete(cleanup);
+      if (this.cleanups.size === 0) this.detach();
+    };
+  }
+
+  private attach() {
+    if (this.attached) return;
+    this.attached = true;
+    this.target.on("SIGINT", this.interrupt);
+    this.target.on("SIGTERM", this.terminate);
+  }
+
+  private detach() {
+    if (!this.attached) return;
+    this.attached = false;
+    this.target.off("SIGINT", this.interrupt);
+    this.target.off("SIGTERM", this.terminate);
+  }
+
+  private async handle(signal: "SIGINT" | "SIGTERM") {
+    if (this.handling) return;
+    this.handling = true;
+    this.detach();
+    const cleanups = [...this.cleanups];
+    this.cleanups.clear();
+    const results = await Promise.allSettled(cleanups.map(async cleanup => await cleanup()));
+    for (const result of results) {
+      if (result.status === "rejected") this.report(result.reason);
+    }
+    this.exit(signal === "SIGINT" ? 130 : 143);
+  }
+}
+
+const isolatedWorkbenchSignalCleanup = new IsolatedWorkbenchSignalCleanup(
+  process,
+  code => process.exit(code),
+);
 
 function validateWorkspace(fixtures: string, root: string) {
   const resolvedFixtures = path.resolve(fixtures);
@@ -57,6 +130,7 @@ export default class IsolatedWorkbench {
   private log = "";
   private closed = false;
   private endpoint: WorkbenchDaemonEndpoint | null = null;
+  private releaseSignalCleanup: (() => void) | null = null;
   private constructor(
     private readonly fixtures: string,
     readonly root: string,
@@ -64,6 +138,8 @@ export default class IsolatedWorkbench {
     readonly dataRootPath: string,
     readonly signal: AbortSignal,
     private readonly codexIdentity: boolean,
+    private readonly openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
+    private readonly stateHome: string | null,
   ) {}
 
   get processIds() { return { daemon: this.child?.pid, app: this.appChild?.pid }; }
@@ -93,15 +169,24 @@ export default class IsolatedWorkbench {
   }
   get origin() { return this.daemonEndpoint.origin; }
 
-  static async create(source: string, signal: AbortSignal, options = { codexIdentity: true }) {
+  static async create(source: string, signal: AbortSignal, options: IsolatedWorkbenchOptions = {}) {
     const fixtures = path.join(source, ".workbench", "test-runs");
     await fs.mkdir(fixtures, { recursive: true });
     const root = await fs.mkdtemp(path.join(fixtures, "wb-scenario-"));
+    const codexIdentity = options.codexIdentity ?? true;
     try {
-      return await this.initialise(source, fixtures, root, signal, options.codexIdentity);
+      return await this.initialise(
+        source,
+        fixtures,
+        root,
+        signal,
+        codexIdentity,
+        options.openCodeIdentity,
+        options.stateHome ?? null,
+      );
     } catch (error) {
       try {
-        await removeIsolatedWorkbenchWorkspace(fixtures, root, options.codexIdentity);
+        await removeIsolatedWorkbenchWorkspace(fixtures, root, codexIdentity);
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], `Scenario setup and cleanup failed; retained workspace: ${root}`);
       }
@@ -115,6 +200,8 @@ export default class IsolatedWorkbench {
     root: string,
     signal: AbortSignal,
     codexIdentity: boolean,
+    openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
+    stateHome: string | null,
   ) {
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
@@ -170,12 +257,17 @@ export default class IsolatedWorkbench {
       path.join(root, "data", "inthedark", "wb"),
       signal,
       codexIdentity,
+      openCodeIdentity,
+      stateHome,
     );
   }
 
   async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
     this.closed = false;
     this.endpoint = null;
+    this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
+      await this.stopForSignal();
+    });
     const home = path.join(this.root, "codex");
     const library = path.join(this.root, "library");
     await fs.mkdir(home, { recursive: true });
@@ -258,6 +350,11 @@ export default class IsolatedWorkbench {
       TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
       XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
       XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
+      ...(this.openCodeIdentity ? {
+        OPENCODE_CONFIG_DIR: this.openCodeIdentity.configDirectory,
+        OPENCODE_DB: this.openCodeIdentity.database,
+      } : {}),
+      ...(this.stateHome === null ? {} : { XDG_STATE_HOME: this.stateHome }),
     };
     // These children represent a separate installation, never the agent's live caller.
     for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT",
@@ -328,24 +425,38 @@ export default class IsolatedWorkbench {
   }
 
   async stop() {
+    return await this.stopOwnedProcesses(false);
+  }
+
+  private async stopForSignal() {
+    await this.stopOwnedProcesses(true);
+  }
+
+  private async stopOwnedProcesses(force: boolean) {
     this.closed = true;
+    this.releaseSignalCleanup?.();
+    this.releaseSignalCleanup = null;
     this.transcriptClient?.dispose();
     this.transcriptClient = null;
     this.client?.dispose();
     this.client = null;
     const children = { app: this.appChild, daemon: this.child };
     const results = await Promise.allSettled([
-      this.child ? this.stopChild(this.child).then(() => { this.child = null; }) : Promise.resolve(),
-      this.appChild ? this.stopChild(this.appChild).then(() => { this.appChild = null; this.appAddress = null; }) : Promise.resolve(),
+      this.child ? this.stopChild(this.child, force).then(() => { this.child = null; }) : Promise.resolve(),
+      this.appChild ? this.stopChild(this.appChild, force).then(() => { this.appChild = null; this.appAddress = null; }) : Promise.resolve(),
     ]);
     const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
     if (errors.length) throw new AggregateError(errors, "Isolated process cleanup failed");
     return { app: children.app?.exitCode, daemon: children.daemon?.exitCode };
   }
 
-  private async stopChild(child: ChildProcess) {
+  private async stopChild(child: ChildProcess, force: boolean) {
     try {
       if (child.exitCode === null && child.signalCode === null) {
+        if (force) {
+          await killProcessTreeAsync(child.pid);
+          return;
+        }
         const signal = AbortSignal.timeout(45_000);
         const exited = once(child, "exit", { signal }).then(
           () => null,

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { ProviderKeySchema } from "./provider-key.ts";
 
 test("stored provider identities admit future implementations without a product enum", () => {
-  for (const key of ["codex", "opencode2", "future-provider", "local_provider"]) {
+  for (const key of ["codex", "opencode", "future-provider", "local_provider"]) {
     assert.equal(ProviderKeySchema.parse(key), key);
   }
 });

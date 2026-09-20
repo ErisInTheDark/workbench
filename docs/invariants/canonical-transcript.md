@@ -1,6 +1,6 @@
-- Give every supported harness the same transcript guarantees.
+- Give every supported provider the same transcript guarantees.
 - Browser transcript reads use one Workbench first-page and next-page contract.
-- Browser page cursors are opaque. Each harness bridge translates them to native paging.
+- Browser page cursors are opaque. Each provider bridge translates them to native paging.
 - Store every permanent visible thread item as one row in `thread_items`.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.

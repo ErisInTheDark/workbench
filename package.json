@@ -8,6 +8,7 @@
     "test:network": "node scripts/test-network.mjs",
     "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
     "test:codex": "node --disable-warning=ExperimentalWarning --import tsx test/run-codex-test.mjs",
+    "test:opencode": "node --disable-warning=ExperimentalWarning --import tsx test/run-opencode-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "typecheck": "node scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/index.ts",

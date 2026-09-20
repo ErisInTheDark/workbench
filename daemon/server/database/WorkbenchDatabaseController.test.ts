@@ -634,13 +634,13 @@ test("database requests share one evolving relational fixture", async (context) 
 async function checkTransactions(controller: WorkbenchDatabaseController) {
     await controller.executeTransaction([
       upsertRow(coreTables.workbenchHarnesses, { id: "codex" }, { conflictColumns: ["id"], updateColumns: ["id"] }),
-      insertRow(coreTables.workbenchHarnesses, { id: "opencode2" }),
+      insertRow(coreTables.workbenchHarnesses, { id: "opencode" }),
     ]);
     assert.deepEqual(
       await controller.query(selectRows(coreTables.workbenchHarnesses, {
         orderBy: [{ column: "id" }],
       })),
-      [{ id: "codex" }, { id: "opencode2" }],
+      [{ id: "codex" }, { id: "opencode" }],
     );
 
     const thread = {

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
+ * - prepareWorkbenchShellExecution: translate shared shell input into one admitted host-shell command.
  * - CodexShellControllerOptions: inject Codex execution and host environment.
  * - default CodexShellController: run host-shell commands through the Codex thread's exact sandbox state.
  */
@@ -14,6 +15,7 @@ import {
   type WorkbenchShell,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
 import type CodexExecServer from "./CodexExecServer";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
@@ -212,4 +214,36 @@ export default class CodexShellController {
       env: { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: request.caller.threadId, WORKBENCH_HARNESS: request.caller.harness },
     }, signal);
   }
+
+  async executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal) {
+    const configuration = await this.configuration(request.cwd);
+    signal.throwIfAborted();
+    return this.options.executor.execute({
+      ...configuration,
+      command: request.command,
+      cwd: request.cwd,
+      env: Object.fromEntries(Object.entries(request.env ?? {}).filter(
+        (entry): entry is [string, string] => entry[1] !== null,
+      )),
+      permissions: { type: "disabled" },
+      workspaceRoots: [request.cwd],
+    }, signal);
+  }
+}
+
+export function prepareWorkbenchShellExecution(
+  input: object,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const request = WorkbenchShellInputSchema.parse(input);
+  const commandCwd = request.workdir ? path.resolve(cwd, request.workdir) : cwd;
+  const shell = hostShellCommand(request.command, request.login ?? true, platform, environment);
+  return {
+    command: shell.command,
+    cwd: commandCwd,
+    shell: shell.shell,
+    ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
+  };
 }
