@@ -15,7 +15,7 @@ import {
 import {
   WorkbenchUserInputSchema, type WorkbenchUserInput,
 } from "workbench-shared/workbench/provider/provider-input";
-import type { TranscriptTextField } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type { TranscriptTextField, TranscriptToolPatchUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type {
   DynamicToolCallOutputContentItem, ThreadItem,
 } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -29,6 +29,7 @@ import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/s
 import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 
 export interface OpenCodeTranscriptOwners {
   threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurns">;
@@ -216,6 +217,8 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
           : null,
         success: failed ? false : state.status === "completed" ? true : null,
         durationMs: part.time.completed && part.time.ran ? part.time.completed - part.time.ran : null,
+        ...("metadata" in state && state.metadata !== undefined ? { metadata: state.metadata } : {}),
+        ...(part.name === "execute" ? { toolCallGroupId: part.id } : {}),
       },
     }];
   });
@@ -226,6 +229,10 @@ export default class OpenCodeTranscriptAdapter {
 
   constructor(private readonly owners: OpenCodeTranscriptOwners) {}
 
+  previewToolPatch(input: Omit<TranscriptToolPatchUpdate, "kind">) {
+    this.owners.transcript.acceptLiveUpdate?.({ ...input, kind: "toolPatch" });
+  }
+
   async recordItem(input: {
     threadId: WorkbenchThreadId;
     turnId: WorkbenchTurnId;
@@ -233,6 +240,7 @@ export default class OpenCodeTranscriptAdapter {
     item: ThreadItem;
     lifecycle: WorkbenchTranscriptItemLifecycle;
     observedAt: number;
+    provenance?: "provider" | "workbench";
   }) {
     const [identity] = await this.owners.items.admit([{
       threadId: input.threadId,
@@ -247,8 +255,38 @@ export default class OpenCodeTranscriptAdapter {
       item: { ...input.item, id: itemId },
       lifecycle: input.lifecycle,
       observedAt: input.observedAt,
-    }], { source: "provider" });
+    }], { source: input.provenance ?? "provider" });
     return itemId;
+  }
+
+  async startToolTranscript(input: Omit<WorkbenchToolTranscriptReference, "itemId">): Promise<WorkbenchToolTranscriptReference> {
+    const itemId = await this.recordItem({
+      ...input, source: openCodeItemSource(input.sourceId), provenance: "workbench",
+      lifecycle: "streaming", observedAt: input.startedAt,
+      item: {
+        type: "mcpToolCall", id: input.sourceId, server: "wb", tool: input.tool,
+        arguments: input.arguments, status: "inProgress", toolCallGroupId: input.parentId,
+        appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
+      },
+    });
+    return { ...input, itemId };
+  }
+
+  async finishToolTranscript(reference: WorkbenchToolTranscriptReference, result: ProviderToolResult) {
+    const observedAt = Date.now();
+    await this.recordItem({
+      threadId: reference.threadId, turnId: reference.turnId, source: openCodeItemSource(reference.sourceId),
+      provenance: "workbench", lifecycle: "completed", observedAt,
+      item: {
+        type: "mcpToolCall", id: reference.itemId, server: "wb", tool: reference.tool,
+        arguments: reference.arguments, status: result.isError ? "failed" : "completed", toolCallGroupId: reference.parentId,
+        appContext: null, pluginId: null, readOnlyHint: null,
+        result: { content: result.content, structuredContent: result.structuredContent ?? null, _meta: result._meta ?? null },
+        // MCP isError is a returned result, not a transport error that replaces its content.
+        error: null,
+        durationMs: Math.max(0, observedAt - reference.startedAt),
+      },
+    });
   }
 
   async recordSteer(entry: OpenCodeSteerEntry) {

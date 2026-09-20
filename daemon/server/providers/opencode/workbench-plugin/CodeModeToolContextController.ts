@@ -11,6 +11,7 @@ interface PendingToolContext {
   callId: string;
   sessionId: string;
   tool: string;
+  assistantMessageId?: string;
 }
 
 function inputRecord(input: unknown) {
@@ -41,7 +42,7 @@ export default class CodeModeToolContextController {
     const context = this.pending.get(token);
     if (!context) throw new Error("Workbench tool context token is unavailable or already used.");
     this.pending.delete(token);
-    return context;
+    return { ...context, childId: token };
   }
 
   release(input: unknown) {

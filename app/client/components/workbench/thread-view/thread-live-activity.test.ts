@@ -17,6 +17,30 @@ function turn(items: ThreadItem[]): Turn {
   return { id: "turn", status: "inProgress", items, itemsView: "full", error: null, startedAt: 0, completedAt: null, durationMs: null };
 }
 
+test("native summaries avoid counting a running child and its wrapper twice without erasing terminal evidence", () => {
+  const wrapper: Extract<ThreadItem, { type: "dynamicToolCall" }> = {
+    id: "wrapper", type: "dynamicToolCall", namespace: "opencode", tool: "execute", toolCallGroupId: "group",
+    arguments: { code: "opaque" }, status: "inProgress", contentItems: [{ type: "inputText", text: "wrapper output" }],
+    durationMs: null, success: null,
+  };
+  const child: Extract<ThreadItem, { type: "mcpToolCall" }> = {
+    id: "child", type: "mcpToolCall", server: "wb", tool: "custom", toolCallGroupId: "group", arguments: {},
+    status: "inProgress", durationMs: null, result: null, error: null, appContext: null, pluginId: null, readOnlyHint: null,
+  };
+  const items = [wrapper, child];
+  const entries = getThreadTerminalEntries(items, { cwd: "/project" });
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0]?.output, "wrapper output");
+  const singleChild = getLiveThreadActivity({ commands: entries.slice(1), turn: turn(items), pendingUserInputRequest: null });
+  assert.deepEqual(getLiveThreadActivity({ commands: entries, turn: turn(items), pendingUserInputRequest: null }), singleChild);
+  const completedChild = { ...child, status: "completed" as const };
+  const remaining = getThreadTerminalEntries([wrapper, completedChild], { cwd: "/project" });
+  assert.ok(getLiveThreadActivity({ commands: remaining, turn: turn([wrapper, completedChild]), pendingUserInputRequest: null }));
+  const native = { ...wrapper, tool: "read", arguments: { path: "src/a.ts" } };
+  const nativeEntries = getThreadTerminalEntries([native], { cwd: "/project" });
+  assert.ok(nativeEntries[0]?.display?.ongoingSummaryParts.some(part => part.type === "path" && part.path === "src/a.ts"));
+});
+
 test("started commands with no output are admitted alongside completed history", () => {
   const entries = getThreadTerminalEntries([command("first", "completed"), command("second")], { cwd: "/project" });
   assert.deepEqual(entries.map(entry => [entry.id, entry.status, entry.output]), [

@@ -52,6 +52,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readConfiguration: async () => ({ config: {} }),
     });
     const tools = new OpenCodeToolsController({
+      transcript: {
+        start: (input, context, caller) => threads.startToolTranscript(input, context, caller),
+        finish: (reference, result) => threads.finishToolTranscript(reference, result),
+      },
       resolveCaller: (nativeThreadId, signal) => threads.resolveToolCaller(nativeThreadId, signal),
       execute: shell.executeAdmitted.bind(shell),
       executeReadOnly: shell.executeReadOnly.bind(shell),

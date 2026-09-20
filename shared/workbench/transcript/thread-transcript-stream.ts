@@ -2,6 +2,7 @@
  * Exports:
  * - TranscriptTextField/TranscriptTextUpdate: provider-independent live text fields.
  * - TranscriptPatchUpdate/TranscriptLiveUpdate: transient file patches and text without durable writes.
+ * - TranscriptToolPatchUpdate: transient generated file intent attached to an existing tool item.
  * - TranscriptLayout/TranscriptLayoutPatch/TranscriptSequenceEdit: server-decided presentation positions.
  * - TranscriptStructureUpdate/TranscriptStreamUpdate: incremental transcript publication.
  * - createTranscriptLayout/createTranscriptLayoutPatch/applyTranscriptLayoutPatch: encode and apply ordered placement.
@@ -10,6 +11,7 @@
  */
 import { areDeeplyEqual } from "../deep-equality.ts";
 import type { FileUpdateChange } from "../thread/workbench-thread-items.ts";
+import type { ToolPatchPreviewFile } from "../thread/tool-patch-preview.ts";
 import type { WorkbenchTranscriptSnapshot } from "../database/transcript/workbench-transcript-contract.ts";
 import {
   projectWorkbenchTranscript,
@@ -41,7 +43,15 @@ export interface TranscriptPatchUpdate {
   changes: FileUpdateChange[];
 }
 
-export type TranscriptLiveUpdate = TranscriptTextUpdate | TranscriptPatchUpdate;
+export interface TranscriptToolPatchUpdate {
+  kind: "toolPatch";
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  files: ToolPatchPreviewFile[];
+}
+
+export type TranscriptLiveUpdate = TranscriptTextUpdate | TranscriptPatchUpdate | TranscriptToolPatchUpdate;
 type Segment = WorkbenchTranscriptProjection["display"]["segments"][number];
 export interface TranscriptLayout {
   turns: string[];

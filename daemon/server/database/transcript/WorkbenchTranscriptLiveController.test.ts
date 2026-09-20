@@ -6,6 +6,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
+import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchTranscriptLiveController from "./WorkbenchTranscriptLiveController.ts";
 import WorkbenchTranscriptSubscriptionController from "./WorkbenchTranscriptSubscriptionController.ts";
 import type { WorkbenchTranscriptAtomicObservation } from "./workbench-transcript-types.ts";
@@ -37,6 +38,11 @@ function fixture() {
       createdAt: 1, startedAt: 1, endedAt: null, durationMs: null,
     },
   ]);
+  const identities = new WorkbenchTranscriptIdentityRepository(database);
+  const itemId = (reference: string) => identities.admit({
+    threadId: WorkbenchThreadIdSchema.parse("thread"),
+    sources: [{ turnId: WorkbenchTurnIdSchema.parse("turn"), kind: "stable", reference }],
+  }).itemId;
   const record = (text: string, lifecycle: "streaming" | "completed" = "streaming") => {
     const observation: WorkbenchTranscriptAtomicObservation = {
       kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
@@ -46,10 +52,10 @@ function fixture() {
     live.settle(repository.settle([observation]).changes!);
   };
   const delta = (text: string): TranscriptTextUpdate => ({
-    kind: "text", threadId: "thread", turnId: "turn", itemId: "reasoning",
+    kind: "text", threadId: "thread", turnId: "turn", itemId: itemId("reasoning"),
     field: "reasoningSummary", index: 0, append: true, text,
   });
-  return { database, repository, live, record, delta };
+  return { database, repository, live, record, delta, itemId };
 }
 
 function viewer() {
@@ -74,6 +80,40 @@ function viewer() {
     },
   };
 }
+
+test("tool previews survive unrelated activity and viewers but never reopen settled calls", () => {
+  const { database, repository, live, itemId } = fixture();
+  const recordTool = (id: string, status: "inProgress" | "failed") => repository.settle([{
+    kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
+    item: { type: "dynamicToolCall", id, namespace: "opencode", tool: "patch", arguments: {},
+      status, success: status === "failed" ? false : null, contentItems: null, durationMs: null },
+    lifecycle: status === "inProgress" ? "streaming" : "completed", observedAt: 3,
+  }]);
+  const preview = (id: string) => ({
+    kind: "toolPatch" as const, threadId: "thread", turnId: "turn", itemId: itemId(id),
+    files: [{ path: `${id}.ts`, kind: { type: "update" as const, move_path: null }, additions: 1 }],
+  });
+  try {
+    for (const id of ["first", "second"]) {
+      live.settle(recordTool(id, "inProgress").changes!);
+      live.acceptLiveUpdate(preview(id));
+    }
+    live.acceptActivity("thread");
+    const first = viewer();
+    live.open("view", repository.read({ threadId: "thread", turnLimit: 1 }), first.publish);
+    assert.deepEqual(first.events.filter(event => event.kind === "toolPatch").map(event => event.itemId), [itemId("first"), itemId("second")]);
+    live.close("view");
+    live.settle(recordTool("first", "failed").changes!);
+    const next = viewer();
+    live.open("next", repository.read({ threadId: "thread", turnLimit: 1 }), next.publish);
+    assert.deepEqual(next.events.filter(event => event.kind === "toolPatch").map(event => event.itemId), [itemId("second")]);
+    const projected = next.read().turns[0]!.items.find(item => item.id === itemId("first"));
+    assert.ok(projected?.type === "dynamicToolCall" && projected.status === "failed");
+  } finally {
+    live.dispose();
+    database.close();
+  }
+});
 
 test("streaming before selection and between selections retains the full prefix without a durable delta write", () => {
   const { database, repository, live, record, delta } = fixture();
@@ -369,7 +409,7 @@ test("preview delivery stays in its loaded turn and terminal settlement clears r
 });
 
 test("live patches survive selection changes without durable writes and completion replaces them", () => {
-  const { database, repository, live } = fixture();
+  const { database, repository, live, itemId } = fixture();
   const recordPatch = (completed: boolean, replaceLiveText = false) => live.settle(repository.settle([{
     kind: "item", threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("turn"),
     item: { type: "fileChange", id: "patch", status: completed ? "completed" : "inProgress", changes: [] },
@@ -378,7 +418,7 @@ test("live patches survive selection changes without durable writes and completi
   try {
     recordPatch(false);
     live.acceptLiveUpdate({
-      kind: "patch", threadId: "thread", turnId: "turn", itemId: "patch",
+      kind: "patch", threadId: "thread", turnId: "turn", itemId: itemId("patch"),
       changes: [{ path: "file.ts", diff: "+new", kind: { type: "add" } }],
     });
     const active = viewer();

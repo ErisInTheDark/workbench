@@ -1394,6 +1394,52 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
   }
 });
 
+test("retains callable grouping and provider metadata but never persists live patch previews", () => {
+  const { database, repository } = createRepository();
+  const item: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {
+    kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn, lifecycle: "streaming", observedAt: 3,
+    item: {
+      type: "dynamicToolCall", id: "native-patch", namespace: "opencode", tool: "patch",
+      arguments: { patchText: "input" }, status: "inProgress", contentItems: null, success: null, durationMs: null,
+      toolCallGroupId: "parent", metadata: { files: [{ file: "src/a.ts", additions: 1 }] },
+      patchPreview: [{ path: "transient.ts", kind: { type: "add" } }],
+    },
+  };
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0), item]);
+    const projection = projectWorkbenchTranscript(repository.read({ threadId: "thread", turnLimit: 1 })!);
+    assert.ok(projection.success);
+    const actual = projection.data.turns[0]!.items[0]!;
+    assert.equal(actual.type, "dynamicToolCall");
+    if (actual.type !== "dynamicToolCall") assert.fail("missing native tool");
+    assert.equal(actual.toolCallGroupId, "parent");
+    assert.deepEqual(actual.metadata, { files: [{ file: "src/a.ts", additions: 1 }] });
+    assert.equal(actual.patchPreview, undefined);
+    const result = { content: [{ type: "text", text: "full child output" }, { type: "image", data: "base64", mimeType: "image/png" }],
+      structuredContent: { rows: [1, 2] }, _meta: { source: "retained" } };
+    const child: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {
+      ...item, lifecycle: "completed", observedAt: 4,
+      item: { type: "mcpToolCall", id: "child", server: "wb", tool: "rg", arguments: { args: ["needle"] },
+        toolCallGroupId: "parent", status: "failed", result, error: { message: "reported failure" },
+        durationMs: 3, appContext: null, pluginId: null, readOnlyHint: null },
+    };
+    repository.settle([child]);
+    assert.ok(item.item.type === "dynamicToolCall");
+    repository.settle([{ ...item, observedAt: 5, item: { ...item.item, status: "completed", success: true } }]);
+    const reopened = new WorkbenchTranscriptRepository(database);
+    const reread = projectWorkbenchTranscript(reopened.read({ threadId: "thread", turnLimit: 1 })!);
+    assert.ok(reread.success);
+    const retained = reread.data.turns[0]!.items.find(candidate => candidate.type === "mcpToolCall");
+    assert.ok(retained?.type === "mcpToolCall");
+    assert.deepEqual(retained.result, result);
+    assert.equal(retained.toolCallGroupId, "parent");
+    assert.equal(retained.status, "failed");
+  } finally {
+    database.close();
+  }
+});
+
 for (const providerStatus of ["completed", "failed"] as const) {
   test(`provider ${providerStatus} truth replaces a weak synthetic operation settlement`, () => {
     const { database, repository } = createRepository();

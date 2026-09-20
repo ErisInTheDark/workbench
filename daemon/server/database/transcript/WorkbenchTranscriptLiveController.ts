@@ -19,6 +19,7 @@ import {
   type TranscriptLayout,
   type TranscriptLiveUpdate,
   type TranscriptPatchUpdate,
+  type TranscriptToolPatchUpdate,
   type TranscriptStreamUpdate,
   type TranscriptTextField,
   type TranscriptTextUpdate,
@@ -58,6 +59,7 @@ export default class WorkbenchTranscriptLiveController {
   readonly #views = new Map<string, View>();
   readonly #fields = new Map<string, Map<string, TranscriptTextUpdate>>();
   readonly #patches = new Map<string, TranscriptPatchUpdate>();
+  readonly #toolPatches = new Map<string, Map<string, TranscriptToolPatchUpdate>>();
   readonly #reportFailure: (error: unknown) => void;
 
   constructor(reportFailure: (error: unknown) => void = error => {
@@ -92,6 +94,7 @@ export default class WorkbenchTranscriptLiveController {
     for (const update of this.#fields.get(snapshot.thread.id)?.values() ?? []) this.#publishText(view, update);
     const patch = this.#patches.get(snapshot.thread.id);
     if (patch) this.#publishPatch(view, patch);
+    for (const update of this.#toolPatches.get(snapshot.thread.id)?.values() ?? []) this.#publishToolPatch(view, update);
   }
 
   close(id: string) {
@@ -106,9 +109,21 @@ export default class WorkbenchTranscriptLiveController {
     this.#views.clear();
     this.#fields.clear();
     this.#patches.clear();
+    this.#toolPatches.clear();
   }
 
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
+    if (update.kind === "toolPatch") {
+      const patches = this.#toolPatches.get(update.threadId) ?? new Map<string, TranscriptToolPatchUpdate>();
+      if (update.files.length) patches.set(update.itemId, update);
+      else patches.delete(update.itemId);
+      if (patches.size) this.#toolPatches.set(update.threadId, patches);
+      else this.#toolPatches.delete(update.threadId);
+      for (const view of this.#views.values()) {
+        if (view.projection.thread.id === update.threadId) this.#publishToolPatch(view, update);
+      }
+      return;
+    }
     if (update.kind === "text") {
       this.acceptText(update);
       return;
@@ -180,6 +195,14 @@ export default class WorkbenchTranscriptLiveController {
     const terminalTurns = new Set(snapshot.turns
       .filter(turn => turn.state !== "inProgress" && turn.state !== "admitted")
       .map(turn => turn.id));
+    const toolPatches = this.#toolPatches.get(snapshot.thread.id);
+    for (const [itemId, update] of toolPatches ?? []) {
+      const item = items.get(itemId);
+      if (removed.includes(itemId) || completedIds.includes(itemId) || terminalTurns.has(update.turnId)
+        || (item && (item.type !== "dynamicToolCall" || item.status !== "inProgress"))) {
+        this.acceptLiveUpdate({ ...update, files: [] });
+      }
+    }
     const patch = this.#patches.get(snapshot.thread.id);
     if (patch && (removed.includes(patch.itemId) || completedIds.includes(patch.itemId) || terminalTurns.has(patch.turnId))) {
       this.acceptActivity(snapshot.thread.id);
@@ -272,6 +295,15 @@ export default class WorkbenchTranscriptLiveController {
     for (const field of this.#fields.get(snapshot.thread.id)?.values() ?? []) this.#publishText(view, field);
     const patch = this.#patches.get(snapshot.thread.id);
     if (patch) this.#publishPatch(view, patch);
+    for (const update of this.#toolPatches.get(snapshot.thread.id)?.values() ?? []) this.#publishToolPatch(view, update);
+  }
+
+  #publishToolPatch(view: View, update: TranscriptToolPatchUpdate) {
+    const item = view.items.get(update.itemId);
+    const turn = view.turns.get(update.turnId);
+    if (item?.type !== "dynamicToolCall" || view.roots.get(update.itemId)?.turn_id !== update.turnId) return;
+    if (update.files.length && (item.status !== "inProgress" || turn?.state !== "inProgress")) return;
+    view.publish(update);
   }
 
   #publishPatch(view: View, update: TranscriptPatchUpdate) {

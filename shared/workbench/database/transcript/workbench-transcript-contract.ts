@@ -7,8 +7,13 @@
  * - WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: decoded server dispatch union.
  * - workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: notification contracts.
  * - WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: incremental presentation notifications.
+ * - WorkbenchTranscriptReadRequest: canonical transcript window request.
+ * - WorkbenchTranscriptSubscribeParams/WorkbenchTranscriptUnsubscribeParams: subscription identity and optional capabilities.
+ * - WorkbenchTranscriptUpdatedParams: snapshot publication payload.
+ * - WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION/WorkbenchTranscriptCapabilities: supported wire protocol.
  */
 import { coreTables } from "../schema/core-schema.ts";
+import { ToolPatchPreviewFileSchema } from "../../thread/tool-patch-preview.ts";
 import { evidenceTables } from "../schema/evidence-schema.ts";
 import { interactionTables } from "../schema/interaction-schema.ts";
 import { itemTables } from "../schema/item-schema.ts";
@@ -324,7 +329,9 @@ interface TranscriptSubscriptionParams {
 }
 
 export interface WorkbenchTranscriptSubscribeParams
-  extends TranscriptSubscriptionParams, WorkbenchTranscriptReadRequest {}
+  extends TranscriptSubscriptionParams, WorkbenchTranscriptReadRequest {
+  toolPatchPreviews?: boolean;
+}
 
 export type WorkbenchTranscriptUnsubscribeParams = TranscriptSubscriptionParams;
 
@@ -333,7 +340,13 @@ function decodeSubscribeParams(value: unknown): DecodeResult<WorkbenchTranscript
   if ("message" in read) return { success: false, message: read.message };
   const subscriptionId = isRecord(value) && typeof value.subscriptionId === "string" ? value.subscriptionId.trim() : "";
   if (!subscriptionId) return { success: false, message: "Transcript subscription requires subscriptionId." };
-  return { success: true, data: { ...read.data, subscriptionId } };
+  if (isRecord(value) && value.toolPatchPreviews !== undefined && typeof value.toolPatchPreviews !== "boolean") {
+    return { success: false, message: "Transcript tool preview capability must be boolean." };
+  }
+  return { success: true, data: {
+    ...read.data, subscriptionId,
+    ...(isRecord(value) && value.toolPatchPreviews === true ? { toolPatchPreviews: true } : {}),
+  } };
 }
 
 function decodeUnsubscribeParams(value: unknown): DecodeResult<WorkbenchTranscriptUnsubscribeParams> {
@@ -560,6 +573,13 @@ export function conformWorkbenchTranscriptStreamed(value: unknown): DatabaseConf
   });
   if (!isRecord(value) || !isString(value.subscriptionId) || !isRecord(value.update)) return invalid();
   const update = value.update;
+  if (update.kind === "toolPatch" && isString(update.threadId) && isString(update.turnId) && isString(update.itemId)) {
+    const files = ToolPatchPreviewFileSchema.array().safeParse(update.files);
+    if (!files.success) return invalid();
+    return { success: true, repairedPaths: [], data: { subscriptionId: value.subscriptionId, update: {
+      kind: "toolPatch", threadId: update.threadId, turnId: update.turnId, itemId: update.itemId, files: files.data,
+    } } };
+  }
   if (update.kind === "absent") {
     return { success: true, repairedPaths: [], data: { subscriptionId: value.subscriptionId, update: { kind: "absent" } } };
   }

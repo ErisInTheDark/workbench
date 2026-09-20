@@ -30,5 +30,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   sources: [
     "daemon/server/providers/opencode/OpenCodeServiceNode.ts",
     "daemon/server/providers/opencode/OpenCodeServiceController.ts",
+    "daemon/server/providers/opencode/workbench-plugin/index.ts",
+    "daemon/server/providers/opencode/workbench-plugin/CodeModeToolContextController.ts",
+    "daemon/server/providers/opencode/workbench-plugin/OpenCodePatchStreamController.ts",
+    "daemon/server/providers/opencode/workbench-plugin/open-code-tool-stream.ts",
+    "daemon/server/providers/opencode/workbench-plugin/open-code-patch-preview.ts",
+    "daemon/server/providers/opencode/opencode-workbench-rpc.ts",
   ].join("\n"),
 });

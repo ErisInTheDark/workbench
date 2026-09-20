@@ -12,6 +12,7 @@ import {
 import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
+import type { OpenCodePatchObservation } from "./opencode-workbench-rpc";
 
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 
@@ -26,13 +27,17 @@ export interface OpenCodeEventControllerOptions {
     markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; hasPendingSteers?: boolean }>;
   };
-  transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">;
+  transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
+    & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
 
 interface ToolState {
   input: JsonValue;
   name: string;
   startedAt: number;
+  active?: ActiveTurn;
+  itemId?: string;
+  metadata?: JsonValue;
 }
 type DynamicToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -46,8 +51,33 @@ function parseToolInput(text: string): JsonValue {
 
 export default class OpenCodeEventController {
   private readonly tools = new Map<string, Map<string, ToolState>>();
+  private readonly previews = new Map<string, {
+    requestID: string;
+    calls: Map<string, Extract<OpenCodePatchObservation, { kind: "preview" }>>;
+  }>();
 
   constructor(private readonly options: OpenCodeEventControllerOptions) {}
+
+  acceptPatchPreview(observation: OpenCodePatchObservation) {
+    const previous = this.previews.get(observation.sessionID);
+    if (observation.kind === "request") {
+      this.clearPreviews(observation.sessionID);
+      this.previews.set(observation.sessionID, { requestID: observation.requestID, calls: new Map() });
+      return;
+    }
+    if (!previous || previous.requestID !== observation.requestID) return;
+    if (observation.kind === "withdraw") {
+      this.clearPreviews(observation.sessionID);
+      return;
+    }
+    previous.calls.set(observation.callID, observation);
+    this.publishPreview(observation.sessionID, observation.callID);
+  }
+
+  dispose() {
+    for (const sessionID of this.previews.keys()) this.clearPreviews(sessionID);
+    this.tools.clear();
+  }
 
   async accept(event: OpenCodeEvent) {
     if (event.type === "model.updated" || event.type === "provider.updated") {
@@ -170,6 +200,7 @@ export default class OpenCodeEventController {
       case "session.tool.input.ended": {
         const previous = this.getTool(sessionID, event.data.id);
         this.setTool(sessionID, event.data.id, {
+          ...previous,
           input: parseToolInput(event.data.text),
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
@@ -180,6 +211,7 @@ export default class OpenCodeEventController {
       case "session.tool.called": {
         const previous = this.getTool(sessionID, event.data.id);
         this.setTool(sessionID, event.data.id, {
+          ...previous,
           input: event.data.input,
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
@@ -187,31 +219,45 @@ export default class OpenCodeEventController {
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
+      case "session.tool.progress": {
+        const previous = this.getTool(sessionID, event.data.id);
+        if (previous) {
+          previous.metadata = event.data.metadata;
+          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        }
+        return;
+      }
       case "session.tool.success":
       case "session.tool.failed": {
         const previous = this.getTool(sessionID, event.data.id);
-        const active = await this.active(sessionID);
+        const active = previous?.active ?? await this.active(sessionID);
+        const metadata = event.data.metadata ?? previous?.metadata;
+        const succeeded = event.type === "session.tool.success"
+          && !(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.error === true);
         await this.options.transcript.recordItem({
           ...active,
           source: openCodeItemSource(event.data.id),
           item: {
-            ...this.toolItem(event.data.id, previous, event.type === "session.tool.success" ? "completed" : "failed"),
+            ...this.toolItem(event.data.id, previous, succeeded ? "completed" : "failed"),
+            ...(metadata !== undefined ? { metadata } : {}),
             contentItems: openCodeToolContentItems(
               event.data.content,
               event.type === "session.tool.failed" ? event.data.error : undefined,
             ),
-            success: event.type === "session.tool.success",
+            success: succeeded,
             durationMs: previous ? Math.max(0, event.created - previous.startedAt) : null,
           },
           lifecycle: "completed",
           observedAt: event.created,
         });
+        this.previews.get(sessionID)?.calls.delete(event.data.id);
         this.deleteTool(sessionID, event.data.id);
         return;
       }
       case "session.execution.succeeded":
       case "session.execution.failed":
       case "session.execution.interrupted": {
+        this.clearPreviews(sessionID);
         const requestedInterrupt = this.options.threads.consumeRequestedInterrupt?.(sessionID) ?? false;
         const identity = await this.options.threads.syncNative(sessionID);
         if (event.type === "session.execution.succeeded" && identity.hasPendingSteers) return;
@@ -255,14 +301,38 @@ export default class OpenCodeEventController {
   }
 
   private async recordTool(sessionID: string, id: string, status: "inProgress", observedAt: number) {
-    const active = await this.active(sessionID);
-    await this.options.transcript.recordItem({
+    const state = this.getTool(sessionID, id);
+    const active = state?.active ?? await this.active(sessionID);
+    const itemId = await this.options.transcript.recordItem({
       ...active,
       source: openCodeItemSource(id),
       item: this.toolItem(id, this.getTool(sessionID, id), status),
       lifecycle: "streaming",
       observedAt,
     });
+    if (state) {
+      state.active = active;
+      state.itemId = itemId;
+    }
+    this.publishPreview(sessionID, id);
+  }
+
+  private publishPreview(sessionID: string, id: string) {
+    const preview = this.previews.get(sessionID)?.calls.get(id);
+    const tool = this.getTool(sessionID, id);
+    if (!preview || !tool?.active || !tool.itemId || preview.tool !== tool.name) return;
+    this.options.transcript.previewToolPatch?.({ ...tool.active, itemId: tool.itemId, files: preview.files });
+  }
+
+  private clearPreviews(sessionID: string) {
+    const previous = this.previews.get(sessionID);
+    for (const id of previous?.calls.keys() ?? []) {
+      const tool = this.getTool(sessionID, id);
+      if (tool?.active && tool.itemId) {
+        this.options.transcript.previewToolPatch?.({ ...tool.active, itemId: tool.itemId, files: [] });
+      }
+    }
+    this.previews.delete(sessionID);
   }
 
   private getTool(sessionID: string, id: string) {
@@ -293,6 +363,8 @@ export default class OpenCodeEventController {
       contentItems: null,
       success: status === "completed" ? true : status === "failed" ? false : null,
       durationMs: null,
+      ...(state?.metadata !== undefined ? { metadata: state.metadata } : {}),
+      ...(state?.name === "execute" ? { toolCallGroupId: id } : {}),
     };
   }
 

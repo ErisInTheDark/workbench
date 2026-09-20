@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { buildRenderableBlocks, getWorkedBlockRows, type CommandItem } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
@@ -23,6 +23,19 @@ function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted"
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
 const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
+
+test("captured children compact only their exact execute wrapper without deleting its evidence", () => {
+  const wrapper = (id: string): ThreadItem => ({ type: "dynamicToolCall", id, namespace: "opencode",
+    tool: "execute", toolCallGroupId: id, arguments: { code: "opaque code" }, status: "failed",
+    success: false, contentItems: [{ type: "inputText", text: "wrapper failure" }], durationMs: 1 });
+  const child = { ...mcp("child", "task_get", {}), toolCallGroupId: "parent-a" };
+  const blocks = buildRenderableBlocks([wrapper("parent-a"), wrapper("parent-b"), child]);
+  const a = blocks.find(block => block.kind === "item" && block.item.id === "parent-a");
+  const b = blocks.find(block => block.kind === "item" && block.item.id === "parent-b");
+  assert.ok(a?.kind === "item" && "hasCapturedChildren" in a && a.hasCapturedChildren);
+  assert.ok(b?.kind === "item" && !("hasCapturedChildren" in b && b.hasCapturedChildren));
+  assert.deepEqual(a.item, wrapper("parent-a"));
+});
 
 test("adjacent textual steers group only while their exact state matches", () => {
   const blocks = buildRenderableBlocks([

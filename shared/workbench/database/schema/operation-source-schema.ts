@@ -1,19 +1,19 @@
 /*
- * Keywords: database, operation sources, callable tools, history.
- * threadItemOperations: current operation source root table. Keywords: database, schema, operation.
- * threadOperationProcessSources: current process operation source table. Keywords: database, schema, process.
- * threadProcessCommandActions: current ordered process command action table. Keywords: database, schema, command.
- * threadOperationToolSources: current tool operation source table. Keywords: database, schema, tool.
- * threadOperationCallableToolSources: current callable tool source table. Keywords: database, schema, callable.
- * threadCallableDynamicContent: current dynamic callable content table. Keywords: database, schema, callable.
- * threadCallableMcpResults: current MCP result owner table. Keywords: database, schema, mcp.
- * threadCallableMcpResultContent: current ordered MCP result content table. Keywords: database, schema, mcp.
- * threadOperationCollaborationToolSources: current collaboration source table. Keywords: database, schema, collaboration.
- * threadCollaborationReceivers: current ordered collaboration receiver table. Keywords: database, schema, collaboration.
- * threadCollaborationAgentStates: current collaboration agent state table. Keywords: database, schema, collaboration.
- * operationSourceTables: current operation source table inventory. Keywords: database, schema, operation.
- * OperationSourceSchemaRows: selected row types for current operation source tables. Keywords: database, schema, types.
- * operationSourceSchemaHistory: private operation source table histories. Keywords: database, schema, history.
+ * Exports:
+ * - threadItemOperations: operation source roots.
+ * - threadOperationProcessSources: process operation evidence.
+ * - threadProcessCommandActions: ordered process command actions.
+ * - threadOperationToolSources: tool operation evidence.
+ * - threadOperationCallableToolSources: callable arguments, grouping and provider metadata.
+ * - threadCallableDynamicContent: ordered dynamic tool output.
+ * - threadCallableMcpResults: MCP result owners.
+ * - threadCallableMcpResultContent: ordered MCP output.
+ * - threadOperationCollaborationToolSources: collaboration tool evidence.
+ * - threadCollaborationReceivers: ordered collaboration recipients.
+ * - threadCollaborationAgentStates: collaboration agent states.
+ * - operationSourceTables: current operation table inventory.
+ * - OperationSourceSchemaRows: selected operation row types.
+ * - operationSourceSchemaHistory: versioned operation table histories.
  */
 import databaseReleases from "./releases.ts";
 import {
@@ -33,7 +33,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
+import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -180,7 +180,27 @@ const threadOperationCallableToolSourcesV1 = defineTable("thread_operation_calla
     }),
   ],
 }));
-const threadOperationCallableToolSourcesHistory = initialHistory(threadOperationCallableToolSourcesV1);
+const threadOperationCallableToolSourcesV2 = evolveTable(threadOperationCallableToolSourcesV1, {
+  add: { tool_call_group_id: text(), provider_metadata_json: jsonText() },
+});
+const threadOperationCallableToolSourcesHistory = defineTableHistory({
+  current: threadOperationCallableToolSourcesV2,
+  versions: [
+    tableVersion({
+      schemaVersion: databaseReleases.initialTranscript.version,
+      table: threadOperationCallableToolSourcesV1,
+      migration: createTable(threadOperationCallableToolSourcesV1),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.callableToolEvidence.version,
+      table: threadOperationCallableToolSourcesV2,
+      migration: addColumns({
+        from: threadOperationCallableToolSourcesV1, to: threadOperationCallableToolSourcesV2,
+        columns: ["tool_call_group_id", "provider_metadata_json"],
+      }),
+    }),
+  ],
+});
 export const threadOperationCallableToolSources = threadOperationCallableToolSourcesHistory.current;
 
 const threadCallableDynamicContentV1 = defineTable("thread_callable_dynamic_content", {

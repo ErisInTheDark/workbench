@@ -55,6 +55,7 @@ const databaseReleases = Object.freeze({
   voiceProfiles: release(45, "9ede86338aa4e4b0d5c1a104c6aff2f976601cf2e933e985a6e1149daca8db89"),
   relationalTranscriptSources: release(46, "64e7ff66b21ee3fdb98e36caf66ae66e8fdfe48f91c33a5b42771cc165a7159f"),
   tertiaryRateLimits: release(47, "d7a13fe60649e93729a8a806c15c2f70919fcbf3e92e7afaaff38586bdbc8ddc"),
+  callableToolEvidence: release(48, "1cfebace752cdd12d902dfb8b4dfdf58d342ed2b4e0853e374f75cf9447ab405"),
 });
 
 export default databaseReleases;

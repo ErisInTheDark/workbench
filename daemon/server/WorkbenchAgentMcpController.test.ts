@@ -20,8 +20,102 @@ import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./CodexShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+
+for (const name of ["task_get", "shell"]) {
+  test(`captures complete ${name} results before replying`, async () => {
+    const order: string[] = [];
+    const results: ProviderToolResult[] = [];
+    const reference = { threadId: "thread", turnId: "original-turn", itemId: "item",
+      sourceId: "child", parentId: "parent", tool: name, arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+    const tools: WorkbenchProviderTools = {
+      caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
+      describe: async () => ({ experimental: {}, shellDescription: "test" }),
+      patchClaims: async () => "",
+      executeReadOnly: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      shell: async () => {
+        order.push("execute");
+        return { cwd: "C:/workspace", shell: "pwsh", exitCode: 3, stdout: "complete stdout", stderr: "complete stderr" };
+      },
+      transcript: {
+        start: async () => { order.push("start"); return reference; },
+        finish: async (pinned, result) => {
+          assert.equal(pinned, reference);
+          order.push("finish");
+          results.push(result);
+        },
+      },
+    };
+    const controller = new WorkbenchAgentMcpController({
+      tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
+      requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+      executeCommand: async () => { order.push("execute"); return new Response("complete task output"); },
+    });
+    const server = await startController(controller);
+    const client = await connectClient(server.url);
+    try {
+      const result = await client.callTool({ name, arguments: name === "shell" ? { command: "test" } : {} });
+      assert.deepEqual(order, ["start", "execute", "finish"]);
+      assert.deepEqual(results[0]?.content, result.content);
+      if (name === "shell") assert.deepEqual(results[0]?.structuredContent, result.structuredContent);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+}
+
+for (const phase of ["start", "finish", "operation"] as const) {
+  test(`capture ${phase} failure never retries or discards executed output`, async () => {
+    let executions = 0;
+    const recorded: ProviderToolResult[] = [];
+    const errors: string[] = [];
+    const reference = { threadId: "thread", turnId: "turn", itemId: "item", sourceId: "child",
+      parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+    const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
+    const tools: WorkbenchProviderTools = {
+      caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
+      describe: async () => ({ experimental: {}, shellDescription: "test" }),
+      patchClaims: unused, shell: unused, executeReadOnly: unused,
+      transcript: {
+        start: async () => { if (phase === "start") throw new Error("capture failed"); return reference; },
+        finish: async (_reference, result) => {
+          recorded.push(result);
+          if (phase === "finish") throw new Error("capture failed");
+        },
+      },
+    };
+    const controller = new WorkbenchAgentMcpController({
+      tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
+      lifecycleLogError: (...values) => { errors.push(values.join(" ")); },
+      requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+      executeCommand: async () => {
+        executions++;
+        return phase === "operation" ? new Response("actual operation output", { status: 409 })
+          : Response.json({ title: "actual operation output" });
+      },
+    });
+    const server = await startController(controller);
+    const client = await connectClient(server.url);
+    try {
+      const result = await client.callTool({ name: "task_get", arguments: {} });
+      assert.equal(result.isError, true);
+      assert.equal(executions, phase === "start" ? 0 : 1);
+      if (phase !== "start") {
+        assert.match(responseText(result), /actual operation output/);
+        assert.ok(recorded[0]?.content.length);
+      }
+      if (phase !== "operation") assert.ok(errors.length);
+      if (phase === "operation") assert.equal(recorded[0]?.isError, true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+}
 
 function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tools"> & {
+  transcript?: WorkbenchProviderTools["transcript"];
   requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   resolveThreadId?: (nativeId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
   shell?: Pick<CodexShellController, "execute">;
@@ -47,6 +141,7 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
       executor: { execute: async () => { throw new Error("unexpected shell execution"); } },
     }),
   });
+  if (options.transcript) Object.assign(tools, { transcript: options.transcript });
   return new WorkbenchAgentMcpController({
     ...options,
     tools: provider => {
@@ -551,8 +646,16 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const bothStarted = deferred<void>();
   const firstAborted = deferred<unknown>();
+  const capturedCancellation = deferred<ProviderToolResult>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const controller = codexController({
+    transcript: {
+      start: async input => ({ threadId: String(input.metadata.threadId), turnId: "turn", itemId: "item",
+        sourceId: "source", parentId: "parent", tool: input.tool, arguments: input.arguments, startedAt: 1 } as WorkbenchToolTranscriptReference),
+      finish: async (reference, result) => {
+        if (reference.threadId === "thread-1") capturedCancellation.resolve(result);
+      },
+    },
     executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
       const callerThreadId = String(request.body?.callerThreadId ?? "");
       executions.set(callerThreadId, { resolve, signal });
@@ -592,6 +695,7 @@ test("isolates duplicate protocol IDs and cancellation by configured MCP client"
     firstAbort.abort(new Error("first caller stopped"));
     await assert.rejects(firstCall, /first caller stopped|aborted/u);
     assert.ok(await firstAborted.promise);
+    assert.equal((await capturedCancellation.promise).isError, true);
     assert.equal(executions.get("thread-2")?.signal.aborted, false);
 
     executions.get("thread-2")?.resolve(Response.json({ title: "second completed" }));

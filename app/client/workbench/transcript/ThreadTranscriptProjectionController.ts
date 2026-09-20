@@ -20,7 +20,7 @@ import {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import {
   applyTranscriptLayoutPatch, applyTranscriptStructure, readTranscriptText, writeTranscriptText,
-  type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate,
+  type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate, type TranscriptToolPatchUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import {
   isUndeliveredInitialOptimisticInputItem,
@@ -127,6 +127,7 @@ export default class ThreadTranscriptProjectionController {
   #streamLayout: TranscriptLayout | null = null;
   #streamItems = new Map<string, { turnId: string; item: WorkbenchProjectedTranscriptItem }>();
   #patchPreview: { turnId: string; item: Extract<WorkbenchProjectedTranscriptItem, { type: "fileChange" }> } | null = null;
+  readonly #toolPatches = new Map<string, TranscriptToolPatchUpdate>();
   #incremental = false;
   #localInitials: ReturnType<typeof localInitials> = [];
 
@@ -156,6 +157,7 @@ export default class ThreadTranscriptProjectionController {
     this.#projection = null;
     this.#streamItems.clear();
     this.#patchPreview = null;
+    this.#toolPatches.clear();
     this.#streamLayout = null;
     this.#onStateChange({ status: "idle" });
     this.#generation += 1;
@@ -175,6 +177,7 @@ export default class ThreadTranscriptProjectionController {
     if (available) this.#hasBeenAvailable = true;
     this.#streamItems.clear();
     this.#patchPreview = null;
+    this.#toolPatches.clear();
     this.#streamLayout = null;
     this.#incremental = false;
     if (!available) {
@@ -214,6 +217,7 @@ export default class ThreadTranscriptProjectionController {
       this.#projection = null;
       this.#streamItems.clear();
       this.#patchPreview = null;
+      this.#toolPatches.clear();
       this.#streamLayout = null;
       if (!selection) {
         this.#onStateChange({ status: "idle" });
@@ -246,7 +250,23 @@ export default class ThreadTranscriptProjectionController {
 
   #reconcileCurrentProjection() {
     if (!this.#selection || !this.#projection?.value) return null;
-    const projection = this.#projection.value;
+    let projection = this.#projection.value;
+    if (this.#toolPatches.size) {
+      const overlay = (item: WorkbenchProjectedTranscriptItem): WorkbenchProjectedTranscriptItem => {
+        const preview = this.#toolPatches.get(item.id);
+        return item.type === "dynamicToolCall" && item.status === "inProgress" && preview
+          ? { ...item, patchPreview: preview.files } : item;
+      };
+      projection = {
+        ...projection,
+        turns: projection.turns.map(turn => ({ ...turn, items: turn.items.map(overlay) })),
+        display: {
+          ...projection.display,
+          orderedItems: projection.display.orderedItems.map(entry => ({ ...entry, payload: overlay(entry.payload) })),
+          segments: projection.display.segments.map(segment => ({ ...segment, items: segment.items.map(overlay) })),
+        },
+      };
+    }
     const canonicalItems = projection.turns.flatMap(turn => turn.items);
     const canonicalIds = new Set(canonicalItems.map(item => item.id));
     const previews = this.#patchPreview ? [this.#patchPreview] : [];
@@ -401,6 +421,7 @@ export default class ThreadTranscriptProjectionController {
       this.#projection = { value: null, generation };
       this.#streamItems.clear();
       this.#patchPreview = null;
+      this.#toolPatches.clear();
       this.#streamLayout = null;
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
@@ -434,6 +455,15 @@ export default class ThreadTranscriptProjectionController {
     }
     const threadId = update.kind === "structure" ? update.snapshot.thread.id : update.threadId;
     if (threadId !== this.#selection?.thread.id) return;
+    if (update.kind === "toolPatch") {
+      const canonical = this.#streamItems.get(update.itemId);
+      if (!canonical || canonical.turnId !== update.turnId || canonical.item.type !== "dynamicToolCall") return;
+      if (!update.files.length || canonical.item.status !== "inProgress"
+        || !this.#projection?.value?.turns.some(turn => turn.id === update.turnId && turn.status === "inProgress")) this.#toolPatches.delete(update.itemId);
+      else this.#toolPatches.set(update.itemId, update);
+      this.#publishProjection();
+      return;
+    }
     if (update.kind === "patch") {
       if (!update.changes.length) {
         if (this.#patchPreview?.item.id === update.itemId && this.#patchPreview.turnId === update.turnId) {
@@ -494,6 +524,14 @@ export default class ThreadTranscriptProjectionController {
       const layout = applyTranscriptLayoutPatch(update.reset ? null : this.#streamLayout, update.layout);
       const projection = applyTranscriptStructure(this.#projection?.value ?? null, update, layout);
       const streamItems = new Map(projection.turns.flatMap(turn => turn.items.map(item => [item.id, { turnId: turn.id, item }] as const)));
+      for (const [itemId, preview] of this.#toolPatches) {
+        const entry = streamItems.get(itemId);
+        if (update.reset || !entry || entry.turnId !== preview.turnId
+          || entry.item.type !== "dynamicToolCall" || entry.item.status !== "inProgress"
+          || !projection.turns.some(turn => turn.id === preview.turnId && turn.status === "inProgress")) {
+          this.#toolPatches.delete(itemId);
+        }
+      }
       const preview = this.#patchPreview;
       if (preview && (update.reset || streamItems.has(preview.item.id) || update.removedItemIds.includes(preview.item.id)
         || !projection.turns.some(turn => turn.id === preview.turnId && turn.status === "inProgress"))) {
@@ -549,6 +587,7 @@ export default class ThreadTranscriptProjectionController {
         const subscriptionId = `${this.#subscriptionPrefix}:${generation}`;
         this.#activeSubscriptionId = subscriptionId;
         await this.#transcripts.subscribe({
+          toolPatchPreviews: true,
           subscriptionId,
           threadId: selection.thread.id,
           turnIds: durableTurnIds(selection.thread.turns),

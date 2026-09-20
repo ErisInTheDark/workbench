@@ -11,6 +11,42 @@ import type { WorkbenchTranscriptItemSource } from "../../database/transcript/wo
 import type { WorkbenchTranscriptObservation } from "../../database/transcript/workbench-transcript-types";
 import OpenCodeTranscriptAdapter, { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 
+test("child capture retains complete MCP evidence with Workbench provenance and stable identity", async () => {
+  const recorded: WorkbenchTranscriptObservation[] = [];
+  const origins: string[] = [];
+  const itemId = WorkbenchItemIdSchema.parse("a3c25f4a-aee4-46a6-b7bd-a9f4718e001f");
+  const adapter = new OpenCodeTranscriptAdapter({
+    threads: { observe: async () => { throw new Error("no current-turn lookup"); }, observeTurns: async () => [] },
+    items: {
+      admit: async inputs => inputs.map(input => ({ ...input, itemId, sources: input.sources.map(source => ({
+        ...source, component: source.component ?? { kind: "item" as const, index: 0 },
+      })) })),
+      itemIdForSource: () => itemId,
+    },
+    transcript: { record: async (observations, options) => {
+      recorded.push(...observations);
+      origins.push(options!.source);
+      return { changedThreadIds: [] };
+    } },
+  });
+  const reference = await adapter.startToolTranscript({
+    threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: WorkbenchTurnIdSchema.parse("original"),
+    sourceId: "child", parentId: "execute", tool: "rg", arguments: { args: ["needle"] }, startedAt: 1,
+  });
+  const result = { content: [{ type: "text", text: "full output" }, { type: "image", data: "base64", mimeType: "image/png" }],
+    structuredContent: { rows: [1, 2] }, _meta: { extra: "retained" }, isError: true };
+  await adapter.finishToolTranscript(reference, result);
+  assert.deepEqual(origins, ["workbench", "workbench"]);
+  const completed = recorded.at(-1)!;
+  assert.ok(completed.kind === "item" && completed.item.type === "mcpToolCall");
+  assert.equal(completed.turnId, "original");
+  assert.equal(completed.publicItemId, itemId);
+  assert.equal(completed.item.toolCallGroupId, "execute");
+  assert.equal(completed.item.status, "failed");
+  assert.equal(completed.item.error, null, "returned MCP errors must not replace the full output in existing renderers");
+  assert.deepEqual(completed.item.result, { content: result.content, structuredContent: result.structuredContent, _meta: result._meta });
+});
+
 test("preserves OpenCode tool content and structured failures", () => {
   assert.deepEqual(openCodeToolContentItems([
     { type: "text", text: "answered" },
@@ -139,6 +175,8 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
     type: "dynamicToolCall",
     namespace: "opencode",
     tool: "execute",
+    toolCallGroupId: "tool-1",
+    metadata: { error: true },
     arguments: { code: "tools.wb.rg({})" },
     status: "failed",
     contentItems: [{ type: "inputText", text: "preserved result" }],

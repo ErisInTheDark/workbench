@@ -2291,7 +2291,7 @@ function ThreadRenderableBlockViewComponent ({
       );
     }
     case "dynamicToolCall":
-      return <ThreadDynamicToolCallItem answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+      return <ThreadDynamicToolCallItem hasCapturedChildren={block.hasCapturedChildren} answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":

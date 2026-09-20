@@ -41,7 +41,7 @@ export type ThreadRenderableBlock =
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
   | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
   | { kind: "webSearchSequence"; items: Extract<ThreadItem, { type: "webSearch" }>[] }
-  | { kind: "item"; item: Exclude<ThreadItem, { type: "commandExecution" | "fileChange" | "reasoning" }> };
+  | { kind: "item"; hasCapturedChildren?: boolean; item: Exclude<ThreadItem, { type: "commandExecution" | "fileChange" | "reasoning" }> };
 
 export interface HiddenThreadItemIds {
   controlAgentMessages?: boolean;
@@ -86,6 +86,8 @@ function getMergeableSteerState(item: UserMessageItem) {
 
 export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = "."): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
+  const capturedGroups = new Set(items.flatMap(item =>
+    item.type === "mcpToolCall" && item.server === "wb" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
   let pending: Extract<ThreadRenderableBlock, { kind: "commandSequence" | "fileChangeSequence" | "reasoningSequence" | "webSearchSequence" }> | null = null;
   const flush = () => { if (pending) blocks.push(pending); pending = null; };
   const commands = (item: CommandSequenceItem) => {
@@ -161,7 +163,9 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     }
     if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
     flush();
-    blocks.push({ kind: "item", item });
+    blocks.push({ kind: "item", item, ...(item.type === "dynamicToolCall" && item.namespace === "opencode"
+      && item.tool === "execute" && item.toolCallGroupId && capturedGroups.has(item.toolCallGroupId)
+      ? { hasCapturedChildren: true } : {}) });
   }
   flush();
   return blocks;

@@ -30,6 +30,7 @@ import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-en
 import CodeModeToolContextController, {
   WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT,
 } from "./CodeModeToolContextController";
+import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import {
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
@@ -341,6 +342,9 @@ function injectCodeModeToolContext(body: Buffer, contexts: CodeModeToolContextCo
         ? metadata as Record<string, unknown>
         : {}),
       sessionID: context.sessionId,
+      ...(context.assistantMessageId ? { workbenchTool: {
+        childID: context.childId, parentID: context.callId, assistantMessageID: context.assistantMessageId,
+      } } : {}),
     };
   }
   return Buffer.from(JSON.stringify(parsed));
@@ -431,13 +435,47 @@ export function createOpenCodeWorkbenchPlugin(
       const tools = createLifecycleOwnedCompanionToolOwner(connectTools, proxy.url);
       const isManagedSession = options.isManagedSession ?? (async sessionID =>
         isManagedMetadata((await context.session.get({ sessionID })).metadata));
-      const registrations = await Promise.all([
-        context.rpc.register(openCodeWorkbenchRpc, {
-          goQuota: async (_input, { signal }) => readOpenCodeGoQuota({
-            signal,
-            resolveCredential: () => resolveOpenCodeGoCredential(context.integration),
-          }),
+      const rpc = await context.rpc.register(openCodeWorkbenchRpc, {
+        goQuota: async (_input, { signal }) => readOpenCodeGoQuota({
+          signal,
+          resolveCredential: () => resolveOpenCodeGoCredential(context.integration),
         }),
+      }).catch(async error => {
+        const closed = await Promise.allSettled([tools.close(), proxy.close()]);
+        toolContexts.dispose();
+        throw new AggregateError([error, ...closed.flatMap(result => result.status === "rejected" ? [result.reason] : [])],
+          "Workbench companion RPC registration failed.");
+      });
+      const patches = new OpenCodePatchStreamController({
+        isManagedSession,
+        emit: observation => rpc.events.emit("patchPreview", observation),
+        warn: message => console.warn(`[workbench-opencode-preview] ${message}`),
+      });
+      const previewLifetime = new AbortController();
+      const previewEvents = (async () => {
+        try {
+          for await (const event of context.event.subscribe({ signal: previewLifetime.signal })) {
+            if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed"
+              || event.type === "session.execution.interrupted") {
+              await patches.settleSession(event.data.sessionID);
+            }
+          }
+          if (!previewLifetime.signal.aborted) {
+            console.warn("[workbench-opencode-preview] Preview lifecycle subscription ended; previews disabled.");
+            await patches.dispose();
+          }
+        } catch {
+          if (!previewLifetime.signal.aborted) {
+            console.warn("[workbench-opencode-preview] Preview lifecycle subscription failed; previews disabled.");
+            await patches.dispose();
+          }
+        }
+      })();
+      const registrations = await Promise.allSettled([
+        rpc,
+        context.session.hook("http.response", input => patches.httpResponse(input)),
+        context.session.hook("experimental.ws.send", input => patches.websocketSend(input)),
+        context.session.hook("experimental.ws.receive", input => patches.websocketReceive(input)),
         context.mcp.transform(editor => {
           editor.set(WORKBENCH_MCP_NAME, { type: "remote", url: proxy.url });
         }),
@@ -450,7 +488,12 @@ export function createOpenCodeWorkbenchPlugin(
                 return await tools.call({
                   name: tool.id.slice(`${WORKBENCH_MCP_NAME}_`.length),
                   arguments: input as Record<string, unknown>,
-                  _meta: { sessionID: correlated?.sessionId ?? toolContext.sessionID },
+                  _meta: {
+                    sessionID: correlated?.sessionId ?? toolContext.sessionID,
+                    ...(correlated?.assistantMessageId ? { workbenchTool: {
+                      childID: correlated.childId, parentID: correlated.callId, assistantMessageID: correlated.assistantMessageId,
+                    } } : {}),
+                  },
                 });
               };
             });
@@ -486,6 +529,7 @@ export function createOpenCodeWorkbenchPlugin(
               callId: input.id,
               sessionId: input.sessionID,
               tool: input.tool,
+              assistantMessageId: input.messageID,
             });
           }
         }),
@@ -493,12 +537,25 @@ export function createOpenCodeWorkbenchPlugin(
           if (isWorkbenchTool(input.tool)) toolContexts.release(input.input);
         }),
       ]);
-      return async () => {
-        await Promise.allSettled(registrations.map(registration => registration.dispose()));
-        await tools.close();
-        await proxy.close();
+      const dispose = async () => {
+        previewLifetime.abort();
+        await previewEvents;
+        await patches.dispose();
+        const closed = await Promise.allSettled([
+          ...registrations.flatMap(result => result.status === "fulfilled" ? [result.value.dispose()] : []),
+        ]);
+        closed.push(...await Promise.allSettled([tools.close()]));
+        closed.push(...await Promise.allSettled([proxy.close()]));
         toolContexts.dispose();
+        const failures = closed.filter(result => result.status === "rejected");
+        if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Workbench companion cleanup failed.");
       };
+      const failures = registrations.filter(result => result.status === "rejected");
+      if (failures.length) {
+        await dispose();
+        throw new AggregateError(failures.map(result => result.reason), "Workbench companion registration failed.");
+      }
+      return dispose;
     },
   };
 }

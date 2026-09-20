@@ -7,9 +7,9 @@ import type http from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
-import { ProviderToolMetadataSchema, type WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import { ProviderToolMetadataSchema, ProviderToolResultSchema, type WorkbenchToolTranscriptReference, type WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CancelledNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-agent-cli-responses";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
@@ -308,6 +308,18 @@ export default class WorkbenchAgentMcpController {
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
   ) {
+    return this.observeTool("shell", input, meta, signal, tools,
+      () => this.executeShell(input, meta, clientScope, requestId, signal, tools));
+  }
+
+  private async executeShell(
+    input: object,
+    meta: Record<string, unknown> | undefined,
+    clientScope: string,
+    requestId: WorkbenchAgentMcpRequestId,
+    signal: AbortSignal,
+    tools: WorkbenchProviderTools,
+  ) {
     let unregister: (() => void) | null = null;
     try {
       const registration = this.requestRegistry.register(clientScope, requestId, {
@@ -343,6 +355,50 @@ export default class WorkbenchAgentMcpController {
   }
 
   private async callTool(
+    definition: WorkbenchAgentCommandDefinition,
+    input: object,
+    meta: Record<string, unknown> | undefined,
+    clientScope: string,
+    requestId: WorkbenchAgentMcpRequestId,
+    signal: AbortSignal,
+    tools: WorkbenchProviderTools,
+    sendProgress?: (progress: number) => Promise<void>,
+  ) {
+    return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, signal, tools,
+      () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, sendProgress));
+  }
+
+  private async observeTool(
+    tool: string, input: object, meta: Record<string, unknown> | undefined, signal: AbortSignal,
+    tools: WorkbenchProviderTools, execute: () => Promise<CallToolResult>,
+  ): Promise<CallToolResult> {
+    let reference: WorkbenchToolTranscriptReference | null = null;
+    try {
+      if (tools.transcript) reference = await tools.transcript.start({
+        tool, arguments: ProviderToolMetadataSchema.parse(input), metadata: ProviderToolMetadataSchema.parse(meta ?? {}),
+      }, signal);
+    } catch (error) {
+      this.lifecycleLogError("workbench-mcp", sanitizeError(error));
+      return { content: [{ type: "text", text: "Tool was not executed because transcript admission failed." }], isError: true };
+    }
+    const result = await execute();
+    if (!reference) return result;
+    try {
+      await tools.transcript!.finish(reference, ProviderToolResultSchema.parse(result));
+      return result;
+    } catch (error) {
+      this.lifecycleLogError("workbench-mcp", sanitizeError(error));
+      return {
+        ...result, isError: true,
+        content: [...result.content, {
+          type: "text",
+          text: "Operation finished, but transcript recording failed. The original result is retained above. Do not retry the operation.",
+        }],
+      };
+    }
+  }
+
+  private async executeTool(
     definition: WorkbenchAgentCommandDefinition,
     input: object,
     meta: Record<string, unknown> | undefined,

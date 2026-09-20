@@ -8,6 +8,38 @@ import ReloadableNodeHost from "../../shared/reload/ReloadableNodeHost";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+
+test("tool capture finishes through the replacement owner with the original pinned identity", async () => {
+  const f = fixture();
+  const unused = async (): Promise<never> => { throw new Error("unexpected tool execution"); };
+  const reference = { threadId: "thread", turnId: "old-turn", itemId: "item", sourceId: "child",
+    parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+  const tools: NonNullable<WorkbenchProvider["tools"]> = {
+    patchClaims: unused, executeReadOnly: unused, describe: unused, caller: unused, shell: unused,
+    transcript: { start: async () => reference, finish: async () => assert.fail("old owner retained") },
+  };
+  f.setTools(tools);
+  await f.host.start();
+  await f.host.reload(["server:codex/def"]);
+  try {
+    const capture = f.providers.get("codex").tools.transcript!;
+    const pinned = await capture.start({ tool: "task_get", arguments: {}, metadata: {} }, new AbortController().signal);
+    assert.equal(pinned, reference);
+    let finished = false;
+    f.setTools({ ...tools, transcript: {
+      start: unused,
+      finish: async (received, result) => {
+        assert.equal(received, reference);
+        assert.deepEqual(result.content, [{ type: "text", text: "late output" }]);
+        finished = true;
+      },
+    } });
+    await f.host.reload(["server:codex/def"]);
+    await capture.finish(pinned!, { content: [{ type: "text", text: "late output" }] });
+    assert.equal(finished, true);
+  } finally { await f.host.dispose(); }
+});
 
 function deferred() {
   let resolve!: () => void;

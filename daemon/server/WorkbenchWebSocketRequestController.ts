@@ -110,6 +110,7 @@ interface WorkbenchWebSocketTranscriptSubscriptionState {
   client: BridgeClient;
   connectionId: string;
   protocolVersion?: 1 | 2 | 3 | 4;
+  toolPatchPreviews?: boolean;
   subscriptionId: string;
   threadId: string;
   turnIds?: string[];
@@ -673,6 +674,7 @@ export default class WorkbenchWebSocketRequestController {
       client,
       connectionId,
       protocolVersion: request.params.protocolVersion,
+      toolPatchPreviews: request.params.toolPatchPreviews,
       subscriptionId,
       threadId: request.params.threadId,
       turnIds: request.params.turnIds,
@@ -723,6 +725,7 @@ export default class WorkbenchWebSocketRequestController {
         },
         ...(subscription.protocolVersion !== undefined && subscription.protocolVersion >= 3 ? {
           publishStream: (update: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptStreamUpdate) => {
+            if (update.kind === "toolPatch" && !subscription.toolPatchPreviews) return;
             if (signal.aborted || this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
             void this.sendJsonToClient(subscription.client, {
               method: workbenchTranscriptNotifications.streamed.method,

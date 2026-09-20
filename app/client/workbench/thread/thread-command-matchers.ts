@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - getOpenCodeToolDisplay/getOpenCodeFileChanges: present native OpenCode evidence.
  * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts.
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
@@ -21,6 +22,8 @@
  * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations.
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
+
+export { getOpenCodeToolDisplay, getOpenCodeFileChanges } from "./command-matchers/opencode";
 
 import type { CommandAction, CommandExecutionStatus } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {

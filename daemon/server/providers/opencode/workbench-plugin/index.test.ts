@@ -6,6 +6,11 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT } from "./CodeModeToolContextController";
+
+async function* lifecycleEvents({ signal }: { signal: AbortSignal }) {
+  if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+}
 import {
   connectLifecycleOwnedCompanionTools,
   createLifecycleOwnedCompanionToolOwner,
@@ -13,6 +18,101 @@ import {
   readOpenCodeGoQuota,
   resolveOpenCodeGoCredential,
 } from "./index";
+
+test("shows patch targets before the response or tool input finishes without changing transport bytes", async () => {
+  const hooks = new Map<string, (input: object) => Promise<void> | void>();
+  const observations: { kind?: string; files?: { path: string }[] }[] = [];
+  const plugin = createOpenCodeWorkbenchPlugin({
+    createProxy: async () => ({ url: "http://127.0.0.1:43001/mcp", close: async () => undefined }),
+    isManagedSession: async () => true,
+    connectTools: async () => ({
+      callTool: async () => ({ content: [] }),
+      close: async () => undefined,
+    }),
+  });
+  const registration = { dispose: async () => undefined };
+  const cleanup = await plugin.setup({
+    event: { subscribe: lifecycleEvents },
+    app: { version: "2.0.9" },
+    rpc: { register: async () => ({
+      ...registration,
+      events: { emit: async (_name: string, observation: typeof observations[number]) => { observations.push(observation); } },
+    }) },
+    session: { hook: async (name: string, callback: (input: object) => Promise<void> | void) => {
+      hooks.set(name, callback);
+      return registration;
+    } },
+    tool: { hook: async () => registration, transform: async () => registration },
+    mcp: { transform: async () => registration },
+  } as never);
+  let cancelled = false;
+  let source!: ReadableStreamDefaultController<Uint8Array>;
+  const argumentPrefix = JSON.stringify({ patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n" }).slice(0, -2);
+  const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
+  const bytes = new TextEncoder().encode(
+    frame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call-a", name: "patch", input: {} } })
+    + frame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: argumentPrefix } }),
+  );
+  const input = {
+    sessionID: "managed-session",
+    kind: "primary",
+    model: { providerID: "anthropic", modelID: "test" },
+    request: new Request("https://example.test/v1/messages"),
+    response: new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; controller.enqueue(bytes); },
+      cancel() { cancelled = true; },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  };
+  try {
+    await hooks.get("http.response")?.(input);
+    const reader = input.response.body!.getReader();
+    assert.deepEqual((await reader.read()).value, bytes);
+    assert.ok(observations.some(observation => observation.files?.some(file => file.path === "src/a.ts")),
+      "the target must be visible while both response and JSON arguments are unfinished");
+    const second = new TextEncoder().encode(frame({ type: "content_block_delta", index: 0,
+      delta: { type: "input_json_delta", partial_json: "*** Add File: src/b.ts\\n+second\\n" } }));
+    source.enqueue(second);
+    assert.deepEqual((await reader.read()).value, second);
+    assert.deepEqual(observations.at(-1)?.files?.map(file => file.path), ["src/a.ts", "src/b.ts"]);
+    await reader.cancel();
+    assert.equal(cancelled, true);
+    assert.equal(observations.at(-1)?.kind, "withdraw");
+  } finally {
+    if (typeof cleanup === "function") await cleanup();
+  }
+});
+
+for (const failure of ["rpc", "hook"]) {
+test(`failed ${failure} registration disposes successful registrations and the companion listener`, async () => {
+  const registered: string[] = [];
+  const disposed: string[] = [];
+  let proxyClosed = false;
+  const registration = (name: string) => {
+    registered.push(name);
+    return { dispose: async () => { disposed.push(name); } };
+  };
+  const plugin = createOpenCodeWorkbenchPlugin({
+    createProxy: async () => ({ url: "http://127.0.0.1:43001/mcp", close: async () => { proxyClosed = true; } }),
+    isManagedSession: async () => true,
+    connectTools: async () => { throw new Error("no tool connection needed"); },
+  });
+  await assert.rejects(async () => plugin.setup({
+    event: { subscribe: lifecycleEvents },
+    rpc: { register: async () => {
+      if (failure === "rpc") throw new Error("registration failed");
+      return { ...registration("rpc"), events: { emit: async () => undefined } };
+    } },
+    session: { hook: async (name: string) => {
+      if (name === "http.response") throw new Error("registration failed");
+      return registration(name);
+    } },
+    tool: { hook: async (name: string) => registration(name), transform: async () => registration("tools") },
+    mcp: { transform: async () => registration("mcp") },
+  } as never), /registration failed/);
+  assert.equal(proxyClosed, true);
+  assert.deepEqual(disposed.sort(), registered.sort());
+});
+}
 
 test("uses the sole Go credential when OpenCode has no active selection", async () => {
   const connection = { type: "credential" as const, id: "connection", label: "Go" };
@@ -160,6 +260,7 @@ test("keeps native file tools, replaces managed shell and questions, and shares 
   }) => Promise<void> | void) | undefined;
   type ExecuteHook = (input: {
     id: string;
+    messageID?: string;
     input: unknown;
     sessionID: string;
     tool: string;
@@ -204,6 +305,7 @@ test("keeps native file tools, replaces managed shell and questions, and shares 
     },
   } as never);
   const cleanup = await plugin.setup({
+    event: { subscribe: lifecycleEvents },
     app: { version: "2.0.9" },
     rpc: { register: async () => ({ dispose: async () => undefined }) },
     integration: { connection: { active: async () => undefined, resolve: async () => undefined } },
@@ -252,14 +354,16 @@ test("keeps native file tools, replaces managed shell and questions, and shares 
     list: () => [workbenchTool],
     update: (_id, update) => update(workbenchTool),
   });
-  const firstInput = {};
-  const secondInput = {};
+  const firstInput: Record<string, unknown> = {};
+  const secondInput: Record<string, unknown> = {};
   await executeBefore({
-    id: "call-one", input: firstInput, sessionID: "managed-one", tool: "wb_task_get",
+    id: "call-one", messageID: "assistant-one", input: firstInput, sessionID: "managed-one", tool: "wb_task_get",
   });
   await executeBefore({
-    id: "call-two", input: secondInput, sessionID: "managed-two", tool: "wb_task_get",
+    id: "call-two", messageID: "assistant-two", input: secondInput, sessionID: "managed-two", tool: "wb_task_get",
   });
+  const firstChild = firstInput[WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT];
+  const secondChild = secondInput[WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT];
   assert.deepEqual(await Promise.all([
     workbenchTool.execute(secondInput, { sessionID: "wrong-second" }),
     workbenchTool.execute(firstInput, { sessionID: "wrong-first" }),
@@ -273,11 +377,11 @@ test("keeps native file tools, replaces managed shell and questions, and shares 
   assert.deepEqual(calls, [{
     name: "task_get",
     arguments: {},
-    _meta: { sessionID: "managed-two" },
+    _meta: { sessionID: "managed-two", workbenchTool: { childID: secondChild, parentID: "call-two", assistantMessageID: "assistant-two" } },
   }, {
     name: "task_get",
     arguments: {},
-    _meta: { sessionID: "managed-one" },
+    _meta: { sessionID: "managed-one", workbenchTool: { childID: firstChild, parentID: "call-one", assistantMessageID: "assistant-one" } },
   }]);
   assert.equal(connectedTools, 1);
   assert.equal(closedTools, 0);
@@ -387,7 +491,7 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
   assert.ok(address && typeof address !== "string");
   let proxyUrl = "";
   let executeBefore: ((input: {
-    id: string; input: unknown; sessionID: string; tool: string;
+    id: string; input: unknown; sessionID: string; tool: string; messageID?: string;
   }) => Promise<void> | void) | undefined;
   const plugin = createOpenCodeWorkbenchPlugin({
     connectTools: async url => {
@@ -401,6 +505,7 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
     resolveDaemonOrigin: async () => `http://127.0.0.1:${address.port}`,
   });
   const cleanup = await plugin.setup({
+    event: { subscribe: lifecycleEvents },
     rpc: { register: async () => ({ dispose: async () => undefined }) },
     integration: { connection: { active: async () => undefined, resolve: async () => undefined } },
     session: { hook: async () => ({ dispose: async () => undefined }) },
@@ -435,10 +540,11 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
   assert.equal(posted.headers.get("mcp-session-id"), "next-session");
   assert.equal(await posted.text(), "{}");
   assert.ok(executeBefore);
-  const nestedArguments = { args: ["pattern"] };
+  const nestedArguments: Record<string, unknown> = { args: ["pattern"] };
   await executeBefore({
-    id: "nested-call", input: nestedArguments, sessionID: "managed", tool: "wb_rg",
+    id: "nested-call", messageID: "assistant", input: nestedArguments, sessionID: "managed", tool: "wb_rg",
   });
+  const childID = nestedArguments[WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT];
   const nested = await fetch(proxyUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -466,7 +572,8 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
         params: {
           name: "rg",
           arguments: { args: ["pattern"] },
-          _meta: { progressToken: 7, sessionID: "managed" },
+          _meta: { progressToken: 7, sessionID: "managed",
+            workbenchTool: { childID, parentID: "nested-call", assistantMessageID: "assistant" } },
         },
       }),
       method: "POST",

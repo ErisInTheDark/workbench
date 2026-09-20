@@ -1,5 +1,6 @@
 /*
- * transformOperationTranscriptItem: convert process, callable-tool, and collaboration source items to relational mutations. Keywords: transcript, transform, operation.
+ * Exports:
+ * - transformOperationTranscriptItem: convert process, callable-tool and collaboration evidence to relational mutations.
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { operationSourceTables } from "../workbench-database-schema.ts";
@@ -129,6 +130,8 @@ export function transformOperationTranscriptItem(
           state: item.status,
           tool_name: item.tool,
           callable_kind: "mcp",
+          tool_call_group_id: item.toolCallGroupId ?? null,
+          provider_metadata_json: null,
           namespace: null,
           server_name: item.server,
           arguments_json: JSON.stringify(item.arguments),
@@ -175,6 +178,8 @@ export function transformOperationTranscriptItem(
           state: item.status,
           tool_name: item.tool,
           callable_kind: "dynamic",
+          tool_call_group_id: item.toolCallGroupId ?? null,
+          provider_metadata_json: item.metadata === undefined ? null : JSON.stringify(item.metadata),
           namespace: item.namespace,
           server_name: null,
           arguments_json: JSON.stringify(item.arguments),

@@ -7,6 +7,27 @@ import {
   NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+
+test("late child completion stays in its starting turn after a newer turn is admitted", async () => {
+  let latest = turnId;
+  let finished: WorkbenchToolTranscriptReference | null = null;
+  const owner = operations({ message: { list: async () => ({ data: [], cursor: {} }) } }, {
+    record: async () => ({ threadId, latestTurnId: latest }),
+    startToolTranscript: async (input: Omit<WorkbenchToolTranscriptReference, "itemId">) => ({ ...input, itemId: "item" }),
+    finishToolTranscript: async (reference: WorkbenchToolTranscriptReference, _result: ProviderToolResult) => { finished = reference; },
+  });
+  const reference = await owner.startToolTranscript({
+    tool: "rg", arguments: {}, metadata: { sessionID: nativeThreadId },
+  }, { childID: "0c706b28-4f7b-4510-a814-331d729e3f6a", parentID: "execute", assistantMessageID: "assistant" },
+  { harness: "opencode", threadId, cwd: "C:/repo" });
+  latest = WorkbenchTurnIdSchema.parse("newer");
+  await owner.syncNative(nativeThreadId);
+  assert.equal(owner.currentTurn(nativeThreadId)?.turnId, latest);
+  await owner.finishToolTranscript(reference, { content: [{ type: "text", text: "late" }] });
+  assert.equal(finished, reference);
+  assert.equal(reference.turnId, turnId);
+});
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");

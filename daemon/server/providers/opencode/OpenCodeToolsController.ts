@@ -4,10 +4,11 @@
  * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and Codex sandbox execution.
  */
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench-shared/workbench/provider/provider-execution";
+import { OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchToolAdmissionController from "../../WorkbenchToolAdmissionController";
 import { prepareWorkbenchShellExecution } from "../../CodexShellController";
-import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 
 export interface OpenCodeToolsControllerOptions {
   resolveCaller: (nativeThreadId: string, signal: AbortSignal) => Promise<{
@@ -17,10 +18,28 @@ export interface OpenCodeToolsControllerOptions {
   }>;
   execute: NonNullable<WorkbenchProviderTools["execute"]>;
   executeReadOnly: WorkbenchProviderTools["executeReadOnly"];
+  transcript?: {
+    start(input: Parameters<WorkbenchToolTranscript["start"]>[0], context: OpenCodeToolContext, caller: WorkbenchProviderCaller): ReturnType<WorkbenchToolTranscript["start"]>;
+    finish: WorkbenchToolTranscript["finish"];
+  };
 }
 
 export default class OpenCodeToolsController implements WorkbenchProviderTools {
   readonly execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  readonly transcript: WorkbenchToolTranscript = {
+    start: async (input, signal) => {
+      if (input.metadata.workbenchTool === undefined) return null;
+      const context = OpenCodeToolContextSchema.parse(input.metadata.workbenchTool);
+      const caller = await this.caller(input.metadata, signal);
+      signal.throwIfAborted();
+      if (!this.options.transcript) throw new Error("OpenCode tool transcript owner is unavailable.");
+      return this.options.transcript.start(input, context, caller);
+    },
+    finish: async (reference, result) => {
+      if (!this.options.transcript) throw new Error("OpenCode tool transcript owner is unavailable.");
+      await this.options.transcript.finish(reference, result);
+    },
+  };
 
   constructor(private readonly options: OpenCodeToolsControllerOptions) {
     this.execute = options.execute;

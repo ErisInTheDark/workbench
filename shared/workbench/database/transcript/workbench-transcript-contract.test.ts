@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   conformWorkbenchTranscriptSnapshot,
+  conformWorkbenchTranscriptStreamed,
   decodeWorkbenchTranscriptRequest,
   transcriptSnapshotTables,
   workbenchTranscriptOperations,
@@ -25,6 +26,21 @@ const thread = {
   updated_at: 1,
   activity_at: 1,
 };
+
+test("tool previews require explicit subscription support and validate only typed file evidence", () => {
+  const params = { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion: 4 };
+  const legacy = decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, params);
+  assert.ok(legacy?.success);
+  assert.equal("toolPatchPreviews" in legacy.data.params, false);
+  const optedIn = decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, { ...params, toolPatchPreviews: true });
+  assert.ok(optedIn?.success && "toolPatchPreviews" in optedIn.data.params && optedIn.data.params.toolPatchPreviews);
+  assert.equal(decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, { ...params, toolPatchPreviews: "yes" })?.success, false);
+  const update = { kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: "item",
+    files: [{ path: "src/a.ts", kind: { type: "update", move_path: null }, additions: 1 }] };
+  assert.equal(conformWorkbenchTranscriptStreamed({ subscriptionId: "sub", update }).success, true);
+  assert.equal(conformWorkbenchTranscriptStreamed({ subscriptionId: "sub", update: { ...update, files: [{ ...update.files[0], additions: -1 }] } }).success, false);
+  assert.equal(conformWorkbenchTranscriptStreamed({ subscriptionId: "sub", update: { ...update, files: [] } }).success, true);
+});
 
 test("read and subscription decoding retain supported protocol versions and reject unsupported ones", () => {
   for (const method of [workbenchTranscriptOperations.read.method, workbenchTranscriptOperations.subscribe.method]) {

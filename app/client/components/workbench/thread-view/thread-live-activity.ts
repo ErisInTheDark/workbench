@@ -15,6 +15,7 @@ import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/T
 import {
   getThreadCommandDisplay, getThreadCommandBlockDisplay, getThreadCommandExecutionOutcome,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, getWorkbenchCommandRouteSummaryDisplay,
+  getOpenCodeToolDisplay,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandExecutionOutcome,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -119,7 +120,8 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
       id: item.id,
       command: formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool }),
       output: context.includeOutput === false ? "" : formatToolCallOutput({ content: item.contentItems }),
-      status: item.success === false ? "failed" : item.status, streamsOutput: false, display: null,
+      status: item.success === false ? "failed" : item.status, streamsOutput: false,
+      display: item.status === "inProgress" && item.success !== false ? getOpenCodeToolDisplay(item) : null,
     }];
     return [];
   }).map(entry => ({ ...entry, expiresAt: entry.status === "inProgress" ? null : expiresAt(entry.id) }));
@@ -135,7 +137,13 @@ export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands 
   if (turn.items.some(isPendingInitialOptimisticInputItem)) return idle("Connecting");
   const reasoning = getCurrentThreadReasoningActivity(turn);
   if (reasoning) return { kind: "reasoning", ...reasoning };
-  const running = commands.filter(entry => entry.status === "inProgress");
+  const runningIds = new Set(commands.filter(entry => entry.status === "inProgress").map(entry => entry.id));
+  const childGroups = new Set(turn.items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
+    && item.toolCallGroupId && runningIds.has(item.id) ? [item.toolCallGroupId] : []));
+  const coveredWrappers = new Set(turn.items.flatMap(item => item.type === "dynamicToolCall"
+    && item.namespace === "opencode" && item.tool === "execute" && item.toolCallGroupId
+    && childGroups.has(item.toolCallGroupId) ? [item.id] : []));
+  const running = commands.filter(entry => entry.status === "inProgress" && !coveredWrappers.has(entry.id));
   if (running.length) {
     const matched = running.flatMap(entry => entry.display ? [{ display: entry.display }] : []);
     const unmatched = running.length - matched.length;

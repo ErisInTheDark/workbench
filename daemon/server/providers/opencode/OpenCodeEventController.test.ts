@@ -6,6 +6,65 @@ import test from "node:test";
 import type { OpenCodeEvent } from "@opencode/client";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import OpenCodeEventController from "./OpenCodeEventController";
+import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+
+test("previews join exact native calls in either order and cannot survive request replacement or interruption", async () => {
+  const previews: Parameters<OpenCodeTranscriptAdapter["previewToolPatch"]>[0][] = [];
+  const items: Parameters<OpenCodeTranscriptAdapter["recordItem"]>[0][] = [];
+  const owner = new OpenCodeEventController({
+    observe: async () => undefined,
+    threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+    transcript: {
+      appendText: () => undefined, recordTurnState: async () => undefined,
+      recordItem: async input => { items.push(input); return `canonical-${input.source.reference}` as never; },
+      previewToolPatch: input => { previews.push(input); },
+    },
+  });
+  const request = { sessionID: "session", requestID: "request-a" };
+  const file = { path: "first.ts", kind: { type: "add" as const }, additions: 2 };
+  owner.acceptPatchPreview({ ...request, kind: "request" });
+  owner.acceptPatchPreview({ ...request, kind: "preview", callID: "a", tool: "patch", files: [file] });
+  assert.equal(previews.length, 0);
+  await owner.accept(event({ type: "session.tool.input.started", created: 1, data: { sessionID: "session", id: "a", name: "patch" } }));
+  assert.equal(previews.at(-1)?.itemId, "canonical-a");
+  assert.equal(previews.at(-1)?.files[0]?.path, "first.ts");
+  await owner.accept(event({ type: "session.tool.input.started", created: 2, data: { sessionID: "session", id: "b", name: "write" } }));
+  owner.acceptPatchPreview({ ...request, kind: "preview", callID: "b", tool: "write", files: [{ ...file, path: "second.ts" }] });
+  assert.equal(previews.at(-1)?.itemId, "canonical-b");
+  owner.acceptPatchPreview({ ...request, kind: "request", requestID: "request-b" });
+  assert.deepEqual(previews.slice(-2).map(preview => preview.files), [[], []]);
+  const count = previews.length;
+  owner.acceptPatchPreview({ ...request, kind: "preview", callID: "a", tool: "patch", files: [file] });
+  assert.equal(previews.length, count);
+  owner.acceptPatchPreview({ ...request, requestID: "request-b", kind: "preview", callID: "b", tool: "write", files: [file] });
+  await owner.accept(event({ type: "session.execution.interrupted", created: 3, data: { sessionID: "session" } }));
+  assert.deepEqual(previews.at(-1)?.files, []);
+  owner.dispose();
+});
+
+test("native error metadata marks success events failed while retaining complete metadata and pinned turn", async () => {
+  const items: Parameters<OpenCodeTranscriptAdapter["recordItem"]>[0][] = [];
+  let current = turnId;
+  const owner = new OpenCodeEventController({
+    observe: async () => undefined,
+    threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId: current }),
+      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: current }) },
+    transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
+      recordItem: async input => { items.push(input); return "canonical" as never; } },
+  });
+  await owner.accept(event({ type: "session.tool.input.started", created: 1, data: { sessionID: "session", id: "call", name: "execute" } }));
+  current = WorkbenchTurnIdSchema.parse("new-turn");
+  const metadata = { error: true, toolCalls: [{ tool: "search", status: "error" }] };
+  await owner.accept(event({ type: "session.tool.success", created: 3,
+    data: { sessionID: "session", id: "call", metadata, content: [{ type: "text", text: "actual failure output" }] } }));
+  const final = items.at(-1)!;
+  assert.equal(final.turnId, turnId);
+  assert.ok(final.item.type === "dynamicToolCall");
+  assert.equal(final.item.status, "failed");
+  assert.deepEqual(final.item.metadata, metadata);
+  assert.equal(final.item.toolCallGroupId, "call");
+});
 
 const executionLifecycle = {
   markExecutionSettled: (_sessionID: string) => undefined,

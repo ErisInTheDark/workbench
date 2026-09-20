@@ -3,8 +3,29 @@
  * - OpenCodeGoQuotaSchema/OpenCodeGoQuota: normalised credential-free Go quota facts.
  * - OpenCodeGoQuotaResultSchema/OpenCodeGoQuotaResult: bounded quota success or failure facts.
  * - openCodeWorkbenchRpc: typed private RPC between the companion and daemon adapter.
+ * - OpenCodePatchObservationSchema/OpenCodePatchObservation: transient request-fenced file previews.
+ * - OpenCodeToolContextSchema/OpenCodeToolContext: exact companion child and parent identities.
  */
 import { z } from "zod";
+import { ToolPatchPreviewFileSchema } from "workbench-shared/workbench/thread/tool-patch-preview";
+
+export const OpenCodeToolContextSchema = z.object({
+  childID: z.uuid(),
+  parentID: z.string().min(1),
+  assistantMessageID: z.string().min(1),
+});
+export type OpenCodeToolContext = z.infer<typeof OpenCodeToolContextSchema>;
+
+const patchRequest = { sessionID: z.string(), requestID: z.string() };
+export const OpenCodePatchObservationSchema = z.discriminatedUnion("kind", [
+  z.object({ ...patchRequest, kind: z.literal("request") }),
+  z.object({
+    ...patchRequest, kind: z.literal("preview"), callID: z.string(),
+    tool: z.enum(["patch", "edit", "write"]), files: z.array(ToolPatchPreviewFileSchema),
+  }),
+  z.object({ ...patchRequest, kind: z.literal("withdraw") }),
+]);
+export type OpenCodePatchObservation = z.infer<typeof OpenCodePatchObservationSchema>;
 
 const quotaWindow = z.object({
   percent: z.number().finite().min(0).max(100),
@@ -45,5 +66,5 @@ export const openCodeWorkbenchRpc = {
       output: OpenCodeGoQuotaResultSchema,
     },
   },
-  events: {},
+  events: { patchPreview: { schema: OpenCodePatchObservationSchema } },
 } as const;

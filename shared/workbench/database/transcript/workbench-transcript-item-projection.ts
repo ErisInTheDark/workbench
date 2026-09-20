@@ -300,6 +300,10 @@ function callableOperation(
       success: source.success === null ? null : source.success === 1,
       tool: tool.tool_name,
       type: "dynamicToolCall",
+      ...(source.tool_call_group_id ? { toolCallGroupId: source.tool_call_group_id } : {}),
+      ...(source.provider_metadata_json ? {
+        metadata: parseJson(source.provider_metadata_json, "threadOperationCallableToolSources", itemId),
+      } : {}),
     };
   }
 
@@ -348,6 +352,7 @@ function callableOperation(
     status: source.state,
     tool: tool.tool_name,
     type: "mcpToolCall",
+    ...(source.tool_call_group_id ? { toolCallGroupId: source.tool_call_group_id } : {}),
   };
 }
 

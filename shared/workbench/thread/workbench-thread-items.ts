@@ -15,6 +15,7 @@
  * - SubAgentActivityKind/HookPromptFragment: retained activity and prompt evidence.
  * - ImageGenerationItem/ImageGenerationFailure/SleepItem: image generation and waits.
  */
+import type { ToolPatchPreviewFile } from "./tool-patch-preview.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]?: JsonValue };
 export type ImageDetail = "auto" | "low" | "high" | "original";
@@ -129,10 +130,15 @@ export type ThreadItem =
     type: "mcpToolCall"; id: string; server: string; tool: string; status: McpToolCallStatus; arguments: JsonValue;
     appContext: McpToolCallAppContext | null; mcpAppResourceUri?: string; pluginId: string | null;
     readOnlyHint: boolean | null; result: McpToolCallResult | null; error: McpToolCallError | null; durationMs: number | null;
+    toolCallGroupId?: string;
   }
   | {
     type: "dynamicToolCall"; id: string; namespace: string | null; tool: string; arguments: JsonValue;
     status: DynamicToolCallStatus; contentItems: DynamicToolCallOutputContentItem[] | null; success: boolean | null; durationMs: number | null;
+    toolCallGroupId?: string;
+    metadata?: JsonValue;
+    /** Live presentation only; callable-source persistence deliberately excludes this field. */
+    patchPreview?: ToolPatchPreviewFile[];
   }
   | {
     type: "collabAgentToolCall"; id: string; tool: CollabAgentTool; status: CollabAgentToolCallStatus;

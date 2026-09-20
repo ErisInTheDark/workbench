@@ -182,6 +182,36 @@ for (const kind of ["event", "response"] as const) {
   });
 }
 
+for (const optedIn of [false, true]) {
+test(`tool previews are ${optedIn ? "delivered" : "withheld"} across subscription restoration`, async () => {
+  const subscriptions = new Map<string, Parameters<WorkbenchWebSocketRequestControllerOptions["transcript"]["subscribe"]>[0]>();
+  const sent: Array<{ method?: string }> = [];
+  const { controller } = createController({
+    clock: new FakeClock(),
+    transcript: {
+      read: async () => null,
+      subscribe: async subscription => { subscriptions.set(subscription.id, subscription); },
+      unsubscribe: id => { subscriptions.delete(id); },
+    },
+  });
+  const client = createClient((data, callback) => { sent.push(JSON.parse(String(data))); callback?.(); });
+  try {
+    await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", 1, {
+      params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion: 4,
+        ...(optedIn ? { toolPatchPreviews: true } : {}) },
+    }), false);
+    controller.detachForReload();
+    await controller.resumeAfterFailedReload();
+    const subscription = [...subscriptions.values()][0]!;
+    subscription.publishStream!({ kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: "item",
+      files: [{ path: "a.ts", kind: { type: "add" } }] });
+    assert.equal(sent.filter(entry => entry.method === "workbench/transcript/streamed").length, optedIn ? 1 : 0);
+    subscription.publishStream!({ kind: "absent" });
+    assert.equal(sent.filter(entry => entry.method === "workbench/transcript/streamed").length, optedIn ? 2 : 1);
+  } finally { controller.dispose(); }
+});
+}
+
 for (const protocolVersion of [2, 3] as const) {
 test(`rollback restores transcript protocol ${protocolVersion} without reviving old publication callbacks`, async () => {
   const subscriptions = new Map<string, Parameters<WorkbenchWebSocketRequestControllerOptions["transcript"]["subscribe"]>[0]>();

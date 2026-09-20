@@ -7,10 +7,21 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 
 type DynamicItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+
+test("unfinished native arguments show streamed targets but failed settlement cannot retain a generation preview", () => {
+  const item: DynamicItem = { type: "dynamicToolCall", id: "native", namespace: "opencode", tool: "patch",
+    arguments: "", contentItems: null, durationMs: null, status: "inProgress", success: null,
+    patchPreview: [{ path: "src/early-target.ts", kind: { type: "update", move_path: null }, additions: 2 }],
+  };
+  const before = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
+  assert.match(before, /early-target\.ts/u);
+  const failed = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item: { ...item, status: "failed", success: false } }));
+  assert.doesNotMatch(failed, /early-target\.ts/u);
+});
 
 test("a failed dynamic tool keeps its summary visible without opening its details", () => {
   const item: DynamicItem = {

@@ -26,6 +26,8 @@ import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionContr
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import OpenCodeTranscriptReader from "./OpenCodeTranscriptReader";
+import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
   threadId: WorkbenchThreadId;
@@ -458,6 +460,29 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
 
   currentTurn(nativeThreadId: string) {
     return this.latestTurns.get(nativeThreadId) ?? null;
+  }
+
+  async startToolTranscript(
+    input: Parameters<WorkbenchToolTranscript["start"]>[0],
+    context: OpenCodeToolContext,
+    caller: WorkbenchProviderCaller,
+  ): Promise<WorkbenchToolTranscriptReference> {
+    const sessionID = input.metadata.sessionID;
+    if (typeof sessionID !== "string") throw new Error("OpenCode tool session is missing.");
+    let active = this.currentTurn(sessionID);
+    if (!active) {
+      await this.syncNative(sessionID);
+      active = this.currentTurn(sessionID);
+    }
+    if (!active || active.threadId !== caller.threadId) throw new Error("OpenCode tool has no matching admitted turn.");
+    return this.options.transcript.startToolTranscript({
+      ...active, sourceId: context.childID, parentId: context.parentID,
+      tool: input.tool, arguments: input.arguments, startedAt: Date.now(),
+    });
+  }
+
+  async finishToolTranscript(reference: WorkbenchToolTranscriptReference, result: ProviderToolResult) {
+    await this.options.transcript.finishToolTranscript(reference, result);
   }
 
   markExecutionStarted(nativeThreadId: string) {

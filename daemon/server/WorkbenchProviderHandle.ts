@@ -133,6 +133,13 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   }
 
   readonly tools: NonNullable<WorkbenchProvider["tools"]> = {
+    transcript: {
+      start: (input, signal) => this.tool(tools => tools.transcript?.start(input, signal) ?? Promise.resolve(null), "transcript.start"),
+      finish: (reference, result) => this.tool(tools => {
+        if (!tools.transcript) throw new Error(`Provider ${this.key} no longer supports admitted tool capture.`);
+        return tools.transcript.finish(reference, result);
+      }, "transcript.finish"),
+    },
     execute: (request, signal) => this.tool(tools => {
       if (!tools.execute) throw new Error(`Provider ${this.key} does not support admitted execution.`);
       return tools.execute(request, signal);

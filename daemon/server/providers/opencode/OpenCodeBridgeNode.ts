@@ -12,6 +12,7 @@ import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import { logError } from "../../process-helpers";
+import { OpenCodePatchObservationSchema } from "./opencode-workbench-rpc";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -23,7 +24,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const startSubscription = (client: Awaited<ReturnType<typeof service.acquire>>) => subscription ??= (async () => {
       for await (const event of client.event.subscribe({ signal: lifetime.signal })) {
         try {
-          await events.accept(event);
+          if (String(event.type) === "rpc.workbench.patchPreview") {
+            const parsed = OpenCodePatchObservationSchema.safeParse("data" in event ? event.data : undefined);
+            if (!parsed.success) logError("opencode", "Invalid companion file-preview observation.");
+            else events.acceptPatchPreview(parsed.data);
+          } else {
+            await events.accept(event);
+          }
         } catch (error) {
           if (!lifetime.signal.aborted) {
             logError("opencode", `event reconciliation failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
@@ -87,6 +94,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       dispose: async () => {
         lifetime.abort(new Error("OpenCode bridge disposed."));
         await Promise.all([subscription, threads.settle()]);
+        events.dispose();
       },
     };
   },
@@ -104,8 +112,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/providers/opencode/OpenCodeEventController.ts",
     "daemon/server/providers/opencode/OpenCodeThreadOperations.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/index.ts",
-    "daemon/server/providers/opencode/workbench-plugin/CodeModeToolContextController.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptAdapter.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptReader.ts",
   ].join("\n"),

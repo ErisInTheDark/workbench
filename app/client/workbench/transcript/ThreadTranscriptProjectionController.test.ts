@@ -198,6 +198,57 @@ async function patchViewer() {
   };
 }
 
+test("native tool previews remain per-item and immutable through unrelated updates, then settle and reset", async () => {
+  const view = await patchViewer();
+  const baseline = streamBaseline("thread");
+  assert.ok(baseline.kind === "structure");
+  const ids = [patchItemId, deliveredItemId];
+  for (const [index, id] of ids.entries()) {
+    const itemId = index + 2;
+    baseline.snapshot.rows.threadItems.push({ ...baseline.snapshot.rows.threadItems[0]!,
+      id: itemId, public_id: id, item_position: index + 1, type: "operation" });
+    baseline.snapshot.rows.itemIdentities.push({ id, thread_id: "thread" });
+    baseline.snapshot.rows.threadItemOperations.push({ item_id: itemId, item_type: "operation", source_kind: "tool", source_revision: 1 });
+    baseline.snapshot.rows.threadOperationToolSources.push({ item_id: itemId, source_revision: 1,
+      item_type: "operation", source_kind: "tool", tool_kind: "callable", state: "inProgress", tool_name: "patch", duration_ms: null });
+    baseline.snapshot.rows.threadOperationCallableToolSources.push({
+      item_id: itemId, source_revision: 1, tool_kind: "callable", state: "inProgress", tool_name: "patch", callable_kind: "dynamic",
+      tool_call_group_id: null, provider_metadata_json: null, namespace: "opencode", server_name: null,
+      arguments_json: JSON.stringify({ original: true }), app_connector_id: null, app_link_id: null,
+      app_resource_uri: null, app_name: null, app_action_name: null, legacy_resource_uri: null,
+      plugin_id: null, read_only_hint: null, success: null, error_text: null,
+    });
+  }
+  const projected = projectWorkbenchTranscript(baseline.snapshot);
+  assert.ok(projected.success);
+  baseline.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data));
+  const nativeItems = () => view.projection().turns[0]!.items.filter(item => item.type === "dynamicToolCall");
+  try {
+    view.receive(baseline);
+    for (const id of ids) view.receive({ kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: id,
+      files: [{ path: `${id}.ts`, kind: { type: "add" } }] });
+    const previous = nativeItems();
+    assert.equal(previous.filter(item => item.patchPreview?.length).length, 2);
+    view.receive({ kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: ids[0]!, files: [] });
+    assert.equal(nativeItems().filter(item => item.patchPreview?.length).length, 1);
+    assert.equal(previous.filter(item => item.patchPreview?.length).length, 2);
+    assert.deepEqual(nativeItems().map(item => item.arguments), [{ original: true }, { original: true }]);
+    const settled = structuredClone(baseline);
+    settled.reset = false;
+    settled.layout = {};
+    settled.snapshot.turns[0] = { ...settled.snapshot.turns[0]!, state: "interrupted" };
+    view.receive(settled);
+    assert.equal(nativeItems().some(item => item.patchPreview?.length), false);
+    view.receive({ kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: ids[1]!,
+      files: [{ path: "late.ts", kind: { type: "add" } }] });
+    assert.equal(nativeItems().some(item => item.patchPreview?.length), false);
+    view.receive({ kind: "absent" });
+    view.receive(baseline);
+    assert.equal(nativeItems().some(item => item.patchPreview?.length), false);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
+
 test("patch previews appear before admission, grow immutably and become one canonical item", async () => {
   const view = await patchViewer();
   const fileItems = () => view.projection().turns[0]!.items.filter(item => item.type === "fileChange");
@@ -966,6 +1017,7 @@ test("the subscription follows the exact loaded turns and replaces itself when t
         subscriptionId: first.params.subscriptionId,
         threadId: "thread",
         turnIds: ["turn-2"],
+        toolPatchPreviews: true,
         turnLimit: 4,
       },
     },
@@ -976,6 +1028,7 @@ test("the subscription follows the exact loaded turns and replaces itself when t
         subscriptionId: replacement.params.subscriptionId,
         threadId: "thread",
         turnIds: ["turn-1", "turn-2"],
+        toolPatchPreviews: true,
         turnLimit: 4,
       },
     },
