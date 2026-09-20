@@ -568,6 +568,10 @@ export default memo(function ThreadViewContent ({
       if (!payload) {
         historyPaging.fail(transaction);
         dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
+        console.error("Previous thread turn load returned no page while its view remained current.", {
+          threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
+          cursor: activeThread.nextPageCursor?.slice(0, 160),
+        });
         return;
       }
 
@@ -581,7 +585,12 @@ export default memo(function ThreadViewContent ({
       }
       historyPaging.fail(transaction);
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
-      console.error("Previous thread turn load failed.", error);
+      console.error("Previous thread turn load failed.", {
+        threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
+        cursor: activeThread.nextPageCursor?.slice(0, 160),
+        reason: (error instanceof Error ? error.message : "Unexpected history read failure")
+          .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 500),
+      });
     }
   }, [activeThread, activeThreadController.actions.read, previousTurnLoadKey, previousTurnLoadStatus, subagents]);
 

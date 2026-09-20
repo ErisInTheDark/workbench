@@ -6,11 +6,10 @@
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
  */
 import type {
-  ThreadPayload, WorkbenchComposerProfileTargetSelection, WorkbenchQuestionnaireHistoryEntry,
-  WorkbenchSteerHistoryEntry, WorkbenchBrowseResultEntry,
+  ThreadPayload, WorkbenchComposerProfileTargetSelection,
 } from "../../types.ts";
 import type {
-  WorkbenchThreadMessage, WorkbenchThreadMessageResult, WorkbenchThreadPage, WorkbenchThreadPageResult,
+  WorkbenchThreadMessage, WorkbenchThreadMessageResult,
 } from "../thread/thread-actions.ts";
 import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
@@ -36,9 +35,6 @@ export interface WorkbenchProviderThreadList {
 export interface WorkbenchProviderThreads {
   history: {
     materialize(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
-    questionnaires(threadId: string): Promise<WorkbenchQuestionnaireHistoryEntry[]>;
-    steers(threadId: string): Promise<WorkbenchSteerHistoryEntry[]>;
-    browse(threadId: string): Promise<WorkbenchBrowseResultEntry[]>;
   };
   create(input: WorkbenchProviderThreadCreate): Promise<ThreadPayload>;
   list(input: WorkbenchProviderThreadList): Promise<{ data: ThreadPayload[]; nextCursor: string | null }>;
@@ -46,7 +42,6 @@ export interface WorkbenchProviderThreads {
   readLatest(threadId: string): Promise<ThreadPayload>;
   latestTurn(threadId: string): Promise<Turn | null>;
   admitTurn(threadId: string, turnReference: string): Promise<void>;
-  page(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult>;
   submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult>;
   messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<void>;
   rename(threadId: string, title: string): Promise<void>;

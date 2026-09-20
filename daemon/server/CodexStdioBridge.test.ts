@@ -27,7 +27,8 @@ import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbenc
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import WorkbenchTranscriptAssetStore from "./database/transcript/WorkbenchTranscriptAssetStore";
-import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
+import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
@@ -2160,10 +2161,13 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
   const database = databaseFixture();
   const identities = await recordingIdentities({ database, nativeLocation, existingTurn });
   const repository = new WorkbenchTranscriptRepository(database);
-  const sqliteReader = new CodexSqliteTranscriptReader(
-    async request => repository.read(request), async threadId => repository.readContext(threadId),
-    async (threadId, turnIds) => repository.readMaterializedTurnIds(threadId, turnIds),
-  );
+  const sqliteReader = new CodexStoredTranscriptAdapter(new WorkbenchTranscriptReader({
+    readSnapshot: async request => repository.read(request),
+    readContext: async threadId => repository.readContext(threadId),
+    readMaterializedTurns: async (threadId, turnIds) => repository.readMaterializedTurnIds(threadId, turnIds),
+    readContextUsage: async threadId => repository.readContextUsage(threadId),
+    readMetadata: async () => ({ entry: null, harness: "codex" }),
+  }));
   return {
     database,
     repository,
@@ -2253,8 +2257,13 @@ test("SQL context pages settle provider bodies and then read without legacy stor
   const repository = new WorkbenchTranscriptRepository(database);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-sql-context-"));
   const requests: JsonRpcRequest[] = [];
-  const reader = new CodexSqliteTranscriptReader(async request => repository.read(request), async id => repository.readContext(id),
-    async (id, turns) => repository.readMaterializedTurnIds(id, turns));
+  const reader = new CodexStoredTranscriptAdapter(new WorkbenchTranscriptReader({
+    readSnapshot: async request => repository.read(request),
+    readContext: async id => repository.readContext(id),
+    readMaterializedTurns: async (id, turns) => repository.readMaterializedTurnIds(id, turns),
+    readContextUsage: async id => repository.readContextUsage(id),
+    readMetadata: async () => ({ entry: null, harness: "codex" }),
+  }));
   const item: ThreadItem = { id: "reply", type: "agentMessage", text: "complete retained reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
   const fullTurn = { ...bridgeThread([item]).turns[0]!, status: "completed" as const };
   let providerTurns = [fullTurn];

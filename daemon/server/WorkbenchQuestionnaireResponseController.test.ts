@@ -133,8 +133,8 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
     threads: {
       readLatest: unused, messageAgent: unused,
       latestTurn: unused, admitTurn: unused,
-      history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
-      create: unused, list: unused, read: unused, page: unused, rename: unused,
+      history: { materialize: unused },
+      create: unused, list: unused, read: unused, rename: unused,
       compact: unused, interrupt: unused, materialize: unused,
       submit: async input => {
         observe("submit", input);
@@ -224,8 +224,8 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
         threads: {
           readLatest: unused, messageAgent: unused,
           latestTurn: unused, admitTurn: unused,
-          history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
-          create: unused, list: unused, read: unused, page: unused, rename: unused,
+          history: { materialize: unused },
+          create: unused, list: unused, read: unused, rename: unused,
           compact: unused, interrupt: unused, materialize: unused,
           submit: async () => ({ kind: "steered", turnId: turn.turnId }),
         },

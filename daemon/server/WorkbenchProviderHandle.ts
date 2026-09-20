@@ -42,9 +42,6 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   readonly threads: WorkbenchProvider["threads"] = {
     history: {
       materialize: (threadId, turnId, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.history.materialize(threadId, turnId, signal), `${this.key}: threads.history.materialize`),
-      questionnaires: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.history.questionnaires(threadId), `${this.key}: threads.history.questionnaires`),
-      steers: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.history.steers(threadId), `${this.key}: threads.history.steers`),
-      browse: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.history.browse(threadId), `${this.key}: threads.history.browse`),
     },
     create: input => this.run(providerRegistrations[this.key], provider => provider.threads.create(input), `${this.key}: threads.create`),
     list: input => this.run(providerRegistrations[this.key], provider => provider.threads.list(input), `${this.key}: threads.list`),
@@ -52,7 +49,6 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     readLatest: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.readLatest(threadId), `${this.key}: threads.readLatest`),
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
-    page: input => this.run(providerRegistrations[this.key], provider => provider.threads.page(input), `${this.key}: threads.page`),
     submit: input => this.run(providerRegistrations[this.key], provider => provider.threads.submit(input), `${this.key}: threads.submit`),
     messageAgent: input => this.run(providerRegistrations[this.key], provider => provider.threads.messageAgent(input), `${this.key}: threads.messageAgent`),
     rename: (threadId, title) => this.run(providerRegistrations[this.key], provider => provider.threads.rename(threadId, title), `${this.key}: threads.rename`),

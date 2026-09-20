@@ -110,6 +110,7 @@ export type SleepItem = { id: string; durationMs: number };
 // Field spellings preserve the established wire/storage contract, not a dependency
 // on a provider's generated schema. Providers translate into this owned shape.
 export type ThreadItem =
+  | { type: "generic"; id: string; nativeType: string; safeValue: JsonValue }
   | { type: "userMessage"; id: string; clientId: string | null; content: UserInput[] }
   | { type: "hookPrompt"; id: string; fragments: HookPromptFragment[] }
   | {

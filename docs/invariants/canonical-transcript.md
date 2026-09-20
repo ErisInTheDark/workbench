@@ -1,6 +1,6 @@
 - Give every supported provider the same transcript guarantees.
 - Browser transcript reads use one Workbench first-page and next-page contract.
-- Browser page cursors are opaque. Each provider bridge translates them to native paging.
+- Browser page cursors resolve through one Workbench SQLite reader, independent of provider bindings. Provider import and recovery never run implicitly during history reads.
 - Store every permanent visible thread item as one row in `thread_items`.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.

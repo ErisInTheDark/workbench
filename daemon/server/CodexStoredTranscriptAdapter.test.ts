@@ -10,7 +10,8 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptAtomicObservation } from "./database/transcript/workbench-transcript-types";
-import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
+import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 
 test("SQL reads select the exact window and retain answered interactions without reading unrelated bodies", async () => {
   const database = new Database(":memory:");
@@ -67,8 +68,13 @@ test("SQL reads select the exact window and retain answered interactions without
     const firstMessageId = stored.rows.itemSourceAliases
       .find(({ reference }) => reference === "message-0")?.item_identity_id;
     assert.ok(firstMessageId);
-    const reader = new CodexSqliteTranscriptReader(async input => repository.read(input), async id => repository.readContext(id),
-      async (id, turns) => repository.readMaterializedTurnIds(id, turns));
+    const canonical = new WorkbenchTranscriptReader({
+      readSnapshot: async input => repository.read(input), readContext: async id => repository.readContext(id),
+      readMaterializedTurns: async (id, turns) => repository.readMaterializedTurnIds(id, turns),
+      readContextUsage: async id => repository.readContextUsage(id),
+      readMetadata: async () => ({ entry: null, harness: "codex" }),
+    });
+    const reader = new CodexStoredTranscriptAdapter(canonical);
     const metadata: Thread = {
       id: threadId, turns: [], extra: null, sessionId: "session", forkedFromId: null,
       parentThreadId: null, historyMode: "legacy", projectId: null, preview: "", ephemeral: false,
@@ -100,34 +106,5 @@ test("SQL reads select the exact window and retain answered interactions without
     })), [{ path: "src/blocked.ts", additions: 2, deletions: 1 }]);
     assert.equal(await reader.readFileChange(threadId, newer, "message-1"), null);
     assert.equal(await reader.readFileChange(threadId, newer, "missing"), null);
-    const saved = await reader.readPage({ threadId, cursor: null }, null);
-    assert.deepEqual(saved?.thread.turns.map(turn => turn.id), [newer]);
-    assert.equal(saved?.nextCursor, newer);
-    const savedPrevious = await reader.readPage({ threadId, cursor: newer }, null);
-    assert.deepEqual(savedPrevious?.thread.turns.map(turn => turn.id), [older]);
-    assert.deepEqual(savedPrevious?.questionnaireEntries, previous?.questionnaireEntries);
-    assert.deepEqual(savedPrevious?.steerEntries, previous?.steerEntries);
-    assert.equal(savedPrevious?.nextCursor, null);
-    await assert.rejects(reader.readPage({ threadId, cursor: "foreign" }, null), /boundary/);
-    const missing = WorkbenchTurnIdSchema.parse("missing-body");
-    const threadMetadata = observations.find(observation => observation.kind === "thread")!;
-    repository.settle([{ kind: "turnCatalog", threadId, catalog: [threadMetadata, {
-      kind: "turn", threadId, turnId: missing, turnIndex: 2, harnessId: "codex",
-      nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("provider-thread"),
-      nativeTurnId: NativeTurnIdSchema.parse("provider-missing"), state: "completed",
-      createdAt: 6, startedAt: 6, endedAt: 7, durationMs: 1,
-    }] }]);
-    const savedWithGap = await reader.readPage({ threadId, cursor: null }, null);
-    assert.deepEqual(savedWithGap?.thread.turns.map(turn => turn.id), [newer]);
-    assert.ok(savedWithGap?.thread.turnHistory.some(turn => turn.turnId === missing));
-    const newerStill = WorkbenchTurnIdSchema.parse("newer-still");
-    repository.settle([{ kind: "turnCatalog", threadId, catalog: [threadMetadata, {
-      kind: "turn", threadId, turnId: newerStill, turnIndex: 3, harnessId: "codex",
-      nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("provider-thread"),
-      nativeTurnId: NativeTurnIdSchema.parse("provider-newer-still"), state: "completed",
-      createdAt: 8, startedAt: 8, endedAt: 9, durationMs: 1,
-    }] }]);
-    assert.equal(await reader.readPage({ threadId, cursor: newerStill }, null), null,
-      "an exact missing previous page needs import rather than silently skipping a turn");
   } finally { database.close(); }
 });

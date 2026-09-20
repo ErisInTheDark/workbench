@@ -70,7 +70,7 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
   const provider: Pick<WorkbenchProvider, "threads" | "interactions"> = {
     threads: {
       read, readLatest: read, latestTurn: unused, admitTurn: unused,
-      history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
+      history: { materialize: unused },
       create: async input => {
         requests.push({ method: "create", params: input });
         return thread(knownThread("child").threadId, false);
@@ -79,7 +79,7 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
         requests.push({ method: "messageAgent", params: input });
         if (rejectDelivery) throw new Error("delivery rejected");
       },
-      rename: async () => {}, list: unused, page: unused, submit: unused,
+      rename: async () => {}, list: unused, submit: unused,
       compact: unused, interrupt: unused, materialize: unused,
     },
     interactions: {

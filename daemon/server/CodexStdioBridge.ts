@@ -93,7 +93,7 @@ import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionA
 import type { CodexQuestionnairePort } from "./CodexQuestionnaireAdapter";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
-import type CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import type CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import type { WorkbenchThreadPageReadParams } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { log, logError } from "./process-helpers";
@@ -169,7 +169,7 @@ export type CodexStdioBridgeOptions = {
   restartingAppServer?: boolean;
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   transcriptAssets?: Pick<import("./database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
-  sqliteReader?: CodexSqliteTranscriptReader;
+  sqliteReader?: CodexStoredTranscriptAdapter;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
 };
 
@@ -820,7 +820,7 @@ export default class CodexStdioBridge {
   private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly transcriptAssets: CodexStdioBridgeOptions["transcriptAssets"];
-  private readonly sqliteReader?: CodexSqliteTranscriptReader;
+  private readonly sqliteReader?: CodexStoredTranscriptAdapter;
   private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
   private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
@@ -1350,26 +1350,6 @@ export default class CodexStdioBridge {
         },
       };
     }
-  }
-
-  refreshThreadPage(input: WorkbenchThreadPageReadParams) {
-    const request: JsonRpcRequest = { method: "workbench/thread/page/read", params: input };
-    this.threadPageReads.refresh(async signal => {
-      const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
-      signal.throwIfAborted();
-      const native = identity?.bindings.find(binding => binding.harness === "codex");
-      if (!native) throw new Error("Thread refresh has no admitted Codex execution.");
-      await this.ensureInitialized(createInitializeRequest(0, {
-        capabilities: createInitializeCapabilities({ experimentalApi: true }),
-      })).catch(error => {
-        signal.throwIfAborted();
-        throw error;
-      });
-      signal.throwIfAborted();
-      return this.readThreadPage({ ...request, params: { ...input, threadId: native.nativeThreadId } }, signal);
-    }, threadPageReadKey(request), error => {
-      logError("codex-transcript", `page refresh failed thread=${input.threadId.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 160)}: ${sanitizeTranscriptErrorMessage(error).slice(0, 500)}`);
-    });
   }
 
   private async handleThreadPageReadRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {

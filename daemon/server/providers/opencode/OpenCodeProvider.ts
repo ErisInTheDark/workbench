@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - openCodeModelOption: preserve native model metadata without configurable context overrides.
  * - openCodeAccountLimits: map credential-free Go quota into the shared account contract.
  * - default OpenCodeProvider: bind graph-owned OpenCode capabilities to the daemon provider contract.
  */
@@ -10,6 +11,23 @@ import OpenCodeToolsController from "./OpenCodeToolsController";
 import CodexShellController from "../../CodexShellController";
 import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
 import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
+import type OpenCodeServiceController from "./OpenCodeServiceController";
+
+export function openCodeModelOption(
+  model: Pick<Awaited<ReturnType<OpenCodeServiceController["readModelCatalog"]>>["models"][number],
+    "id" | "providerID" | "modelID" | "name" | "family" | "enabled" | "status" | "variants" | "capabilities" | "limit">,
+  defaultModelId?: string,
+) {
+  return {
+    id: `${model.providerID}/${model.modelID}`, displayName: model.name, description: model.family ?? "",
+    hidden: !model.enabled || model.status === "deprecated", isDefault: defaultModelId === model.id,
+    supportsPersonality: false, supportsReasoningEffort: model.variants.length > 0,
+    supportedReasoningEfforts: model.variants.map(variant => variant.id), defaultReasoningEffort: null,
+    supportsVision: model.capabilities.input.includes("image"), supportsFastMode: false,
+    inputModalities: [...model.capabilities.input], maxContextWindowTokens: model.limit.context,
+    contextWindow: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+  };
+}
 
 export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
   const window = (kind: "rolling" | "weekly" | "monthly", duration: number) => {
@@ -77,34 +95,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           },
           configuration: {
             modelContext: {
-              read: async () => (await service.readModelCatalog()).models.map(model => ({
-                model: `${model.providerID}/${model.modelID}`,
-                defaultTokens: model.limit.context,
-                maximumTokens: model.limit.context,
-              })),
+              read: async () => [],
             },
             models: {
               read: async () => {
                 const catalog = await service.readModelCatalog();
-                return catalog.models.map(model => ({
-                  id: `${model.providerID}/${model.modelID}`,
-                  displayName: model.name,
-                  description: model.family ?? "",
-                  hidden: !model.enabled || model.status === "deprecated",
-                  isDefault: catalog.defaultModel?.id === model.id,
-                  supportsPersonality: false,
-                  supportsReasoningEffort: model.variants.length > 0,
-                  supportedReasoningEfforts: model.variants.map(variant => variant.id),
-                  defaultReasoningEffort: null,
-                  supportsVision: model.capabilities.input.includes("image"),
-                  supportsFastMode: false,
-                  inputModalities: [...model.capabilities.input],
-                  maxContextWindowTokens: model.limit.context,
-                  contextWindow: { defaultTokens: model.limit.context, maximumTokens: model.limit.context },
-                  additionalSpeedTiers: [],
-                  policyState: null,
-                  billingMultiplier: null,
-                }));
+                return catalog.models.map(model => openCodeModelOption(model, catalog.defaultModel?.id));
               },
             },
             guidance: { contains: async sections => sections.map(() => false) },

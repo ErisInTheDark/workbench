@@ -7,7 +7,7 @@ import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -38,6 +38,7 @@ import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
+import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
@@ -68,7 +69,7 @@ function createWorkbenchCoreFeature(
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
-  transcript: Pick<DaemonTranscriptRegistration, "read">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   initialCatalog?: WorkbenchProjectStartup,
@@ -242,7 +243,26 @@ function createWorkbenchCoreFeature(
     },
     state: threadState.controller,
   });
+  const transcriptReader = new WorkbenchTranscriptReader({
+    readSnapshot: request => transcript.read(request),
+    readContext: threadId => database.readTranscriptContext!(threadId),
+    readMaterializedTurns: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
+    readContextUsage: threadId => transcript.readContextUsage(threadId),
+    readMetadata: async (thread, provenance) => {
+      const entry = await threadState.controller.getCanonicalThreadEntry(
+        ProjectIdSchema.parse(thread.project_id), WorkbenchThreadIdSchema.parse(thread.id),
+      );
+      let harness = (entry && entry.entryKind !== "draft" ? entry.identity.harness : null) ?? provenance;
+      if (!harness) {
+        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(thread.id) });
+        harness = identity?.bindings.at(-1)?.harness ?? null;
+      }
+      if (!harness) throw new Error("Canonical transcript has no stored execution provenance.");
+      return { entry, harness: WorkbenchHarnessSchema.parse(harness) };
+    },
+  });
   const threadActions = new WorkbenchThreadActionController({
+    transcripts: transcriptReader,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
     warn: message => logThreadStateWarning(message),
@@ -311,7 +331,7 @@ function createWorkbenchCoreFeature(
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -415,6 +435,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchHarnessController.ts",
     "daemon/server/thread-identity-workbench-mapping.ts",
     "daemon/server/WorkbenchThreadActionController.ts",
+    "daemon/server/WorkbenchTranscriptReader.ts",
     "daemon/server/WorkbenchProjectCatalogController.ts",
     "daemon/server/WorkbenchProjectSnapshotController.ts",
     "daemon/server/WorkbenchSearchController.ts",

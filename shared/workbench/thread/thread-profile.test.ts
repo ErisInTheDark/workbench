@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeComposerProfile, normalizeComposerProfileMutation } from "../state/composer-profile-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "./thread-state.ts";
-import { contextCompactionThreshold } from "./thread-profile.ts";
+import { contextCompactionThreshold, copyComposerSettings } from "./thread-profile.ts";
 
 test("compaction reserves fixed headroom for small windows and proportional headroom for large ones", () => {
   assert.equal(contextCompactionThreshold(128_000), 78_000);
@@ -33,4 +33,19 @@ test("context caps survive catalogue normalization and target snapshots", () => 
   });
   assert.ok(mutation && mutation.kind === "upsert");
   assert.deepEqual(mutation.changes, { contextWindowTokens: 600_000 });
+});
+
+test("repairs legacy OpenCode context caps without changing Codex settings", () => {
+  const settings = {
+    agentPath: null, agentSource: null, harness: "opencode" as const, model: "opencode-go/model",
+    reasoningEffort: null, serviceTier: null, contextWindowTokens: 200_000,
+  };
+  const normalized = normalizeComposerProfile({
+    ...settings, id: "stored", name: "Stored", scope: { kind: "global" }, createdAt: 1, updatedAt: 1,
+  });
+
+  assert.ok(normalized);
+  assert.equal(Reflect.has(normalized, "contextWindowTokens"), false);
+  assert.equal(Reflect.has(copyComposerSettings(settings), "contextWindowTokens"), false);
+  assert.equal(copyComposerSettings({ ...settings, harness: "codex" }).contextWindowTokens, 200_000);
 });

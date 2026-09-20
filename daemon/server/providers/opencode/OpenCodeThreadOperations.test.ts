@@ -151,7 +151,7 @@ test("admits a created session into thread state with its captured profile", asy
     installCreatedProfile: async (...input: object[]) => { installed.push(input); },
   });
   Object.assign(owner, {
-    page: async () => ({ thread }),
+    read: async () => thread,
   });
 
   assert.equal(await owner.create({
@@ -222,7 +222,7 @@ test("materialises every canonical message page in ascending order", async () =>
 
 test("provider-owned active execution submits a steer once with native steer delivery", async () => {
   const prompts: object[] = [];
-  const steerObservations: object[] = [];
+  const steerObservations: Array<{ clientUserMessageId: string | null; status: string }> = [];
   const owner = operations({
     session: {
       prompt: async (input: object) => {
@@ -238,7 +238,7 @@ test("provider-owned active execution submits a steer once with native steer del
       },
     },
   }, {
-    recordSteer: async (entry: object) => { steerObservations.push(entry); },
+    recordSteer: async (entry: { clientUserMessageId: string | null; status: string }) => { steerObservations.push(entry); },
   });
 
   const result = await owner.submit({
@@ -284,7 +284,7 @@ test("provider-owned active execution submits a steer once with native steer del
   assert.match(submitted.metadata.workbench.itemId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
   assert.deepEqual(result, { kind: "steered", turnId });
   assert.equal(steerObservations.length, 1);
-  assert.deepEqual((await owner.history.steers(threadId)).map(entry => ({
+  assert.deepEqual(steerObservations.map(entry => ({
     clientUserMessageId: entry.clientUserMessageId,
     status: entry.status,
   })), [{
@@ -559,7 +559,6 @@ test("fails an admitted steer without failing its active turn when OpenCode reje
     intent: "continue",
   }), /selected model is unavailable/u);
   assert.deepEqual(steerObservations.map(entry => entry.status), ["pending", "failed"]);
-  assert.deepEqual(await owner.history.steers(threadId), []);
 });
 
 test("owns provider rejection when root transcript admission fails", async () => {

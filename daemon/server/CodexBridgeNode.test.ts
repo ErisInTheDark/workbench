@@ -14,6 +14,7 @@ import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexLifecycleController from "./CodexLifecycleController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function deferred() {
@@ -22,7 +23,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-test("node serves saved history while refresh initialisation stalls and retires that refresh", async (t) => {
+test("canonical history does not initialise the native bridge", async (t) => {
   const fixture = createThreadStateTestDatabase();
   fixture.admitThread(testProjectIds.project, "saved-thread", "codex", "native-thread", "C:/repo");
   const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
@@ -45,7 +46,6 @@ test("node serves saved history while refresh initialisation stalls and retires 
         id: "message", type: "agentMessage", text: "saved reply", phase: "commentary", memoryCitation: null, delivery: null, questions: null,
       } },
   ]);
-  const entered = deferred();
   const requests: JsonRpcRequest[] = [];
   const failures: object[] = [];
   t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
@@ -53,11 +53,18 @@ test("node serves saved history while refresh initialisation stalls and retires 
   const parent = {
     appServer: {
       async retirePrevious() {},
-      send(request: JsonRpcRequest) { requests.push(request); entered.resolve(); },
+      send(request: JsonRpcRequest) { requests.push(request); },
     },
     deactivateBridge() {},
   };
   const registrations = {
+    transcriptReader: new WorkbenchTranscriptReader({
+      readSnapshot: async request => repository.read(request),
+      readContext: async id => repository.readContext(id),
+      readMaterializedTurns: async (id, turns) => repository.readMaterializedTurnIds(id, turns),
+      readContextUsage: async () => null,
+      readMetadata: async () => ({ entry: null, harness: "codex" }),
+    }),
     codexAppServer: parent, toolRevision: { revision: "catalogue" },
     threadIdentity: fixture.identities.threads, transcriptIdentity: fixture.identities.items,
     threadState: { controller: { getCanonicalThreadEntry: async () => null } },
@@ -77,14 +84,12 @@ test("node serves saved history while refresh initialisation stalls and retires 
     handoffState: undefined, isReplacing: () => false, lease: { isCurrent: () => true }, mode: "initial",
   });
   try {
-    const operations = instance.registrations.codexThreadOperations!;
-    const page = await operations.page({ threadId: identity.threadId, cursor: null });
+    const page = await registrations.transcriptReader.readPage({ threadId: identity.threadId, cursor: null });
     assert.equal(page.thread.turns[0]?.items[0]?.type, "agentMessage");
     const message = page.thread.turns[0]?.items[0];
     assert.equal(message?.type === "agentMessage" && message.text, "saved reply");
-    await entered.promise;
-    await operations.page({ threadId: identity.threadId, cursor: null });
-    assert.deepEqual(requests.map(request => request.method), ["initialize"]);
+    await registrations.transcriptReader.readPage({ threadId: identity.threadId, cursor: null });
+    assert.deepEqual(requests, []);
   } finally {
     await instance.dispose();
     await instance.registrations.codexBridge!.disposeImmediately();

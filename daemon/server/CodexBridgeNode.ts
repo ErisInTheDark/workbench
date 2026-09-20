@@ -13,7 +13,7 @@ import CodexConfigurationController from "./CodexConfigurationController";
 import CodexHealthMonitor from "./CodexHealthMonitor";
 import { log, logError } from "./process-helpers";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
-import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { DaemonProcessContext } from "./daemon-process-context";
@@ -94,11 +94,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const transcript = build.get("transcript");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
-    const sqliteReader = new CodexSqliteTranscriptReader(
-      request => transcript.read(request),
-      threadId => build.get("database").readTranscriptContext!(threadId),
-      (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
-    );
+    const sqliteReader = new CodexStoredTranscriptAdapter(build.get("transcriptReader"));
     const turnRecovery = build.get("codexRecovery");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
@@ -285,21 +281,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadOperations = new CodexThreadOperations({
       questionnaires,
       bridge,
-      readStoredPage: async input => {
-        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
-        if (!identity) return null;
-        const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-        const page = await sqliteReader.readPage({ ...input, threadId: identity.threadId }, entry);
-        if (page && input.cursor === null) {
-          try {
-            page.thread.tokenUsage = (await build.get("database").readThreadContextUsage(identity.threadId))?.tokenUsage ?? null;
-          } catch (error) {
-            console.warn("[codex-transcript] Stored context usage is unavailable; history remains readable.",
-              (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 500));
-          }
-        }
-        return page;
-      },
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       resolveProject: async cwd => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Codex provider thread admission" })).project,
     });
@@ -394,7 +375,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "codexRecovery", "providerObservations"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "codexRecovery", "providerObservations"],
   safeAll: true,
   scope: "server:codex",
   sources: [
@@ -410,7 +391,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/thread-identity-transcript-mapping.ts",
     "daemon/server/CodexFileChangeController.ts",
     "daemon/server/CodexThreadWindowLoader.ts",
-    "daemon/server/CodexSqliteTranscriptReader.ts",
+    "daemon/server/CodexStoredTranscriptAdapter.ts",
     "daemon/server/CodexThreadPageReadController.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
     "daemon/server/workbench-agent-mcp-request-registry.ts",

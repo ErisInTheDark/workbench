@@ -23,7 +23,7 @@ test("context capability bounds reject invalid target mutations without writing"
   const unused = async (): Promise<never> => { throw new Error("Profile validation must only read model context."); };
   const { controller, targetWrites } = createController({
     providers: { get: () => ({
-      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
       configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
       read: async () => [{ model: "model", defaultTokens: 128000, maximumTokens: 1000000 }],
     } } }) },
@@ -77,7 +77,7 @@ function createController(options: {
   };
   const controller = new WorkbenchDaemonRequestController({
     providers: options.providers ?? { get: () => ({
-      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, page: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      threads: { readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
       configuration: {
         modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused },
         sandboxNetwork: {

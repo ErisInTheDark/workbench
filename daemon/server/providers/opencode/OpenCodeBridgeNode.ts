@@ -7,7 +7,6 @@ import OpenCodeProvider from "./OpenCodeProvider";
 import OpenCodeEventController from "./OpenCodeEventController";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
-import OpenCodeTranscriptReader from "./OpenCodeTranscriptReader";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
@@ -58,10 +57,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         )?.limit.context ?? null;
       },
     });
-    const reader = new OpenCodeTranscriptReader(
-      request => build.get("transcript").read(request),
-      threadId => build.get("transcript").readContextUsage(threadId),
-    );
+    const reader = build.get("transcriptReader");
     const managed = new OpenCodeManagedSessionController({
       acquire,
       workbenchOrigin: context.localDaemonOrigin,
@@ -103,7 +99,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: ["openCodeThreadOperations"],
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
-    "threadState", "transcript", "providerObservations",
+    "threadState", "transcript", "transcriptReader", "providerObservations",
   ],
   safeAll: true,
   scope: "server:opencode",
@@ -113,6 +109,5 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/providers/opencode/OpenCodeThreadOperations.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptAdapter.ts",
-    "daemon/server/providers/opencode/OpenCodeTranscriptReader.ts",
   ].join("\n"),
 });

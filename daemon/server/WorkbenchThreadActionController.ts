@@ -15,8 +15,10 @@ import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogCon
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 
 export interface WorkbenchThreadActionOwners {
+  transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
@@ -95,16 +97,13 @@ export default class WorkbenchThreadActionController {
       return { data };
     },
     "thread/questionnaires/read": async input => {
-      const target = await this.target(input.threadId);
-      return { data: await target.provider.threads.history.questionnaires(target.identity.threadId) };
+      return { data: (await this.owners.transcripts.history(input.threadId)).questionnaireEntries };
     },
     "thread/steers/read": async input => {
-      const target = await this.target(input.threadId);
-      return { data: await target.provider.threads.history.steers(target.identity.threadId) };
+      return { data: (await this.owners.transcripts.history(input.threadId)).steerEntries };
     },
     "thread/browse/read": async input => {
-      const target = await this.target(input.threadId);
-      return { data: await target.provider.threads.history.browse(target.identity.threadId) };
+      return { data: (await this.owners.transcripts.history(input.threadId)).browseResultEntries };
     },
     "thread/create": input => this.create(input),
     "thread/message/submit": input => this.message(input),
@@ -113,8 +112,7 @@ export default class WorkbenchThreadActionController {
       return target.provider.threads.read(target.identity.threadId);
     },
     "thread/page/read": async input => {
-      const target = await this.target(input.threadId);
-      return target.provider.threads.page({ ...input, threadId: target.identity.threadId });
+      return this.owners.transcripts.readPage(input);
     },
     "thread/title/set": async (input, connectionId) => {
       const target = await this.target(input.threadId);

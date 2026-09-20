@@ -12,7 +12,8 @@ import type { AgentEndpointProjectResolution } from "./lib/workbench/project/age
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
-import CodexSqliteTranscriptReader from "./CodexSqliteTranscriptReader";
+import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
+import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type { JsonRpcRequest } from "./bridge-types";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -70,12 +71,20 @@ async function createThreadReadHarness(
 ) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-thread-recall-"));
   const sentRequests: JsonRpcRequest[] = [];
-  const sqliteReader = new CodexSqliteTranscriptReader(async () => null, async () => null, async () => []);
+  const sqliteReader = new CodexStoredTranscriptAdapter(new WorkbenchTranscriptReader({
+    readSnapshot: async () => null, readContext: async () => null,
+    readMaterializedTurns: async () => [], readContextUsage: async () => null,
+    readMetadata: async () => ({ entry: null, harness: "codex" }),
+  }));
   const sqlReads: string[] = [];
   sqliteReader.read = async (metadata) => {
     sqlReads.push(metadata.id);
     return { thread: metadata, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
   };
+  sqliteReader.history = async () => ({
+    turns: [], turnHistory: [], questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+    entryScope: { mode: "turns", turnIds: [] },
+  });
   let bridge!: CodexStdioBridge;
   const appServer = {
     send(message: JsonRpcRequest) {

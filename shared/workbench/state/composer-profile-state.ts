@@ -52,7 +52,7 @@ function normalizeSettings(value: unknown): WorkbenchComposerSettings | null {
   const context = ProfileChangesSchema.shape.contextWindowTokens.safeParse(value.contextWindowTokens);
   if (!context.success) return null;
   return {
-    ...(context.data !== undefined ? { contextWindowTokens: context.data } : {}),
+    ...(harness !== "opencode" && context.data !== undefined ? { contextWindowTokens: context.data } : {}),
     agentPath,
     agentSource: agentPath && (value.agentSource === "library" || value.agentSource === "project") ? value.agentSource : null,
     harness,

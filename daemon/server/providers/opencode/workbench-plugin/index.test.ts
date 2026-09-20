@@ -131,6 +131,20 @@ test("uses the sole Go credential when OpenCode has no active selection", async 
   assert.deepEqual(resolved, [connection]);
 });
 
+test("does not use an active OAuth credential as an OpenCode Go API key", async () => {
+  const credential = await resolveOpenCodeGoCredential({
+    connection: {
+      active: async () => ({ type: "credential", id: "oauth", label: "Console" }),
+      resolve: async () => ({
+        type: "oauth", access: "oauth-access", refresh: "oauth-refresh", expires: Date.now() + 60_000,
+      }),
+    },
+    get: async () => ({ data: { connections: [] } }),
+  });
+
+  assert.equal(credential, undefined);
+});
+
 test("normalises all OpenCode Go windows without returning the credential", async () => {
   const seen: string[] = [];
   const result = await readOpenCodeGoQuota({

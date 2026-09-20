@@ -91,10 +91,10 @@ class FakeProvider {
       this.contentReads.push(threadId);
       return thread(threadId, this.cwd, threadId === questionnaireThreadId);
     },
-    create: this.unused, list: this.unused, page: this.unused, submit: this.unused,
+    create: this.unused, list: this.unused, submit: this.unused,
     messageAgent: this.unused, rename: this.unused, compact: this.unused, interrupt: this.unused,
     latestTurn: this.unused, admitTurn: this.unused, materialize: this.unused,
-    history: { materialize: this.unused, questionnaires: this.unused, steers: this.unused, browse: this.unused },
+    history: { materialize: this.unused },
   };
   readonly interactions: NonNullable<WorkbenchProvider["interactions"]> = {
     pending: async () => {

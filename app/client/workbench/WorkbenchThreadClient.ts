@@ -1369,22 +1369,22 @@ function WorkbenchThreadClient(
     commit: (payload: ThreadPayload) => TResult,
   ) {
     if (cursor !== null) {
-      if (
-        getThreadSourceKey(result.payload) !== fence.threadKey
-        || !isHistoricalThreadReadFenceCurrent(fence)
-      ) {
+      if (!isHistoricalThreadReadFenceCurrent(fence)) {
         return null;
+      }
+      if (getThreadSourceKey(result.payload) !== fence.threadKey) {
+        throw new Error("Canonical historical page returned a different thread identity.");
       }
       const beforeTurnIndex = result.payload.turnHistory.findIndex((entry) => entry.turnId === cursor);
       if (beforeTurnIndex < 0) {
-        return null;
+        throw new Error("Canonical historical page omitted its requested cursor boundary.");
       }
       const expectedTurnId = beforeTurnIndex > 0 ? result.payload.turnHistory[beforeTurnIndex - 1]?.turnId ?? null : null;
       if (
         result.payload.turns.length !== (expectedTurnId ? 1 : 0)
         || result.payload.turns.some((turn) => turn.id !== expectedTurnId)
       ) {
-        return null;
+        throw new Error(`Canonical historical page returned ${result.payload.turns.length} bodies instead of its exact predecessor.`);
       }
       const currentSource = threadSources.get(fence.threadKey);
       if (!currentSource) {

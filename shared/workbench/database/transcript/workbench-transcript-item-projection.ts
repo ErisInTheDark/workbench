@@ -32,12 +32,7 @@ export interface WorkbenchProjectedInteractionItem {
   type: "approval" | "questionnaire";
 }
 
-export interface WorkbenchProjectedGenericItem {
-  id: string;
-  nativeType: string;
-  safeValue: JsonValue;
-  type: "generic";
-}
+export type WorkbenchProjectedGenericItem = Extract<ThreadItem, { type: "generic" }>;
 
 export type WorkbenchProjectedTranscriptItem =
   | ThreadItem

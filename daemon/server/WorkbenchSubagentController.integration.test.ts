@@ -130,9 +130,9 @@ class FakeProvider {
       assert.equal(options?.preserveGoal, true);
       this.calls.push({ harness: "codex", method: "interrupt", params: { threadId, turnId }, promptContext: null });
     },
-    rename: async () => {}, list: this.unused, admitTurn: this.unused, page: this.unused,
+    rename: async () => {}, list: this.unused, admitTurn: this.unused,
     compact: this.unused, submit: this.unused, materialize: this.unused,
-    history: { materialize: this.unused, questionnaires: this.unused, steers: this.unused, browse: this.unused },
+    history: { materialize: this.unused },
   };
   readonly interactions: NonNullable<WorkbenchProvider["interactions"]> = {
     pending: async () => [{ harness: "codex", itemId: "item-1", request: questionnaire, requestKey: "request-key", threadId: childThreadId, turnId: `${childThreadId}-turn` }],

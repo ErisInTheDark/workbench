@@ -92,10 +92,14 @@ export async function resolveOpenCodeGoCredential(integration: {
   get(input: { integrationID: string }): Promise<{ data: { connections: ConnectionInfo[] } }>;
 }) {
   const active = await integration.connection.active("opencode-go");
-  if (active) return integration.connection.resolve(active);
+  if (active) {
+    const credential = await integration.connection.resolve(active);
+    return credential?.type === "key" ? credential : undefined;
+  }
   const current = await integration.get({ integrationID: "opencode-go" });
   const credentials = current.data.connections.filter(connection => connection.type === "credential");
-  return credentials.length === 1 ? integration.connection.resolve(credentials[0]!) : undefined;
+  const credential = credentials.length === 1 ? await integration.connection.resolve(credentials[0]!) : undefined;
+  return credential?.type === "key" ? credential : undefined;
 }
 
 export async function readOpenCodeGoQuota(options: {
@@ -114,8 +118,7 @@ export async function readOpenCodeGoQuota(options: {
       error: { kind: "credential", message: "OpenCode Go credential resolution failed." },
     };
   }
-  const token = credential?.type === "key" ? credential.key
-    : credential?.type === "oauth" ? credential.access : undefined;
+  const token = credential?.type === "key" ? credential.key : undefined;
   if (!token) {
     return {
       ok: false,

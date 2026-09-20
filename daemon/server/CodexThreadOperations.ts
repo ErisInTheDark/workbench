@@ -3,7 +3,6 @@
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
  * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, and interaction owners.
  */
-import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
@@ -11,17 +10,15 @@ import { toThreadPayload, toThreadTurn } from "workbench-shared/codex/thread-ada
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { WorkbenchThreadHistoryPendingError } from "workbench-shared/workbench/provider/provider-thread";
 import type {
-  ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchQuestionnaireHistoryEntry,
-  WorkbenchSteerHistoryEntry, WorkbenchBrowseResultEntry,
+  ThreadPayload, WorkbenchPendingUserInputRequest,
 } from "workbench-shared/types";
 import type {
   WorkbenchProviderThreadCreate, WorkbenchProviderThreadList, WorkbenchProviderThreads,
 } from "workbench-shared/workbench/provider/provider-thread";
-import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult, WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
+import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchThreadMessageResultSchema } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchProviderGoalSchema, type WorkbenchProviderGoalUpdate } from "workbench-shared/workbench/provider/provider-goal";
 
-import { WORKBENCH_THREAD_PAGE_READ_METHOD } from "workbench-shared/workbench/thread/workbench-thread-page";
 import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { admitProviderNotifications, admitProviderThreads, mapProviderThread } from "./CodexProviderIdentity";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
@@ -36,8 +33,7 @@ import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } fro
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "refreshThreadPage">;
-  readStoredPage(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult | null>;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest">;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
   questionnaires?: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver" | "interruptRetainingQuestionnaire">;
@@ -135,18 +131,6 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       this.result(await this.dispatch(request));
       signal.throwIfAborted();
     },
-    questionnaires: async threadId => {
-      const result = await this.mapped({ method: "questionnaire/history/list", params: { threadId } }) as { data: WorkbenchQuestionnaireHistoryEntry[] };
-      return result.data;
-    },
-    steers: async threadId => {
-      const result = await this.mapped({ method: "steer/history/list", params: { threadId } }) as { data: WorkbenchSteerHistoryEntry[] };
-      return result.data;
-    },
-    browse: async threadId => {
-      const result = await this.mapped({ method: "browse/result/list", params: { threadId } }) as { data: WorkbenchBrowseResultEntry[] };
-      return result.data;
-    },
   };
 
   readonly browse: WorkbenchProviderBrowse = {
@@ -210,7 +194,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     try {
       return await this.mappedResponse(request);
     } catch (error) {
-      if (request.method === "thread/read" || request.method === "thread/context/read" || request.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
+      if (request.method === "thread/read" || request.method === "thread/context/read") {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
         if (message.includes("rollout at") && message.includes("is empty")
           || message.includes("no rollout found by id") || message.includes("no rollout found for thread id")) {
@@ -226,7 +210,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     const response = await this.dispatch(native);
     this.result(response);
     const result = record(response.result);
-    if (result?.thread && request.method !== "thread/context/read" && request.method !== WORKBENCH_THREAD_PAGE_READ_METHOD) {
+    if (result?.thread && request.method !== "thread/context/read") {
       await this.observeThread(result.thread as Thread);
     }
     const turns = result?.turn ? [result.turn as NativeTurn]
@@ -363,32 +347,6 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       cursor = result.nextCursor;
     } while (cursor);
     throw new Error("Referenced turn is absent from the provider metadata catalog.");
-  }
-
-  async page(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult> {
-    if (input.readScope !== "subagentBackground") {
-      const stored = await this.owners.readStoredPage(input);
-      if (stored) {
-        if (input.cursor === null) this.owners.bridge.refreshThreadPage(input);
-        return stored;
-      }
-    }
-    const result = await this.mapped({ id: 0, method: WORKBENCH_THREAD_PAGE_READ_METHOD, params: input }) as CodexThreadPageResponse;
-    return {
-      thread: {
-        ...toThreadPayload(result.thread, "codex", result.model ?? result.thread.model, result.reasoningEffort ?? result.thread.reasoningEffort, result.serviceTier ?? null),
-        id: this.owners.identities.threads.knownThread(ThreadReferenceSchema.parse(result.thread.id)).threadId,
-        isDraft: false,
-        tokenUsage: result.tokenUsage ?? null,
-        nextPageCursor: result.nextCursor,
-        browseResultEntries: result.browseResultEntries,
-      },
-      nextCursor: result.nextCursor,
-      questionnaireEntries: result.questionnaireEntries,
-      steerEntries: result.steerEntries,
-      browseResultEntries: result.browseResultEntries,
-      ...(result.entryScope ? { entryScope: result.entryScope } : {}),
-    };
   }
 
   async submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult> {

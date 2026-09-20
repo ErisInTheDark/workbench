@@ -178,6 +178,7 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  transcriptReader: import("./WorkbenchTranscriptReader").default;
   voiceSettings: import("./voice/VoiceSettingsStore").default;
   voice: {
     controller: import("./voice/WorkbenchVoiceController").default;

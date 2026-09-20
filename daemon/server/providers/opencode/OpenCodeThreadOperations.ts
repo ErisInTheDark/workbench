@@ -25,7 +25,7 @@ import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature"
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
-import OpenCodeTranscriptReader from "./OpenCodeTranscriptReader";
+import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 
@@ -59,7 +59,7 @@ export interface OpenCodeThreadOperationsOptions {
   state: Pick<WorkbenchThreadStateFeature, "controller" | "installCreatedProfile">;
   managed: Pick<OpenCodeManagedSessionController, "creation" | "refresh">;
   transcript: OpenCodeTranscriptAdapter;
-  reader: OpenCodeTranscriptReader;
+  reader: Pick<WorkbenchTranscriptReader, "readPage">;
   signal: AbortSignal;
 }
 
@@ -146,9 +146,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       signal.throwIfAborted();
       await this.sync(threadId, signal);
     },
-    questionnaires: async () => [],
-    steers: async threadId => [...(this.pendingSteers.get(threadId)?.values() ?? [])],
-    browse: async () => [],
   };
 
   constructor(private readonly options: OpenCodeThreadOperationsOptions) {}
@@ -203,7 +200,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     });
     this.sessions.set(session.id, session);
     const identity = await this.options.transcript.record(session, [], { id: project.id, rootPath: project.rootPath });
-    const thread = (await this.page({ threadId: identity.threadId, cursor: null })).thread;
+    const thread = await this.read(identity.threadId);
     await this.options.state.installCreatedProfile("opencode", thread, input.profile);
     return thread;
   }
@@ -219,14 +216,15 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const data = [];
     for (const session of response.data) {
       const identity = await this.syncSession(session);
-      const page = await this.options.reader.readPage({ threadId: identity.threadId, cursor: null }, null);
+      const page = await this.options.reader.readPage({ threadId: identity.threadId, cursor: null });
       if (page) data.push(page.thread);
     }
     return { data, nextCursor: response.cursor.next ?? null };
   }
 
   async read(threadId: string) {
-    return (await this.page({ threadId, cursor: null })).thread;
+    const identity = await this.identity(threadId);
+    return (await this.options.reader.readPage({ threadId: identity.threadId, cursor: null })).thread;
   }
 
   async readLatest(threadId: string) {
@@ -242,17 +240,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     await this.sync(threadId);
   }
 
-  async page(input: Parameters<WorkbenchProviderThreads["page"]>[0]) {
-    const identity = await this.identity(input.threadId);
-    const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-    const page = await this.options.reader.readPage({ ...input, threadId: identity.threadId }, entry);
-    if (page) return page;
-    await this.sync(identity.threadId);
-    const materialized = await this.options.reader.readPage({ ...input, threadId: identity.threadId }, entry);
-    if (!materialized) throw new Error("OpenCode transcript did not settle after canonical session materialisation.");
-    return materialized;
-  }
-
   async submit(input: Parameters<WorkbenchProviderThreads["submit"]>[0]): Promise<WorkbenchThreadMessageResult> {
     const { binding, identity } = await this.native(input.threadId);
     const client = await this.options.acquire();
@@ -262,7 +249,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const [freshSession, inbox, stored] = await Promise.all([
         client.session.get({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
         client.session.inbox.list({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
-        this.options.reader.readPage({ threadId: identity.threadId, cursor: null }, entry),
+        this.options.reader.readPage({ threadId: identity.threadId, cursor: null }),
       ]);
       session = freshSession;
       this.sessions.set(binding.nativeThreadId, session);

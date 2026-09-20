@@ -31,7 +31,7 @@ export function admitCodexTranscriptObservations(
 export function mapCodexTranscriptObservation(...[owners, native, observation]: Parameters<typeof mapNativeTranscriptObservation>) {
   return mapNativeTranscriptObservation(owners, native, observation,
     native?.harness === "codex" ? getCodexItemIdentityKind : undefined,
-    (destination, item) => mapProviderThreadItem(owners, destination, item));
+    (destination, item) => item.type === "generic" ? item : mapProviderThreadItem(owners, destination, item));
 }
 
 type AdmittedIdentities = {

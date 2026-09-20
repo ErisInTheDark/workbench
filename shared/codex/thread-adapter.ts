@@ -109,7 +109,7 @@ export function toThreadSummary<Id extends string>(thread: Omit<CompatibleThread
 export function toThreadTurn<T extends Turn>(turn: T, harness: WorkbenchHarness = "codex"): T {
   return harness === "codex" ? {
     ...turn,
-    items: turn.items.map(withCodexItemMetadata),
+    items: turn.items.map(item => item.type === "generic" ? item : withCodexItemMetadata(item)),
   } : turn;
 }
 

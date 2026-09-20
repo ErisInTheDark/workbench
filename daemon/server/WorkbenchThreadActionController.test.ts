@@ -22,8 +22,8 @@ function fixture(providerWarning?: string) {
     threads: {
       readLatest: unused, messageAgent: unused,
       latestTurn: unused, admitTurn: unused,
-      history: { materialize: unused, questionnaires: unused, steers: unused, browse: unused },
-      create: unused, list: unused, read: unused, page: unused,
+      history: { materialize: unused },
+      create: unused, list: unused, read: unused,
       submit: async input => { messages.push(input); return { kind: "steered", turnId: "wb-turn", ...(providerWarning ? { warning: providerWarning } : {}) }; },
       rename: unused, compact: unused,
       interrupt: async (threadId, turnId) => {
@@ -36,6 +36,7 @@ function fixture(providerWarning?: string) {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const owners: WorkbenchThreadActionOwners = {
+    transcripts: { readPage: unused, history: unused },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },
     projects: { resolveProjectById: unused },
     identities: { resolveTurn: unused, resolve: async () => ({
@@ -85,6 +86,29 @@ test("provider deletion resolves aliases without mutating WB state and preserves
   f.provider.threads.delete = async () => { throw new Error("provider refused deletion"); };
   await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /provider refused deletion/);
   assert.deepEqual(f.mutations, []);
+});
+
+test("canonical page reads do not require an available provider", async () => {
+  const f = fixture();
+  const reads: string[] = [];
+  const page = { nextCursor: null, questionnaireEntries: [], steerEntries: [], browseResultEntries: [], thread: {} };
+  Object.assign(f.owners, {
+    transcripts: {
+      readPage: async (input: { threadId: string }) => {
+        reads.push(input.threadId);
+        return page;
+      },
+    },
+  });
+  f.owners.providers.get = () => { throw new Error("provider unavailable"); };
+  const identity = await f.owners.identities.resolve({ threadId: WorkbenchThreadIdSchema.parse("wb-thread") });
+  assert.ok(identity);
+  f.owners.identities.resolve = async () => ({ ...identity, bindings: [
+    ...identity.bindings,
+    { harness: "opencode", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse("other-native"), pending: false, turnIndex: 1 },
+  ] });
+  assert.equal(await f.controller.handle("thread/page/read", { threadId: "wb-thread", cursor: null }), page);
+  assert.deepEqual(reads, ["wb-thread"]);
 });
 
 test("missing targets identify durable identity resolution and the requested thread", async () => {

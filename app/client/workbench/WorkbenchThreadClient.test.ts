@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -23,6 +23,13 @@ import type {
   WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+before(() => { process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://127.0.0.1:43210"; });
+after(() => {
+  if (originalDaemonUrl === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+  else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalDaemonUrl;
+});
 
 const fixtureIdentityValues = {
   ProjectId: {
@@ -2582,6 +2589,30 @@ test("navigation during creation profile acknowledgement cannot select or send t
   assert.notEqual(client.getSnapshot().currentThread?.id, "created");
   assert.equal(socket.requests.some(request => request.method === "turn/start" || isSteerRequest(request)), false);
 }));
+
+for (const defect of ["predecessor", "identity", "boundary"] as const) {
+test(`active history reads report malformed ${defect} instead of silently superseding them`, async () => withClient(async (client, socket) => {
+  const history = [historyEntry("older", "unloaded"), historyEntry("turn", "loaded")];
+  client.selectThreadPayload({ ...activeThread(), turnHistory: history });
+  FakeWebSocket.intercept = (_target, request) => request.method === "thread/page/read";
+  const owner = client.getThreadController("project", {
+    kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+  });
+  const reading = owner.read({ cursor: "turn" });
+  const rejected = assert.rejects(reading, new RegExp(defect, "iu"));
+  const request = await waitForRequest(socket, "thread/page/read");
+  socket.respond(request.id, {
+    browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [],
+    entryScope: { mode: "turns", turnIds: [] },
+    thread: {
+      ...wireThreadWithHistory([], defect === "boundary" ? [] : history),
+      ...(defect === "identity" ? { id: "different-thread" } : {}),
+    },
+  });
+  await rejected;
+  assert.deepEqual(client.getSnapshot().currentThread?.turns.map(turn => turn.id), ["turn"]);
+}));
+}
 
 test("native plan snapshots and notifications stay out while tagged agent markdown remains", async () => withClient(async (client, socket) => {
   const source = activeThread();
