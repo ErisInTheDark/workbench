@@ -8,7 +8,7 @@ import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   children: [],
   create: (context, build) => {

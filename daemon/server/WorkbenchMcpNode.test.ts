@@ -126,7 +126,7 @@ for (const outcome of ["replacement", "retiring success", "rollback", "admitted 
         }
       },
     } as DaemonProcessContext;
-    const parent = (replacement: boolean) => new ReloadableNode({
+    const parent = (replacement: boolean) => ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [WorkbenchMcpNode], description: "MCP parent",
       lifecycle: "atomic", safeAll: true, scope: "server:parent", sources: "parent.ts", requires: [],
       provides: [...WorkbenchMcpNode.requires, ...(replacement ? ["modules" as const] : [])],
@@ -179,7 +179,7 @@ for (const outcome of ["replacement", "retiring success", "rollback", "admitted 
 
 test("candidate activation failure leaves the live MCP executor and freshness intact", async () => {
   let bumps = 0;
-  const failedChild = new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+  const failedChild = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
     access: "agent", children: [], description: "activation failure",
     lifecycle: "atomic", safeAll: true, scope: "server:failure", sources: "failure.ts",
     requires: [], provides: [],
@@ -192,7 +192,7 @@ test("candidate activation failure leaves the live MCP executor and freshness in
       dispose: () => {},
     }),
   });
-  const parent = new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+  const parent = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
     access: "agent", children: [WorkbenchMcpNode, failedChild], description: "MCP parent",
     lifecycle: "atomic", safeAll: true, scope: "server:parent", sources: "parent.ts",
     requires: [], provides: [...WorkbenchMcpNode.requires],

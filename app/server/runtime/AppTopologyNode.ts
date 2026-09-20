@@ -7,7 +7,7 @@ import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   children: [],
   create: () => ({

@@ -26,7 +26,7 @@ const REQUIRED_REGISTRATIONS = [
   "threadState",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (context, build) => {

@@ -15,7 +15,7 @@ interface AppDatabaseReloadState {
   releaseCandidate?(): Promise<void>;
 }
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   children: [AppStateNode, AppNetworkNode],
   create: (context, build) => {

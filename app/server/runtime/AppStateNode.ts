@@ -12,7 +12,7 @@ import AppCompilerNode from "./AppCompilerNode.ts";
 import AppNetworkNode from "./AppNetworkNode.ts";
 import AppHttpNode from "./AppHttpNode.ts";
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   children: [AppCompilerNode, AppNetworkNode, AppHttpNode],
   create: (context, build) => {

@@ -7,7 +7,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerState } from "./WorkbenchWebSocketRequestController";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (context, build) => {

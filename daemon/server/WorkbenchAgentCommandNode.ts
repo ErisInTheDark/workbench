@@ -18,7 +18,7 @@ import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from 
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [WorkbenchMcpNode],
   create: (context, build) => {

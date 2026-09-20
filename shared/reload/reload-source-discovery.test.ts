@@ -14,7 +14,7 @@ function moduleAt(relative: string, children: NodeModule[] = [], exports: object
 }
 
 function node(scope: string, children: ReloadableNode<object, object, never>[] = []) {
-  return new ReloadableNode<object, object, never>({
+  return ReloadableNode.define<object, object, never>()({
     scope, children, access: "agent", description: scope, lifecycle: "atomic",
     provides: [] as const, requires: [] as const, safeAll: true, sources: "",
     create: () => ({ registrations: {}, start() {}, dispose() {} }),

@@ -20,6 +20,25 @@ interface Objects {
   unrelated: boolean;
 }
 
+void ReloadableNode.define<object, Objects, never>()({
+  access: "agent",
+  children: [],
+  create: (_context, build) => {
+    build.get("value");
+    // @ts-expect-error Reload nodes may access only their declared parents.
+    build.get("unrelated");
+    void build.run("consumer", value => value);
+    return { registrations: {}, start() {}, dispose() {} };
+  },
+  description: "type boundary",
+  lifecycle: "atomic",
+  provides: [],
+  requires: ["value"],
+  safeAll: true,
+  scope: "server:type-boundary",
+  sources: "",
+});
+
 function fixture(prefix: "server" | "client") {
   let generation = 0;
   let fail = false;
@@ -31,7 +50,7 @@ function fixture(prefix: "server" | "client") {
       provides: (keyof Objects)[],
       create: ReloadableNode<object, Objects, never>["create"],
       lifecycle: "atomic" | "handoff" = "atomic",
-    ) => new ReloadableNode<object, Objects, never>({
+    ) => ReloadableNode.define<object, Objects, never>()({
       scope: `${prefix}:${name}`, access: "agent", children: [], requires: [], provides,
       lifecycle, safeAll: true, sources: "", description: name, create,
     });
@@ -158,7 +177,7 @@ test("source ownership is published with its successful graph and restored after
   type SourceObjects = { readSources: () => ReloadDirtSourceState };
   const graph = () => ({
     ...defineReloadableNodeGraph([
-      new ReloadableNode<object, SourceObjects, never>({
+      ReloadableNode.define<object, SourceObjects, never>()({
         scope: "client:owner", access: "operator", description: "owner", lifecycle: "atomic",
         provides: ["readSources"], requires: [], children: [], safeAll: false, sources: "",
         create: (_context, build) => ({
@@ -176,7 +195,7 @@ test("source ownership is published with its successful graph and restored after
           dispose() {},
         }),
       }),
-      new ReloadableNode<object, SourceObjects, never>({
+      ReloadableNode.define<object, SourceObjects, never>()({
         scope: "client:sibling", access: "operator", description: "sibling", lifecycle: "atomic",
         provides: [], requires: [], children: [], safeAll: false, sources: "",
         create: () => ({ registrations: {}, start() {}, dispose() {} }),

@@ -10,7 +10,7 @@ import CodexToolsNode from "./CodexToolsNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
 import { logError } from "./process-helpers";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexToolsNode, OpenCodeProvider],
   create: context => {

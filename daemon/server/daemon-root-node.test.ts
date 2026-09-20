@@ -24,7 +24,7 @@ function readReloadNodeSourceState() {
   const copy = (node: Node): ReloadableNode<null, object, never> => {
     const existing = copies.get(node);
     if (existing) return existing;
-    const result = new ReloadableNode<null, object, never>({
+    const result = ReloadableNode.define<null, object, never>()({
       ...node,
       children: node.children.map(copy),
       provides: [] as const,
@@ -119,17 +119,28 @@ test("tool reload preserves the executor and executor replacement owns the tool 
   const { dependantClosure, descriptors } = readReloadNodeSourceState();
   const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
   const tools = dependantClosure(["server:codex/tools"]);
-  assert.equal(tools.includes("server:codex/exec"), false);
-  assert.equal(tools.includes("server:voice"), false);
-  assert.equal(tools.includes("harness:codex"), false);
-  const execution = dependantClosure(["server:codex/exec"]);
-  assert.equal(execution.includes("server:codex/tools"), true);
-  assert.equal(execution.includes("server:codex/def"), true);
-  assert.equal(execution.includes("server:voice"), false);
-  assert.equal(execution.includes("harness:codex"), false);
-  assert.equal(execution.includes("server:process"), false);
-  assert.equal(catalog.get("server:codex/exec")!.safeAll, true);
-  assert.notEqual(catalog.get("server:codex/exec")!.destructive, true);
+  const execution = dependantClosure(["server:commands/exec"]);
+  assert.deepEqual({
+    executionIncludesDefinition: execution.includes("server:codex/def"),
+    executionIncludesHarness: execution.includes("harness:codex"),
+    executionIncludesProcess: execution.includes("server:process"),
+    executionIncludesTools: execution.includes("server:codex/tools"),
+    executionIncludesVoice: execution.includes("server:voice"),
+    toolsIncludesExecutor: tools.includes("server:codex/exec"),
+    toolsIncludesHarness: tools.includes("harness:codex"),
+    toolsIncludesVoice: tools.includes("server:voice"),
+  }, {
+    executionIncludesDefinition: true,
+    executionIncludesHarness: false,
+    executionIncludesProcess: false,
+    executionIncludesTools: true,
+    executionIncludesVoice: false,
+    toolsIncludesExecutor: false,
+    toolsIncludesHarness: false,
+    toolsIncludesVoice: false,
+  });
+  assert.equal(catalog.get("server:commands/exec")!.safeAll, true);
+  assert.notEqual(catalog.get("server:commands/exec")!.destructive, true);
 });
 
 test("provider configuration reload owns its definition without acquiring the harness", () => {

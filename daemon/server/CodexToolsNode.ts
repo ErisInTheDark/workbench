@@ -11,7 +11,7 @@ import CodexShellController from "./CodexShellController";
 import CodexCommandExecController from "./CodexCommandExecController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexProvider],
   create: (_context, { get }) => {

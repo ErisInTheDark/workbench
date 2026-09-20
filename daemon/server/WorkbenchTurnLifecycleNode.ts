@@ -23,7 +23,7 @@ interface WorkbenchTurnLifecycleState {
   mcpGeneration?: WorkbenchToolRevisionState;
 }
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {

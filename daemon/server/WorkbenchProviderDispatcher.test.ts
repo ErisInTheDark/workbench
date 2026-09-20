@@ -32,7 +32,7 @@ function fixture() {
   const releaseStart = deferred();
   let holdStart = false;
   const graph = () => defineReloadableNodeGraph([
-    new ReloadableNode<object, Objects, never>({
+    ReloadableNode.define<object, Objects, never>()({
       access: "agent", children: [], description: "Provider fixture", lifecycle: "atomic",
       provides: ["codexProvider", "openCodeProvider"], requires: [], safeAll: true,
       scope: "server:codex/def", sources: "",
@@ -66,7 +66,7 @@ function fixture() {
         };
       },
     }),
-    new ReloadableNode<object, Objects, never>({
+    ReloadableNode.define<object, Objects, never>()({
       access: "agent", children: [], description: "Provider consumer", lifecycle: "atomic",
       provides: ["providers"], requires: [], safeAll: true,
       scope: "server:consumer", sources: "",

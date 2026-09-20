@@ -25,7 +25,7 @@ for (const failFirst of [false, true]) {
     let firstAttemptDone!: () => void;
     const attempted = new Promise<void>(resolve => { firstAttemptDone = resolve; });
     type Node = ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
-    const bridge: Node = new ReloadableNode({
+    const bridge: Node = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [], description: "Native readiness fixture", lifecycle: "atomic",
       provides: ["codexBridge"], requires: [], safeAll: true, scope: "server:codex", sources: "",
       create: () => ({
@@ -35,7 +35,7 @@ for (const failFirst of [false, true]) {
         start() {}, dispose() {},
       }),
     });
-    const harness: Node = new ReloadableNode({
+    const harness: Node = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "cli", children: [bridge], description: "Native process fixture", lifecycle: "atomic",
       provides: [], requires: [], safeAll: false, scope: "harness:codex", sources: "",
       create: () => {
@@ -44,7 +44,10 @@ for (const failFirst of [false, true]) {
         return { registrations: {}, start() {}, dispose() {} };
       },
     });
-    const lifecycle: Node = new ReloadableNode({ ...CodexLifecycleNode, children: [harness, bridge] });
+    const lifecycle: Node = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
+      ...CodexLifecycleNode,
+      children: [harness, bridge],
+    });
     const graph = () => defineReloadableNodeGraph([lifecycle]);
     let host!: ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
     const processContext = {

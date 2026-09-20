@@ -9,7 +9,7 @@ import ReloadableNode from "./ReloadableNode";
 import WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexBridgeNode],
   create: (context, build) => {

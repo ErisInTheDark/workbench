@@ -24,9 +24,12 @@ test("queued native recovery survives replacement as captured context, never as 
     reportTurnRecoveryFailure: async () => assert.fail("unexpected recovery failure"),
     isHardReloadPending: () => false,
   } as unknown as DaemonProcessContext;
-  const native = new ReloadableNode({ ...CodexRecoveryNode, children: [] });
+  const native = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
+    ...CodexRecoveryNode,
+    children: [],
+  });
   const graph = () => defineReloadableNodeGraph([
-    new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+    ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [native], description: "Shared recovery dependencies", lifecycle: "atomic",
       provides: ["turnRecovery", "threadIdentity", "codexBridge"], requires: [], safeAll: true,
       scope: "server:test-recovery-parent", sources: "",

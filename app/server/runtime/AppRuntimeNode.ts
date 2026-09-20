@@ -16,7 +16,7 @@ interface AppRuntimeNodeState {
   reload: WorkbenchAppReloadControllerState;
 }
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   children: [AppDatabaseNode, AppTopologyNode],
   create: (context, build) => {

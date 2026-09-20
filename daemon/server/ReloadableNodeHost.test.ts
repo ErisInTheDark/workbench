@@ -24,7 +24,7 @@ function node(options: {
   requires?: readonly (keyof Objects)[];
   scope: string;
 }) {
-  return new ReloadableNode<null, Objects, never>({
+  return ReloadableNode.define<null, Objects, never>()({
     access: "agent",
     children: options.children ?? [],
     create: options.create ?? (() => ({ dispose: () => undefined, registrations: {}, start: () => undefined })),

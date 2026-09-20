@@ -75,7 +75,7 @@ export async function recoverCodexSqliteTranscripts(
   }
 }
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   boundarySources: [
     "daemon/server/codex-transcript-*.ts",

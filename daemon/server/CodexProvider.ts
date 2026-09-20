@@ -9,7 +9,7 @@ import CodexSingleFileController from "./CodexSingleFileController";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
 import path from "node:path";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (context, { get }) => {

@@ -9,7 +9,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (context) => {

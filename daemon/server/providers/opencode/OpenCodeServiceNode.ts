@@ -9,7 +9,7 @@ import OpenCodeProvider from "./OpenCodeProvider";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "cli",
   children: [OpenCodeBridgeNode, OpenCodeProvider],
   create: () => {

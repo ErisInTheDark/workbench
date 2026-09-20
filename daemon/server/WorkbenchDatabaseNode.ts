@@ -77,11 +77,11 @@ function loadDatabaseControllers() {
   return { CaptureGapController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
 }
 
-export default new ReloadableNode<
+export default ReloadableNode.define<
   DaemonProcessContext,
   DaemonRuntimeObjects,
   DaemonProviderNotification
->({
+>()({
   access: "agent",
   boundarySources: [
     "daemon/server/lib/workbench/database/schema/**",

@@ -10,7 +10,7 @@ import CodexBridgeNode from "./CodexBridgeNode";
 import CodexLifecycleController from "./CodexLifecycleController";
 import { log, logError } from "./process-helpers";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "cli",
   children: [CodexAppServerNode, CodexBridgeNode],
   create: (context, build) => {

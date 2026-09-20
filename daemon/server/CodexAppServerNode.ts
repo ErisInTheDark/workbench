@@ -14,7 +14,7 @@ interface CodexServerHandoff {
   appServer: CodexAppServer;
 }
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "cli",
   children: [CodexBridgeNode],
   create: (context, build) => {

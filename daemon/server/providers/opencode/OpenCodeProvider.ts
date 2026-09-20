@@ -41,7 +41,7 @@ export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
   };
 }
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
   create: (_context, { get }) => {

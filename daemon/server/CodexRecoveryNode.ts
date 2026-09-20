@@ -12,7 +12,7 @@ import { createInitializeCapabilities, createInitializeRequest } from "workbench
 import { recoverCodexTurn } from "./codex-turn-recovery";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexBridgeNode, CodexProvider],
   create: (context, build) => {

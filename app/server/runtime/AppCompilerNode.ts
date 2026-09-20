@@ -8,7 +8,7 @@ import type { WorkbenchFrontendGeneration } from "workbench-shared/frontend-gene
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
-export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
+export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
   boundarySources: "app/client/browser-entry.tsx\napp/client/globals.css",
   children: [],

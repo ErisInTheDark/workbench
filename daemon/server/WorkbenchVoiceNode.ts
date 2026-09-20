@@ -14,7 +14,7 @@ import { buildWorkbenchPromptInstructions } from "./lib/workbench/instructions/w
 import { filterWorkbenchInstructionContent, formatWorkbenchInstructionFilterWarning } from "./lib/workbench/instructions/instruction-context-filter";
 import { listWorkbenchLibraryAgents } from "./lib/workbench-library";
 
-export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
+export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent", children: [WorkbenchWebSocketNode], lifecycle: "atomic",
   scope: "server:voice", safeAll: true,
   description: "Reload native recognition, voice model selection and transformer sessions.",
