@@ -800,7 +800,7 @@ test("accepted questionnaire response returns its thread to working", async () =
     title: "Task",
     identity: { harness: "codex", threadId: fixtureThreadIds["thread"] },
     metadata: { archived: false, pinned: false, snoozed: false },
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, turnId: question.turnId, settled: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, settled: false },
     pendingQuestionnaire: question,
   };
   const controller = new WorkbenchThreadStateController({
@@ -829,7 +829,7 @@ test("accepted questionnaire response returns its thread to working", async () =
       delivery: "delivered",
       insertAfterItemId: null,
       insertAfterItemIndex: null,
-      turnId: fixtureTurnIds["new-turn"],
+      turnId: question.turnId,
     }));
 
     assert.equal(result?.delivery, "delivered");
@@ -837,7 +837,7 @@ test("accepted questionnaire response returns its thread to working", async () =
       entry => entry.entryKind === "thread" && entry.identity.threadId === fixtureThreadIds["thread"],
     );
     assert.deepEqual(current?.entryKind === "thread" ? current.lifecycle : null, {
-      agent: { agentStatus: "working", turnId: fixtureTurnIds["new-turn"] },
+      agent: { agentStatus: "working", turnId: question.turnId },
       kind: "working",
       reason: "acceptedIntent",
       settled: false,
@@ -849,7 +849,7 @@ test("accepted questionnaire response returns its thread to working", async () =
       ...question,
       itemId: "984090b6-1d94-44cc-ab26-e6470965597e",
       requestKey: "replacement",
-      turnId: fixtureTurnIds["new-turn"],
+      turnId: question.turnId,
     };
     await controller.observeLifecycle("codex", fixtureThreadIds["thread"], {
       kind: "pendingInput",

@@ -1095,7 +1095,13 @@ export default class WorkbenchThreadStateController {
         const previousEntries = new Map(state.entries);
         const clearsPendingQuestionnaire = matches(current.pendingQuestionnaire);
         const lifecycle = clearsPendingQuestionnaire && areDeeplyEqual(current.lifecycle, context.lifecycle)
-          ? reduceWorkbenchThreadLifecycle(current.lifecycle, { kind: "acceptedIntent", turnId: accepted.turnId })
+          ? reduceWorkbenchThreadLifecycle(
+            reduceWorkbenchThreadLifecycle(current.lifecycle, {
+              kind: "inputResolved",
+              requestKey: questionnaire.requestKey,
+            }),
+            { kind: "acceptedIntent", turnId: accepted.turnId },
+          )
           : current.lifecycle;
         const next = parseWorkbenchThreadStateEntry({
           ...current,

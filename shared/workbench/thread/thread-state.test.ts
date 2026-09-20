@@ -713,6 +713,10 @@ test("exact-turn transitions reject stale completion and manual settlement becom
   });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.equal(isWorkbenchThreadStatusProviderOwned(pendingInput), true);
+  assert.deepEqual(
+    reduceWorkbenchThreadLifecycle(pendingInput, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }),
+    pendingInput,
+  );
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle" }), pendingInput);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
