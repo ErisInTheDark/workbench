@@ -5,7 +5,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
-import type { SessionInfo, SessionMessageInfo, SessionMessageUser } from "@opencode/client";
+import type { SessionInboxInfo, SessionInfo, SessionMessageInfo, SessionMessageUser } from "@opencode/client";
 import {
   NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema,
   type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema,
@@ -82,6 +82,14 @@ function nativeMessageId(clientMessageId: string) {
   return clientMessageId.startsWith("msg_") ? clientMessageId : `msg_${clientMessageId}`;
 }
 
+function isManagedWorkbenchPrompt(item: SessionInboxInfo) {
+  if (item.type !== "user") return false;
+  const metadata = item.payload.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  const workbench = metadata.workbench;
+  return Boolean(workbench && typeof workbench === "object" && !Array.isArray(workbench));
+}
+
 function openCodeFailure(operation: string, error: unknown) {
   if (error instanceof Error) return error;
   if (!error || typeof error !== "object") return new Error(`OpenCode ${operation} failed.`);
@@ -120,6 +128,7 @@ async function listMessages(
 }
 
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
+  private readonly executionStates = new Map<string, "active" | "idle">();
   private readonly pendingPrompts = new Set<Promise<void>>();
   private readonly sessions = new Map<string, SessionInfo>();
   private readonly latestTurns = new Map<string, {
@@ -245,7 +254,35 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   async submit(input: Parameters<WorkbenchProviderThreads["submit"]>[0]): Promise<WorkbenchThreadMessageResult> {
     const { binding, identity } = await this.native(input.threadId);
     const client = await this.options.acquire();
-    const delivery = input.intent === "steer" ? "steer" : "queue";
+    const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+    let session = this.sessions.get(binding.nativeThreadId);
+    if (!session || !this.executionStates.has(binding.nativeThreadId)) {
+      const [freshSession, inbox, stored] = await Promise.all([
+        client.session.get({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
+        client.session.inbox.list({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
+        this.options.reader.readPage({ threadId: identity.threadId, cursor: null }, entry),
+      ]);
+      session = freshSession;
+      this.sessions.set(binding.nativeThreadId, session);
+      const latest = stored?.thread.turns.at(-1);
+      if (latest) {
+        this.latestTurns.set(binding.nativeThreadId, {
+          threadId: identity.threadId,
+          turnId: WorkbenchTurnIdSchema.parse(latest.id),
+        });
+      }
+      this.executionStates.set(
+        binding.nativeThreadId,
+        latest && (
+          inbox.some(isManagedWorkbenchPrompt)
+          || latest.status === "inProgress" && session.outcome === undefined
+        ) ? "active" : "idle",
+      );
+    }
+    const activeTurn = this.executionStates.get(binding.nativeThreadId) === "active"
+      ? this.latestTurns.get(binding.nativeThreadId) ?? null
+      : null;
+    const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const request = prompt(input.input);
     const messageId = nativeMessageId(input.clientMessageId);
     const itemId = WorkbenchItemIdSchema.parse(randomUUID());
@@ -258,13 +295,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         input: input.input,
       },
     };
-    const session = input.intent === "steer" ? null : this.sessions.get(binding.nativeThreadId)
-      ?? await client.session.get({ sessionID: binding.nativeThreadId }, { signal: this.options.signal });
-    const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
     await this.options.managed.refresh({
       sessionID: binding.nativeThreadId,
-      cwd: session?.location.directory ?? identity.projectRoot,
+      cwd: session.location.directory,
       projectId: identity.projectId,
       threadId: identity.threadId,
       model: settings?.model ?? null,
@@ -277,33 +311,32 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       resolvePromptOwner = resolve;
     });
     let providerRequest: ReturnType<WorkbenchOpenCodeClient["session"]["prompt"]>;
-    const admittedSteer = input.intent === "steer"
+    const admittedSteer = activeTurn && delivery === "steer"
       ? this.createPendingSteer(
         binding.nativeThreadId,
         identity.threadId,
-        WorkbenchTurnIdSchema.parse(input.expectedTurnId),
+        activeTurn.turnId,
         itemId,
         input,
       )
       : null;
     try {
-      if (admittedSteer) await this.options.transcript.recordSteer(admittedSteer);
-      providerRequest = client.session.prompt({
-        sessionID: binding.nativeThreadId,
-        id: messageId,
-        ...request,
-        delivery,
-        metadata,
-      }, { signal: this.options.signal });
-      if (input.intent === "steer") {
+      if (admittedSteer) {
+        await this.options.transcript.recordSteer(admittedSteer);
+        providerRequest = client.session.prompt({
+          sessionID: binding.nativeThreadId,
+          id: messageId,
+          ...request,
+          delivery,
+          metadata,
+        }, { signal: this.options.signal });
         await providerRequest;
         resolvePromptOwner({
           threadId: identity.threadId,
-          turnId: WorkbenchTurnIdSchema.parse(input.expectedTurnId),
+          turnId: activeTurn.turnId,
         });
-        return { kind: "steered", turnId: input.expectedTurnId };
+        return { kind: "steered", turnId: activeTurn.turnId };
       }
-      this.trackPrompt(providerRequest, promptOwner);
       const message: SessionMessageUser = {
         id: messageId,
         type: "user",
@@ -311,7 +344,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         time: { created: Date.now() },
         metadata,
       };
-      const recorded = await this.options.transcript.record(session!, [message], {
+      const recorded = await this.options.transcript.record(session, [message], {
         id: identity.projectId,
         rootPath: identity.projectRoot,
       });
@@ -322,10 +355,19 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
       });
+      this.executionStates.set(binding.nativeThreadId, "active");
       resolvePromptOwner({
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
       });
+      providerRequest = client.session.prompt({
+        sessionID: binding.nativeThreadId,
+        id: messageId,
+        ...request,
+        delivery,
+        metadata,
+      }, { signal: this.options.signal });
+      this.trackPrompt(providerRequest, promptOwner, binding.nativeThreadId, messageId);
     } catch (error) {
       resolvePromptOwner(null);
       const failure = openCodeFailure("prompt", error);
@@ -418,6 +460,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     return this.latestTurns.get(nativeThreadId) ?? null;
   }
 
+  markExecutionStarted(nativeThreadId: string) {
+    this.executionStates.set(nativeThreadId, "active");
+  }
+
+  markExecutionSettled(nativeThreadId: string) {
+    this.executionStates.set(nativeThreadId, "idle");
+  }
+
   async resolveToolCaller(nativeThreadId: string, signal: AbortSignal) {
     signal.throwIfAborted();
     const identity = await this.options.identities.resolve({
@@ -443,12 +493,20 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private trackPrompt(
     request: ReturnType<WorkbenchOpenCodeClient["session"]["prompt"]>,
     owner: Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null>,
+    nativeThreadId: string,
+    messageId: string,
   ) {
     const tracked = Promise.all([
       request.then(() => true, () => false),
       owner,
     ]).then(async ([succeeded, resolvedOwner]) => {
       if (succeeded || !resolvedOwner || this.options.signal.aborted) return;
+      const inbox = await (await this.options.acquire()).session.inbox.list(
+        { sessionID: nativeThreadId },
+        { signal: this.options.signal },
+      );
+      if (inbox.some(item => item.id === messageId)) return;
+      this.executionStates.set(nativeThreadId, "idle");
       await this.options.observe({
         activity: null,
         lifecycle: {
@@ -487,6 +545,12 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     if (!this.pendingSteers.get(result.threadId)?.size) this.pendingSteers.delete(result.threadId);
     if (result.latestTurnId) {
       this.latestTurns.set(session.id, { threadId: result.threadId, turnId: result.latestTurnId });
+      this.executionStates.set(
+        session.id,
+        result.latestTurnState === "inProgress" || this.pendingSteerSessions.has(session.id) ? "active" : "idle",
+      );
+    } else {
+      this.executionStates.set(session.id, "idle");
     }
     return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
   }

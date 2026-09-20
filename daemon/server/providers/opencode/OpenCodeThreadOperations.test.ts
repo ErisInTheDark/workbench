@@ -28,11 +28,22 @@ function operations(
   lifecycle: {
     observe?: (facts: object) => Promise<void>;
     questionnaires?: object;
+    readPage?: () => Promise<object>;
     signal?: AbortSignal;
   } = {},
 ) {
   return new OpenCodeThreadOperations({
-    acquire: async () => client as never,
+    acquire: async () => {
+      const value = client as { session?: Record<string, unknown> };
+      return {
+        ...value,
+        session: {
+          get: async () => session,
+          inbox: { list: async () => [] },
+          ...value.session,
+        },
+      } as never;
+    },
     observe: lifecycle.observe ?? (async () => undefined),
     identities: {
       resolve: async () => ({
@@ -78,7 +89,11 @@ function operations(
       ) => interrupt(),
     } as never,
     transcript: transcript as never,
-    reader: {} as never,
+    reader: {
+      readPage: lifecycle.readPage ?? (async () => ({
+        thread: { turns: [{ id: turnId, status: "inProgress", items: [] }] },
+      })),
+    } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
   });
 }
@@ -184,7 +199,7 @@ test("materialises every canonical message page in ascending order", async () =>
   assert.deepEqual(recorded, ["user", "assistant"]);
 });
 
-test("submits a steer once with native steer delivery", async () => {
+test("provider-owned active execution submits a steer once with native steer delivery", async () => {
   const prompts: object[] = [];
   const steerObservations: object[] = [];
   const owner = operations({
@@ -209,8 +224,7 @@ test("submits a steer once with native steer delivery", async () => {
     threadId,
     clientMessageId: "00000000-0000-4000-8000-000000000010",
     input: [{ type: "text", text: "please continue", text_elements: [] }],
-    intent: "steer",
-    expectedTurnId: turnId,
+    intent: "continue",
   });
 
   const submitted = prompts[0] as {
@@ -259,24 +273,34 @@ test("submits a steer once with native steer delivery", async () => {
 });
 
 test("admits a root turn directly without rereading provider history", async () => {
+  const previousTurnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000020");
   const recorded: Array<{ session: object; messages: object[] }> = [];
-  const owner = operations({
+  let owner!: OpenCodeThreadOperations;
+  let ownerAtPrompt: object | null = null;
+  owner = operations({
     session: {
       get: async () => session,
-      prompt: async () => ({
-        id: "inbox",
-        sessionID: nativeThreadId,
-        time: { created: 3 },
-        type: "user",
-        payload: { text: "hello" },
-        delivery: "queue",
-      }),
+      prompt: async () => {
+        ownerAtPrompt = owner.currentTurn(nativeThreadId);
+        return {
+          id: "inbox",
+          sessionID: nativeThreadId,
+          time: { created: 3 },
+          type: "user",
+          payload: { text: "hello" },
+          delivery: "queue",
+        };
+      },
     },
   }, {
     record: async (nativeSession: object, messages: object[]) => {
       recorded.push({ session: nativeSession, messages });
       return { threadId, latestTurnId: turnId };
     },
+  }, {}, {
+    readPage: async () => ({
+      thread: { turns: [{ id: previousTurnId, status: "completed", items: [] }] },
+    }),
   });
   Object.assign(owner, {
     read: async () => ({ turns: [{ id: turnId, status: "inProgress", items: [] }] }),
@@ -291,6 +315,7 @@ test("admits a root turn directly without rereading provider history", async () 
   });
 
   assert.equal(recorded.length, 1);
+  assert.deepEqual(ownerAtPrompt, { threadId, turnId });
   assert.equal(recorded[0]!.session, session);
   const recordedMessage = recorded[0]!.messages[0] as {
     id: string; text: string; time: { created: unknown }; type: string;
@@ -305,6 +330,188 @@ test("admits a root turn directly without rereading provider history", async () 
     kind: "started",
     turn: { id: turnId, status: "inProgress", items: [] },
   });
+});
+
+test("provider-owned idle execution starts an ordinary continuation", async () => {
+  const prompts: Array<{ delivery: string }> = [];
+  const owner = operations({
+    session: {
+      get: async () => ({ ...session, outcome: "succeeded" }),
+      prompt: async (input: { delivery: string }) => {
+        prompts.push(input);
+        return { id: "inbox", sessionID: nativeThreadId, time: { created: 3 }, type: "user" };
+      },
+    },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId }),
+  });
+  Object.assign(owner, {
+    read: async () => ({ turns: [{ id: turnId, status: "inProgress", items: [] }] }),
+  });
+
+  const result = await owner.submit({
+    threadId,
+    clientMessageId: "client-message",
+    input: [{ type: "text", text: "hello", text_elements: [] }],
+    intent: "continue",
+  });
+
+  assert.equal(prompts[0]?.delivery, "queue");
+  assert.equal(result.kind, "started");
+});
+
+test("provider reload treats a surviving managed inbox prompt as active execution ownership", async () => {
+  const prompts: Array<{ delivery: string }> = [];
+  const steerObservations: object[] = [];
+  const owner = operations({
+    session: {
+      get: async () => ({ ...session, outcome: "failed" }),
+      inbox: {
+        list: async () => [{
+          id: "pending-inbox",
+          sessionID: nativeThreadId,
+          time: { created: 2 },
+          type: "user",
+          payload: {
+            text: "earlier work",
+            metadata: { workbench: { version: 1 } },
+          },
+          delivery: "queue",
+        }],
+      },
+      prompt: async (input: { delivery: string }) => {
+        prompts.push(input);
+        return {
+          id: "steer-inbox",
+          sessionID: nativeThreadId,
+          time: { created: 3 },
+          type: "user",
+          payload: { text: "please continue" },
+          delivery: "steer",
+        };
+      },
+    },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId }),
+    recordSteer: async (entry: object) => { steerObservations.push(entry); },
+  }, {}, {
+    readPage: async () => ({
+      thread: { turns: [{ id: turnId, status: "failed", items: [] }] },
+    }),
+  });
+
+  const result = await owner.submit({
+    threadId,
+    clientMessageId: "00000000-0000-4000-8000-000000000010",
+    input: [{ type: "text", text: "please continue", text_elements: [] }],
+    intent: "continue",
+  });
+
+  assert.equal(prompts[0]?.delivery, "steer");
+  assert.deepEqual(result, { kind: "steered", turnId });
+  assert.equal(steerObservations.length, 1);
+});
+
+test("preserves a root when an ambiguous prompt failure still exists in the native inbox", async () => {
+  let inboxReads = 0;
+  let promptCalls = 0;
+  const lifecycle: object[] = [];
+  const owner = operations({
+    session: {
+      get: async () => ({ ...session, outcome: "failed" }),
+      inbox: {
+        list: async () => ++inboxReads === 1 ? [] : [{
+          id: "msg_client-message",
+          sessionID: nativeThreadId,
+          time: { created: 3 },
+          type: "user",
+          payload: {
+            text: "hello",
+            metadata: { workbench: { version: 1 } },
+          },
+          delivery: "queue",
+        }],
+      },
+      prompt: async () => {
+        if (++promptCalls === 1) throw new Error("connection closed after admission");
+        return { id: "steer", sessionID: nativeThreadId, time: { created: 4 }, type: "user" };
+      },
+    },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId }),
+    recordSteer: async () => undefined,
+  }, {}, {
+    observe: async facts => { lifecycle.push(facts); },
+    readPage: async () => ({
+      thread: { turns: [{ id: turnId, status: "completed", items: [] }] },
+    }),
+  });
+  Object.assign(owner, {
+    read: async () => ({ turns: [{ id: turnId, status: "inProgress", items: [] }] }),
+  });
+
+  assert.equal((await owner.submit({
+    threadId,
+    clientMessageId: "client-message",
+    input: [{ type: "text", text: "hello", text_elements: [] }],
+    intent: "newTurn",
+  })).kind, "started");
+  await owner.settle();
+  const continuation = await owner.submit({
+    threadId,
+    clientMessageId: "00000000-0000-4000-8000-000000000010",
+    input: [{ type: "text", text: "continue", text_elements: [] }],
+    intent: "continue",
+  });
+
+  assert.deepEqual(lifecycle, []);
+  assert.deepEqual(continuation, { kind: "steered", turnId });
+});
+
+test("fails and releases a root when rejected prompt admission is absent from the native inbox", async () => {
+  let promptCalls = 0;
+  const deliveries: string[] = [];
+  const lifecycle: object[] = [];
+  const owner = operations({
+    session: {
+      get: async () => ({ ...session, outcome: "failed" }),
+      inbox: { list: async () => [] },
+      prompt: async (input: { delivery: string }) => {
+        deliveries.push(input.delivery);
+        if (++promptCalls === 1) throw new Error("admission rejected");
+        return { id: "root", sessionID: nativeThreadId, time: { created: 4 }, type: "user" };
+      },
+    },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId }),
+    recordSteer: async () => undefined,
+  }, {}, {
+    observe: async facts => { lifecycle.push(facts); },
+    readPage: async () => ({
+      thread: { turns: [{ id: turnId, status: "completed", items: [] }] },
+    }),
+  });
+  Object.assign(owner, {
+    read: async () => ({ turns: [{ id: turnId, status: "inProgress", items: [] }] }),
+  });
+
+  await owner.submit({
+    threadId,
+    clientMessageId: "client-message",
+    input: [{ type: "text", text: "hello", text_elements: [] }],
+    intent: "newTurn",
+  });
+  await owner.settle();
+  const continuation = await owner.submit({
+    threadId,
+    clientMessageId: "next-message",
+    input: [{ type: "text", text: "retry", text_elements: [] }],
+    intent: "continue",
+  });
+
+  assert.equal(lifecycle.length, 1);
+  assert.deepEqual(deliveries, ["queue", "queue"]);
+  assert.equal(continuation.kind, "started");
 });
 
 test("fails an admitted steer without failing its active turn when OpenCode rejects it", async () => {
@@ -328,8 +535,7 @@ test("fails an admitted steer without failing its active turn when OpenCode reje
     threadId,
     clientMessageId: "00000000-0000-4000-8000-000000000010",
     input: [{ type: "text", text: "hello", text_elements: [] }],
-    intent: "steer",
-    expectedTurnId: turnId,
+    intent: "continue",
   }), /selected model is unavailable/u);
   assert.deepEqual(steerObservations.map(entry => entry.status), ["pending", "failed"]);
   assert.deepEqual(await owner.history.steers(threadId), []);

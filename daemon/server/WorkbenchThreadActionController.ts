@@ -174,7 +174,16 @@ export default class WorkbenchThreadActionController {
 
   private async message(input: WorkbenchThreadMessage) {
     const { identity, harness, provider } = await this.target(input.threadId);
-    const result = await provider.threads.submit({ ...input, threadId: identity.threadId });
+    const providerInput = input.intent === "newTurn"
+      ? { ...input, threadId: identity.threadId }
+      : {
+          threadId: identity.threadId,
+          clientMessageId: input.clientMessageId,
+          input: input.input,
+          ...(input.context ? { context: input.context } : {}),
+          intent: "continue" as const,
+        };
+    const result = await provider.threads.submit(providerInput);
     try {
       const turnId = WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId);
       await this.owners.state.acceptProviderIntent(identity.projectId, harness, identity.threadId, turnId);

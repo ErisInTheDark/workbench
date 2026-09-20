@@ -321,7 +321,7 @@ export default class OpenCodeTranscriptAdapter {
       activityAt: session.time.updated,
     });
     const groups = groupTurns(messages);
-    const turns = await this.owners.threads.observeTurns(groups.map((group, index) => {
+    const turnObservations = groups.map((group, index) => {
       const first = group.messages[0]!;
       const last = group.messages.at(-1)!;
       const assistant = [...group.messages].reverse().find(message => message.type === "assistant") as SessionMessageAssistant | undefined;
@@ -346,7 +346,8 @@ export default class OpenCodeTranscriptAdapter {
         endedAt: completedAt,
         durationMs: completedAt === null ? null : Math.max(0, completedAt - first.time.created),
       };
-    }));
+    });
+    const turns = await this.owners.threads.observeTurns(turnObservations);
     for (const [index, turn] of turns.entries()) {
       const first = groups[index]!.messages[0]!;
       this.turnScopes.set(`${turn.threadId}:${turn.turnId}`, {
@@ -506,6 +507,7 @@ export default class OpenCodeTranscriptAdapter {
     return {
       ...identity,
       latestTurnId: turns.at(-1)?.turnId ?? null,
+      latestTurnState: turnObservations.at(-1)?.state ?? null,
       deliveredSteerClientMessageIds,
     };
   }

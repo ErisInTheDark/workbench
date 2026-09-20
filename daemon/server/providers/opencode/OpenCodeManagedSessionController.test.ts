@@ -8,13 +8,22 @@ import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController
 
 test("marks managed sessions and refreshes filtered instructions before each prompt", async () => {
   const puts: object[] = [];
+  const updates: object[] = [];
+  const operations: string[] = [];
   let generation = 0;
   const controller = new OpenCodeManagedSessionController({
     acquire: async () => ({
       session: {
+        update: async (input: object) => {
+          updates.push(input);
+          operations.push("permissions");
+        },
         instructions: {
           entry: {
-            put: async (input: object) => { puts.push(input); },
+            put: async (input: object) => {
+              puts.push(input);
+              operations.push("instructions");
+            },
           },
         },
       },
@@ -46,6 +55,23 @@ test("marks managed sessions and refreshes filtered instructions before each pro
   };
   await controller.refresh(context);
   await controller.refresh(context);
+  assert.deepEqual(updates, [
+    {
+      sessionID: "session",
+      permissions: [
+        { action: "bash", resource: "*", effect: "deny" },
+        { action: "shell", resource: "*", effect: "deny" },
+      ],
+    },
+    {
+      sessionID: "session",
+      permissions: [
+        { action: "bash", resource: "*", effect: "deny" },
+        { action: "shell", resource: "*", effect: "deny" },
+      ],
+    },
+  ]);
+  assert.deepEqual(operations, ["permissions", "instructions", "permissions", "instructions"]);
   assert.deepEqual(puts, [
     {
       sessionID: "session",

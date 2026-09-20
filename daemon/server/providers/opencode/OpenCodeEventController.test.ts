@@ -7,12 +7,18 @@ import type { OpenCodeEvent } from "@opencode/client";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import OpenCodeEventController from "./OpenCodeEventController";
 
+const executionLifecycle = {
+  markExecutionSettled: (_sessionID: string) => undefined,
+  markExecutionStarted: (_sessionID: string) => undefined,
+};
+
 test("invalidates cached model catalogues on provider catalogue events", async () => {
   let invalidations = 0;
   const controller = new OpenCodeEventController({
     invalidateModelCatalogs: () => { invalidations++; },
     observe: async () => undefined,
     threads: {
+      ...executionLifecycle,
       currentTurn: () => null,
       latestTurn: async () => null,
       syncNative: async () => { throw new Error("session sync must not run"); },
@@ -38,13 +44,18 @@ function event(value: object) {
 
 test("streams text directly and performs one canonical read at execution settlement", async () => {
   let syncs = 0;
+  const started: string[] = [];
+  const settled: string[] = [];
   const recorded: { source: object; lifecycle: string; text: string }[] = [];
   const deltas: string[] = [];
   const lifecycle: string[] = [];
   const turnStates: string[] = [];
   const controller = new OpenCodeEventController({
     threads: {
+      ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
+      markExecutionSettled: sessionID => { settled.push(sessionID); },
+      markExecutionStarted: sessionID => { started.push(sessionID); },
       syncNative: async () => {
         syncs++;
         return { threadId };
@@ -118,12 +129,15 @@ test("streams text directly and performs one canonical read at execution settlem
   assert.deepEqual(turnStates, ["inProgress"],
     "Successful settlement must preserve the canonical history timestamp");
   assert.equal(syncs, 1);
+  assert.deepEqual(started, ["session"]);
+  assert.deepEqual(settled, ["session"]);
 });
 
 test("keeps reused tool ids isolated by native session", async () => {
   const recorded: Array<{ content: unknown; source: object; tool: string }> = [];
   const controller = new OpenCodeEventController({
     threads: {
+      ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId }),
       latestTurn: async () => null,
@@ -182,6 +196,7 @@ test("materialises an admitted steer only when OpenCode delivers its inbox item"
   let syncs = 0;
   const controller = new OpenCodeEventController({
     threads: {
+      ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => {
         syncs++;
@@ -214,6 +229,7 @@ test("does not complete a WB turn while its next OpenCode steer is pending", asy
   const lifecycle: string[] = [];
   const controller = new OpenCodeEventController({
     threads: {
+      ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId, hasPendingSteers: true }),
       latestTurn: async () => ({ id: turnId }),
@@ -240,6 +256,7 @@ test("maps OpenCode cancellation failure to interrupted after a WB stop", async 
   const states: string[] = [];
   const controller = new OpenCodeEventController({
     threads: {
+      ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       consumeRequestedInterrupt: () => true,
       syncNative: async () => ({ threadId, hasPendingSteers: false }),

@@ -15,6 +15,14 @@ import { formatWorkbenchInstructionFilterWarning } from "../../lib/workbench/ins
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 
+function managedPermissions() {
+  return NATIVE_COMMAND_ACTIONS.map(action => ({
+    action,
+    resource: "*",
+    effect: "deny" as const,
+  }));
+}
+
 export interface OpenCodeManagedSessionContext {
   sessionID: string;
   cwd: string;
@@ -44,11 +52,7 @@ export default class OpenCodeManagedSessionController {
   creation() {
     return {
       metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
-      permissions: NATIVE_COMMAND_ACTIONS.map(action => ({
-        action,
-        resource: "*",
-        effect: "deny" as const,
-      })),
+      permissions: managedPermissions(),
     };
   }
 
@@ -60,7 +64,12 @@ export default class OpenCodeManagedSessionController {
       built.developerInstructions,
       built.activatedSkills,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
-    await (await this.options.acquire()).session.instructions.entry.put({
+    const session = (await this.options.acquire()).session;
+    await session.update({
+      sessionID: input.sessionID,
+      permissions: managedPermissions(),
+    });
+    await session.instructions.entry.put({
       sessionID: input.sessionID,
       key: "workbench",
       value,

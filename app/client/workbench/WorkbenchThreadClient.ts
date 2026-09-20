@@ -612,6 +612,7 @@ function WorkbenchThreadClient(
   const listeners = new Set<WorkbenchThreadListener>();
   const account = new WorkbenchAccountClient({
     listModels: async (harness) => (await daemon.models.list(harness)).data,
+    reportError: message => emitStatusMessage(message),
     readRateLimits: async (harness) => await daemon.account.limits(harness),
   });
   const state = createInitialThreadState();

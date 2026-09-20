@@ -22,6 +22,8 @@ export interface OpenCodeEventControllerOptions {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
     latestTurn(threadId: string): Promise<{ id: string } | null>;
+    markExecutionSettled(nativeThreadId: string): void;
+    markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; hasPendingSteers?: boolean }>;
   };
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">;
@@ -77,6 +79,7 @@ export default class OpenCodeEventController {
         return;
       }
       case "session.execution.started": {
+        this.options.threads.markExecutionStarted(sessionID);
         const active = await this.active(sessionID);
         await this.options.transcript.recordTurnState({
           ...active,
@@ -212,6 +215,7 @@ export default class OpenCodeEventController {
         const requestedInterrupt = this.options.threads.consumeRequestedInterrupt?.(sessionID) ?? false;
         const identity = await this.options.threads.syncNative(sessionID);
         if (event.type === "session.execution.succeeded" && identity.hasPendingSteers) return;
+        this.options.threads.markExecutionSettled(sessionID);
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
         const status = requestedInterrupt ? "interrupted"

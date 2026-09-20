@@ -3912,6 +3912,7 @@ test("managed admission steers a provider-confirmed active turn without changing
   let prepared = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
+  const staleActiveTurn = { ...activeTurn, id: "stale-turn" };
   const activeThread = { ...bridgeThread(), turns: [] };
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -3919,7 +3920,7 @@ test("managed admission steers a provider-confirmed active turn without changing
       const result = message.method === "thread/read"
         ? { thread: activeThread }
         : message.method === "thread/turns/list"
-          ? { data: [activeTurn], nextCursor: null }
+          ? { data: [staleActiveTurn], nextCursor: null }
         : message.method === "turn/steer"
           ? { turnId: "turn" }
           : message.method === "turn/start"
@@ -3946,6 +3947,10 @@ test("managed admission steers a provider-confirmed active turn without changing
     resolveProjectFromCwd: async () => null,
   });
   try {
+    await bridge.handleUpstreamMessage({
+      method: "turn/started",
+      params: { threadId: "thread", turn: activeTurn, turnId: activeTurn.id },
+    });
     const response = await bridge.handleBridgeRequest({
       id: 72,
       method: "workbench/codex/message/admit",
@@ -3965,7 +3970,6 @@ test("managed admission steers a provider-confirmed active turn without changing
     });
     assert.deepEqual(upstreamRequests.map(({ method }) => method), [
       "thread/read",
-      "thread/turns/list",
       "turn/steer",
     ]);
     assert.deepEqual(upstreamRequests[0]?.params, {
@@ -3973,12 +3977,6 @@ test("managed admission steers a provider-confirmed active turn without changing
       threadId: "thread",
     });
     assert.deepEqual(upstreamRequests[1]?.params, {
-      itemsView: "notLoaded",
-      limit: 1,
-      sortDirection: "desc",
-      threadId: "thread",
-    });
-    assert.deepEqual(upstreamRequests[2]?.params, {
       clientUserMessageId: "message-id",
       expectedTurnId: "turn",
       input: [{ text: "steer me", text_elements: [], type: "text" }],
@@ -4008,7 +4006,7 @@ test("managed admission steers a provider-confirmed active turn without changing
     assert.match(startOnly.error?.message ?? "", /cannot start a new turn while the provider reports an active turn/u);
     assert.deepEqual(
       upstreamRequests.slice(startOnlyOffset).map(({ method }) => method),
-      ["thread/read", "thread/turns/list"],
+      ["thread/read"],
     );
     const toolOutput = { name: "agent_message", namespace: "workbench", output: "agent information" };
     const outputOffset = upstreamRequests.length;

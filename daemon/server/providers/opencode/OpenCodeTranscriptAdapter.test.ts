@@ -248,7 +248,7 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
     },
   });
 
-  await adapter.record({
+  const result = await adapter.record({
     id: "session", projectID: "project", title: "Thread", cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 3 }, location: { directory: "C:/repo" },
@@ -264,6 +264,7 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
   }, { keepLatestTurnOpen: true, settleUsage: true });
 
   assert.equal(turnState, "inProgress");
+  assert.equal(result.latestTurnState, "inProgress");
   assert.deepEqual(usage?.snapshot.tokenUsage?.last, {
     cacheWriteInputTokens: 7,
     cachedInputTokens: 11,

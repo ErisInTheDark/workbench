@@ -11,7 +11,25 @@ import {
   createLifecycleOwnedCompanionToolOwner,
   createOpenCodeWorkbenchPlugin,
   readOpenCodeGoQuota,
+  resolveOpenCodeGoCredential,
 } from "./index";
+
+test("uses the sole Go credential when OpenCode has no active selection", async () => {
+  const connection = { type: "credential" as const, id: "connection", label: "Go" };
+  const resolved: object[] = [];
+  const credential = await resolveOpenCodeGoCredential({
+    connection: {
+      active: async () => undefined,
+      resolve: async selected => {
+        resolved.push(selected);
+        return { type: "key", key: "secret-value" };
+      },
+    },
+    get: async () => ({ data: { connections: [connection] } }),
+  });
+  assert.equal(credential?.type, "key");
+  assert.deepEqual(resolved, [connection]);
+});
 
 test("normalises all OpenCode Go windows without returning the credential", async () => {
   const seen: string[] = [];
@@ -31,14 +49,38 @@ test("normalises all OpenCode Go windows without returning the credential", asyn
   });
   assert.deepEqual(seen, ["Bearer secret-value"]);
   assert.equal(JSON.stringify(result).includes("secret-value"), false);
-  assert.deepEqual(Object.keys(result.windows), ["rolling", "weekly", "monthly"]);
-  assert.equal(result.observedAt, 100);
-  const unavailable = await readOpenCodeGoQuota({
+  if ("error" in result) assert.fail(result.error.message);
+  assert.deepEqual(Object.keys(result.quota.windows), ["rolling", "weekly", "monthly"]);
+  assert.equal(result.quota.observedAt, 100);
+  assert.deepEqual(await readOpenCodeGoQuota({
     resolveCredential: async () => ({ type: "key", key: "secret-value" }),
     fetch: async () => new Response(null, { status: 403 }),
+  }), {
+    ok: false,
+    error: {
+      kind: "response",
+      message: "OpenCode Go quota is unavailable for the active account.",
+    },
   });
-  assert.equal(unavailable.available, false);
-  assert.equal(unavailable.windows, null);
+  assert.deepEqual(await readOpenCodeGoQuota({
+    resolveCredential: async () => undefined,
+  }), {
+    ok: false,
+    error: {
+      kind: "credential",
+      message: "OpenCode Go has no available credential.",
+    },
+  });
+  assert.deepEqual(await readOpenCodeGoQuota({
+    resolveCredential: async () => ({ type: "key", key: "secret-value" }),
+    fetch: async () => { throw new Error("PRIVATE_NETWORK_DETAIL"); },
+  }), {
+    ok: false,
+    error: {
+      kind: "request",
+      message: "OpenCode Go usage request failed.",
+    },
+  });
 });
 
 test("keeps MCP tool calls pending until response or explicit lifecycle closure", async () => {
@@ -111,7 +153,7 @@ test("replaces a failed companion transport without replaying its tool call", as
   assert.deepEqual(closes, [1, 2]);
 });
 
-test("keeps native file tools, replaces managed shell, and shares one Workbench client", async t => {
+test("keeps native file tools, replaces managed shell and questions, and shares one Workbench client", async t => {
   let contextHook: ((input: {
     sessionID: string;
     tools: Record<string, { description: string; input: object }>;
@@ -242,29 +284,39 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
 
   const ordinaryTools = {
     bash: { description: "native", input: {} },
+    execute: { description: "native code mode", input: {} },
+    question: { description: "native", input: {} },
     wb_shell: { description: "workbench", input: {} },
   };
   await contextHook({ sessionID: "ordinary", tools: ordinaryTools });
+  const ordinaryExecuteDescription = ordinaryTools.execute.description;
   assert.ok("bash" in ordinaryTools);
+  assert.ok("question" in ordinaryTools);
   assert.ok(!("wb_shell" in ordinaryTools));
+  assert.equal(ordinaryExecuteDescription, "native code mode");
 
   const managedTools = {
     bash: { description: "native", input: {} },
     shell: { description: "native", input: {} },
     execute: { description: "native", input: {} },
+    question: { description: "native", input: {} },
     apply_patch: { description: "native", input: {} },
     edit: { description: "native", input: {} },
     read: { description: "native", input: {} },
     wb_shell: { description: "workbench", input: {} },
   };
   await contextHook({ sessionID: "managed", tools: managedTools });
+  const managedExecuteDescription = managedTools.execute.description;
   assert.ok(!("bash" in managedTools));
   assert.ok(!("shell" in managedTools));
+  assert.ok(!("question" in managedTools));
   assert.ok("execute" in managedTools);
   assert.ok("apply_patch" in managedTools);
   assert.ok("edit" in managedTools);
   assert.ok("read" in managedTools);
   assert.ok("wb_shell" in managedTools);
+  assert.match(managedExecuteDescription, /nested Workbench tools only/iu);
+  assert.match(managedExecuteDescription, /direct OpenCode tools/iu);
 
   await assert.rejects(
     Promise.resolve(executeBefore({ id: "bash", input: {}, sessionID: "managed", tool: "bash" })),
@@ -272,6 +324,10 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
   );
   await assert.rejects(
     Promise.resolve(executeBefore({ id: "shell", input: {}, sessionID: "managed", tool: "shell" })),
+    /native OpenCode tool.*managed Workbench session/iu,
+  );
+  await assert.rejects(
+    Promise.resolve(executeBefore({ id: "question", input: {}, sessionID: "managed", tool: "question" })),
     /native OpenCode tool.*managed Workbench session/iu,
   );
   await executeBefore({ id: "edit", input: {}, sessionID: "managed", tool: "edit" });

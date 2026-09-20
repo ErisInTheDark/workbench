@@ -80,18 +80,27 @@ function setup(options: {
   };
 }
 
-test("active and waiting threads preserve content, context and expected-turn intent", async () => {
+test("active and waiting threads preserve optimistic steer appearance without choosing provider delivery", async () => {
   for (const status of ["active", "active:waitingOnUserInput"]) {
     const context = { activatedSkillPaths: ["C:/skills/review/SKILL.md"] };
     const f = setup({ context });
     f.sources.update("codex:thread", source => ({ ...source, status }));
     assert.equal((await f.admit()).kind, "admitted");
     assert.deepEqual(f.messages, [{
-      intent: "steer", threadId: "thread", expectedTurnId: "turn",
+      intent: "continue", threadId: "thread",
       clientMessageId: "message-1", input, context,
     }]);
     assert.deepEqual(f.events, ["connect", "render"]);
   }
+});
+
+test("provider-started response replaces an optimistic steer with a new turn", async () => {
+  const started = { ...thread().turns[0]!, id: "new-turn" };
+  const f = setup({ submit: async () => ({ kind: "started", turn: started }) });
+  const result = await f.admit();
+  assert.equal(result.kind, "turnStarted");
+  assert.deepEqual(f.messages.map(message => message.intent), ["continue"]);
+  assert.deepEqual(f.events, ["connect", "render", "started"]);
 });
 
 test("idle admission projects pending input before starting or steering through the daemon", async () => {
@@ -134,7 +143,7 @@ test("connection-time activity changes choose the latest source without a second
     connection.resolve();
     await admission;
     assert.equal(f.messages.length, 1);
-    assert.equal(f.messages[0].intent, becomesActive ? "steer" : "continue");
+    assert.equal(f.messages[0].intent, "continue");
   }
 });
 

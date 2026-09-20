@@ -2013,7 +2013,7 @@ export default class CodexStdioBridge {
         const turnId = asString(asRecord(message.params)?.turnId)
           ?? asString(asRecord(asRecord(message.params)?.turn)?.id);
         if (threadId) this.unmaterializedThreadIds.delete(threadId);
-        if (threadId && turnId) this.transcriptActiveTurns.set(turnId, threadId);
+        if (threadId && turnId) this.rememberTranscriptActiveTurn(threadId, turnId);
       }
       if (message.method === "item/started" || message.method === "item/completed") {
         this.fileChanges.recordTurnCursor(message.params);
@@ -3172,26 +3172,30 @@ export default class CodexStdioBridge {
       if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
         return await this.dispatchAdmittedTurnStart(requestId, startRequest);
       }
-      const activeTurnResponse = await this.dispatchManagedProviderRequest({
-        id: `workbench:admission-active-turn:${String(requestId ?? Date.now())}`,
-        method: "thread/turns/list",
-        params: {
-          itemsView: "notLoaded",
-          limit: 1,
-          sortDirection: "desc",
-          threadId,
-        },
-      });
-      signal.throwIfAborted();
-      if (activeTurnResponse.error) return { id: requestId, error: activeTurnResponse.error };
-      const activeTurns = asRecord(activeTurnResponse.result)?.data;
-      if (!Array.isArray(activeTurns)) {
-        return { id: requestId, error: { code: -32000, message: "Codex admission could not read the active turn." } };
+      let activeTurnId = this.readTranscriptActiveTurnId(threadId);
+      if (!activeTurnId) {
+        const activeTurnResponse = await this.dispatchManagedProviderRequest({
+          id: `workbench:admission-active-turn:${String(requestId ?? Date.now())}`,
+          method: "thread/turns/list",
+          params: {
+            itemsView: "notLoaded",
+            limit: 1,
+            sortDirection: "desc",
+            threadId,
+          },
+        });
+        signal.throwIfAborted();
+        if (activeTurnResponse.error) return { id: requestId, error: activeTurnResponse.error };
+        const activeTurns = asRecord(activeTurnResponse.result)?.data;
+        if (!Array.isArray(activeTurns)) {
+          return { id: requestId, error: { code: -32000, message: "Codex admission could not read the active turn." } };
+        }
+        activeTurnId = this.readManagedActiveTurn(readThread, activeTurns as Turn[]).id;
       }
       const steerResponse = await this.dispatchManagedMessageSteer(
         requestId,
         threadId,
-        this.readManagedActiveTurn(readThread, activeTurns as Turn[]),
+        activeTurnId,
         startRequest,
         steerRequest,
       );
@@ -3312,7 +3316,7 @@ export default class CodexStdioBridge {
         if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
           return { accepted: false, result: await this.dispatchAdmittedTurnStart(requestId, startRequest) };
         }
-        return { accepted: false, result: await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest) };
+        return { accepted: false, result: await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn.id, startRequest, steerRequest) };
       }
       if (resumedThread.status.type !== "idle" && resumedThread.status.type !== "systemError") {
         return { accepted: false, result: { id: requestId, error: { code: -32000, message: `The resumed Codex thread is ${resumedThread.status.type}, not inactive.` } } };
@@ -3379,10 +3383,25 @@ export default class CodexStdioBridge {
     return activeTurn;
   }
 
+  private rememberTranscriptActiveTurn(threadId: string, turnId: string) {
+    for (const [knownTurnId, knownThreadId] of this.transcriptActiveTurns) {
+      if (knownThreadId === threadId) this.transcriptActiveTurns.delete(knownTurnId);
+    }
+    this.transcriptActiveTurns.set(turnId, threadId);
+  }
+
+  private readTranscriptActiveTurnId(threadId: string) {
+    let activeTurnId: string | null = null;
+    for (const [knownTurnId, knownThreadId] of this.transcriptActiveTurns) {
+      if (knownThreadId === threadId) activeTurnId = knownTurnId;
+    }
+    return activeTurnId;
+  }
+
   private async dispatchManagedMessageSteer(
     requestId: number | string | null,
     threadId: string,
-    activeTurn: Turn,
+    activeTurnId: string,
     startRequest: JsonRpcRequest,
     steerRequest: JsonRpcRequest | null,
   ): Promise<JsonRpcResponse> {
@@ -3407,7 +3426,7 @@ export default class CodexStdioBridge {
       params: {
         ...asRecord(steerRequest.params),
         clientUserMessageId,
-        expectedTurnId: activeTurn.id,
+        expectedTurnId: activeTurnId,
         input: startParams.input,
         threadId,
       },

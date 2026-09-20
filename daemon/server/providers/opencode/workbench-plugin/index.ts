@@ -3,6 +3,7 @@
  * - connectLifecycleOwnedCompanionTools: connect MCP tools without the SDK's manufactured request deadline.
  * - createLifecycleOwnedCompanionToolOwner: reuse one client and replace it only after transport failure.
  * - readOpenCodeGoQuota: resolve and normalise Go quota without exposing its credential.
+ * - resolveOpenCodeGoCredential: select the active or sole unambiguous Go credential inside OpenCode.
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
  * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
@@ -23,16 +24,23 @@ import {
   type RequestId,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Plugin } from "@opencode/plugin/promise/plugin";
+import type { ConnectionInfo } from "@opencode/client";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
 import CodeModeToolContextController, {
   WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT,
 } from "./CodeModeToolContextController";
-import { openCodeWorkbenchRpc, OpenCodeGoQuotaSchema } from "../opencode-workbench-rpc";
+import {
+  openCodeWorkbenchRpc,
+  OpenCodeGoQuotaSchema,
+  type OpenCodeGoQuotaResult,
+} from "../opencode-workbench-rpc";
 
 const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
-const NATIVE_COMMAND_TOOLS = new Set(["bash", "shell"]);
+const MANAGED_CODE_MODE_SCOPE =
+  "Search and call nested Workbench tools only. Native OpenCode tools such as edit, write, and apply_patch remain direct OpenCode tools outside this catalogue.";
+const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "question", "shell"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
 
 interface CompanionProxy {
@@ -75,33 +83,89 @@ const goQuotaResponseSchema = z.object({
   }),
 });
 
+export async function resolveOpenCodeGoCredential(integration: {
+  connection: {
+    active(integrationID: string): Promise<ConnectionInfo | undefined>;
+    resolve(connection: ConnectionInfo): Promise<{ type: string; key?: string; access?: string } | undefined>;
+  };
+  get(input: { integrationID: string }): Promise<{ data: { connections: ConnectionInfo[] } }>;
+}) {
+  const active = await integration.connection.active("opencode-go");
+  if (active) return integration.connection.resolve(active);
+  const current = await integration.get({ integrationID: "opencode-go" });
+  const credentials = current.data.connections.filter(connection => connection.type === "credential");
+  return credentials.length === 1 ? integration.connection.resolve(credentials[0]!) : undefined;
+}
+
 export async function readOpenCodeGoQuota(options: {
   fetch?: typeof fetch;
   now?: () => number;
   resolveCredential(): Promise<{ type: string; key?: string; access?: string } | undefined>;
   signal?: AbortSignal;
-}) {
+}): Promise<OpenCodeGoQuotaResult> {
   const observedAt = (options.now ?? Date.now)();
-  const credential = await options.resolveCredential();
+  let credential: Awaited<ReturnType<typeof options.resolveCredential>>;
+  try {
+    credential = await options.resolveCredential();
+  } catch {
+    return {
+      ok: false,
+      error: { kind: "credential", message: "OpenCode Go credential resolution failed." },
+    };
+  }
   const token = credential?.type === "key" ? credential.key
     : credential?.type === "oauth" ? credential.access : undefined;
-  if (!token) return OpenCodeGoQuotaSchema.parse({ available: false, observedAt, windows: null });
-  const response = await (options.fetch ?? fetch)("https://opencode.ai/zen/go/v1/usage", {
-    headers: { authorization: `Bearer ${token}` },
-    signal: options.signal,
-  });
-  if (response.status === 401 || response.status === 403) {
-    return OpenCodeGoQuotaSchema.parse({ available: false, observedAt, windows: null });
+  if (!token) {
+    return {
+      ok: false,
+      error: { kind: "credential", message: "OpenCode Go has no available credential." },
+    };
   }
-  if (!response.ok) throw new Error(`OpenCode Go usage request failed (${response.status}).`);
-  const parsed = goQuotaResponseSchema.parse(await response.json());
+  let response: Response;
+  try {
+    response = await (options.fetch ?? fetch)("https://opencode.ai/zen/go/v1/usage", {
+      headers: { authorization: `Bearer ${token}` },
+      signal: options.signal,
+    });
+  } catch {
+    return {
+      ok: false,
+      error: { kind: "request", message: "OpenCode Go usage request failed." },
+    };
+  }
+  if (response.status === 401) {
+    return {
+      ok: false,
+      error: { kind: "response", message: "OpenCode Go rejected its active credential." },
+    };
+  }
+  if (response.status === 403) {
+    return {
+      ok: false,
+      error: { kind: "response", message: "OpenCode Go quota is unavailable for the active account." },
+    };
+  }
+  if (!response.ok) {
+    return {
+      ok: false,
+      error: { kind: "response", message: `OpenCode Go usage request failed (${response.status}).` },
+    };
+  }
+  let parsed: z.infer<typeof goQuotaResponseSchema>;
+  try {
+    parsed = goQuotaResponseSchema.parse(await response.json());
+  } catch {
+    return {
+      ok: false,
+      error: { kind: "response", message: "OpenCode Go returned invalid quota data." },
+    };
+  }
   const window = (value: typeof parsed.usage.rolling) => ({
     percent: value.percent,
     resetsAt: Date.parse(value.resetsAt),
     status: value.status,
   });
-  return OpenCodeGoQuotaSchema.parse({
-    available: true,
+  const quota = OpenCodeGoQuotaSchema.safeParse({
     observedAt,
     windows: {
       rolling: window(parsed.usage.rolling),
@@ -109,6 +173,12 @@ export async function readOpenCodeGoQuota(options: {
       monthly: window(parsed.usage.monthly),
     },
   });
+  return quota.success
+    ? { ok: true, quota: quota.data }
+    : {
+        ok: false,
+        error: { kind: "response", message: "OpenCode Go returned invalid quota data." },
+      };
 }
 
 export async function connectLifecycleOwnedCompanionTools(
@@ -365,10 +435,7 @@ export function createOpenCodeWorkbenchPlugin(
         context.rpc.register(openCodeWorkbenchRpc, {
           goQuota: async (_input, { signal }) => readOpenCodeGoQuota({
             signal,
-            resolveCredential: async () => {
-              const connection = await context.integration.connection.active("opencode-go");
-              return connection ? await context.integration.connection.resolve(connection) : undefined;
-            },
+            resolveCredential: () => resolveOpenCodeGoCredential(context.integration),
           }),
         }),
         context.mcp.transform(editor => {
@@ -391,8 +458,12 @@ export function createOpenCodeWorkbenchPlugin(
         }),
         context.session.hook("context", async input => {
           const managed = await isManagedSession(input.sessionID);
+          const execute = input.tools.execute;
+          if (managed && execute && !execute.description.includes(MANAGED_CODE_MODE_SCOPE)) {
+            execute.description = `${execute.description}\n\n${MANAGED_CODE_MODE_SCOPE}`;
+          }
           for (const tool of Object.keys(input.tools)) {
-            if (managed ? NATIVE_COMMAND_TOOLS.has(tool) : isWorkbenchTool(tool)) {
+            if (managed ? MANAGED_DISABLED_NATIVE_TOOLS.has(tool) : isWorkbenchTool(tool)) {
               delete input.tools[tool];
             }
           }
@@ -407,7 +478,7 @@ export function createOpenCodeWorkbenchPlugin(
         }),
         context.tool.hook("execute.before", async input => {
           const managed = await isManagedSession(input.sessionID);
-          if (NATIVE_COMMAND_TOOLS.has(input.tool) && managed) {
+          if (MANAGED_DISABLED_NATIVE_TOOLS.has(input.tool) && managed) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
           }
           if (isWorkbenchTool(input.tool) && managed) {

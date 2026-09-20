@@ -13,7 +13,6 @@ test("installs OpenCode under its graph provider registration", () => {
 
 test("maps all three OpenCode Go windows into one account limit", () => {
   const limits = openCodeAccountLimits({
-    available: true,
     observedAt: 1,
     windows: {
       rolling: { percent: 12, resetsAt: 1_000, status: "ok" },

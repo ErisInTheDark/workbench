@@ -125,6 +125,16 @@ test("accepted messages retain WB identity and are not resent when state settlem
   assert.equal(f.messages[0].threadId, "wb-thread");
 });
 
+test("message admission ignores browser steer classification", async () => {
+  const f = fixture();
+  await f.controller.handle("thread/message/submit", {
+    threadId: "wb-thread", clientMessageId: "message", input: [], intent: "steer", expectedTurnId: "stale-turn",
+  });
+  assert.deepEqual(f.messages, [{
+    threadId: "wb-thread", clientMessageId: "message", input: [], intent: "continue",
+  }]);
+});
+
 test("accepted provider warnings survive an additional state settlement failure", async () => {
   const f = fixture("Recorder needs repair.");
   f.failSettlement();

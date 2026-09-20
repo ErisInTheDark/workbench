@@ -34,7 +34,7 @@ export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
       credits: null,
       individualLimit: null,
       spendControlReached: null,
-      planType: quota.available ? "go" : null,
+      planType: "go",
       rateLimitReachedType: reached,
     },
     rateLimitsByLimitId: null,
@@ -64,9 +64,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           tools,
           account: {
             limits: {
-              read: async () => openCodeAccountLimits(
-                await (await service.acquire()).rpc(openCodeWorkbenchRpc).goQuota({}),
-              ),
+              read: async () => {
+                const result = await (await service.acquire()).rpc(openCodeWorkbenchRpc).goQuota({});
+                if ("error" in result) throw new Error(result.error.message);
+                return openCodeAccountLimits(result.quota);
+              },
             },
           },
           configuration: {

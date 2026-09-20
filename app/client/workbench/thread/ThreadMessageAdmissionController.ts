@@ -168,14 +168,14 @@ function ThreadMessageAdmissionController({
     }
 
     const entry = optimisticInputs.enqueueSteer(thread, activeTurn.id, input);
+    const sourceRevision = sources.getRevision(capture.threadKey);
     render(capture.threadKey);
 
     let response: WorkbenchThreadMessageResult;
     try {
       response = await client.submit({
-          intent: "steer",
+          intent: "continue",
           clientMessageId: entry.handle,
-          expectedTurnId: activeTurn.id,
           input,
           threadId: capture.threadId,
           ...(request.context ? { context: request.context } : {}),
@@ -192,7 +192,20 @@ function ThreadMessageAdmissionController({
     }
 
     if (response.warning) emitWarning(response.warning);
-    const acknowledgedTurnId = response.kind === "steered" ? response.turnId.trim() : response.turn.id.trim();
+    if (response.kind === "started") {
+      const turnId = WorkbenchTurnIdSchema.parse(response.turn.id);
+      optimisticInputs.movePending(entry.handle, turnId, "initial");
+      request.projectStartedTurn({
+        clientUserMessageId: entry.handle,
+        input,
+        projectContextGeneration: capture.projectContextGeneration,
+        sourceRevision,
+        threadKey: capture.threadKey,
+        turn: response.turn,
+      });
+      return { clientUserMessageId: entry.handle, kind: "turnStarted", turn: response.turn };
+    }
+    const acknowledgedTurnId = response.turnId.trim();
     if (!acknowledgedTurnId) {
       const status = optimisticInputs.transition(entry.handle, "failed");
       if (sources.has(capture.threadKey)) {
@@ -226,7 +239,7 @@ function ThreadMessageAdmissionController({
     if (sources.has(capture.threadKey)) {
       render(capture.threadKey);
     }
-    emitWarning(`Codex admitted the steer to unexpected turn ${acknowledgedTurnId}; reconciling the thread.`);
+    emitWarning(`The provider admitted the message to unexpected turn ${acknowledgedTurnId}; reconciling the thread.`);
     return { acknowledgedTurnId, handle: entry.handle, kind: "admittedNeedsReconciliation" };
   }
 

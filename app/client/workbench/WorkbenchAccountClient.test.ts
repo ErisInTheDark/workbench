@@ -148,8 +148,10 @@ test("independent harness refreshes cannot invalidate each other", async () => {
 test("failed rate-limit refreshes retain the last known snapshot without publication", async () => {
   let shouldFail = false;
   let publishes = 0;
+  const errors: string[] = [];
   const client = new WorkbenchAccountClient({
     listModels: async () => [],
+    reportError: message => errors.push(message),
     readRateLimits: async () => {
       if (shouldFail) throw new Error("temporarily unavailable");
       return rateLimits("cached");
@@ -165,6 +167,7 @@ test("failed rate-limit refreshes retain the last known snapshot without publica
 
   assert.equal(client.getRateLimits("codex")?.limitName, "cached");
   assert.equal(publishes, 1);
+  assert.deepEqual(errors, ["Unable to refresh codex account limits: temporarily unavailable"]);
 });
 
 test("reset rejects a late rate-limit result from the previous project context", async () => {

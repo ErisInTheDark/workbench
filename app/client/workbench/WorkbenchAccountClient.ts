@@ -31,6 +31,7 @@ export interface WorkbenchAccountSnapshot {
 export interface WorkbenchAccountClientOptions {
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   now?: () => number;
+  reportError?: (message: string) => void;
   readRateLimits: (harness: WorkbenchHarness) => Promise<WorkbenchAccountLimits>;
 }
 
@@ -168,8 +169,9 @@ export default class WorkbenchAccountClient {
         this.rateLimits.set(harness, { generation, snapshot: next, source });
         this.publish();
       })
-      .catch(() => {
-        // Account availability is optional; retain the last known snapshot until a later refresh succeeds.
+      .catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : "unknown failure";
+        this.options.reportError?.(`Unable to refresh ${harness} account limits: ${detail.slice(0, 500)}`);
       })
       .finally(() => {
         if (this.refreshes.get(harness) === task) this.refreshes.delete(harness);
