@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - connectLifecycleOwnedCompanionTools: connect MCP tools without the SDK's manufactured request deadline.
+ * - createLifecycleOwnedCompanionToolOwner: reuse one client and replace it only after transport failure.
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
  * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
@@ -25,7 +26,7 @@ import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-en
 
 const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
-const NATIVE_MUTATION_TOOLS = new Set(["apply_patch", "bash", "edit", "patch", "shell", "write"]);
+const NATIVE_COMMAND_TOOLS = new Set(["bash", "shell"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
 
 interface CompanionProxy {
@@ -151,31 +152,44 @@ function adaptToolResult(result: Awaited<ReturnType<CompanionToolClient["callToo
   };
 }
 
-async function callCompanionTool(
+export function createLifecycleOwnedCompanionToolOwner(
   connect: (url: string) => Promise<CompanionToolClient>,
   url: string,
-  input: Parameters<CompanionToolClient["callTool"]>[0],
 ) {
-  const client = await connect(url);
-  let failed = false;
-  let failure: unknown;
-  let result: ReturnType<typeof adaptToolResult> | undefined;
-  try {
-    result = adaptToolResult(await client.callTool(input));
-  } catch (error) {
-    failed = true;
-    failure = error;
+  interface Connection {
+    client: Promise<CompanionToolClient>;
+    closing: Promise<void> | null;
   }
-  try {
-    await client.close();
-  } catch (closeError) {
-    if (failed) {
-      throw new AggregateError([failure, closeError], "Workbench companion tool call and cleanup both failed.");
-    }
-    throw closeError;
-  }
-  if (failed) throw failure;
-  return result!;
+  let connection: Connection | null = null;
+  const acquire = () => {
+    if (!connection) connection = { client: connect(url), closing: null };
+    return connection;
+  };
+  const close = async (owned: Connection) => {
+    if (connection === owned) connection = null;
+    owned.closing ??= owned.client.then(client => client.close(), () => undefined);
+    await owned.closing;
+  };
+  return {
+    async call(input: Parameters<CompanionToolClient["callTool"]>[0]) {
+      const owned = acquire();
+      let result: CallToolResult;
+      try {
+        result = await (await owned.client).callTool(input);
+      } catch (error) {
+        try {
+          await close(owned);
+        } catch (closeError) {
+          throw new AggregateError([error, closeError], "Workbench companion tool call and cleanup both failed.");
+        }
+        throw error;
+      }
+      return adaptToolResult(result);
+    },
+    async close() {
+      if (connection) await close(connection);
+    },
+  };
 }
 
 function isWorkbenchTool(tool: string) {
@@ -262,6 +276,7 @@ export function createOpenCodeWorkbenchPlugin(
     setup: async context => {
       const proxy = await (options.createProxy ?? (() => createCompanionProxy(options.resolveDaemonOrigin)))();
       const connectTools = options.connectTools ?? connectCompanionTools;
+      const tools = createLifecycleOwnedCompanionToolOwner(connectTools, proxy.url);
       const isManagedSession = options.isManagedSession ?? (async sessionID =>
         isManagedMetadata((await context.session.get({ sessionID })).metadata));
       const registrations = await Promise.all([
@@ -272,7 +287,7 @@ export function createOpenCodeWorkbenchPlugin(
           for (const tool of editor.list()) {
             if (!isWorkbenchTool(tool.id)) continue;
             editor.update(tool.id, value => {
-              value.execute = async (input, toolContext) => callCompanionTool(connectTools, proxy.url, {
+              value.execute = async (input, toolContext) => tools.call({
                 name: tool.id.slice(`${WORKBENCH_MCP_NAME}_`.length),
                 arguments: input as Record<string, unknown>,
                 _meta: { sessionID: toolContext.sessionID },
@@ -283,7 +298,7 @@ export function createOpenCodeWorkbenchPlugin(
         context.session.hook("context", async input => {
           const managed = await isManagedSession(input.sessionID);
           for (const tool of Object.keys(input.tools)) {
-            if (managed ? NATIVE_MUTATION_TOOLS.has(tool) : isWorkbenchTool(tool)) {
+            if (managed ? NATIVE_COMMAND_TOOLS.has(tool) : isWorkbenchTool(tool)) {
               delete input.tools[tool];
             }
           }
@@ -297,13 +312,14 @@ export function createOpenCodeWorkbenchPlugin(
           }
         }),
         context.tool.hook("execute.before", async input => {
-          if (NATIVE_MUTATION_TOOLS.has(input.tool) && await isManagedSession(input.sessionID)) {
+          if (NATIVE_COMMAND_TOOLS.has(input.tool) && await isManagedSession(input.sessionID)) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
           }
         }),
       ]);
       return async () => {
         await Promise.allSettled(registrations.map(registration => registration.dispose()));
+        await tools.close();
         await proxy.close();
       };
     },

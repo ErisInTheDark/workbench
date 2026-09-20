@@ -7,7 +7,12 @@ Trigger criteria:
 
 Process:
 1. Ensure the context of the impending questionnaire is fully presented to the user BEFORE invoking the tool, in commentary.
+<harness:codex>
 2. Call `tools.mcp__wb__request_user_input` in one Code mode cell. Treat it as a Workbench Long Wait.
+</harness:codex>
+<harness:opencode>
+2. Call `tools.wb.request_user_input` in one `execute` call. Treat it as a Workbench Long Wait.
+</harness:opencode>
 
 Constraints:
 - Must faithfully represent the plan or choice explained in commentary

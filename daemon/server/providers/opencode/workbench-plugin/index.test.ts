@@ -8,6 +8,7 @@ import test from "node:test";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
   connectLifecycleOwnedCompanionTools,
+  createLifecycleOwnedCompanionToolOwner,
   createOpenCodeWorkbenchPlugin,
 } from "./index";
 
@@ -56,7 +57,32 @@ test("keeps MCP tool calls pending until response or explicit lifecycle closure"
   await assert.rejects(interrupted, /client closed/u);
 });
 
-test("keeps ordinary sessions native while managed sessions use only Workbench mutation tools", async t => {
+test("replaces a failed companion transport without replaying its tool call", async () => {
+  const calls: number[] = [];
+  const closes: number[] = [];
+  let connections = 0;
+  const owner = createLifecycleOwnedCompanionToolOwner(async () => {
+    const connection = ++connections;
+    return {
+      callTool: async () => {
+        calls.push(connection);
+        if (connection === 1) throw new Error("transport failed");
+        return { content: [{ type: "text", text: "recovered" }] };
+      },
+      close: async () => { closes.push(connection); },
+    };
+  }, "http://127.0.0.1:43001/mcp");
+  await assert.rejects(owner.call({ name: "rg" }), /transport failed/u);
+  assert.deepEqual(await owner.call({ name: "rg" }), {
+    content: "recovered",
+    output: { content: [{ type: "text", text: "recovered" }] },
+  });
+  await owner.close();
+  assert.deepEqual(calls, [1, 2]);
+  assert.deepEqual(closes, [1, 2]);
+});
+
+test("keeps native file tools, replaces managed shell, and shares one Workbench client", async t => {
   let contextHook: ((input: {
     sessionID: string;
     tools: Record<string, { description: string; input: object }>;
@@ -124,6 +150,7 @@ test("keeps ordinary sessions native while managed sessions use only Workbench m
   } as never);
   t.after(async () => {
     if (typeof cleanup === "function") await cleanup();
+    assert.equal(closedTools, 1);
   });
 
   assert.ok(contextHook && executeBefore && toolTransform && httpRequest);
@@ -149,17 +176,19 @@ test("keeps ordinary sessions native while managed sessions use only Workbench m
     arguments: {},
     _meta: { sessionID: "managed" },
   };
-  assert.deepEqual(await workbenchTool.execute({}, { sessionID: "managed" }), {
+  assert.deepEqual(await Promise.all([
+    workbenchTool.execute({}, { sessionID: "managed" }),
+    workbenchTool.execute({}, { sessionID: "managed" }),
+  ]), [{
     content: "task",
     output: { content: [{ type: "text", text: "task" }] },
-  });
-  assert.deepEqual(await workbenchTool.execute({}, { sessionID: "managed" }), {
+  }, {
     content: "task",
     output: { content: [{ type: "text", text: "task" }] },
-  });
+  }]);
   assert.deepEqual(calls, [expectedCall, expectedCall]);
-  assert.equal(connectedTools, 2);
-  assert.equal(closedTools, 2);
+  assert.equal(connectedTools, 1);
+  assert.equal(closedTools, 0);
 
   const ordinaryTools = {
     bash: { description: "native", input: {} },
@@ -171,18 +200,32 @@ test("keeps ordinary sessions native while managed sessions use only Workbench m
 
   const managedTools = {
     bash: { description: "native", input: {} },
+    shell: { description: "native", input: {} },
+    execute: { description: "native", input: {} },
+    apply_patch: { description: "native", input: {} },
     edit: { description: "native", input: {} },
+    read: { description: "native", input: {} },
     wb_shell: { description: "workbench", input: {} },
   };
   await contextHook({ sessionID: "managed", tools: managedTools });
   assert.ok(!("bash" in managedTools));
-  assert.ok(!("edit" in managedTools));
+  assert.ok(!("shell" in managedTools));
+  assert.ok("execute" in managedTools);
+  assert.ok("apply_patch" in managedTools);
+  assert.ok("edit" in managedTools);
+  assert.ok("read" in managedTools);
   assert.ok("wb_shell" in managedTools);
 
   await assert.rejects(
     Promise.resolve(executeBefore({ sessionID: "managed", tool: "bash" })),
     /native OpenCode tool.*managed Workbench session/iu,
   );
+  await assert.rejects(
+    Promise.resolve(executeBefore({ sessionID: "managed", tool: "shell" })),
+    /native OpenCode tool.*managed Workbench session/iu,
+  );
+  await executeBefore({ sessionID: "managed", tool: "edit" });
+  await executeBefore({ sessionID: "managed", tool: "execute" });
   await executeBefore({ sessionID: "ordinary", tool: "bash" });
 
   const openCodeRequest = {

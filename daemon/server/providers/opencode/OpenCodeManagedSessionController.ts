@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeManagedSessionContext: provider-local instruction refresh input.
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
- * - default OpenCodeManagedSessionController: own OpenCode session marking, native mutation denial, and fresh instructions.
+ * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, and fresh instructions.
  */
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import {
@@ -13,7 +13,7 @@ import {
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 import { formatWorkbenchInstructionFilterWarning } from "../../lib/workbench/instructions/instruction-context-filter";
 
-const NATIVE_MUTATION_ACTIONS = ["apply_patch", "bash", "edit", "patch", "shell", "write"] as const;
+const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 
 export interface OpenCodeManagedSessionContext {
   sessionID: string;
@@ -44,7 +44,7 @@ export default class OpenCodeManagedSessionController {
   creation() {
     return {
       metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
-      permissions: NATIVE_MUTATION_ACTIONS.map(action => ({
+      permissions: NATIVE_COMMAND_ACTIONS.map(action => ({
         action,
         resource: "*",
         effect: "deny" as const,

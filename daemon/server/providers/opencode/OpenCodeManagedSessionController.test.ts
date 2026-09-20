@@ -29,12 +29,8 @@ test("marks managed sessions and refreshes filtered instructions before each pro
   assert.deepEqual(controller.creation(), {
     metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
     permissions: [
-      { action: "apply_patch", resource: "*", effect: "deny" },
       { action: "bash", resource: "*", effect: "deny" },
-      { action: "edit", resource: "*", effect: "deny" },
-      { action: "patch", resource: "*", effect: "deny" },
       { action: "shell", resource: "*", effect: "deny" },
-      { action: "write", resource: "*", effect: "deny" },
     ],
   });
 

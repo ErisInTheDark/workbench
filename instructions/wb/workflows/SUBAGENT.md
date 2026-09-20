@@ -6,7 +6,12 @@ Stay inside your assignment and ownership boundary. Do not revert or overwrite u
 
 Your specific task or workflow may require you to get more information from or send notifications to your parent thread. Your available options are:
 - Ending a turn with a final response that includes what you need
+<harness:codex>
 - Sending a questionnaire to the parent thread (`tools.mcp__wb__request_user_input` through Workbench Long Wait)
+</harness:codex>
+<harness:opencode>
+- Sending a questionnaire to the parent thread (`tools.wb.request_user_input` through Workbench Long Wait)
+</harness:opencode>
 - Using `mcp__wbex__subagent_message` with `parent: true` to send a message directly to the parent thread
 
 Sending preference:

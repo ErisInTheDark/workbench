@@ -24,7 +24,7 @@ import type { ThreadItem } from "../../shared/workbench/thread/workbench-thread-
 import type { WorkbenchThreadStateOpenResult } from "../../shared/workbench/thread/thread-state";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import {
-  createProviderBoundaryJourney, PROVIDER_SHELL_PROOF_FILE,
+  createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
 } from "./provider-boundary-journey";
 
 function passphrase() {
@@ -353,7 +353,9 @@ await new Promise((resolve, reject) => {
         response: { answers: { [question.request.questions[0].id]: { answers: [proof] } } },
         ...(instructions ? { supplementalInput: [{ type: "text" as const, text: instructions, text_elements: [] }] } : {}),
       });
+    await fs.writeFile(path.join(runtime.project, PROVIDER_SEARCH_PROOF_FILE), PROVIDER_SEARCH_PROOF);
     const journey = createProviderBoundaryJourney({
+      search: "Workbench MCP rg",
       shell: "Workbench MCP shell",
       taskGet: "Workbench MCP task_get",
       taskComplete: "Workbench MCP task_completed",
@@ -466,6 +468,8 @@ await new Promise((resolve, reject) => {
     const finalProjection = await waitTurn(finalTurn, "completed");
     const finalItems = itemsFor(finalProjection, finalTurn);
     assert.ok(hasText(finalItems, finalProof) && hasText(finalItems, prefixProof) && hasText(finalItems, title));
+    assert.ok(finalItems.some(item => item.type === "mcpToolCall"
+      && item.tool === "rg" && item.status === "completed"), "Codex must complete WB search");
     assert.ok(finalItems.some(item => item.type === "mcpToolCall" && item.tool === "task_completed" && item.status === "completed"));
     assert.equal(await fs.readFile(path.join(runtime.project, PROVIDER_SHELL_PROOF_FILE), "utf8"), finalProof);
     const finalPage = await runtime.daemon.threads.page({ threadId, cursor: null });

@@ -225,7 +225,14 @@ export default class CodexShellController {
       env: Object.fromEntries(Object.entries(request.env ?? {}).filter(
         (entry): entry is [string, string] => entry[1] !== null,
       )),
-      permissions: { type: "disabled" },
+      permissions: {
+        type: "managed",
+        network: "restricted",
+        file_system: {
+          type: "restricted",
+          entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }],
+        },
+      },
       workspaceRoots: [request.cwd],
     }, signal);
   }

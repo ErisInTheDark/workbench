@@ -217,7 +217,12 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 
 ## When Using Tools
 
+<harness:codex>
 - Use `tools.mcp__wb__rg` for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+</harness:codex>
+<harness:opencode>
+- Use `tools.wb.rg` for project search inside `execute`. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+</harness:opencode>
 - Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
 - Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
 - Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.

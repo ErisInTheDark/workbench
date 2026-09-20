@@ -2,6 +2,7 @@
 <!-- Prevent agents from restarting a lifecycle wait, polling it, or treating a Code cell yield as completion. -->
 ## Workbench Long Waits
 
+<harness:codex>
 Use one blocking Workbench wait in one Code mode cell. Use only one long-wait cell at a time.
 
 Use this Code mode shape. Replace the example tool and input with the Workbench Long Wait named by the owning mechanic:
@@ -31,4 +32,10 @@ If `functions.wait` returns another still-running result, call it again with the
 Do not call the original Workbench wait tool again. Do not add a timeout to the original tool call. Do not sleep, poll, start a parallel wait, or write timeout commentary. A 25-minute cell yield is not a lifecycle deadline, failure, or reason to set blocked status.
 
 If a steer interrupts the wait, apply it before more work.
+</harness:codex>
+<harness:opencode>
+Use one blocking Workbench wait in one `execute` call. Await the owning `tools.wb.*` tool directly. Do not restart, poll, add a timeout, or start a parallel wait. The call remains owned until the tool returns.
+
+If a steer interrupts the wait, apply it before more work.
+</harness:opencode>
 </available:long-waits>

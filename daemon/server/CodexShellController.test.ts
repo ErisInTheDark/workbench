@@ -246,3 +246,27 @@ test("admitted non-Codex calls use their own WB identity and only admitted permi
   assert.equal(calls[1]?.permissions.type, "disabled");
   assert.deepEqual(calls[0]?.env, { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "other", WORKBENCH_HARNESS: "opencode" });
 });
+
+test("read-only provider tools use an enforced read-only sandbox", async () => {
+  const calls: CodexExecRequest[] = [];
+  const controller = new WorkbenchShellController({
+    executor: { execute: async request => { calls.push(request); return { exitCode: 0, stdout: "", stderr: "" }; } },
+    readConfiguration: async () => ({ config: {} }),
+  });
+  const cwd = process.cwd();
+  await controller.executeReadOnly({
+    command: ["rg", "needle"],
+    cwd,
+    env: { INCLUDED: "yes", OMITTED: null },
+  }, new AbortController().signal);
+  assert.deepEqual(calls[0]?.permissions, {
+    type: "managed",
+    network: "restricted",
+    file_system: {
+      type: "restricted",
+      entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }],
+    },
+  });
+  assert.deepEqual(calls[0]?.env, { INCLUDED: "yes" });
+  assert.equal(calls[0]?.cwd, cwd);
+});

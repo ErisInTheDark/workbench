@@ -15,7 +15,9 @@ import {
   WorkbenchUserInputSchema, type WorkbenchUserInput,
 } from "workbench-shared/workbench/provider/provider-input";
 import type { TranscriptTextField } from "workbench-shared/workbench/transcript/thread-transcript-stream";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type {
+  DynamicToolCallOutputContentItem, ThreadItem,
+} from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
@@ -111,6 +113,24 @@ interface OpenCodeSteerItem {
 
 type OpenCodeTranslatedItem = OpenCodeMessageItem | OpenCodeSteerItem;
 
+function toolContentItems(content: readonly {
+  type: string;
+  text?: string;
+  uri?: string;
+}[] | undefined): DynamicToolCallOutputContentItem[] | null {
+  if (!content) return null;
+  const items: DynamicToolCallOutputContentItem[] = [];
+  for (const part of content) {
+    if (part.type === "text" && part.text !== undefined) {
+      items.push({ type: "inputText", text: part.text });
+    }
+    if (part.type === "image" && part.uri !== undefined) {
+      items.push({ type: "inputImage", imageUrl: part.uri });
+    }
+  }
+  return items;
+}
+
 function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
   if (message.type === "user") {
     const user = message as SessionMessageUser;
@@ -166,15 +186,20 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
       }];
     }
     const state = part.state;
+    const failed = state.status === "error"
+      || state.status === "completed" && state.metadata?.error === true;
     return [{
       kind: "item",
       source: openCodeItemSource(part.id),
       preferredItemId: null,
       item: {
         type: "dynamicToolCall", id: part.id, namespace: "opencode", tool: part.name,
-        arguments: state.input, status: state.status === "error" ? "failed"
+        arguments: state.input, status: failed ? "failed"
           : state.status === "completed" ? "completed" : "inProgress",
-        contentItems: null, success: state.status === "completed" ? true : state.status === "error" ? false : null,
+        contentItems: state.status === "completed" || state.status === "error"
+          ? toolContentItems(state.content)
+          : null,
+        success: failed ? false : state.status === "completed" ? true : null,
         durationMs: part.time.completed && part.time.ran ? part.time.completed - part.time.ran : null,
       },
     }];

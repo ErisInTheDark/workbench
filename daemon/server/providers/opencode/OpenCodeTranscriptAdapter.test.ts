@@ -62,7 +62,23 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       type: "assistant",
       agent: "agent",
       model: { id: "m", providerID: "p" },
-      content: [{ type: "reasoning", text: "think" }, { type: "text", text: "hi" }],
+      content: [
+        { type: "reasoning", text: "think" },
+        { type: "text", text: "hi" },
+        {
+          type: "tool",
+          id: "tool-1",
+          name: "execute",
+          state: {
+            status: "completed",
+            input: { code: "tools.wb.rg({})" },
+            output: "legacy output",
+            content: [{ type: "text", text: "preserved result" }],
+            metadata: { error: true },
+          },
+          time: { created: 2, ran: 2, completed: 3 },
+        } as never,
+      ],
       time: { created: 2, completed: 3 },
     },
     {
@@ -101,8 +117,24 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
   ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" });
 
   assert.equal(recorded.filter(entry => entry.kind === "turn").length, 2);
-  assert.equal(recorded.filter(entry => entry.kind === "item").length, 6);
+  assert.equal(recorded.filter(entry => entry.kind === "item").length, 7);
   assert.equal(recorded.some(entry => entry.kind === "item" && entry.item.type === "contextCompaction"), true);
+  const toolObservation = recorded.find(entry => entry.kind === "item"
+    && entry.item.type === "dynamicToolCall");
+  assert.ok(toolObservation?.kind === "item");
+  const tool = toolObservation.item;
+  assert.ok(tool?.type === "dynamicToolCall");
+  const { id: _admittedItemId, ...toolEvidence } = tool;
+  assert.deepEqual(toolEvidence, {
+    type: "dynamicToolCall",
+    namespace: "opencode",
+    tool: "execute",
+    arguments: { code: "tools.wb.rg({})" },
+    status: "failed",
+    contentItems: [{ type: "inputText", text: "preserved result" }],
+    success: false,
+    durationMs: 1,
+  });
   const [steer] = recorded.filter(entry => entry.kind === "steer");
   assert.deepEqual({
     clientUserMessageId: steer?.entry.clientUserMessageId,
@@ -133,6 +165,12 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       kind: "stable",
       reference: "assistant-1",
       component: { kind: "text", index: 0 },
+    },
+    {
+      turnId: "00000000-0000-4000-8000-000000000002",
+      kind: "stable",
+      reference: "tool-1",
+      component: { kind: "item", index: 0 },
     },
     {
       turnId: "00000000-0000-4000-8000-000000000002",

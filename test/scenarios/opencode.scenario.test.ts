@@ -18,7 +18,7 @@ import OpenCodeServiceController, {
 } from "../../daemon/server/providers/opencode/OpenCodeServiceController";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import {
-  createProviderBoundaryJourney, PROVIDER_SHELL_PROOF_FILE,
+  createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
 } from "./provider-boundary-journey";
 
 const file = "test/scenarios/opencode.scenario.test.ts";
@@ -179,7 +179,9 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     assert.ok(cli.includes(title), "CLI must resolve the managed WB thread identity");
     console.log("[opencode live] managed CLI identity verified");
 
+    await fs.writeFile(path.join(runtime.project, PROVIDER_SEARCH_PROOF_FILE), PROVIDER_SEARCH_PROOF);
     const journey = createProviderBoundaryJourney({
+      search: "the wb_rg tool",
       shell: "the wb_shell tool",
       taskGet: "the wb_task_get tool",
       taskComplete: "the wb_task_completed tool",
@@ -345,6 +347,11 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     assert.ok(JSON.stringify(finalItems).includes(finalProof));
     assert.ok(JSON.stringify(finalItems).includes(prefixProof));
     assert.ok(JSON.stringify(finalItems).includes(title));
+    assert.ok(finalItems.some(item => item.type === "dynamicToolCall"
+      && item.tool === "execute" && item.status === "completed"
+      && item.contentItems?.some(content => content.type === "inputText"
+        && content.text.includes(PROVIDER_SEARCH_PROOF))),
+    "OpenCode must complete WB search and preserve its result");
     assert.equal(await fs.readFile(path.join(runtime.project, PROVIDER_SHELL_PROOF_FILE), "utf8"), finalProof);
     const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
       readonly: true,

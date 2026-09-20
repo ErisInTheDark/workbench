@@ -18,7 +18,12 @@ Let the active agent identity influence child names. Do not use task slugs, role
 
 ### waiting
 
+<harness:codex>
 `tools.mcp__wb__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
+</harness:codex>
+<harness:opencode>
+`tools.wb.subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
+</harness:opencode>
 
 Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 

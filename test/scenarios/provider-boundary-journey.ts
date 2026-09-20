@@ -1,12 +1,16 @@
 /*
  * Exports:
  * - ProviderBoundaryToolNames: provider-native names for shared Workbench capabilities.
+ * - PROVIDER_SEARCH_PROOF/PROVIDER_SEARCH_PROOF_FILE: isolated project fixture read through WB search.
  * - PROVIDER_SHELL_PROOF_FILE: isolated project file written through the provider shell boundary.
  * - createProviderBoundaryJourney: build one ordered behavioural journey for every real provider.
  */
+export const PROVIDER_SEARCH_PROOF = "workbench-provider-search-proof";
+export const PROVIDER_SEARCH_PROOF_FILE = ".workbench-provider-search-proof";
 export const PROVIDER_SHELL_PROOF_FILE = ".workbench-provider-shell-proof";
 
 export interface ProviderBoundaryToolNames {
+  search: string;
   shell: string;
   taskGet: string;
   taskComplete: string;
@@ -56,12 +60,15 @@ export function createProviderBoundaryJourney(tools: ProviderBoundaryToolNames) 
     final: (prefixProof: string, finalProof: string) => [
       "Authorised final provider scenario. Follow exactly, in order.",
       `1. Call ${tools.taskGet}.`,
-      `2. Call ${tools.shell} with command \`node -e "require('fs').writeFileSync('${
+      `2. Call ${tools.search} with exactly ${JSON.stringify({
+        args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE],
+      })}.`,
+      `3. Call ${tools.shell} with command \`node -e "require('fs').writeFileSync('${
         PROVIDER_SHELL_PROOF_FILE
       }','${finalProof}')"\`.`,
-      `3. Quote "${finalProof}", "${prefixProof}", and the task title together in commentary.`,
-      `4. Call ${tools.taskComplete}. This completion is authorised.`,
-      "5. End with an empty final response.",
+      `4. Quote "${finalProof}", "${prefixProof}", and the task title together in commentary.`,
+      `5. Call ${tools.taskComplete}. This completion is authorised.`,
+      "6. End with an empty final response.",
     ].join("\n"),
   };
 }
