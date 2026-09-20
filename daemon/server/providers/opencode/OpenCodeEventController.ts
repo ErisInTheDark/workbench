@@ -16,6 +16,7 @@ import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 
 export interface OpenCodeEventControllerOptions {
+  invalidateModelCatalogs?(): void;
   observe(facts: WorkbenchProviderObservation): Promise<void>;
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
@@ -47,6 +48,10 @@ export default class OpenCodeEventController {
   constructor(private readonly options: OpenCodeEventControllerOptions) {}
 
   async accept(event: OpenCodeEvent) {
+    if (event.type === "model.updated" || event.type === "provider.updated") {
+      this.options.invalidateModelCatalogs?.();
+      return;
+    }
     const sessionID = "data" in event && event.data && "sessionID" in event.data
       ? event.data.sessionID as string
       : null;

@@ -25,6 +25,7 @@ import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscrip
 import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptAtomicObservation } from "../../database/transcript/workbench-transcript-types";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
+import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
@@ -33,6 +34,7 @@ export interface OpenCodeTranscriptOwners {
   threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurns">;
   items: Pick<WorkbenchTranscriptIdentityController, "admit" | "itemIdForSource">;
   transcript: Pick<DaemonTranscriptRegistration, "acceptLiveUpdate" | "record">;
+  modelContext?(model: { id: string; providerID: string }, directory: string): Promise<number | null>;
 }
 
 interface MessageTurn {
@@ -83,6 +85,18 @@ function steerInput(inputs: readonly WorkbenchUserInput[]): WorkbenchSteerHistor
       })),
     };
   });
+}
+
+function tokenBreakdown(tokens: NonNullable<SessionMessageAssistant["tokens"]>) {
+  const inputTokens = tokens.input + tokens.cache.read + tokens.cache.write;
+  return {
+    cacheWriteInputTokens: tokens.cache.write,
+    cachedInputTokens: tokens.cache.read,
+    inputTokens,
+    outputTokens: tokens.output,
+    reasoningOutputTokens: tokens.reasoning,
+    totalTokens: inputTokens + tokens.output + tokens.reasoning,
+  };
 }
 
 function groupTurns(messages: readonly SessionMessageInfo[]) {
@@ -293,7 +307,7 @@ export default class OpenCodeTranscriptAdapter {
     session: SessionInfo,
     messages: readonly SessionMessageInfo[],
     project: { id: string; rootPath: string },
-    options: { keepLatestTurnOpen?: boolean } = {},
+    options: { keepLatestTurnOpen?: boolean; settleUsage?: boolean } = {},
   ) {
     const nativeThreadId = NativeThreadIdSchema.parse(session.id);
     const nativeLocation = session.location.directory;
@@ -366,6 +380,52 @@ export default class OpenCodeTranscriptAdapter {
       publicItemId: itemIdentities[itemIndex++]!.itemId,
     })));
     const deliveredSteerClientMessageIds: string[] = [];
+    const usageObservations: WorkbenchTranscriptAtomicObservation[] = [];
+    if (options.settleUsage && turns.length) {
+      const latestTurn = turns.at(-1)!;
+      const latestMessage = messages.at(-1);
+      const latestAssistant = latestMessage?.type === "assistant" && latestMessage.tokens
+        ? latestMessage as SessionMessageAssistant : null;
+      if (latestAssistant?.tokens) {
+        const modelContextWindow = await this.owners.modelContext?.(
+          latestAssistant.model,
+          nativeLocation,
+        ) ?? null;
+        usageObservations.push({
+          kind: "turnUsageContext",
+          model: `${latestAssistant.model.providerID}/${latestAssistant.model.id}`,
+          observedAt: latestAssistant.time.completed ?? latestAssistant.time.created,
+          serviceTier: null,
+          threadId: identity.threadId,
+          turnId: latestTurn.turnId,
+        }, {
+          kind: "turnTokenUsage",
+          cumulative: tokenBreakdown(session.tokens),
+          observedAt: latestAssistant.time.completed ?? latestAssistant.time.created,
+          threadId: identity.threadId,
+          turnId: latestTurn.turnId,
+          usageDataVersion: WORKBENCH_STATS_USAGE_DATA_VERSION,
+        }, {
+          kind: "threadContextUsage",
+          threadId: identity.threadId,
+          snapshot: {
+            tokenUsage: {
+              last: tokenBreakdown(latestAssistant.tokens),
+              total: tokenBreakdown(session.tokens),
+              modelContextWindow,
+            },
+          },
+          initialise: false,
+        });
+      } else if (latestMessage?.type === "compaction") {
+        usageObservations.push({
+          kind: "threadContextUsage",
+          threadId: identity.threadId,
+          snapshot: { tokenUsage: null },
+          initialise: false,
+        });
+      }
+    }
     const observations = [{
       kind: "thread" as const,
       threadId: WorkbenchThreadIdSchema.parse(identity.threadId),
@@ -441,7 +501,7 @@ export default class OpenCodeTranscriptAdapter {
           observedAt: completedAt ?? message.time.created,
         };
       })];
-    })];
+    }), ...usageObservations];
     await this.owners.transcript.record(observations as WorkbenchTranscriptAtomicObservation[], { source: "provider" });
     return {
       ...identity,

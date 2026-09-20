@@ -26,7 +26,7 @@ function providers(read: () => Promise<import("workbench-shared/workbench/provid
     configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },
     account: { limits: { read } },
   };
-  return { get: () => provider };
+  return { get: (key: string) => key === "codex" ? provider : { ...provider, account: undefined } };
 }
 
 const importProgress: WorkbenchStatsImportProgress = {

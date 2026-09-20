@@ -476,7 +476,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const result = await this.options.transcript.record(session, messages, {
       id: resolution.project.id,
       rootPath: resolution.project.rootPath,
-    }, { keepLatestTurnOpen: this.pendingSteerSessions.has(session.id) });
+    }, {
+      keepLatestTurnOpen: this.pendingSteerSessions.has(session.id),
+      settleUsage: true,
+    });
     for (const clientMessageId of result.deliveredSteerClientMessageIds ?? []) {
       this.pendingSteers.get(result.threadId)?.delete(clientMessageId);
       this.deletePendingSteerSession(clientMessageId);

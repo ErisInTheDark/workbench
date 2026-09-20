@@ -116,7 +116,7 @@ export default class WorkbenchTranscriptController {
   readonly #captureGaps: WorkbenchTranscriptCaptureGapController;
   readonly #database: Pick<
     WorkbenchDatabaseController,
-    "failure" | "readTranscript" | "settleTranscript" | "start"
+    "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
   > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>;
   readonly #recorder: WorkbenchTranscriptRecorder;
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
@@ -127,7 +127,7 @@ export default class WorkbenchTranscriptController {
   constructor(
     database: Pick<
       WorkbenchDatabaseController,
-      "failure" | "readTranscript" | "settleTranscript" | "start"
+      "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
     > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>,
     captureGaps: WorkbenchTranscriptCaptureGapController,
   ) {
@@ -150,6 +150,11 @@ export default class WorkbenchTranscriptController {
 
   get pendingRecoveryThreadIds() {
     return this.#captureGaps.pendingRecoveryThreadIds;
+  }
+
+  async readContextUsage(threadId: string) {
+    this.#assertActive();
+    return await this.#database.readThreadContextUsage(threadId);
   }
 
   assertReady() {

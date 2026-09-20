@@ -12,7 +12,7 @@ import {
 import WorkbenchStatsChart from "./WorkbenchStatsChart";
 
 type Limit = WorkbenchStatsResponse["rateLimits"][number];
-type WindowKind = "primary" | "secondary";
+type WindowKind = "primary" | "secondary" | "tertiary";
 
 function currentWindow(limit: Limit, kind: WindowKind) {
   return limit.samples.at(-1)?.[kind] ?? null;
@@ -33,6 +33,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
           {stats.rateLimits.map((limit) => {
             const primary = currentWindow(limit, "primary");
             const secondary = currentWindow(limit, "secondary");
+            const tertiary = currentWindow(limit, "tertiary");
             const windows: Array<{
               colour: string;
               kind: WindowKind;
@@ -40,6 +41,11 @@ export default function WorkbenchRateLimitUsage({ stats }: {
             }> = [];
             if (primary) windows.push({ colour: "var(--accent)", kind: "primary", window: primary });
             if (secondary) windows.push({ colour: "var(--text)", kind: "secondary", window: secondary });
+            if (tertiary) windows.push({
+              colour: "color-mix(in srgb, var(--accent) 55%, var(--text))",
+              kind: "tertiary",
+              window: tertiary,
+            });
             return (
               <div className="min-w-0 space-y-3" key={`${limit.harness}:${limit.limitId}`}>
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -49,7 +55,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
                   <span className="flex flex-wrap gap-x-3 text-[0.72rem] text-fg/muted">
                     {windows.map(({ kind, window }) => (
                       <span key={kind}>
-                        {formatRateLimitWindowLabel(window.durationMinutes, kind === "primary" ? "Primary" : "Secondary")}
+                        {formatRateLimitWindowLabel(window.durationMinutes, kind === "primary" ? "Primary" : kind === "secondary" ? "Secondary" : "Tertiary")}
                         {" · "}{window.usedPercent.toFixed(1)}% used
                         {" · "}{formatRateLimitResetTime(window.resetsAt)}
                       </span>
@@ -61,7 +67,7 @@ export default function WorkbenchRateLimitUsage({ stats }: {
                   formatValue={(value) => `${value.toFixed(1)}%`}
                   series={windows.map(({ colour, kind, window }) => ({
                     colour,
-                    label: formatRateLimitWindowLabel(window.durationMinutes, kind === "primary" ? "Primary" : "Secondary"),
+                    label: formatRateLimitWindowLabel(window.durationMinutes, kind === "primary" ? "Primary" : kind === "secondary" ? "Secondary" : "Tertiary"),
                     values: limit.samples.map((sample) => sample[kind]?.usedPercent ?? null),
                   }))}
                   title="Consumed"

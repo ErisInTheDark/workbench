@@ -44,8 +44,17 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       threads: build.get("threadIdentity"),
       items: build.get("transcriptIdentity"),
       transcript: build.get("transcript"),
+      modelContext: async (model, directory) => {
+        const catalog = await service.readModelCatalog(directory);
+        return catalog.models.find(candidate =>
+          candidate.providerID === model.providerID && candidate.modelID === model.id
+        )?.limit.context ?? null;
+      },
     });
-    const reader = new OpenCodeTranscriptReader(request => build.get("transcript").read(request));
+    const reader = new OpenCodeTranscriptReader(
+      request => build.get("transcript").read(request),
+      threadId => build.get("transcript").readContextUsage(threadId),
+    );
     const managed = new OpenCodeManagedSessionController({
       acquire,
       workbenchOrigin: context.localDaemonOrigin,
@@ -65,6 +74,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
       signal: lifetime.signal,
     });
     const events = new OpenCodeEventController({
+      invalidateModelCatalogs: () => service.invalidateModelCatalogs(),
       observe: async facts => {
         await build.get("providerObservations").observe("opencode", facts);
       },

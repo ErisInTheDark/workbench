@@ -10,7 +10,36 @@ import {
   connectLifecycleOwnedCompanionTools,
   createLifecycleOwnedCompanionToolOwner,
   createOpenCodeWorkbenchPlugin,
+  readOpenCodeGoQuota,
 } from "./index";
+
+test("normalises all OpenCode Go windows without returning the credential", async () => {
+  const seen: string[] = [];
+  const result = await readOpenCodeGoQuota({
+    now: () => 100,
+    resolveCredential: async () => ({ type: "key", key: "secret-value" }),
+    fetch: async (_input, init) => {
+      seen.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({
+        usage: {
+          rolling: { status: "ok", percent: 12, resetsAt: "2026-09-20T01:00:00.000Z" },
+          weekly: { status: "ok", percent: 34, resetsAt: "2026-09-27T01:00:00.000Z" },
+          monthly: { status: "limited", percent: 56, resetsAt: "2026-10-20T01:00:00.000Z" },
+        },
+      }), { status: 200 });
+    },
+  });
+  assert.deepEqual(seen, ["Bearer secret-value"]);
+  assert.equal(JSON.stringify(result).includes("secret-value"), false);
+  assert.deepEqual(Object.keys(result.windows), ["rolling", "weekly", "monthly"]);
+  assert.equal(result.observedAt, 100);
+  const unavailable = await readOpenCodeGoQuota({
+    resolveCredential: async () => ({ type: "key", key: "secret-value" }),
+    fetch: async () => new Response(null, { status: 403 }),
+  });
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.windows, null);
+});
 
 test("keeps MCP tool calls pending until response or explicit lifecycle closure", async () => {
   const sent: JSONRPCMessage[] = [];
@@ -134,6 +163,8 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
   } as never);
   const cleanup = await plugin.setup({
     app: { version: "2.0.9" },
+    rpc: { register: async () => ({ dispose: async () => undefined }) },
+    integration: { connection: { active: async () => undefined, resolve: async () => undefined } },
     session: {
       hook: async (name: string, callback: typeof contextHook | typeof httpRequest) => {
         if (name === "context") contextHook = callback as typeof contextHook;
@@ -314,6 +345,8 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
     resolveDaemonOrigin: async () => `http://127.0.0.1:${address.port}`,
   });
   const cleanup = await plugin.setup({
+    rpc: { register: async () => ({ dispose: async () => undefined }) },
+    integration: { connection: { active: async () => undefined, resolve: async () => undefined } },
     session: { hook: async () => ({ dispose: async () => undefined }) },
     tool: {
       hook: async (name: string, callback: typeof executeBefore) => {

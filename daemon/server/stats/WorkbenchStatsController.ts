@@ -61,6 +61,7 @@ function rateSnapshot(candidate: WorkbenchRateLimitSnapshot, fallbackId = "defau
     limitName: typeof candidate.limitName === "string" && candidate.limitName.trim() ? candidate.limitName : null,
     primary: rateWindow(candidate.primary),
     secondary: rateWindow(candidate.secondary),
+    tertiary: rateWindow(candidate.tertiary ?? null),
   };
 }
 

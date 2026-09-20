@@ -337,6 +337,9 @@ test("durable item facts refresh subscriptions only at complete projection bound
   let published = deferred<void>();
   const controller = new WorkbenchTranscriptController({
     failure: null,
+    async readThreadContextUsage() {
+      throw new Error("Unexpected context usage read.");
+    },
     async readTranscript() {
       reads += 1;
       return null;
@@ -504,6 +507,7 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
   let rejectSettlements = true;
   const failed = new WorkbenchTranscriptController({
     get failure() { return database.failure; },
+    readThreadContextUsage: (threadId) => database.readThreadContextUsage(threadId),
     readTranscript: (request) => database.readTranscript(request),
     settleTranscript: (observations) => (
       rejectSettlements

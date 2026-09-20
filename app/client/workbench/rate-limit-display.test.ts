@@ -9,6 +9,7 @@ import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "./rate-limi
 test("rate-limit windows use their real duration names", () => {
   assert.equal(formatRateLimitWindowLabel(10_080, "Primary"), "Weekly");
   assert.equal(formatRateLimitWindowLabel(300, "Primary"), "5h");
+  assert.equal(formatRateLimitWindowLabel(43_200, "Primary"), "Monthly");
   assert.equal(formatRateLimitWindowLabel(null, "Primary"), "Primary");
 });
 

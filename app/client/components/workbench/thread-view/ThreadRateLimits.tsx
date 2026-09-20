@@ -49,14 +49,14 @@ export default function ThreadRateLimits ({
   showsHarnessControl?: boolean;
   trailingContent?: ReactNode;
 }) {
-  if (!leadingContent && !trailingContent && !canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (!leadingContent && !trailingContent && !canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.tertiary && !rateLimits?.limitName) {
     return null;
   }
 
   const harnessControl = showsHarnessControl ? <ThreadHarnessControl canToggle={canToggleHarness} harness={harness} onToggle={onHarnessToggle} /> : null;
   const leadingControl = showsHarnessControl ? leadingContent : null;
 
-  if (canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.tertiary && !rateLimits?.limitName) {
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
         <div className="flex items-center gap-3">{leadingControl}{harnessControl}</div>
@@ -70,13 +70,16 @@ export default function ThreadRateLimits ({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {leadingControl}
         <div className="flex justify-center">{harnessControl}</div>
-        {(rateLimits?.primary || rateLimits?.secondary) ? (
+        {(rateLimits?.primary || rateLimits?.secondary || rateLimits?.tertiary) ? (
           <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
             {rateLimits.primary ? (
               <RateLimitWindowText fallback="Primary" window={rateLimits.primary} />
             ) : null}
             {rateLimits.secondary ? (
               <RateLimitWindowText fallback="Secondary" window={rateLimits.secondary} />
+            ) : null}
+            {rateLimits.tertiary ? (
+              <RateLimitWindowText fallback="Tertiary" window={rateLimits.tertiary} />
             ) : null}
           </p>
         ) : null}

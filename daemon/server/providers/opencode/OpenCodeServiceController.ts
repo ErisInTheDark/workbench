@@ -131,6 +131,10 @@ export default class OpenCodeServiceController {
   private disposed = false;
   private readonly serviceStateHome: string;
   private readonly serviceFile: string;
+  private readonly modelCatalogs = new Map<string, Promise<{
+    defaultModel: Awaited<ReturnType<WorkbenchOpenCodeClient["model"]["default"]>>["data"];
+    models: Awaited<ReturnType<WorkbenchOpenCodeClient["model"]["list"]>>["data"];
+  }>>();
 
   constructor(private readonly options: OpenCodeServiceControllerOptions = {}) {
     const dataRoot = resolveWorkbenchDataRoot({ environment: options.environment ?? process.env });
@@ -147,12 +151,37 @@ export default class OpenCodeServiceController {
     return await awaitWhileActive(acquiring, signal);
   }
 
+  async readModelCatalog(directory?: string) {
+    const key = directory ?? "";
+    let reading = this.modelCatalogs.get(key);
+    if (!reading) {
+      reading = this.acquire().then(async client => {
+        const location = directory ? { location: { directory } } : undefined;
+        const [models, defaultModel] = await Promise.all([
+          client.model.list(location),
+          client.model.default(location),
+        ]);
+        return { models: models.data, defaultModel: defaultModel.data };
+      }).catch(error => {
+        this.modelCatalogs.delete(key);
+        throw error;
+      });
+      this.modelCatalogs.set(key, reading);
+    }
+    return await reading;
+  }
+
+  invalidateModelCatalogs() {
+    this.modelCatalogs.clear();
+  }
+
   async dispose() {
     if (this.disposed) return;
     this.disposed = true;
     this.lifetime.abort(new Error("OpenCode service controller disposed."));
     this.client = null;
     this.acquiring = null;
+    this.modelCatalogs.clear();
     await this.stopOwnedService();
   }
 

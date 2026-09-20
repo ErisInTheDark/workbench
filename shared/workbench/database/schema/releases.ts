@@ -54,6 +54,7 @@ const databaseReleases = Object.freeze({
   stableProjectOwnership: release(44, "9e16378a683e1f5aee559f31f70be27006ebf758710128f768ad25f958d2a448"),
   voiceProfiles: release(45, "9ede86338aa4e4b0d5c1a104c6aff2f976601cf2e933e985a6e1149daca8db89"),
   relationalTranscriptSources: release(46, "64e7ff66b21ee3fdb98e36caf66ae66e8fdfe48f91c33a5b42771cc165a7159f"),
+  tertiaryRateLimits: release(47, "d7a13fe60649e93729a8a806c15c2f70919fcbf3e92e7afaaff38586bdbc8ddc"),
 });
 
 export default databaseReleases;

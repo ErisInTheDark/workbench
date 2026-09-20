@@ -10,9 +10,13 @@ import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thr
 import { readWorkbenchThreadPageNextCursor } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 
 export default class OpenCodeTranscriptReader {
-  constructor(private readonly readSnapshot: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>) {}
+  constructor(
+    private readonly readSnapshot: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>,
+    private readonly readContextUsage: (threadId: string) => Promise<ThreadContextUsageSnapshot | null> = async () => null,
+  ) {}
 
   async readPage(input: WorkbenchThreadPage, entry: WorkbenchThreadSidebarEntry | null): Promise<WorkbenchThreadPageResult | null> {
     const catalog = await this.readSnapshot({ threadId: input.threadId, turnIds: [], turnLimit: 1 });
@@ -90,6 +94,7 @@ export default class OpenCodeTranscriptReader {
     });
     const pageThread = { turns, workbenchTurnHistory: projected.data.turnHistory };
     const nextCursor = readWorkbenchThreadPageNextCursor(pageThread);
+    const contextUsage = await this.readContextUsage(snapshot.thread.id);
     return {
       browseResultEntries: projected.data.browseResultEntries,
       questionnaireEntries,
@@ -117,7 +122,7 @@ export default class OpenCodeTranscriptReader {
         reasoningEffort: settings?.reasoningEffort ?? null,
         serviceTier: settings?.serviceTier ?? null,
         agentPath: settings?.agentPath ?? null,
-        tokenUsage: null,
+        tokenUsage: contextUsage?.tokenUsage ?? null,
         turns,
         turnHistory: projected.data.turnHistory,
         nextPageCursor: nextCursor,

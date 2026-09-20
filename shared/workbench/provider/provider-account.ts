@@ -18,6 +18,7 @@ export const WorkbenchRateLimitSnapshotSchema = z.object({
   limitName: z.string().nullable(),
   primary: WorkbenchRateLimitWindowSchema.nullable(),
   secondary: WorkbenchRateLimitWindowSchema.nullable(),
+  tertiary: WorkbenchRateLimitWindowSchema.nullable().optional(),
   credits: z.object({ hasCredits: z.boolean(), unlimited: z.boolean(), balance: z.string().nullable() }).nullable(),
   individualLimit: z.object({
     limit: z.string(), used: z.string(), remainingPercent: z.number(), resetsAt: z.number(),

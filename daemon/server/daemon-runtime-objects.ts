@@ -160,6 +160,7 @@ export interface DaemonTranscriptRegistration {
   readonly failure: Error | null;
   readonly pendingRecoveryThreadIds: Promise<readonly string[]>;
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
+  readContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
   record(
     observations: readonly WorkbenchTranscriptObservation[],

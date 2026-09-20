@@ -541,3 +541,26 @@ test("rate limits record a current absent secondary window instead of preserving
     database.close();
   }
 });
+
+test("rate limits preserve a tertiary account window", () => {
+  const database = createDatabase();
+  try {
+    const repository = new WorkbenchStatsRepository(database);
+    const now = Date.UTC(2026, 8, 4, 12);
+    repository.recordRateLimits({
+      harness: "opencode",
+      observedAt: now,
+      snapshots: [{
+        limitId: "opencode-go",
+        limitName: "OpenCode Go",
+        primary: { durationMinutes: 300, resetsAt: now, usedPercent: 12 },
+        secondary: { durationMinutes: 10_080, resetsAt: now, usedPercent: 34 },
+        tertiary: { durationMinutes: 43_200, resetsAt: now, usedPercent: 56 },
+      }],
+    });
+    const sample = repository.read({ projectId: null, range: "7d" }, now).rateLimits[0]?.samples[0];
+    assert.equal(sample?.tertiary?.usedPercent, 56);
+  } finally {
+    database.close();
+  }
+});

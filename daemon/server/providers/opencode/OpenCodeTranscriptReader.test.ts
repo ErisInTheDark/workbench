@@ -62,9 +62,29 @@ test("projects delivered OpenCode steers as transcript items and steer history",
         clientUserMessageId: "00000000-0000-4000-8000-000000000004",
         error: null,
       },
+    }, {
+      kind: "threadContextUsage",
+      threadId,
+      initialise: false,
+      snapshot: {
+        tokenUsage: {
+          last: {
+            cacheWriteInputTokens: 0, cachedInputTokens: 10, inputTokens: 100,
+            outputTokens: 20, reasoningOutputTokens: 5, totalTokens: 125,
+          },
+          total: {
+            cacheWriteInputTokens: 0, cachedInputTokens: 10, inputTokens: 100,
+            outputTokens: 20, reasoningOutputTokens: 5, totalTokens: 125,
+          },
+          modelContextWindow: 200_000,
+        },
+      },
     }]);
 
-    const reader = new OpenCodeTranscriptReader(request => Promise.resolve(repository.read(request)));
+    const reader = new OpenCodeTranscriptReader(
+      request => Promise.resolve(repository.read(request)),
+      id => Promise.resolve(repository.readContextUsage(id)),
+    );
     const page = await reader.readPage({ threadId, cursor: null }, null);
     const item = page?.thread.turns[0]?.items[0];
     assert.ok(item);
@@ -80,6 +100,7 @@ test("projects delivered OpenCode steers as transcript items and steer history",
       itemId: item.id,
       status: "sent",
     }]);
+    assert.equal(page?.thread.tokenUsage?.modelContextWindow, 200_000);
   } finally {
     database.close();
   }

@@ -109,6 +109,38 @@ test("allows failed dedicated-service acquisition to be retried", async () => {
   await controller.dispose();
 });
 
+test("coalesces model catalogues by directory and invalidates provider changes", async () => {
+  let lists = 0;
+  const client = {
+    plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+    model: {
+      list: async () => {
+        lists++;
+        return { data: [{ id: `model-${lists}` }] };
+      },
+      default: async () => ({ data: null }),
+    },
+  };
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => undefined,
+    ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
+    createClient: () => client as never,
+    stopService: async () => undefined,
+  });
+  try {
+    const [first, second] = await Promise.all([
+      controller.readModelCatalog("C:/repo"),
+      controller.readModelCatalog("C:/repo"),
+    ]);
+    assert.equal(first, second);
+    assert.equal(lists, 1);
+    controller.invalidateModelCatalogs();
+    assert.equal((await controller.readModelCatalog("C:/repo")).models[0]?.id, "model-2");
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("stops a dedicated service that fails after its process starts", async () => {
   let stops = 0;
   const dataRoot = path.resolve("workbench-opencode-failed-start-test");

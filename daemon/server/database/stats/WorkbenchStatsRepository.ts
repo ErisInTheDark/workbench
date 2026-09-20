@@ -34,6 +34,7 @@ export interface WorkbenchRateLimitObservation {
     limitName: string | null;
     primary: RateWindowObservation | null;
     secondary: RateWindowObservation | null;
+    tertiary?: RateWindowObservation | null;
   }>;
 }
 
@@ -84,9 +85,9 @@ export default class WorkbenchStatsRepository {
             AND s.id = (SELECT id FROM account_rate_limit_samples WHERE harness_id = ? AND limit_id = ? ORDER BY observed_at DESC, id DESC LIMIT 1)
         `).all(observation.harness, snapshot.limitId, observation.harness, snapshot.limitId) as Array<{
           duration_minutes: number | null; resets_at: number | null; used_basis_points: number | null;
-          window_kind: "primary" | "secondary" | null;
+          window_kind: "primary" | "secondary" | "tertiary" | null;
         }>;
-        const previous = (kind: "primary" | "secondary"): RateWindowObservation | null => {
+        const previous = (kind: "primary" | "secondary" | "tertiary"): RateWindowObservation | null => {
           const row = previousRows.find((candidate) => candidate.window_kind === kind);
           return row?.used_basis_points === null || row?.used_basis_points === undefined ? null : {
             durationMinutes: row.duration_minutes,
@@ -96,7 +97,9 @@ export default class WorkbenchStatsRepository {
         };
         const primary = snapshot.primary;
         const secondary = snapshot.secondary;
-        if (previousRows.length && sameWindow(previous("primary"), primary) && sameWindow(previous("secondary"), secondary)) continue;
+        const tertiary = snapshot.tertiary ?? null;
+        if (previousRows.length && sameWindow(previous("primary"), primary)
+          && sameWindow(previous("secondary"), secondary) && sameWindow(previous("tertiary"), tertiary)) continue;
         const result = this.database.prepare(`
           INSERT INTO account_rate_limit_samples (harness_id, limit_id, limit_name, observed_at)
           VALUES (?, ?, ?, ?)
@@ -106,7 +109,7 @@ export default class WorkbenchStatsRepository {
             sample_id, window_kind, used_basis_points, duration_minutes, resets_at
           ) VALUES (?, ?, ?, ?, ?)
         `);
-        for (const [kind, window] of [["primary", primary], ["secondary", secondary]] as const) {
+        for (const [kind, window] of [["primary", primary], ["secondary", secondary], ["tertiary", tertiary]] as const) {
           if (window) insertWindow.run(Number(result.lastInsertRowid), kind, Math.round(boundedPercent(window.usedPercent) * 100), window.durationMinutes, window.resetsAt);
         }
       }
@@ -139,7 +142,7 @@ export default class WorkbenchStatsRepository {
     `).all(usage.startedAt, now, usage.startedAt, usage.startedAt) as Array<{
       duration_minutes: number | null; harness_id: WorkbenchHarness; id: number; limit_id: string;
       limit_name: string | null; observed_at: number; resets_at: number | null;
-      used_basis_points: number | null; window_kind: "primary" | "secondary" | null;
+      used_basis_points: number | null; window_kind: "primary" | "secondary" | "tertiary" | null;
     }>;
     const rateSeries = new Map<string, WorkbenchStatsResponse["rateLimits"][number]>();
     for (const row of rateRows) {
@@ -148,7 +151,7 @@ export default class WorkbenchStatsRepository {
       if (!series.limitName && row.limit_name) series.limitName = row.limit_name;
       let sample = series.samples.find(({ observedAt }) => observedAt === row.observed_at);
       if (!sample) {
-        sample = { observedAt: row.observed_at, primary: null, secondary: null };
+        sample = { observedAt: row.observed_at, primary: null, secondary: null, tertiary: null };
         series.samples.push(sample);
       }
       if (row.window_kind && row.used_basis_points !== null) {

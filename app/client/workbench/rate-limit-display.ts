@@ -27,6 +27,7 @@ export function formatRateLimitIdentity(
 export function formatRateLimitWindowLabel(durationMinutes: number | null, fallback: string) {
   if (durationMinutes === null) return fallback;
   if (durationMinutes === 60 * 24 * 7) return "Weekly";
+  if (durationMinutes === 60 * 24 * 30) return "Monthly";
   if (durationMinutes % (60 * 24) === 0) return `${durationMinutes / (60 * 24)}d`;
   if (durationMinutes % 60 === 0) return `${durationMinutes / 60}h`;
   return `${durationMinutes}m`;

@@ -123,11 +123,12 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       recent: "recent",
       time: { created: 8 },
     },
-  ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" });
+  ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
 
   assert.equal(recorded.filter(entry => entry.kind === "turn").length, 2);
   assert.equal(recorded.filter(entry => entry.kind === "item").length, 7);
   assert.equal(recorded.some(entry => entry.kind === "item" && entry.item.type === "contextCompaction"), true);
+  assert.equal(recorded.find(entry => entry.kind === "threadContextUsage")?.snapshot.tokenUsage, null);
   const toolObservation = recorded.find(entry => entry.kind === "item"
     && entry.item.type === "dynamicToolCall");
   assert.ok(toolObservation?.kind === "item");
@@ -210,7 +211,9 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
 
 test("keeps the latest turn open while a WB steer awaits native delivery", async () => {
   let turnState: string | undefined;
+  let usage: Extract<WorkbenchTranscriptObservation, { kind: "threadContextUsage" }> | undefined;
   const adapter = new OpenCodeTranscriptAdapter({
+    modelContext: async model => model.providerID === "p" && model.id === "m" ? 200_000 : null,
     threads: {
       observe: async () => ({ threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001") } as never),
       observeTurns: async inputs => inputs.map(input => ({
@@ -239,6 +242,7 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
     transcript: {
       record: async observations => {
         turnState = observations.find(entry => entry.kind === "turn")?.state;
+        usage = observations.find(entry => entry.kind === "threadContextUsage");
         return { changedThreadIds: [] };
       },
     },
@@ -253,10 +257,20 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
   }, {
     id: "assistant", type: "assistant", agent: "agent", model: { id: "m", providerID: "p" },
     content: [{ type: "text", text: "done" }], time: { created: 2, completed: 3 },
+    tokens: { input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 } },
   }], {
     id: "00000000-0000-4000-8000-000000000010",
     rootPath: "C:/repo",
-  }, { keepLatestTurnOpen: true });
+  }, { keepLatestTurnOpen: true, settleUsage: true });
 
   assert.equal(turnState, "inProgress");
+  assert.deepEqual(usage?.snapshot.tokenUsage?.last, {
+    cacheWriteInputTokens: 7,
+    cachedInputTokens: 11,
+    inputTokens: 118,
+    outputTokens: 13,
+    reasoningOutputTokens: 5,
+    totalTokens: 136,
+  });
+  assert.equal(usage?.snapshot.tokenUsage?.modelContextWindow, 200_000);
 });

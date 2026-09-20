@@ -191,7 +191,29 @@ const accountRateLimitWindowsV1 = defineTable("account_rate_limit_windows", {
     check(sql`${table.used_basis_points} <= ${literal(10_000)}`),
   ],
 }));
-const accountRateLimitWindowsHistory = initialHistory(accountRateLimitWindowsV1);
+const accountRateLimitWindowsV2 = defineTable("account_rate_limit_windows", {
+  sample_id: integer().notNull().references("account_rate_limit_samples", "id", { onDelete: "CASCADE" }),
+  window_kind: enumText("primary", "secondary", "tertiary").notNull(),
+  used_basis_points: integer().notNull().nonNegative(),
+  duration_minutes: integer().nonNegative(),
+  resets_at: integer().nonNegative(),
+}, (table) => ({
+  constraints: [
+    unique([table.sample_id, table.window_kind]),
+    check(sql`${table.used_basis_points} <= ${literal(10_000)}`),
+  ],
+}));
+const accountRateLimitWindowsHistory = defineTableHistory({
+  current: accountRateLimitWindowsV2,
+  versions: [
+    tableVersion({ migration: createTable(accountRateLimitWindowsV1), schemaVersion: databaseReleases.usage.version, table: accountRateLimitWindowsV1 }),
+    tableVersion({
+      migration: rebuildTable({ from: accountRateLimitWindowsV1, to: accountRateLimitWindowsV2 }),
+      schemaVersion: databaseReleases.tertiaryRateLimits.version,
+      table: accountRateLimitWindowsV2,
+    }),
+  ],
+});
 export const accountRateLimitWindows = accountRateLimitWindowsHistory.current;
 
 const gitClaimSessionsV1 = defineTable("git_claim_sessions", {

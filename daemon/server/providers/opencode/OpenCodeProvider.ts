@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - openCodeAccountLimits: map credential-free Go quota into the shared account contract.
  * - default OpenCodeProvider: bind graph-owned OpenCode capabilities to the daemon provider contract.
  */
 import ReloadableNode from "../../ReloadableNode";
@@ -7,6 +8,38 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import OpenCodeToolsController from "./OpenCodeToolsController";
 import CodexShellController from "../../CodexShellController";
+import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
+import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
+
+export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
+  const window = (kind: "rolling" | "weekly" | "monthly", duration: number) => {
+    const value = quota.windows?.[kind];
+    return value ? {
+      usedPercent: value.percent,
+      windowDurationMins: duration,
+      resetsAt: Math.floor(value.resetsAt / 1_000),
+    } : null;
+  };
+  const reached = quota.windows
+    ? Object.entries(quota.windows).find(([, value]) => value.percent >= 100)?.[0] ?? null
+    : null;
+  return {
+    preferredLimitId: "opencode-go",
+    rateLimits: {
+      limitId: "opencode-go",
+      limitName: "OpenCode Go",
+      primary: window("rolling", 300),
+      secondary: window("weekly", 10_080),
+      tertiary: window("monthly", 43_200),
+      credits: null,
+      individualLimit: null,
+      spendControlReached: null,
+      planType: quota.available ? "go" : null,
+      rateLimitReachedType: reached,
+    },
+    rateLimitsByLimitId: null,
+  };
+}
 
 export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>({
   access: "agent",
@@ -29,24 +62,30 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
           threads,
           interactions: threads.interactions,
           tools,
+          account: {
+            limits: {
+              read: async () => openCodeAccountLimits(
+                await (await service.acquire()).rpc(openCodeWorkbenchRpc).goQuota({}),
+              ),
+            },
+          },
           configuration: {
             modelContext: {
-              read: async () => (await service.acquire()).model.list().then(result => result.data.map(model => ({
+              read: async () => (await service.readModelCatalog()).models.map(model => ({
                 model: `${model.providerID}/${model.modelID}`,
                 defaultTokens: model.limit.context,
                 maximumTokens: model.limit.context,
-              }))),
+              })),
             },
             models: {
               read: async () => {
-                const client = await service.acquire();
-                const [models, defaultModel] = await Promise.all([client.model.list(), client.model.default()]);
-                return models.data.map(model => ({
+                const catalog = await service.readModelCatalog();
+                return catalog.models.map(model => ({
                   id: `${model.providerID}/${model.modelID}`,
                   displayName: model.name,
                   description: model.family ?? "",
                   hidden: !model.enabled || model.status === "deprecated",
-                  isDefault: defaultModel.data?.id === model.id,
+                  isDefault: catalog.defaultModel?.id === model.id,
                   supportsPersonality: false,
                   supportsReasoningEffort: model.variants.length > 0,
                   supportedReasoningEfforts: model.variants.map(variant => variant.id),

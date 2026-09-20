@@ -2,6 +2,7 @@
  * Exports:
  * - connectLifecycleOwnedCompanionTools: connect MCP tools without the SDK's manufactured request deadline.
  * - createLifecycleOwnedCompanionToolOwner: reuse one client and replace it only after transport failure.
+ * - readOpenCodeGoQuota: resolve and normalise Go quota without exposing its credential.
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
  * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
@@ -11,6 +12,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { z } from "zod";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   CallToolResultSchema,
@@ -26,6 +28,7 @@ import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-en
 import CodeModeToolContextController, {
   WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT,
 } from "./CodeModeToolContextController";
+import { openCodeWorkbenchRpc, OpenCodeGoQuotaSchema } from "../opencode-workbench-rpc";
 
 const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
@@ -62,6 +65,50 @@ export interface OpenCodeWorkbenchPluginOptions {
   createProxy?: (contexts: CodeModeToolContextController) => Promise<CompanionProxy>;
   isManagedSession?: (sessionID: string) => Promise<boolean>;
   resolveDaemonOrigin?: () => Promise<string>;
+}
+
+const goQuotaResponseSchema = z.object({
+  usage: z.object({
+    rolling: z.object({ status: z.string(), percent: z.number(), resetsAt: z.iso.datetime() }),
+    weekly: z.object({ status: z.string(), percent: z.number(), resetsAt: z.iso.datetime() }),
+    monthly: z.object({ status: z.string(), percent: z.number(), resetsAt: z.iso.datetime() }),
+  }),
+});
+
+export async function readOpenCodeGoQuota(options: {
+  fetch?: typeof fetch;
+  now?: () => number;
+  resolveCredential(): Promise<{ type: string; key?: string; access?: string } | undefined>;
+  signal?: AbortSignal;
+}) {
+  const observedAt = (options.now ?? Date.now)();
+  const credential = await options.resolveCredential();
+  const token = credential?.type === "key" ? credential.key
+    : credential?.type === "oauth" ? credential.access : undefined;
+  if (!token) return OpenCodeGoQuotaSchema.parse({ available: false, observedAt, windows: null });
+  const response = await (options.fetch ?? fetch)("https://opencode.ai/zen/go/v1/usage", {
+    headers: { authorization: `Bearer ${token}` },
+    signal: options.signal,
+  });
+  if (response.status === 401 || response.status === 403) {
+    return OpenCodeGoQuotaSchema.parse({ available: false, observedAt, windows: null });
+  }
+  if (!response.ok) throw new Error(`OpenCode Go usage request failed (${response.status}).`);
+  const parsed = goQuotaResponseSchema.parse(await response.json());
+  const window = (value: typeof parsed.usage.rolling) => ({
+    percent: value.percent,
+    resetsAt: Date.parse(value.resetsAt),
+    status: value.status,
+  });
+  return OpenCodeGoQuotaSchema.parse({
+    available: true,
+    observedAt,
+    windows: {
+      rolling: window(parsed.usage.rolling),
+      weekly: window(parsed.usage.weekly),
+      monthly: window(parsed.usage.monthly),
+    },
+  });
 }
 
 export async function connectLifecycleOwnedCompanionTools(
@@ -315,6 +362,15 @@ export function createOpenCodeWorkbenchPlugin(
       const isManagedSession = options.isManagedSession ?? (async sessionID =>
         isManagedMetadata((await context.session.get({ sessionID })).metadata));
       const registrations = await Promise.all([
+        context.rpc.register(openCodeWorkbenchRpc, {
+          goQuota: async (_input, { signal }) => readOpenCodeGoQuota({
+            signal,
+            resolveCredential: async () => {
+              const connection = await context.integration.connection.active("opencode-go");
+              return connection ? await context.integration.connection.resolve(connection) : undefined;
+            },
+          }),
+        }),
         context.mcp.transform(editor => {
           editor.set(WORKBENCH_MCP_NAME, { type: "remote", url: proxy.url });
         }),

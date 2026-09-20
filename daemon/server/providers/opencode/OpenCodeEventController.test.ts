@@ -7,6 +7,27 @@ import type { OpenCodeEvent } from "@opencode/client";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import OpenCodeEventController from "./OpenCodeEventController";
 
+test("invalidates cached model catalogues on provider catalogue events", async () => {
+  let invalidations = 0;
+  const controller = new OpenCodeEventController({
+    invalidateModelCatalogs: () => { invalidations++; },
+    observe: async () => undefined,
+    threads: {
+      currentTurn: () => null,
+      latestTurn: async () => null,
+      syncNative: async () => { throw new Error("session sync must not run"); },
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordItem: async () => "item" as never,
+      recordTurnState: async () => undefined,
+    },
+  });
+  await controller.accept({ type: "model.updated" } as never);
+  await controller.accept({ type: "provider.updated" } as never);
+  assert.equal(invalidations, 2);
+});
+
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 const durable = { aggregateID: "session", seq: 1, version: 1 as const };

@@ -25,6 +25,7 @@ test("the current snapshot does not resurrect an older secondary rate-limit seri
           observedAt: Date.UTC(2026, 8, 5),
           primary: { durationMinutes: 10_080, resetsAt: null, usedPercent: 45 },
           secondary: null,
+          tertiary: { durationMinutes: 43_200, resetsAt: null, usedPercent: 20 },
         },
       ],
     }],
@@ -33,5 +34,6 @@ test("the current snapshot does not resurrect an older secondary rate-limit seri
   assert.match(html, />Codex</u);
   assert.match(html, /Weekly/u);
   assert.doesNotMatch(html, /Secondary/u);
+  assert.match(html, /Monthly/u);
   assert.doesNotMatch(html, /Codex · codex/iu);
 });

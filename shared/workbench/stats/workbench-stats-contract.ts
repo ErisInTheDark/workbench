@@ -180,6 +180,7 @@ export const StatsResponseV2Schema = z.object({
       observedAt: timestamp,
       primary: RateWindowSchema.nullable(),
       secondary: RateWindowSchema.nullable(),
+      tertiary: RateWindowSchema.nullable().optional(),
     }).strict()).max(2_000),
   }).strict()).max(100),
   range: WorkbenchStatsRangeSchema,
