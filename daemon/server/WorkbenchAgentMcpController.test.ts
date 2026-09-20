@@ -651,6 +651,76 @@ test("releases HTTP admission and propagates caller cancellation across controll
   }
 });
 
+test("keeps declared Code Mode waits alive with request-owned progress only", async () => {
+  const executions = new Map<string, (response: Response) => void>();
+  const started = deferred<void>();
+  const pulses: Array<() => Promise<void>> = [];
+  const stopped: string[] = [];
+  const progress: number[] = [];
+  const progressed = deferred<number>();
+  const controller = codexController({
+    executeCommand: async request => await new Promise<Response>(resolve => {
+      executions.set(request.responseKind, resolve);
+      if (executions.size === 2) started.resolve();
+    }),
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    requestCodex: async request => ({
+      id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } },
+    }),
+    scheduleProgress: (pulse) => {
+      let active = true;
+      pulses.push(async () => {
+        if (active) await pulse();
+      });
+      return () => {
+        active = false;
+        stopped.push("stopped");
+      };
+    },
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const questionnaire = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: {
+        questions: [{ header: "choice", id: "choice", options: [], question: "Which?" }],
+      },
+      name: "request_user_input",
+    }, undefined, {
+      onprogress: update => {
+        progress.push(update.progress);
+        progressed.resolve(update.progress);
+      },
+      resetTimeoutOnProgress: true,
+    });
+    const ordinary = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: {},
+      name: "task_get",
+    }, undefined, {
+      onprogress: () => { throw new Error("ordinary tool emitted progress"); },
+    });
+    await started.promise;
+    assert.equal(pulses.length, 1);
+    await pulses[0]!();
+    assert.equal(await progressed.promise, 1);
+    assert.deepEqual(progress, [1]);
+
+    executions.get("thread-title-get")?.(Response.json({ title: "done" }));
+    executions.get("json")?.(Response.json({ answers: { choice: { answers: ["one"] } } }));
+    assert.equal((await ordinary).isError, false);
+    assert.equal((await questionnaire).isError, false);
+    assert.deepEqual(stopped, ["stopped"]);
+    await pulses[0]!();
+    assert.deepEqual(progress, [1]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("thread steer interruption ends declared waits but preserves questionnaires and ordinary MCP calls", { timeout: 5_000 }, async () => {
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const allStarted = deferred<void>();

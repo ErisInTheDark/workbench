@@ -95,6 +95,7 @@ export default new ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, Da
     "daemon/server/providers/opencode/OpenCodeThreadOperations.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",
     "daemon/server/providers/opencode/workbench-plugin/index.ts",
+    "daemon/server/providers/opencode/workbench-plugin/CodeModeToolContextController.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptAdapter.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptReader.ts",
   ].join("\n"),

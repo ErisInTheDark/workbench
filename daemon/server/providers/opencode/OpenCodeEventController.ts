@@ -9,6 +9,7 @@ import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/wo
 import {
   type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
+import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
 
@@ -31,12 +32,6 @@ interface ToolState {
   startedAt: number;
 }
 type DynamicToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
-
-function contentItems(event: SessionToolSuccess | SessionToolFailed) {
-  return event.data.content?.map(content => content.type === "text"
-    ? { type: "inputText" as const, text: content.text }
-    : { type: "inputImage" as const, imageUrl: content.uri }) ?? null;
-}
 
 function parseToolInput(text: string): JsonValue {
   try {
@@ -193,7 +188,10 @@ export default class OpenCodeEventController {
           source: openCodeItemSource(event.data.id),
           item: {
             ...this.toolItem(event.data.id, previous, event.type === "session.tool.success" ? "completed" : "failed"),
-            contentItems: contentItems(event),
+            contentItems: openCodeToolContentItems(
+              event.data.content,
+              event.type === "session.tool.failed" ? event.data.error : undefined,
+            ),
             success: event.type === "session.tool.success",
             durationMs: previous ? Math.max(0, event.created - previous.startedAt) : null,
           },

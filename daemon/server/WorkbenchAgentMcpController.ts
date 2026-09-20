@@ -44,12 +44,35 @@ export interface WorkbenchAgentMcpControllerOptions {
   lifecycleLogError?: (name: string, message: string) => void;
   daemonOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
+  scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
   runLoggedCommand?: <TValue>(
     label: string,
     signal: AbortSignal,
     operation: () => Promise<TValue>,
     succeeded?: (value: TValue) => boolean,
   ) => Promise<TValue>;
+}
+
+function scheduleProgress(pulse: () => Promise<void>, signal: AbortSignal) {
+  let stopped = false;
+  let inFlight = Promise.resolve();
+  const run = () => {
+    if (stopped || signal.aborted) return;
+    inFlight = inFlight.then(async () => {
+      if (!stopped && !signal.aborted) await pulse();
+    });
+  };
+  run();
+  const timer = setInterval(run, 60_000);
+  timer.unref();
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    signal.removeEventListener("abort", stop);
+  };
+  signal.addEventListener("abort", stop, { once: true });
+  return stop;
 }
 
 function isLoopbackAddress(address: string | undefined) {
@@ -106,6 +129,7 @@ export default class WorkbenchAgentMcpController {
   private readonly lifecycleLogError: NonNullable<WorkbenchAgentMcpControllerOptions["lifecycleLogError"]>;
   private readonly daemonOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
+  private readonly scheduleProgress: NonNullable<WorkbenchAgentMcpControllerOptions["scheduleProgress"]>;
   private readonly tools: WorkbenchAgentMcpControllerOptions["tools"];
   private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
@@ -117,6 +141,7 @@ export default class WorkbenchAgentMcpController {
     daemonOrigin,
     tools,
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
+    scheduleProgress: schedule = scheduleProgress,
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
@@ -124,6 +149,7 @@ export default class WorkbenchAgentMcpController {
     this.lifecycleLogError = lifecycleLogError;
     this.daemonOrigin = daemonOrigin;
     this.requestRegistry = requestRegistry;
+    this.scheduleProgress = schedule;
     this.tools = tools;
     this.runLoggedCommand = runLoggedCommand;
   }
@@ -263,6 +289,12 @@ export default class WorkbenchAgentMcpController {
         extra.requestId,
         AbortSignal.any([requestSignal, extra.signal]),
         tools,
+        extra._meta?.progressToken === undefined
+          ? undefined
+          : async (progress) => await extra.sendNotification({
+            method: "notifications/progress",
+            params: { progressToken: extra._meta!.progressToken!, progress },
+          }),
       ));
     }
     return server;
@@ -318,8 +350,10 @@ export default class WorkbenchAgentMcpController {
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    sendProgress?: (progress: number) => Promise<void>,
   ) {
     let unregister: (() => void) | null = null;
+    let stopProgress: (() => void) | null = null;
     try {
       const toolName = getWorkbenchAgentCommandToolName(definition);
       const registration = this.requestRegistry.register(clientScope, requestId, {
@@ -330,6 +364,20 @@ export default class WorkbenchAgentMcpController {
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
+      if (
+        sendProgress
+        && definition.mcpCodeModeEligible
+        && definition.mcpRuntimeDrainPolicy === "preserve-across-reload"
+      ) {
+        let progress = 0;
+        stopProgress = this.scheduleProgress(async () => {
+          try {
+            await sendProgress(++progress);
+          } catch (error) {
+            this.lifecycleLogError("workbench-mcp-progress", sanitizeError(error) || "Workbench MCP progress failed.");
+          }
+        }, signal);
+      }
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal);
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);
@@ -365,6 +413,7 @@ export default class WorkbenchAgentMcpController {
       }
       return { content: [{ type: "text" as const, text: `Workbench tool call failed: ${message}` }], isError: true };
     } finally {
+      stopProgress?.();
       unregister?.();
     }
   }

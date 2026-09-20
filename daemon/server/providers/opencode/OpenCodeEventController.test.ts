@@ -100,7 +100,7 @@ test("streams text directly and performs one canonical read at execution settlem
 });
 
 test("keeps reused tool ids isolated by native session", async () => {
-  const recorded: Array<{ source: object; tool: string }> = [];
+  const recorded: Array<{ content: unknown; source: object; tool: string }> = [];
   const controller = new OpenCodeEventController({
     threads: {
       currentTurn: () => ({ threadId, turnId }),
@@ -111,7 +111,11 @@ test("keeps reused tool ids isolated by native session", async () => {
       recordTurnState: async () => undefined,
       recordItem: async input => {
         if (input.item.type === "dynamicToolCall") {
-          recorded.push({ source: input.source, tool: input.item.tool });
+          recorded.push({
+            content: input.item.contentItems,
+            source: input.source,
+            tool: input.item.tool,
+          });
         }
         return "00000000-0000-4000-8000-000000000003" as never;
       },
@@ -134,8 +138,22 @@ test("keeps reused tool ids isolated by native session", async () => {
   }));
 
   assert.deepEqual(recorded.at(-1), {
+    content: null,
     source: { reference: "tool-1", component: { kind: "item", index: 0 } },
     tool: "read",
+  });
+
+  await controller.accept(event({
+    id: "tool-b-end", created: 4, type: "session.tool.failed", durable,
+    data: {
+      sessionID: "session-b", id: "tool-1", executed: true,
+      error: { type: "tool", message: "permission denied" },
+    },
+  }));
+  assert.deepEqual(recorded.at(-1), {
+    content: [{ type: "inputText", text: "permission denied" }],
+    source: { reference: "tool-1", component: { kind: "item", index: 0 } },
+    tool: "write",
   });
 });
 

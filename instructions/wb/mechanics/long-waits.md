@@ -34,7 +34,7 @@ Do not call the original Workbench wait tool again. Do not add a timeout to the 
 If a steer interrupts the wait, apply it before more work.
 </harness:codex>
 <harness:opencode>
-Use one blocking Workbench wait in one `execute` call. Await the owning `tools.wb.*` tool directly. Do not restart, poll, add a timeout, or start a parallel wait. The call remains owned until the tool returns.
+Use one blocking Workbench wait in one `execute` call. Await the owning `tools.wb.*` tool directly and return its result. The same program may run independent finite WB calls concurrently. Do not restart, poll, add a timeout, or start another wait. The call remains owned until the tool returns.
 
 If a steer interrupts the wait, apply it before more work.
 </harness:opencode>

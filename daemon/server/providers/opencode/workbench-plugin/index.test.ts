@@ -87,7 +87,14 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
     sessionID: string;
     tools: Record<string, { description: string; input: object }>;
   }) => Promise<void> | void) | undefined;
-  let executeBefore: ((input: { sessionID: string; tool: string }) => Promise<void> | void) | undefined;
+  type ExecuteHook = (input: {
+    id: string;
+    input: unknown;
+    sessionID: string;
+    tool: string;
+  }) => Promise<void> | void;
+  let executeBefore: ExecuteHook | undefined;
+  let executeAfter: ExecuteHook | undefined;
   let httpRequest: ((input: {
     sessionID: string;
     model: { providerID: string };
@@ -113,7 +120,7 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
       url: "http://127.0.0.1:43001/mcp",
       close: async () => undefined,
     }),
-    isManagedSession: async sessionID => sessionID === "managed",
+    isManagedSession: async sessionID => sessionID.startsWith("managed"),
     connectTools: async () => {
       connectedTools += 1;
       return {
@@ -135,8 +142,9 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
       },
     },
     tool: {
-      hook: async (name: string, callback: typeof executeBefore) => {
+      hook: async (name: string, callback: ExecuteHook) => {
         if (name === "execute.before") executeBefore = callback;
+        if (name === "execute.after") executeAfter = callback;
         return { dispose: async () => undefined };
       },
       transform: async (callback: typeof toolTransform) => {
@@ -153,7 +161,7 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
     assert.equal(closedTools, 1);
   });
 
-  assert.ok(contextHook && executeBefore && toolTransform && httpRequest);
+  assert.ok(contextHook && executeBefore && executeAfter && toolTransform && httpRequest);
   const workbenchTool: {
     id: string;
     name: string;
@@ -171,14 +179,17 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
     list: () => [workbenchTool],
     update: (_id, update) => update(workbenchTool),
   });
-  const expectedCall = {
-    name: "task_get",
-    arguments: {},
-    _meta: { sessionID: "managed" },
-  };
+  const firstInput = {};
+  const secondInput = {};
+  await executeBefore({
+    id: "call-one", input: firstInput, sessionID: "managed-one", tool: "wb_task_get",
+  });
+  await executeBefore({
+    id: "call-two", input: secondInput, sessionID: "managed-two", tool: "wb_task_get",
+  });
   assert.deepEqual(await Promise.all([
-    workbenchTool.execute({}, { sessionID: "managed" }),
-    workbenchTool.execute({}, { sessionID: "managed" }),
+    workbenchTool.execute(secondInput, { sessionID: "wrong-second" }),
+    workbenchTool.execute(firstInput, { sessionID: "wrong-first" }),
   ]), [{
     content: "task",
     output: { content: [{ type: "text", text: "task" }] },
@@ -186,7 +197,15 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
     content: "task",
     output: { content: [{ type: "text", text: "task" }] },
   }]);
-  assert.deepEqual(calls, [expectedCall, expectedCall]);
+  assert.deepEqual(calls, [{
+    name: "task_get",
+    arguments: {},
+    _meta: { sessionID: "managed-two" },
+  }, {
+    name: "task_get",
+    arguments: {},
+    _meta: { sessionID: "managed-one" },
+  }]);
   assert.equal(connectedTools, 1);
   assert.equal(closedTools, 0);
 
@@ -217,16 +236,23 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
   assert.ok("wb_shell" in managedTools);
 
   await assert.rejects(
-    Promise.resolve(executeBefore({ sessionID: "managed", tool: "bash" })),
+    Promise.resolve(executeBefore({ id: "bash", input: {}, sessionID: "managed", tool: "bash" })),
     /native OpenCode tool.*managed Workbench session/iu,
   );
   await assert.rejects(
-    Promise.resolve(executeBefore({ sessionID: "managed", tool: "shell" })),
+    Promise.resolve(executeBefore({ id: "shell", input: {}, sessionID: "managed", tool: "shell" })),
     /native OpenCode tool.*managed Workbench session/iu,
   );
-  await executeBefore({ sessionID: "managed", tool: "edit" });
-  await executeBefore({ sessionID: "managed", tool: "execute" });
-  await executeBefore({ sessionID: "ordinary", tool: "bash" });
+  await executeBefore({ id: "edit", input: {}, sessionID: "managed", tool: "edit" });
+  await executeBefore({ id: "execute", input: {}, sessionID: "managed", tool: "execute" });
+  await executeBefore({ id: "bash", input: {}, sessionID: "ordinary", tool: "bash" });
+  const abandoned = {};
+  await executeBefore({
+    id: "abandoned", input: abandoned, sessionID: "managed", tool: "wb_task_get",
+  });
+  await executeAfter({
+    id: "abandoned", input: abandoned, sessionID: "managed", tool: "wb_task_get",
+  });
 
   const openCodeRequest = {
     sessionID: "ses_workbench",
@@ -249,9 +275,12 @@ test("keeps native file tools, replaces managed shell, and shares one Workbench 
 });
 
 test("proxies the stateful MCP transport without buffering its lifecycle methods", async t => {
-  const requests: Array<{ method: string; session: string | undefined }> = [];
-  const upstream = http.createServer((request, response) => {
+  const requests: Array<{ body: string; method: string; session: string | undefined }> = [];
+  const upstream = http.createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     requests.push({
+      body: Buffer.concat(chunks).toString("utf8"),
       method: request.method ?? "",
       session: typeof request.headers["mcp-session-id"] === "string"
         ? request.headers["mcp-session-id"] : undefined,
@@ -270,6 +299,9 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
   const address = upstream.address();
   assert.ok(address && typeof address !== "string");
   let proxyUrl = "";
+  let executeBefore: ((input: {
+    id: string; input: unknown; sessionID: string; tool: string;
+  }) => Promise<void> | void) | undefined;
   const plugin = createOpenCodeWorkbenchPlugin({
     connectTools: async url => {
       proxyUrl = url;
@@ -278,13 +310,16 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
         callTool: async () => ({ content: [] }),
       };
     },
-    isManagedSession: async () => false,
+    isManagedSession: async sessionID => sessionID === "managed",
     resolveDaemonOrigin: async () => `http://127.0.0.1:${address.port}`,
   });
   const cleanup = await plugin.setup({
     session: { hook: async () => ({ dispose: async () => undefined }) },
     tool: {
-      hook: async () => ({ dispose: async () => undefined }),
+      hook: async (name: string, callback: typeof executeBefore) => {
+        if (name === "execute.before") executeBefore = callback;
+        return { dispose: async () => undefined };
+      },
       transform: async () => ({ dispose: async () => undefined }),
     },
     mcp: {
@@ -310,13 +345,44 @@ test("proxies the stateful MCP transport without buffering its lifecycle methods
   });
   assert.equal(posted.headers.get("mcp-session-id"), "next-session");
   assert.equal(await posted.text(), "{}");
+  assert.ok(executeBefore);
+  const nestedArguments = { args: ["pattern"] };
+  await executeBefore({
+    id: "nested-call", input: nestedArguments, sessionID: "managed", tool: "wb_rg",
+  });
+  const nested = await fetch(proxyUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "rg", arguments: nestedArguments, _meta: { progressToken: 7 } },
+    }),
+  });
+  assert.equal(nested.status, 200);
+  await nested.text();
   const deleted = await fetch(proxyUrl, {
     method: "DELETE",
     headers: { "mcp-session-id": "current-session" },
   });
   assert.equal(deleted.status, 200);
   assert.deepEqual(requests, [
-    { method: "POST", session: "current-session" },
-    { method: "DELETE", session: "current-session" },
+    { body: "{}", method: "POST", session: "current-session" },
+    {
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: {
+          name: "rg",
+          arguments: { args: ["pattern"] },
+          _meta: { progressToken: 7, sessionID: "managed" },
+        },
+      }),
+      method: "POST",
+      session: undefined,
+    },
+    { body: "", method: "DELETE", session: "current-session" },
   ]);
 });

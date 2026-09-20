@@ -9,7 +9,16 @@ import {
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptItemSource } from "../../database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptObservation } from "../../database/transcript/workbench-transcript-types";
-import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+import OpenCodeTranscriptAdapter, { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
+
+test("preserves OpenCode tool content and structured failures", () => {
+  assert.deepEqual(openCodeToolContentItems([
+    { type: "text", text: "answered" },
+  ]), [{ type: "inputText", text: "answered" }]);
+  assert.deepEqual(openCodeToolContentItems(undefined, {
+    message: "The operation timed out.",
+  }), [{ type: "inputText", text: "The operation timed out." }]);
+});
 
 test("keeps a delivered steer in its active WB turn and starts the next root separately", async () => {
   let recorded: readonly WorkbenchTranscriptObservation[] = [];

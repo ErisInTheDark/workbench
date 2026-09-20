@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - OpenCodeTranscriptOwners: shared identity and recorder ports used by the provider edge.
+ * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
  * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts.
  */
 import type {
@@ -113,14 +114,13 @@ interface OpenCodeSteerItem {
 
 type OpenCodeTranslatedItem = OpenCodeMessageItem | OpenCodeSteerItem;
 
-function toolContentItems(content: readonly {
+export function openCodeToolContentItems(content: readonly {
   type: string;
   text?: string;
   uri?: string;
-}[] | undefined): DynamicToolCallOutputContentItem[] | null {
-  if (!content) return null;
+}[] | undefined, error?: { message: string }): DynamicToolCallOutputContentItem[] | null {
   const items: DynamicToolCallOutputContentItem[] = [];
-  for (const part of content) {
+  for (const part of content ?? []) {
     if (part.type === "text" && part.text !== undefined) {
       items.push({ type: "inputText", text: part.text });
     }
@@ -128,7 +128,8 @@ function toolContentItems(content: readonly {
       items.push({ type: "inputImage", imageUrl: part.uri });
     }
   }
-  return items;
+  if (items.length) return items;
+  return error ? [{ type: "inputText", text: error.message.slice(0, 1000) }] : null;
 }
 
 function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
@@ -197,7 +198,7 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
         arguments: state.input, status: failed ? "failed"
           : state.status === "completed" ? "completed" : "inProgress",
         contentItems: state.status === "completed" || state.status === "error"
-          ? toolContentItems(state.content)
+          ? openCodeToolContentItems(state.content, state.status === "error" ? state.error : undefined)
           : null,
         success: failed ? false : state.status === "completed" ? true : null,
         durationMs: part.time.completed && part.time.ran ? part.time.completed - part.time.ran : null,

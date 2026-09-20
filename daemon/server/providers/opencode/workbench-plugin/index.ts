@@ -23,6 +23,9 @@ import {
 import type { Plugin } from "@opencode/plugin/promise/plugin";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+import CodeModeToolContextController, {
+  WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT,
+} from "./CodeModeToolContextController";
 
 const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
@@ -56,7 +59,7 @@ interface CompanionTransport {
 
 export interface OpenCodeWorkbenchPluginOptions {
   connectTools?: (url: string) => Promise<CompanionToolClient>;
-  createProxy?: () => Promise<CompanionProxy>;
+  createProxy?: (contexts: CodeModeToolContextController) => Promise<CompanionProxy>;
   isManagedSession?: (sessionID: string) => Promise<boolean>;
   resolveDaemonOrigin?: () => Promise<string>;
 }
@@ -202,7 +205,34 @@ function isManagedMetadata(metadata: Record<string, unknown> | undefined) {
     && "managed" in workbench && workbench.managed === true);
 }
 
-async function createCompanionProxy(resolveDaemonOrigin?: () => Promise<string>): Promise<CompanionProxy> {
+function injectCodeModeToolContext(body: Buffer, contexts: CodeModeToolContextController) {
+  if (!body.includes(WORKBENCH_CODE_MODE_CONTEXT_ARGUMENT)) return body;
+  const parsed = JSON.parse(body.toString("utf8")) as unknown;
+  const messages = Array.isArray(parsed) ? parsed : [parsed];
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const request = message as Record<string, unknown>;
+    if (request.method !== "tools/call") continue;
+    const params = request.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) continue;
+    const values = params as Record<string, unknown>;
+    const context = contexts.consume(values.arguments);
+    if (!context) continue;
+    const metadata = values._meta;
+    values._meta = {
+      ...(metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? metadata as Record<string, unknown>
+        : {}),
+      sessionID: context.sessionId,
+    };
+  }
+  return Buffer.from(JSON.stringify(parsed));
+}
+
+async function createCompanionProxy(
+  contexts: CodeModeToolContextController,
+  resolveDaemonOrigin?: () => Promise<string>,
+): Promise<CompanionProxy> {
   const server = http.createServer(async (request, response) => {
     const method = request.method;
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -220,6 +250,9 @@ async function createCompanionProxy(resolveDaemonOrigin?: () => Promise<string>)
       if (method === "POST") {
         for await (const chunk of request) body.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
+      const requestBody = method === "POST"
+        ? injectCodeModeToolContext(Buffer.concat(body), contexts)
+        : undefined;
       const origin = resolveDaemonOrigin ? await resolveDaemonOrigin() : await (async () => {
         const dataRoot = resolveWorkbenchDataRoot();
         const endpoint = await readDaemonEndpoint(path.join(dataRoot, "daemon", "runtime.json"));
@@ -235,7 +268,7 @@ async function createCompanionProxy(resolveDaemonOrigin?: () => Promise<string>)
       const upstream = await fetch(new URL("/daemon/mcp?provider=opencode", origin), {
         method,
         headers,
-        ...(method === "POST" ? { body: Buffer.concat(body) } : {}),
+        ...(requestBody ? { body: new Uint8Array(requestBody) } : {}),
         signal: abort.signal,
       });
       const responseHeaders = Object.fromEntries([...upstream.headers.entries()]
@@ -274,7 +307,9 @@ export function createOpenCodeWorkbenchPlugin(
   return {
     id: WORKBENCH_PLUGIN_ID,
     setup: async context => {
-      const proxy = await (options.createProxy ?? (() => createCompanionProxy(options.resolveDaemonOrigin)))();
+      const toolContexts = new CodeModeToolContextController();
+      const proxy = await (options.createProxy ?? (contexts =>
+        createCompanionProxy(contexts, options.resolveDaemonOrigin)))(toolContexts);
       const connectTools = options.connectTools ?? connectCompanionTools;
       const tools = createLifecycleOwnedCompanionToolOwner(connectTools, proxy.url);
       const isManagedSession = options.isManagedSession ?? (async sessionID =>
@@ -287,11 +322,14 @@ export function createOpenCodeWorkbenchPlugin(
           for (const tool of editor.list()) {
             if (!isWorkbenchTool(tool.id)) continue;
             editor.update(tool.id, value => {
-              value.execute = async (input, toolContext) => tools.call({
-                name: tool.id.slice(`${WORKBENCH_MCP_NAME}_`.length),
-                arguments: input as Record<string, unknown>,
-                _meta: { sessionID: toolContext.sessionID },
-              });
+              value.execute = async (input, toolContext) => {
+                const correlated = toolContexts.consume(input);
+                return await tools.call({
+                  name: tool.id.slice(`${WORKBENCH_MCP_NAME}_`.length),
+                  arguments: input as Record<string, unknown>,
+                  _meta: { sessionID: correlated?.sessionId ?? toolContext.sessionID },
+                });
+              };
             });
           }
         }),
@@ -312,15 +350,27 @@ export function createOpenCodeWorkbenchPlugin(
           }
         }),
         context.tool.hook("execute.before", async input => {
-          if (NATIVE_COMMAND_TOOLS.has(input.tool) && await isManagedSession(input.sessionID)) {
+          const managed = await isManagedSession(input.sessionID);
+          if (NATIVE_COMMAND_TOOLS.has(input.tool) && managed) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
           }
+          if (isWorkbenchTool(input.tool) && managed) {
+            toolContexts.issue(input.input, {
+              callId: input.id,
+              sessionId: input.sessionID,
+              tool: input.tool,
+            });
+          }
+        }),
+        context.tool.hook("execute.after", input => {
+          if (isWorkbenchTool(input.tool)) toolContexts.release(input.input);
         }),
       ]);
       return async () => {
         await Promise.allSettled(registrations.map(registration => registration.dispose()));
         await tools.close();
         await proxy.close();
+        toolContexts.dispose();
       };
     },
   };

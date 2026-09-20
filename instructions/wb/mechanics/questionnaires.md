@@ -11,7 +11,7 @@ Process:
 2. Call `tools.mcp__wb__request_user_input` in one Code mode cell. Treat it as a Workbench Long Wait.
 </harness:codex>
 <harness:opencode>
-2. Call `tools.wb.request_user_input` in one `execute` call. Treat it as a Workbench Long Wait.
+2. In one `execute` call, `return await tools.wb.request_user_input(...)`. Treat it as a Workbench Long Wait.
 </harness:opencode>
 
 Constraints:
