@@ -33,6 +33,8 @@ import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
+import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { readGlobalWorkbenchSettings, readProjectWorkbenchSettings, resolveWorkbenchSettings } from "../../../workbench/state/workbench-settings";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -437,6 +439,12 @@ function ThreadGenericDynamicToolCallItem ({
   const display = getOpenCodeToolDisplay(item);
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
+  const state = useWorkbenchClientStateSnapshot();
+  const settings = resolveWorkbenchSettings(
+    readGlobalWorkbenchSettings(state.records),
+    readProjectWorkbenchSettings(state.daemonRegistrationId, projectId ?? "", state.records),
+  );
+  if (hasCapturedChildren && !settings.threadCodeDetails && outcome !== "failed") return null;
 
   return (
     <ThreadDisclosure

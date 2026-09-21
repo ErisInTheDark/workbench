@@ -1,7 +1,13 @@
 /*
  * Exports:
- * - Workbench settings value/key/definition types: shared settings contracts. Keywords: settings, registry, search.
- * - WORKBENCH_SETTING_DEFINITIONS: labels, descriptions, and options shared by settings UI and search. Keywords: settings, metadata, registry.
+ * - WorkbenchTheme: available themes.
+ * - WorkbenchEditorFontFamily: editor font choices.
+ * - WorkbenchFileOpenBehavior: file opening policy.
+ * - WorkbenchSelectedProjectPinPlacement: selected-project pin location.
+ * - WorkbenchSettingKey: configurable setting identities.
+ * - WorkbenchGlobalSettings: global preference values.
+ * - WorkbenchSettingDefinition: setting control metadata.
+ * - WORKBENCH_SETTING_DEFINITIONS: shared settings controls and search metadata.
  */
 import type { WorkbenchSelectedProjectPinPlacementValue } from "../../state/workbench-client-state.ts";
 
@@ -12,7 +18,7 @@ export type WorkbenchSelectedProjectPinPlacement = WorkbenchSelectedProjectPinPl
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | "fileOpenBehavior" | "selectedProjectPinPlacement"
-  | "showUnopenableFiles" | "threadCodeBlockWrap";
+  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails";
 
 export interface WorkbenchGlobalSettings {
   composerSpellCheck: boolean;
@@ -24,6 +30,7 @@ export interface WorkbenchGlobalSettings {
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
+  threadCodeDetails: boolean;
 }
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
@@ -63,6 +70,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },
   threadCodeBlockWrap: { description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.", key: "threadCodeBlockWrap", label: "Wrap thread code blocks", type: "boolean" },
+  threadCodeDetails: { description: "Show code-mode source and raw output alongside captured tool calls. Failed executions and calls without captured tool results remain visible.", key: "threadCodeDetails", label: "Show code details", type: "boolean" },
   editorSpellCheck: { description: "Controls browser spellcheck in the rich markdown editor.", key: "editorSpellCheck", label: "Editor spellcheck", type: "boolean" },
   theme: {
     columns: "two", description: "Controls Workbench colors and font personality.", key: "theme", label: "Theme", type: "select",

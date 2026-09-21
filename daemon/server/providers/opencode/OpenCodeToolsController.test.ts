@@ -1,9 +1,9 @@
 /*
- * Exports:
- * - tests: protect exact OpenCode session caller binding and admitted Codex sandbox execution.
+ * No production exports. Tests protect native path translation, session binding and admitted execution.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import path from "node:path";
 import OpenCodeToolsController from "./OpenCodeToolsController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
@@ -25,7 +25,7 @@ test("native mutation admission checks every resource against the resolved calle
   assert.equal(result.allowed, false);
   assert.deepEqual(checked, [{
     cwd: "/repo", harness: "opencode", threadId: "owner",
-    paths: ["src/old.ts", "src/new.ts", "removed.ts"],
+    paths: ["src/old.ts", "src/new.ts", "removed.ts"].map(resource => path.resolve("/repo", resource)),
   }]);
   assert.match(result.reason, /src\/new.ts/);
   assert.match(result.reason, /removed.ts/);

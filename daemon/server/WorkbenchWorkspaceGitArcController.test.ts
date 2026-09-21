@@ -18,6 +18,7 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import { GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-status";
 import { GitArcScopeClaimsResponseSchema } from "workbench-shared/workbench/git/git-arc-scope-response";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import OpenCodeToolsController from "./providers/opencode/OpenCodeToolsController";
 
 const execFileAsync = promisify(execFile);
 
@@ -438,7 +439,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     new WorkbenchThreadTransitionCoordinator(),
     async (rootPath) => rootPath,
   );
-  const identity = { cwd: apiRoot, harness: "codex" as const, threadId: "claim-thread" };
+  const identity = { cwd: apiRoot, harness: "opencode" as const, threadId: "claim-thread" };
   const plan = await controller.execute(project, {
     action: "plan",
     adoptPaths: [],
@@ -463,38 +464,58 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     path.join(apiRoot, "future.ts"),
     path.join(webRoot, "claimed.ts"),
   ];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, covered), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, covered), {
     allowed: true,
     uncoveredPaths: [],
   });
   if (process.platform === "win32") {
-    assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, covered.map((filePath) => filePath.toLowerCase())), {
+    assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, covered.map((filePath) => filePath.toLowerCase())), {
       allowed: true,
       uncoveredPaths: [],
     });
   }
   const uncovered = [path.join(apiRoot, "sibling.ts"), path.join(webRoot, "destination.ts"), path.join(temporaryRoot, "outside.ts")];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, uncovered), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, uncovered), {
     allowed: false,
     uncoveredPaths: uncovered,
   });
   const ignored = [path.join(apiRoot, "ignored", "generated.ts"), path.join(apiRoot, "untracked.log")];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, [...covered, ...ignored]), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, [...covered, ...ignored]), {
     allowed: true,
     uncoveredPaths: [],
   });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, [...ignored, trackedIgnored]), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, [...ignored, trackedIgnored]), {
     allowed: false,
     uncoveredPaths: [trackedIgnored],
   });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "no-active-arc", ignored), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, "no-active-arc", ignored), {
     allowed: true,
     uncoveredPaths: [],
   });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "no-active-arc", covered), {
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, "no-active-arc", covered), {
     allowed: false,
     uncoveredPaths: covered,
   });
+
+  const native = new OpenCodeToolsController({
+    resolveCaller: async () => ({
+      cwd: apiRoot, harness: "opencode",
+      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId),
+    }),
+    execute: async () => { throw new Error("must not execute"); },
+    executeReadOnly: async () => { throw new Error("must not execute"); },
+  });
+  const admit = async (resources: string[]) => JSON.parse(await native.patchClaims({
+    callerThreadId: null, raw: JSON.stringify({ sessionID: "native", resources }),
+  }, caller => controller.checkActiveClaimPaths(project, caller.harness, caller.threadId, caller.paths), new AbortController().signal));
+  assert.deepEqual(await admit([
+    "src/nested.ts", "src/new.ts", "future.ts", "../web/claimed.ts", covered[0]!,
+  ]), { allowed: true });
+  for (const resource of ["sibling.ts", "../web/destination.ts", "../outside.ts", uncovered[2]!]) {
+    assert.equal((await admit(["src/nested.ts", resource])).allowed, false);
+  }
+  assert.deepEqual(await admit(["ignored/generated.ts", "untracked.log"]), { allowed: true });
+  assert.equal((await admit(["tracked.log"])).allowed, false);
 });
 
 test("workspace arc results qualify ignored skips and become no-ops only when every member skips", async () => {

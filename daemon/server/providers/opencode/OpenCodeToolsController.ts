@@ -3,6 +3,7 @@
  * - OpenCodeToolsControllerOptions: bind native identity to shared admitted execution.
  * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and Codex sandbox execution.
  */
+import path from "node:path";
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench-shared/workbench/provider/provider-execution";
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
@@ -87,7 +88,8 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     signal.throwIfAborted();
     const request = OpenCodeFileClaimRequestSchema.parse(JSON.parse(input.raw));
     const caller = await this.caller({ sessionID: request.sessionID }, signal);
-    const result = await check({ ...caller, paths: request.resources });
+    // Native internal resources are session-relative; shared claim admission requires absolute paths.
+    const result = await check({ ...caller, paths: request.resources.map(resource => path.resolve(caller.cwd, resource)) });
     signal.throwIfAborted();
     return JSON.stringify(result.allowed ? { allowed: true } : {
       allowed: false,

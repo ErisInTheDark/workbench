@@ -1,13 +1,28 @@
 /*
  * Exports:
- * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue/WorkbenchTranscriptModeValue: preference value contracts.
- * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records.
- * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values.
- * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations.
- * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows, schema capability, and revision responses.
- * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary.
- * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry.
- * - WorkbenchProjectRemapSchema/WorkbenchProjectRemap: bounded daemon-scoped project-address adoption.
+ * - WorkbenchHarnessValue: provider identity.
+ * - WorkbenchThemeValue: theme choices.
+ * - WorkbenchEditorFontFamilyValue: editor font choices.
+ * - WorkbenchFileOpenBehaviorValue: file opening policy.
+ * - WorkbenchSelectedProjectPinPlacementValue: selected-project pin location.
+ * - WorkbenchTranscriptModeValue: transcript storage selection.
+ * - WorkbenchGlobalPreference: typed global preference.
+ * - WorkbenchProjectPreference: typed project override.
+ * - WorkbenchSidebarPreference: typed sidebar preference.
+ * - WorkbenchFileDraftValue: recoverable file edits.
+ * - WorkbenchComposerDraftValue: recoverable composer input.
+ * - WorkbenchQuestionnaireDraftValue: recoverable questionnaire answers.
+ * - WorkbenchClientStateRecord: persisted browser state variants.
+ * - WorkbenchClientStateIdentity: browser state addresses.
+ * - WorkbenchClientStateMutation: put/delete intents.
+ * - WorkbenchClientStateRows: schema-derived wire rows.
+ * - WorkbenchClientStateResponse: versioned snapshots and deltas.
+ * - WORKBENCH_BROWSER_STATE_HEADER: browser namespace header.
+ * - isWorkbenchBrowserStateId: validate browser namespace.
+ * - workbenchClientStateMutationPath: route for a record kind.
+ * - workbenchClientStateMutationKinds: record kinds admitted by a route.
+ * - WorkbenchProjectRemapSchema: validate project-address adoption.
+ * - WorkbenchProjectRemap: daemon-scoped address adoption.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -40,6 +55,7 @@ export type WorkbenchGlobalPreference =
       | "showUnopenableFiles"
       | "sidebarCollapsed"
       | "threadCodeBlockWrap"
+      | "threadCodeDetails"
       | "threadLiveActivityOpen";
     value: boolean;
   }
@@ -56,7 +72,7 @@ export type WorkbenchGlobalPreference =
   | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue };
 
 export type WorkbenchProjectPreference =
-  | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap"; value: boolean }
+  | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails"; value: boolean }
   | { enabled: boolean; key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { enabled: boolean; key: "editorFontSize"; value: number }
   | { enabled: boolean; key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }

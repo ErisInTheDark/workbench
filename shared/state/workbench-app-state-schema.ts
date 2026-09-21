@@ -311,6 +311,31 @@ const globalPreferencesV7 = defineTable("global_preferences", {
   ],
 }));
 
+const globalPreferencesV8 = defineTable("global_preferences", {
+  key: enumText(
+    "appPort", "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "harness", "projectStatusCountsExpanded", "projectsOpen", "projectTimeGroupCount",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "selectedProjectPinPlacement", "showUnopenableFiles",
+    "sidebarCollapsed", "theme", "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen",
+    "transcriptProjectionMode", "voiceInputEnabled",
+  ).primaryKey(),
+  boolean_value: booleanInteger(),
+  integer_value: integer(),
+  text_value: text(),
+  ...revisionColumns(),
+}, table => ({
+  constraints: [
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND (
+        (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reactDevelopmentMode")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}, ${literal("threadLiveActivityOpen")}, ${literal("voiceInputEnabled")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("selectedProjectPinPlacement")}, ${literal("theme")}, ${literal("transcriptProjectionMode")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      ))
+    `),
+  ],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: globalPreferencesV1 }),
@@ -344,8 +369,13 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.voiceInputEnabled.version,
       table: globalPreferencesV7,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV7, to: globalPreferencesV8 }),
+      schemaVersion: appStateReleases.threadCodeDetails.version,
+      table: globalPreferencesV8,
+    }),
   ],
-  current: globalPreferencesV7,
+  current: globalPreferencesV8,
 });
 
 const projectPreferencesV1 = defineTable("project_preferences", {
@@ -413,6 +443,33 @@ const projectPreferencesV2 = defineTable("project_preferences", {
   ],
 }));
 
+const projectPreferencesV3 = defineTable("project_preferences", {
+  daemon_registration_id: registrationForeignKey(),
+  project_id: text().notNull(),
+  key: enumText(
+    "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "selectedProjectPinPlacement", "showUnopenableFiles", "theme",
+    "threadCodeBlockWrap", "threadCodeDetails",
+  ).notNull(),
+  enabled: booleanInteger(),
+  boolean_value: booleanInteger(),
+  integer_value: integer(),
+  text_value: text(),
+  ...revisionColumns(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.key]),
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.enabled} IS NULL AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND ${table.enabled} IS NOT NULL AND (
+        (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("showUnopenableFiles")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} = ${literal("editorFontSize")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("selectedProjectPinPlacement")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      ))
+    `),
+  ],
+}));
+
 const projectPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(projectPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: projectPreferencesV1 }),
@@ -421,8 +478,13 @@ const projectPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.projectAndGlobalPreferences.version,
       table: projectPreferencesV2,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: projectPreferencesV2, to: projectPreferencesV3 }),
+      schemaVersion: appStateReleases.threadCodeDetails.version,
+      table: projectPreferencesV3,
+    }),
   ],
-  current: projectPreferencesV2,
+  current: projectPreferencesV3,
 });
 
 const projectSidebarPreferencesHistory = initialHistory(defineTable("project_sidebar_preferences", {

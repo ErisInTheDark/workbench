@@ -27,6 +27,43 @@ async function temporaryDatabase(context: TestContext) {
   return path.join(directory, "state.sqlite3");
 }
 
+test("code-detail preferences survive reopening and retain pre-upgrade settings", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 13 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
+  old.prepare("INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,boolean_value,deleted,revision) VALUES ('retained','alpha','threadCodeBlockWrap',1,1,0,2)").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  const daemon = await repository.start();
+  try {
+    repository.commit(revision => [
+      insertRow(appStateTables.globalPreferences, {
+        key: "threadCodeDetails", boolean_value: 1, integer_value: null, text_value: null, deleted: 0, revision,
+      }),
+      insertRow(appStateTables.projectPreferences, {
+        key: "threadCodeDetails", boolean_value: 0, integer_value: null, text_value: null, deleted: 0, revision,
+        enabled: 1, daemon_registration_id: daemon, project_id: "alpha",
+      }),
+    ]);
+  } finally { await repository.close(); }
+  const reopened = new WorkbenchAppStateRepository({ databasePath });
+  await reopened.start();
+  try {
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "theme" } }))[0]?.text_value, "winter");
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "threadCodeDetails" } }))[0]?.boolean_value, 1);
+    const project = reopened.query(selectRows(appStateTables.projectPreferences, { where: { key: "threadCodeDetails" } }))[0];
+    assert.equal(project?.boolean_value, 0);
+    assert.equal(project?.enabled, 1);
+    assert.equal(project?.project_id, "alpha");
+    const retained = reopened.query(selectRows(appStateTables.projectPreferences, { where: { key: "threadCodeBlockWrap" } }))[0];
+    assert.equal(retained?.boolean_value, 1);
+    assert.equal(retained?.enabled, 1);
+    assert.equal(retained?.daemon_registration_id, "retained");
+  } finally { await reopened.close(); }
+});
+
 test("favourite provider references retain standalone favourites across the upgrade", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

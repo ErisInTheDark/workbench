@@ -1,18 +1,36 @@
 /*
- * Keywords: settings, persistent preferences, sidebar, project overrides.
  * Exports:
- * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
- * - WorkbenchTheme/WorkbenchEditorFontFamily/WorkbenchFileOpenBehavior/WorkbenchSelectedProjectPinPlacement/WorkbenchSettingKey: setting value contracts. Keywords: settings, theme, editor, pinned, thread.
- * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
- * - WorkbenchProjectSettingOverride/WorkbenchSettingDefinition: override values and setting metadata.
- * - WorkbenchGlobalSidebarPreferences/WorkbenchProjectSidebarPreferences/WorkbenchSidebarPreferences: global shell, project-local, and combined sidebar state. Keywords: settings, global, project, sidebar, disclosure, folders.
- * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
- * - createDefaultGlobalWorkbenchSettings/createDefaultProjectWorkbenchSettings/createDefaultWorkbenchGlobalSidebarPreferences/createDefaultWorkbenchProjectSidebarPreferences: create settings and scoped sidebar defaults. Keywords: settings, defaults, sidebar, global, project.
- * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSetting: project global settings and write one setting intent. Keywords: settings, app state, global.
- * - readProjectWorkbenchSettings/writeProjectWorkbenchSetting: project explicit project override slots and write one override intent. Keywords: settings, app state, project.
- * - readWorkbenchGlobalSidebarPreferences/writeWorkbenchGlobalSidebarPreference: global shell sidebar state and focused writes. Keywords: settings, app state, global, sidebar, home.
- * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreference/setWorkbenchProjectSidebarFolderOpen: project sidebar state and focused writes. Keywords: settings, app state, project, sidebar.
- * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
+ * - DEFAULT_EDITOR_FONT_SIZE: initial editor zoom.
+ * - MIN_EDITOR_FONT_SIZE: minimum editor zoom.
+ * - MAX_EDITOR_FONT_SIZE: maximum editor zoom.
+ * - WorkbenchTheme: theme choices.
+ * - WorkbenchEditorFontFamily: editor font choices.
+ * - WorkbenchFileOpenBehavior: file opening policy.
+ * - WorkbenchSelectedProjectPinPlacement: selected-project pin location.
+ * - WorkbenchSettingKey: configurable identities.
+ * - WorkbenchGlobalSettings: global preference values.
+ * - WorkbenchProjectSettings: project override slots.
+ * - WorkbenchResolvedSettings: effective preference values.
+ * - WorkbenchProjectSettingOverride: one override value and enablement.
+ * - WorkbenchSettingDefinition: control metadata.
+ * - WorkbenchGlobalSidebarPreferences: global sidebar state.
+ * - WorkbenchProjectSidebarPreferences: project sidebar state.
+ * - WorkbenchSidebarPreferences: combined sidebar state.
+ * - WORKBENCH_SETTING_DEFINITIONS: shared control registry.
+ * - createDefaultGlobalWorkbenchSettings: global defaults.
+ * - createDefaultProjectWorkbenchSettings: disabled project overrides.
+ * - createDefaultWorkbenchGlobalSidebarPreferences: global sidebar defaults.
+ * - createDefaultWorkbenchProjectSidebarPreferences: project sidebar defaults.
+ * - readGlobalWorkbenchSettings: project global records into preferences.
+ * - writeGlobalWorkbenchSetting: persist one global intent.
+ * - readProjectWorkbenchSettings: project scoped override records.
+ * - writeProjectWorkbenchSetting: persist one project override.
+ * - readWorkbenchGlobalSidebarPreferences: project global sidebar records.
+ * - writeWorkbenchGlobalSidebarPreference: persist one global sidebar intent.
+ * - readWorkbenchProjectSidebarPreferences: project scoped sidebar records.
+ * - writeWorkbenchProjectSidebarPreference: persist one project sidebar intent.
+ * - setWorkbenchProjectSidebarFolderOpen: persist folder disclosure.
+ * - resolveWorkbenchSettings: merge overrides over global preferences.
  */
 import type {
   WorkbenchClientStateRecord,
@@ -120,6 +138,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
+    threadCodeDetails: typeof candidate.threadCodeDetails === "boolean" ? candidate.threadCodeDetails : false,
   };
 }
 
@@ -152,6 +171,7 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
     case "composerSpellCheck":
     case "showUnopenableFiles":
     case "threadCodeBlockWrap":
+    case "threadCodeDetails":
       return {
         enabled,
         value: typeof candidate.value === "boolean" ? candidate.value : defaultValue,
@@ -170,6 +190,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     showUnopenableFiles: false,
     theme: "default",
     threadCodeBlockWrap: false,
+    threadCodeDetails: false,
   };
 }
 
@@ -185,6 +206,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
     threadCodeBlockWrap: { enabled: false, value: globalDefaults.threadCodeBlockWrap },
+    threadCodeDetails: { enabled: false, value: globalDefaults.threadCodeDetails },
   };
 }
 
@@ -326,6 +348,7 @@ export function readProjectWorkbenchSettings(
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
     threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", candidate.threadCodeBlockWrap),
+    threadCodeDetails: normalizeProjectOverride("threadCodeDetails", candidate.threadCodeDetails),
   } satisfies WorkbenchProjectSettings;
 }
 
@@ -439,5 +462,6 @@ export function resolveWorkbenchSettings(
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
+    threadCodeDetails: projectSettings.threadCodeDetails.enabled ? projectSettings.threadCodeDetails.value : globalSettings.threadCodeDetails,
   };
 }

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect global shell and project-local sidebar projection, isolation, and writes. Keywords: settings, sidebar, global, project, home, app state.
+ * No production exports. Tests protect preference inheritance, isolation and focused writes.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -20,6 +20,22 @@ import {
   writeWorkbenchProjectSidebarPreference,
 } from "./workbench-settings";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+
+test("code details inherit globally and project overrides reset without crossing projects", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  const resolve = (projectId: string) => resolveWorkbenchSettings(
+    readGlobalWorkbenchSettings(controller.getSnapshot().records),
+    readProjectWorkbenchSettings("memory", projectId, controller.getSnapshot().records),
+  );
+  assert.equal(resolve("alpha").threadCodeDetails, false);
+  await writeGlobalWorkbenchSetting(controller, "threadCodeDetails", true);
+  assert.equal(resolve("alpha").threadCodeDetails, true);
+  await writeProjectWorkbenchSetting(controller, "alpha", "threadCodeDetails", { enabled: true, value: false });
+  assert.equal(resolve("alpha").threadCodeDetails, false);
+  assert.equal(resolve("beta").threadCodeDetails, true);
+  await writeProjectWorkbenchSetting(controller, "alpha", "threadCodeDetails", { enabled: false, value: false });
+  assert.equal(resolve("alpha").threadCodeDetails, true);
+});
 
 test("each focused setting intent writes one app-state identity", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });

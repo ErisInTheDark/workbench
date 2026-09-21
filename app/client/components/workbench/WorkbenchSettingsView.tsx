@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import {
   createSettingsRoute,
   type WorkbenchSettingsScope,
@@ -47,6 +48,7 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "selectedProjectPinPlacement",
   "showUnopenableFiles",
   "threadCodeBlockWrap",
+  "threadCodeDetails",
   "editorFontSize",
 ];
 const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
@@ -236,12 +238,14 @@ export default function WorkbenchSettingsView({
 
   const renderGlobalSettingRow = (key: WorkbenchSettingKey) => {
     const definition = WORKBENCH_SETTING_DEFINITIONS[key];
+    const unavailable = key === "threadCodeDetails" && clientState.schemaVersion < appStateReleases.threadCodeDetails.version;
     if (definition.type === "boolean") {
       return (
         <section key={key} className="rounded-[0.85rem] py-1">
-          {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
+          {renderSettingControl(key, globalSettings[key], unavailable, (nextValue) => {
             updateGlobalSetting(key, nextValue as never);
           })}
+          {unavailable ? <p>Available after the app database is reloaded.</p> : null}
         </section>
       );
     }
@@ -262,6 +266,7 @@ export default function WorkbenchSettingsView({
 
   const renderProjectSettingRow = (key: WorkbenchSettingKey) => {
     const definition = WORKBENCH_SETTING_DEFINITIONS[key];
+    const unavailable = key === "threadCodeDetails" && clientState.schemaVersion < appStateReleases.threadCodeDetails.version;
     const override = projectSettings[key];
     const inheritedValue = globalSettings[key];
     const displayedValue = override.enabled ? override.value : inheritedValue;
@@ -271,6 +276,7 @@ export default function WorkbenchSettingsView({
           <WorkbenchOptionCard
             className={override.enabled ? "pr-12" : undefined}
             description={definition.description}
+            disabled={unavailable}
             isChecked={displayedValue}
             isSingleChoice={false}
             label={definition.label}
@@ -284,10 +290,12 @@ export default function WorkbenchSettingsView({
               title={`Reset ${definition.label} to global`}
               className="absolute top-1/2 right-3 -translate-y-1/2"
               onClick={() => resetProjectSettingOverride(key)}
+              disabled={unavailable}
             >
               <ReloadIcon size={20} />
             </WorkbenchIconButton>
           ) : null}
+          {unavailable ? <p>Available after the app database is reloaded.</p> : null}
         </section>
       );
     }
