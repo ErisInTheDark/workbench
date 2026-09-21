@@ -33,6 +33,7 @@ export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
   createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
+  createNetwork?: AppProcessContext["createNetwork"];
   daemonEndpointPath?: string;
   logger: WorkbenchProcessLogger;
   outputDirectoryPath: string;
@@ -78,7 +79,7 @@ async function readReloadScopes(request: IncomingMessage) {
   if (
     !scopes.length
     || scopes.length > 32
-    || scopes.some((scope) => typeof scope !== "string" || !scope.startsWith("client:") || !WORKBENCH_RELOAD_SCOPE_PATTERN.test(scope))
+    || scopes.some((scope) => typeof scope !== "string" || (!scope.startsWith("client:") && !scope.startsWith("host:")) || !WORKBENCH_RELOAD_SCOPE_PATTERN.test(scope))
   ) throw new Error("App reload scopes are invalid.");
   return [...new Set(scopes as string[])] as WorkbenchReloadScope[];
 }
@@ -97,6 +98,7 @@ export default class WorkbenchAppRuntime {
         return this.appliedReactDevelopmentMode;
       }),
       createDatabase: options.createDatabase,
+      createNetwork: options.createNetwork,
       executeReloadScopes: async (scopes) => {
         const previous = host.get("reloadController");
         const applied = host.getDependantClosure(scopes);
@@ -233,23 +235,45 @@ export default class WorkbenchAppRuntime {
             ],
           }
         : reloadDirt;
+      const hostDirt = responseVersion === "4" ? this.host.get("network").hostReloadDirt() : null;
+      const combinedDirt = hostDirt ? {
+        dirtyScopes: [...projectedDirt.dirtyScopes, ...hostDirt.dirtyScopes],
+        pendingScopes: [...projectedDirt.pendingScopes, ...hostDirt.pendingScopes],
+        error: [projectedDirt.error, hostDirt.error].filter(Boolean).join(" ").slice(0, 500) || null,
+      } : projectedDirt;
       sendJson(response, 200, {
-        ...(responseVersion === "3"
+        ...(responseVersion === "3" || responseVersion === "4"
           ? { frontendGeneration: this.host.get("compiler").getFrontendGeneration() }
           : {}),
         reloadDirt: projectReloadDirt(
-          projectedDirt,
-          responseVersion === "2" || responseVersion === "3",
+          combinedDirt,
+          responseVersion === "2" || responseVersion === "3" || responseVersion === "4",
         ),
       });
       return;
     }
     if (url.pathname === RUNTIME_PATH && request.method === "POST") {
       try {
-        const admission = this.host.get("reloadController").admit(
-          await readReloadScopes(request),
+        const scopes = await readReloadScopes(request);
+        const hostScopes = scopes.filter(scope => scope.startsWith("host:"));
+        const clientScopes = scopes.filter(scope => scope.startsWith("client:"));
+        if (clientScopes.length && !clientScopes.includes("client:process")) this.host.validateReloadScopes(clientScopes);
+        const admission = clientScopes.length ? this.host.get("reloadController").admit(
+          clientScopes,
           this.options.requestProcessRestart,
-        );
+        ) : null;
+        if (hostScopes.length) {
+          try { await this.host.get("network").reloadHost(hostScopes); }
+          catch (error) { admission?.cancel(); throw error; }
+          if (!clientScopes.length) {
+            sendJson(response, 202, {
+              ok: true, state: "running", requestedScopes: hostScopes, queuedScopes: hostScopes,
+              appliedScopes: [], startedAt: Date.now(), completedAt: null, error: null,
+            });
+            return;
+          }
+        }
+        if (!admission) throw new Error("No app reload scopes were admitted.");
         let acknowledged = false;
         response.once("finish", () => {
           acknowledged = true;
@@ -264,7 +288,11 @@ export default class WorkbenchAppRuntime {
           if (acknowledged || response.writableFinished) return;
           admission.cancel();
         });
-        sendJson(response, 202, admission.response);
+        sendJson(response, 202, {
+          ...admission.response,
+          requestedScopes: scopes,
+          queuedScopes: [...hostScopes, ...admission.response.queuedScopes],
+        });
       } catch (error) {
         sendJson(response, 400, {
           error: error instanceof Error ? error.message.slice(0, 500) : "App reload request failed.",

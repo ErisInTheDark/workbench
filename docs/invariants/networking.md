@@ -1,5 +1,6 @@
 - Keep local app and daemon listeners loopback-only; remote access uses readiness-verified published endpoints and re-resolves after reconnect. Missing or stale publication is unavailable, never a guessed port.
-- Authenticate remote app ingress from the Tailscale transport and per-process credential; discard caller-supplied identity headers, enforce grants on both private HTTPS and host-tailnet HTTP, and close owned connections on revocation.
+- Authenticate remote app and daemon ingress through Tailscale; discard caller-supplied identity headers, enforce the network owner's grants on every published transport, and close owned connections on revocation.
+- Keep one network identity and policy receiver per installation. App disposal must not stop daemon publication, DNS or policy reception.
 - Keep the CA private key with the authority; members retain their own leaf keys and tsnet identities. DNS selection is independent of ownership, and ownership transfer preserves root trust through durable prepare, relinquish, and activate phases without automatic root replacement.
 - Persist network configuration, membership, grants, and handover or rename intent before acknowledging native changes; if persistence fails, keep the previous safe state and expose the failure.
 - Serve only the Workbench-owned DNS suffix from the selected DNS app; leave public and unrelated names to the configured external path, with no hidden resolver failover.

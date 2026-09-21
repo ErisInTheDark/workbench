@@ -10,6 +10,7 @@ import PrimaryButton from "./PrimaryButton";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchNetworkAccessSettings from "./WorkbenchNetworkAccessSettings";
+import WorkbenchDaemonDiscovery from "./WorkbenchDaemonDiscovery";
 import WorkbenchNetworkConnectionForm from "./WorkbenchNetworkConnectionForm";
 import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
@@ -73,6 +74,7 @@ function NetworkSettingsContent () {
           onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
         {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
         <WorkbenchNetworkConnectionForm />
+        <WorkbenchDaemonDiscovery />
         <div className="flex flex-wrap items-center gap-2 text-sm"><span>App URL</span>
           {appUrl ? <>
             <a className="min-w-0 break-all font-mono text-accent" href={appUrl} target="_blank" rel="noreferrer">{appUrl}</a>

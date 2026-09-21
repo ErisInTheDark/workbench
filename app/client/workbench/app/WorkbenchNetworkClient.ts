@@ -52,14 +52,14 @@ export default class WorkbenchNetworkClient {
     const controller = new AbortController();
     this.requests.add(controller);
     try {
-      const response = await (this.options.fetcher ?? fetch)(`${WORKBENCH_NETWORK_PATH}?capabilities=3`, { cache: "no-store", signal: controller.signal });
+      const response = await (this.options.fetcher ?? fetch)(`${WORKBENCH_NETWORK_PATH}?capabilities=4`, { cache: "no-store", signal: controller.signal });
       if (this.closed) return;
       if (response.status === 404) throw new Error("Restart the Workbench app to load network settings.");
       if (!response.ok) throw new Error(`Network settings could not be read (HTTP ${response.status}).`);
       const value: unknown = await response.json();
       if (this.closed) return;
       this.receive(value);
-      const eventsUrl = `${WORKBENCH_NETWORK_PATH}/events?capabilities=3`;
+      const eventsUrl = `${WORKBENCH_NETWORK_PATH}/events?capabilities=4`;
       const events = this.options.events?.(eventsUrl) ?? new EventSource(eventsUrl);
       this.events?.close();
       this.events = events;

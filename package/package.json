@@ -1,12 +1,17 @@
 {
   "name": "@inthedark/wb",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "wb": "./wb"
   },
   "files": [
-    "wb"
+    "wb",
+    "WorkbenchBootstrap.mjs",
+    "WorkbenchInstallPrompt.mjs",
+    "SetupCommand.mjs"
   ]
 }

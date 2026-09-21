@@ -17,18 +17,18 @@ async function dispatcherFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-root-wb-"));
   const dispatcherPath = path.join(root, "wb");
   const daemonCliPath = path.join(root, "daemon", "server", "lib", "workbench", "cli", "workbench-agent-cli.sh");
-  const tsxCliPath = path.join(root, "app", "node_modules", "tsx", "dist", "cli.mjs");
+  const dispatchPath = path.join(root, "package", "dispatch.mjs");
   await fs.mkdir(path.dirname(daemonCliPath), { recursive: true });
-  await fs.mkdir(path.dirname(tsxCliPath), { recursive: true });
+  await fs.mkdir(path.dirname(dispatchPath), { recursive: true });
   await fs.copyFile(rootDispatcherPath, dispatcherPath);
   await fs.mkdir(path.join(root, "app", "server"), { recursive: true });
   await fs.writeFile(path.join(root, "app", "server", "index.ts"), "", "utf8");
   await fs.writeFile(path.join(root, "app", "server", "desktop.ts"), "", "utf8");
   await fs.writeFile(path.join(root, "caller-sentinel"), "", "utf8");
-  await fs.writeFile(tsxCliPath, [
+  await fs.writeFile(dispatchPath, [
     "import fs from 'node:fs';",
     "const cwd = fs.existsSync('./caller-sentinel') ? 'preserved' : 'changed';",
-    "console.log(`tsx|cwd=${cwd}|entry=${process.argv[2] ?? ''}|command=${process.argv[3] ?? ''}`);",
+    "console.log(`human|cwd=${cwd}|args=${JSON.stringify(process.argv.slice(2))}`);",
     "",
   ].join("\n"), "utf8");
   await fs.writeFile(daemonCliPath, [
@@ -53,7 +53,7 @@ test("delegates argumentful commands to the existing daemon shell", async (conte
     cwd: fixture.root,
     env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_ORIGIN: "", WORKBENCH_THREAD_ID: "" },
   });
-  assert.equal(result.stdout, "daemon|origin=http://127.0.0.1:4500|thread=|args=thread,recall,\n");
+  assert.equal(result.stdout, "daemon|origin=|thread=|args=thread,recall,\n");
   assert.equal(result.stderr, "");
 });
 
@@ -63,23 +63,24 @@ test("keeps no-argument managed and hook calls on the daemon shell", async (cont
 
   const managed = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+    env: { ...process.env, WORKBENCH_ORIGIN: "http://127.0.0.1:4321", CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
   });
-  assert.match(managed.stdout, /^daemon\|origin=http:\/\/127\.0\.0\.1:4500\|thread=thread-one/u);
+  assert.match(managed.stdout, /^daemon\|origin=http:\/\/127\.0\.0\.1:4321\|thread=thread-one/u);
 
   const hook = await execFileAsync("bash", [fixture.dispatcherPath], {
     cwd: fixture.root,
     env: {
       ...process.env,
       CODEX_THREAD_ID: "",
+      WORKBENCH_ORIGIN: "",
       WORKBENCH_APPLY_PATCH_CLAIM_HOOK: "1",
       WORKBENCH_THREAD_ID: "",
     },
   });
-  assert.match(hook.stdout, /^daemon\|origin=http:\/\/127\.0\.0\.1:4500\|thread=/u);
+  assert.match(hook.stdout, /^daemon\|origin=\|thread=/u);
 });
 
-test("starts the typed app entry only for an unthreaded no-argument call", async (context) => {
+test("routes unthreaded launch through the checkout-owned dispatcher", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync("bash", [fixture.dispatcherPath], {
@@ -91,11 +92,11 @@ test("starts the typed app entry only for an unthreaded no-argument call", async
       WORKBENCH_THREAD_ID: "",
     },
   });
-  assert.match(result.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]server[\\/]index\.ts\|command=\n$/u);
+  assert.equal(result.stdout, "human|cwd=preserved|args=[]\n");
   assert.equal(result.stderr, "");
 });
 
-test("starts the desktop owner for an unthreaded Windows no-argument call", async (context) => {
+test("keeps Windows human launch on the same dispatcher", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync("bash", [fixture.dispatcherPath], {
@@ -107,7 +108,7 @@ test("starts the desktop owner for an unthreaded Windows no-argument call", asyn
       WORKBENCH_THREAD_ID: "",
     },
   });
-  assert.match(result.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]server[\\/]desktop\.ts\|command=start\n$/u);
+  assert.equal(result.stdout, "human|cwd=preserved|args=[]\n");
   assert.equal(result.stderr, "");
 });
 
@@ -118,13 +119,13 @@ test("keeps shortcut installation local for humans and delegated for managed age
     cwd: fixture.root,
     env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
   });
-  assert.match(human.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]server[\\/]desktop\.ts\|command=shortcut\n$/u);
+  assert.equal(human.stdout, 'human|cwd=preserved|args=["shortcut"]\n');
 
   const managed = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut"], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+    env: { ...process.env, WORKBENCH_ORIGIN: "", CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
   });
-  assert.match(managed.stdout, /^daemon\|origin=http:\/\/127\.0\.0\.1:4500\|thread=thread-one\|args=shortcut,/u);
+  assert.match(managed.stdout, /^daemon\|origin=\|thread=thread-one\|args=shortcut,/u);
 });
 
 test("does not discard extra shortcut arguments", async (context) => {
@@ -132,9 +133,9 @@ test("does not discard extra shortcut arguments", async (context) => {
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut", "extra"], {
     cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+    env: { ...process.env, WORKBENCH_ORIGIN: "", CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
   });
-  assert.match(result.stdout, /^daemon\|origin=http:\/\/127\.0\.0\.1:4500\|thread=\|args=shortcut,extra,/u);
+  assert.match(result.stdout, /^daemon\|origin=\|thread=\|args=shortcut,extra,/u);
 });
 
 test("preserves delegated exit status", async (context) => {

@@ -22,6 +22,12 @@ import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
 import { WorkbenchDaemonConnectionSchema, WorkbenchDaemonEndpointSchema } from "../../shared/http/workbench-daemon-endpoint";
+import { readServiceEndpoint } from "../../shared/process/workbench-service-endpoint";
+import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery";
+import WorkbenchAppStateRepository from "../../app/server/state/WorkbenchAppStateRepository";
+import WorkbenchNetworkRepository from "../../daemon/host/network/WorkbenchNetworkRepository";
+import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
+import { serviceTableInventory } from "../../shared/state/workbench-service-schema";
 
 function inspectDatabase(file: string, table?: string) {
   const database = new Database(file, { readonly: true });
@@ -43,6 +49,14 @@ test("real application survives reload expiry, migrated candidate failure, retry
   const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
   const serverDatabase = path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3");
   const endpointPath = path.join(runtime.dataRootPath, "daemon", "runtime.json");
+  const serviceDatabase = path.join(runtime.dataRootPath, "service", "service.sqlite3");
+  const serviceIdentity = async () => {
+    const endpoint = await readServiceEndpoint(path.join(runtime.dataRootPath, "service", "runtime.json"));
+    assert.ok(endpoint);
+    const response = await fetch(`${endpoint.origin}/_workbench-service/identity`, { signal: t.signal });
+    assert.equal(response.status, 200);
+    return WorkbenchDaemonIdentitySchema.parse(await response.json());
+  };
   const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = '{"retained":"lifecycle cutover evidence"}';
@@ -203,8 +217,28 @@ test("real application survives reload expiry, migrated candidate failure, retry
     assert.ok(fixtureProject);
     const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, fixtureProject.id);
     const appStart = performance.now();
+    const legacyApp = new WorkbenchAppStateRepository({ databasePath: appDatabase });
+    await legacyApp.start();
+    try {
+      new WorkbenchNetworkRepository(legacyApp).write({
+        hostServe: { enabled: false, port: 8123 }, privateAccess: null, members: [],
+      });
+    } finally { await legacyApp.close(); }
     await runtime.startApp();
     await verifyEndpoint();
+    const initialService = await serviceIdentity();
+    const importedService = new Database(serviceDatabase, { readonly: true });
+    try {
+      const repository = new WorkbenchNetworkRepository({
+        query: <Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Row[] => {
+          const compiled = compileWorkbenchDatabaseStatement(serviceTableInventory, statement);
+          return importedService.prepare(compiled.sql).all(...compiled.parameters) as Row[];
+        },
+        executeTransaction: () => { throw new Error("Import verification must not mutate service state."); },
+      });
+      assert.equal(repository.read().hostServe.port, 8123);
+      assert.equal(importedService.prepare("SELECT count(*) FROM service_network_import").pluck().get(), 1);
+    } finally { importedService.close(); }
     const appStartupMs = Math.round(performance.now() - appStart);
     console.log(`cold startup to scenario readiness: daemon ${daemonStartupMs}ms, app ${appStartupMs}ms`);
     for (const output of [runtime.output, runtime.appOutput]) {
@@ -294,6 +328,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       [transcript.turnId], "Cold startup must permit an immediate durable read");
     await runtime.startApp();
     await verifyEndpoint();
+    assert.equal((await serviceIdentity()).daemonId, initialService.daemonId);
     await assets();
     await verifyTranscript();
     assert.equal((await appState()).daemonRegistrationId, registration.daemonRegistrationId);
@@ -313,6 +348,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await writeLifecycleFault(runtime.project, { fail: "client:http", initial: true });
     await assert.rejects(runtime.startApp(), /Lifecycle injected activation failure/u);
     assert.equal(await runtime.waitForAppExit(), 1, "Failed startup must close its owners and exit without external killing");
+    assert.equal((await serviceIdentity()).daemonId, initialService.daemonId, "App failure must leave the independent host available.");
     console.log("failed startup cleaned up its own resources; lifecycle checks passed");
   } catch (error) {
     console.error("lifecycle failed", error, "\napp tail\n", runtime.appOutput.slice(-12000), "\ndaemon tail\n", runtime.output.slice(-12000));

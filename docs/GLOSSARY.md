@@ -21,7 +21,7 @@
 | logs | Persisted daemon and app server logs under `.workbench/logs/`. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |
-| daemon host | Supervisor under `daemon/host/`. Owns daemon startup/shutdown, launcher logs and silence recovery. Imports shared contracts, never server implementation. |
+| daemon host | Lightweight service under `daemon/host/`. Owns networking, durable daemon identity and supervised daemon startup independently of the app. |
 | codex app-server | Codex's harness. |
 | provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |
 | app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |

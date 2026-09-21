@@ -14,6 +14,7 @@
  * - WorkbenchNetworkSettingsSchema/WorkbenchNetworkSettings: one explicit connection-settings draft.
  */
 import { z } from "zod";
+import { WorkbenchDaemonDiscoverySchema, WorkbenchDaemonIdentitySchema } from "./workbench-daemon-discovery.ts";
 
 export const WORKBENCH_NETWORK_PATH = "/api/workbench-network";
 export const WORKBENCH_NETWORK_PROTOCOL = 1;
@@ -112,6 +113,8 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
 }).strict();
 
 export const WorkbenchNetworkSnapshotSchema = z.object({
+  discovery: WorkbenchDaemonDiscoverySchema.optional(),
+  daemon: WorkbenchDaemonIdentitySchema.optional(),
   configuration: WorkbenchNetworkConfigurationSchema,
   runtime: WorkbenchNetworkRuntimeSchema,
   executable: z.object({ available: z.boolean(), message: z.string().max(512).nullable() }).strict(),
@@ -133,6 +136,8 @@ export const WorkbenchNetworkSnapshotSchema = z.object({
 }).strict();
 
 export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("daemon-discovery-refresh") }).strict(),
+  z.object({ action: z.literal("daemon-wake-retry") }).strict(),
   z.object({ action: z.literal("access-prepare"), revision: z.number().int().min(1), access: z.enum(["all", "selected"]), grants: WorkbenchNetworkGroupSchema.shape.grants }).strict(),
   z.object({ action: z.literal("settings-prepare"), settings: WorkbenchNetworkSettingsSchema }).strict(),
   z.object({ action: z.literal("settings-finish"), token: z.uuid() }).strict(),
@@ -180,15 +185,19 @@ export const WorkbenchNetworkResultSchema = z.discriminatedUnion("kind", [
 
 export const WorkbenchNetworkSidecarConfigurationSchema = z.object({
   configuration: WorkbenchNetworkConfigurationSchema,
-  appOrigin: z.url(),
+  appOrigin: z.url().nullable(),
   daemonOrigin: z.url().nullable(),
   daemonPort: port.nullable(),
+  publishDaemon: z.boolean().optional(),
+  privateAppAllowed: z.boolean().optional(),
   preparing: z.boolean(),
   ingressToken: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  daemonIngressToken: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   retainedHostPort: port.optional(),
 }).strict();
 
 export const WorkbenchNetworkPipeResponseSchema = z.union([
+  z.object({ event: z.literal("daemon-discovery"), snapshot: WorkbenchDaemonDiscoverySchema }).strict(),
   z.object({ event: z.literal("status"), snapshot: WorkbenchNetworkRuntimeSchema }).strict(),
   z.object({
     event: z.literal("persist-member"), id: z.string().min(1).max(64),

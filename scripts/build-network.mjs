@@ -17,7 +17,7 @@ const script = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(script), "..");
 export const networkPaths = Object.freeze({
   root,
-  source: path.join(root, "app/network"),
+  source: path.join(root, "shared/network/native"),
   cache: path.join(root, ".workbench/tmp/network-build"),
 });
 
@@ -53,7 +53,7 @@ export async function networkSourceHash() {
   const unregister = register();
   try {
     const require = createRequire(import.meta.url);
-    const Process = require("../app/server/network/WorkbenchNetworkProcess.ts").default;
+    const Process = require("../shared/network/WorkbenchNetworkProcess.ts").default;
     return await Process.sourceHash(networkPaths.source);
   } finally {
     unregister();

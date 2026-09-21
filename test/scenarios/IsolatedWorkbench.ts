@@ -11,6 +11,7 @@ import { appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createSpawnOptions, killProcessTreeAsync } from "../../daemon/server/process-helpers";
@@ -122,6 +123,7 @@ export default class IsolatedWorkbench {
   private readonly observers = new Set<() => void>();
   private child: ChildProcess | null = null;
   private appChild: ChildProcess | null = null;
+  private serviceChild: ChildProcess | null = null;
   private appLog = "";
   private appAddress: string | null = null;
   private client: WorkbenchSocketClient | null = null;
@@ -346,6 +348,7 @@ export default class IsolatedWorkbench {
       WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
       WORKBENCH_DAEMON_LOOP: "1",
+      WORKBENCH_SERVICE_MANAGED: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
       TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
       XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
@@ -363,7 +366,33 @@ export default class IsolatedWorkbench {
     return env;
   }
 
+  private async startService() {
+    if (this.serviceChild) return;
+    const child = spawn(process.execPath, ["--import", "tsx", "--import",
+      pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "daemon/host/launch-node.mjs"], {
+      ...createSpawnOptions(this.project, {
+        ...this.environment(), WORKBENCH_SERVICE_SESSION: randomUUID(),
+      }, true),
+      windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
+    });
+    this.serviceChild = child;
+    let output = "";
+    const collect = (chunk: Buffer) => {
+      output += chunk.toString();
+      appendFileSync(path.join(this.root, "service.log"), chunk);
+      for (const observer of this.observers) observer();
+    };
+    child.stdout!.on("data", collect);
+    child.stderr!.on("data", collect);
+    child.once("exit", () => { for (const observer of this.observers) observer(); });
+    await this.until(() => {
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Isolated host failed\n${output.slice(-12000)}`);
+      return output.includes("workbench-host-ready\n");
+    });
+  }
+
   async startApp() {
+    await this.startService();
     assert.equal(this.appChild, null);
     const offset = this.appLog.length;
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
@@ -444,6 +473,7 @@ export default class IsolatedWorkbench {
     const results = await Promise.allSettled([
       this.child ? this.stopChild(this.child, force).then(() => { this.child = null; }) : Promise.resolve(),
       this.appChild ? this.stopChild(this.appChild, force).then(() => { this.appChild = null; this.appAddress = null; }) : Promise.resolve(),
+      this.serviceChild ? this.stopChild(this.serviceChild, force).then(() => { this.serviceChild = null; }) : Promise.resolve(),
     ]);
     const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
     if (errors.length) throw new AggregateError(errors, "Isolated process cleanup failed");

@@ -15,6 +15,8 @@ tray/target/
 voice/target/
 tray/gen/
 app/tray/target/
+shared/native/target/
+daemon/host/native/target/
 app/voice/target/
 daemon/voice/target/
 daemon/voice/bin/

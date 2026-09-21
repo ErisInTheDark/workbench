@@ -61,7 +61,7 @@ test("requests dependant metadata and defaults it for an older app response", as
     visibility: { hidden: () => false, subscribe: () => () => {} },
   });
   const snapshot = await client.bootstrap();
-  assert.equal(requested, "/api/workbench-app-runtime?version=3");
+  assert.equal(requested, "/api/workbench-app-runtime?version=4");
   assert.deepEqual(snapshot.dirtyScopes[0]?.dependantScopes, []);
   assert.equal(snapshot.tabOutOfDate, false);
   client.dispose();

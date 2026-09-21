@@ -13,18 +13,17 @@ unset WORKBENCH_CWD_REDIRECTED
 workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 daemon_cli="$workbench_root/daemon/server/lib/workbench/cli/workbench-agent-cli.sh"
 thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
-desktop_entry="$workbench_root/app/server/desktop.ts"
 hook_mode=0
-shortcut_mode=0
+human_mode=0
 if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
   hook_mode=1
 elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
   hook_mode=1
-elif [[ "$#" -eq 1 && "${1:-}" == "shortcut" ]]; then
-  shortcut_mode=1
+elif [[ "$#" -eq 0 ]] || { [[ "$#" -eq 1 ]] && [[ "${1:-}" == "shortcut" || "${1:-}" == "connect" || "${1:-}" == "disconnect" ]]; }; then
+  human_mode=1
 fi
 
-if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || { (( "$#" > 0 )) && (( shortcut_mode == 0 )); }; then
+if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || (( human_mode == 0 )); then
   if [[ ! -f "$daemon_cli" ]]; then
     printf '%s\n' "Workbench daemon CLI is unavailable: $daemon_cli" >&2
     exit 1
@@ -33,38 +32,4 @@ if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || { (( "$#" > 0 )) && (( short
   exec bash "$daemon_cli" "$@"
 fi
 
-tsx_cli="$workbench_root/app/node_modules/tsx/dist/cli.mjs"
-app_entry="$workbench_root/app/server/index.ts"
-if [[ ! -f "$tsx_cli" || ! -f "$app_entry" || ! -f "$desktop_entry" ]]; then
-  printf '%s\n' 'Workbench app dependencies are unavailable. Install the checkout dependencies first.' >&2
-  exit 1
-fi
-
-desktop_platform="${WORKBENCH_DESKTOP_PLATFORM:-}"
-if [[ -z "$desktop_platform" ]]; then
-  case "$(uname -s)" in
-    CYGWIN*|MINGW*|MSYS*) desktop_platform="win32" ;;
-    *) desktop_platform="other" ;;
-  esac
-fi
-
-if (( shortcut_mode == 1 )); then
-  exec node \
-    --disable-warning=ExperimentalWarning \
-    "$tsx_cli" \
-    "$desktop_entry" \
-    shortcut
-fi
-
-if [[ "$desktop_platform" == "win32" ]]; then
-  exec node \
-    --disable-warning=ExperimentalWarning \
-    "$tsx_cli" \
-    "$desktop_entry" \
-    start
-fi
-
-exec node \
-  --disable-warning=ExperimentalWarning \
-  "$tsx_cli" \
-  "$app_entry"
+exec node --disable-warning=ExperimentalWarning "$workbench_root/package/dispatch.mjs" "$@"

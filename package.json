@@ -3,7 +3,10 @@
   "private": true,
   "scripts": {
     "app": "node app/node_modules/tsx/dist/cli.mjs app/server/index.ts",
+    "build:app": "node --import tsx app/server/build.ts",
     "build:tray": "node scripts/build-tray.mjs",
+    "build:host": "node scripts/build-host.mjs",
+    "test:native": "node scripts/test-native.mjs",
     "build:network": "node scripts/build-network.mjs",
     "test:network": "node scripts/test-network.mjs",
     "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
@@ -11,7 +14,7 @@
     "test:opencode": "node --disable-warning=ExperimentalWarning --import tsx test/run-opencode-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/index.ts",
+    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/connect.ts wake",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server"
   },
   "devDependencies": {

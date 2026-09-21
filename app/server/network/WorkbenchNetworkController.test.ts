@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchNetworkCommand, WorkbenchNetworkConfiguration, WorkbenchNetworkResult, WorkbenchNetworkRuntime } from "workbench-shared/http/workbench-network";
 import WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
+import ServiceNetworkController from "../../../daemon/host/network/WorkbenchNetworkController.ts";
+import type { WorkbenchServiceRegistration, WorkbenchServiceSnapshot } from "workbench-shared/http/workbench-service";
 
 function fixture(privateIssue?: () => string | null) {
   let configuration: WorkbenchNetworkConfiguration = { hostServe: { enabled: false, port: 8080 }, privateAccess: null, members: [] };
@@ -16,28 +18,27 @@ function fixture(privateIssue?: () => string | null) {
   let rejectedAction: string | null = null;
   let forward = false;
   let beforePortUpdate = async () => {};
-  const owner = new WorkbenchNetworkController({
-    root: ".", stateDirectory: ".", warn: () => {}, privateIssue,
+  let registration: WorkbenchServiceRegistration | null = null;
+  let hostStarted = false;
+  const host = new ServiceNetworkController({
+    root: ".", stateDirectory: ".", warn: () => {},
     repository: { read: () => structuredClone(configuration), write: next => { configuration = structuredClone(next); } },
-    readTarget: () => targetAvailable ? target : null, inspect: async () => "test-executable",
-    appPort: {
-      read: () => ({ appOrigin: target.appOrigin, currentPort: Number(new URL(target.appOrigin).port), editable: true, source: "setting" as const }),
-      update: async port => {
-        await beforePortUpdate();
-        target = { ...target, appOrigin: `http://127.0.0.1:${port}` };
-        await owner.targetChanged();
-        return { appOrigin: target.appOrigin, currentPort: port, editable: true, source: "setting" as const };
-      },
-    },
-    createProcess: publish => {
+    target: () => ({
+      ...target, appOrigin: registration?.appOrigin ?? null, ingressToken: registration?.ingressToken,
+      privateAppAllowed: registration?.privateAppAllowed ?? true,
+    }),
+    preview: () => ({ port: registration?.previewHostPort ?? null, retainedPort: registration?.retainedHostPort ?? null }),
+    keepPublication: () => false,
+    inspect: async () => "test-executable",
+    createProcess: options => {
       starts++;
-      status = publish;
+      status = options.status;
       return {
         request: async command => {
           calls.push(command);
           if (command.action === rejectedAction) throw new Error("Injected network operation failure.");
           if (forward && command.action === "configure") status({
-            ...owner.snapshot().runtime,
+            ...host.snapshot().runtime,
             hostServe: { phase: "ready", message: null, url: `http://100.80.0.2:${command.configuration.hostServe.port}` },
           });
           return result;
@@ -47,7 +48,47 @@ function fixture(privateIssue?: () => string | null) {
       };
     },
   });
-  return { owner, calls, publish: (runtime: WorkbenchNetworkRuntime) => status(runtime),
+  const snapshot = (): WorkbenchServiceSnapshot => ({
+    identity: { protocol: 1, daemonId: "67e323d5-949a-4c41-956f-1fa28905f034", hostname: "fixture", state: "ready", wakeEnabled: false },
+    daemonOrigin: target.daemonOrigin, failure: null, network: host.snapshot(), discovery: { refreshing: false, peers: [] },
+  });
+  const owner = new WorkbenchNetworkController({
+    endpointPath: "unused", ensure: async () => {}, wakeLocal: false, warn: () => {}, privateIssue,
+    readTarget: () => targetAvailable ? target : null,
+    appPort: {
+      read: () => ({ appOrigin: target.appOrigin, currentPort: Number(new URL(target.appOrigin).port), editable: true, source: "setting" as const }),
+      update: async port => {
+        await beforePortUpdate();
+        target = { ...target, appOrigin: `http://127.0.0.1:${port}` };
+        await owner.targetChanged();
+        return { appOrigin: target.appOrigin, currentPort: port, editable: true, source: "setting" as const };
+      },
+    },
+    createClient: () => {
+      let ready = false;
+      const listeners = new Set<() => void>();
+      const emit = () => { for (const listener of listeners) listener(); };
+      const unsubscribe = host.subscribe(emit);
+      return {
+        start: async () => {
+          if (!hostStarted) { await host.start(); hostStarted = true; }
+          ready = true; emit();
+        },
+        getSnapshot: () => ({ phase: ready ? "ready" as const : "connecting" as const, snapshot: ready ? snapshot() : null, failure: null }),
+        subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        request: async intent => {
+          let result: WorkbenchNetworkResult = { kind: "ok" };
+          if (intent.method === "service/app/register") { registration = intent.registration; await host.targetChanged(); }
+          else if (intent.method === "service/network/action") result = await host.action(intent.action);
+          else if (intent.method === "service/network/settings") result = await host.settings(intent.mode, intent.port);
+          emit();
+          return { kind: "network-result", id: "fixture", result };
+        },
+        close: async () => { ready = false; unsubscribe(); registration = null; await host.targetChanged(); },
+      };
+    },
+  });
+  return { owner, host, calls, publish: (runtime: WorkbenchNetworkRuntime) => status(runtime),
     get configuration() { return configuration; }, get starts() { return starts; }, get closes() { return closes; },
     target: (port: number) => { target = { ...target, appOrigin: `http://127.0.0.1:${port}` }; },
     result: (next: WorkbenchNetworkResult) => { result = next; },
@@ -183,7 +224,7 @@ test("remote localhost selection is rejected before any configuration or forward
 
 test("a replacement forwarding failure preserves committed settings", async context => {
   const f = fixture();
-  context.after(() => f.owner.close());
+  context.after(() => { f.fail(null); return f.owner.close(); });
   f.forward();
   await f.owner.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
@@ -299,7 +340,7 @@ test("authenticated app access does not grant network management and retired ing
     group: { id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1, ownerNodeId: "desktop", dnsNodeId: "desktop", access: "all", grants: [] },
   });
   await f.owner.start();
-  const configure = f.calls.find(command => command.action === "configure");
+  const configure = f.calls.findLast(command => command.action === "configure");
   assert.ok(configure?.action === "configure" && configure.ingressToken);
   const headers = { "x-workbench-network-token": configure.ingressToken, "x-workbench-network-device": "visitor" };
   assert.deepEqual(f.owner.ingress(headers), { deviceNodeId: "visitor", manageApp: false, manageNetwork: false, trustHost: false });
@@ -310,10 +351,10 @@ test("authenticated app access does not grant network management and retired ing
   assert.equal(f.owner.ingress(ownerHeaders)?.trustHost, true);
   assert.equal(f.owner.ingress({})?.trustHost, true);
   assert.equal(f.owner.ingress({ ...ownerHeaders, "x-workbench-network-token": "0".repeat(64) }), null);
-  await f.owner.action({ action: "mode", mode: "localhost" });
-  assert.equal(f.owner.ingress(ownerHeaders), null, "a stopped helper loses ingress authority immediately");
-  await f.owner.action({ action: "mode", mode: "tailnet-ip" });
-  assert.equal(f.owner.ingress(ownerHeaders), null, "a previous helper's credentials must not survive replacement");
+  await f.owner.suspend();
+  assert.equal(f.owner.ingress(ownerHeaders), null, "a detached app session loses ingress authority immediately");
+  await f.owner.start();
+  assert.equal(f.owner.ingress(ownerHeaders), null, "a previous app session's credentials must not survive replacement");
   assert.equal(f.owner.ingress({})?.manageNetwork, true, "local owner access remains available");
 });
 
@@ -424,7 +465,7 @@ test("localhost suspends a pending rename until service mode is selected again",
   assert.equal(f.configuration.privateAccess?.label, "desk");
 });
 
-test("startup resumes a service rename only after the app listener is available", async context => {
+test("the independent service resumes a rename without an app listener", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
   f.seed({
@@ -434,8 +475,9 @@ test("startup resumes a service rename only after the app listener is available"
   });
   f.targetAvailable(false);
   await f.owner.start();
-  assert.equal(f.starts, 0);
-  assert.equal(f.owner.snapshot().busy, false, "no rename operation starts before listener publication");
+  assert.equal(f.starts, 1);
+  assert.equal(f.configuration.rename, undefined);
+  assert.equal(f.owner.snapshot().busy, false);
   f.targetAvailable(true);
   await f.owner.targetChanged();
   assert.equal(f.configuration.rename, undefined);
@@ -475,15 +517,15 @@ test("approval persists the exact pending identity before releasing certificate 
   await f.owner.close();
 });
 
-test("reload suspension releases the sidecar before a replacement and can resume durable intent", async () => {
+test("app reload detaches its session without stopping independent networking", async () => {
   const f = fixture();
   await f.owner.start();
   await f.owner.action({ action: "host-serve", enabled: true, port: 8088 });
   await f.owner.suspend();
-  assert.equal(f.closes, 1);
+  assert.equal(f.closes, 0);
   await assert.rejects(f.owner.action({ action: "host-serve", enabled: false, port: 8088 }));
   await f.owner.start();
-  assert.equal(f.starts, 2);
+  assert.equal(f.starts, 1);
   assert.equal(f.configuration.hostServe.enabled, true);
   await f.owner.close();
 });
@@ -507,11 +549,11 @@ test("an incompatible persisted service mode cannot override the private HTTPS s
   });
   try {
     await f.owner.start();
-    const configure = f.calls.find(command => command.action === "configure");
+    const configure = f.calls.findLast(command => command.action === "configure");
     assert.equal(configure?.action, "configure");
     if (configure?.action === "configure") {
-      assert.equal(configure.configuration.mode, "tailnet-ip");
-      assert.equal(configure.configuration.privateAccess?.enabled, false);
+      assert.equal(configure.privateAppAllowed, false);
+      assert.equal(configure.configuration.mode, "tailnet-service", "app safety must not disable the independent network identity");
     }
     assert.equal(f.configuration.mode, "tailnet-service", "runtime safety must not rewrite the user's desired mode");
   } finally { await f.owner.close(); }

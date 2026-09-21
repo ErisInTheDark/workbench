@@ -1,9 +1,11 @@
 /*
  * Exports:
- * - HttpServerAddress: bound listener identity returned after startup. Keywords: HTTP, port, URL.
- * - HttpServerOptions/default HttpServer: own one dependency-free HTTP socket and delegate every request. Keywords: HTTP, listener, lifecycle.
+ * - HttpServerAddress: bound listener identity returned after startup.
+ * - HttpServerOptions: request, upgrade and failure boundaries for one listener.
+ * - default HttpServer: own an HTTP listener and its upgraded connections.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 export interface HttpServerAddress {
   hostname: string;
@@ -14,6 +16,7 @@ export interface HttpServerAddress {
 export interface HttpServerOptions {
   displayHostname?: string;
   handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> | void;
+  handleUpgrade?(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> | void;
   hostname?: string;
   onError?: (error: Error) => void;
   port?: number;
@@ -46,8 +49,9 @@ export default class HttpServer {
   private server: Server | null = null;
   private readonly listenController = new AbortController();
   private closing: Promise<void> | null = null;
+  private readonly upgrades = new Set<Duplex>();
 
-  constructor(options: HttpServerOptions) {
+  constructor(private readonly options: HttpServerOptions) {
     this.displayHostname = options.displayHostname?.trim() || undefined;
     this.handle = options.handleRequest;
     this.hostname = options.hostname?.trim() || "0.0.0.0";
@@ -59,7 +63,7 @@ export default class HttpServer {
     if (this.closing) throw new Error("HTTP server has closed.");
     if (this.server) throw new Error("HTTP server is already running.");
     const server = createServer((request, response) => {
-      void Promise.resolve(this.handle(request, response)).catch((error: unknown) => {
+      void Promise.resolve().then(() => this.handle(request, response)).catch((error: unknown) => {
         const normalized = error instanceof Error ? error : new Error(String(error));
         this.onError(normalized);
         if (!response.headersSent) {
@@ -68,6 +72,19 @@ export default class HttpServer {
         } else if (!response.writableEnded) {
           response.destroy(normalized);
         }
+      });
+    });
+    server.on("upgrade", (request, socket, head) => {
+      if (!this.options.handleUpgrade || this.closing) {
+        socket.destroy();
+        return;
+      }
+      this.upgrades.add(socket);
+      socket.once("close", () => this.upgrades.delete(socket));
+      void Promise.resolve().then(() => this.options.handleUpgrade!(request, socket, head)).catch((error: unknown) => {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        this.onError(normalized);
+        socket.destroy();
       });
     });
     this.server = server;
@@ -94,6 +111,7 @@ export default class HttpServer {
       throw error;
     }
     const address = server.address();
+    server.on("error", this.onError);
     if (!address || typeof address === "string") {
       await this.close();
       throw new Error("HTTP server did not expose a TCP address.");
@@ -115,6 +133,7 @@ export default class HttpServer {
       // The same native cancellation covers an in-progress bind and a live listener.
       this.listenController.abort();
       server.closeIdleConnections();
+      for (const socket of this.upgrades) socket.destroy();
     }
     if (options.force) server.closeAllConnections();
     return this.closing;

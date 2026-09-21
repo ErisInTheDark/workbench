@@ -2,7 +2,7 @@
  * Exports:
  * - DesktopAppController: own the hidden Node app child, readiness, browser opening, logging, and Quit lifecycle.
  */
-use crate::{rotating_log_writer::RotatingLogWriter, windows_child_job::WindowsChildJob};
+use workbench_native::{rotating_log_writer::RotatingLogWriter, windows_child_job::WindowsChildJob};
 use serde::Deserialize;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -514,13 +514,15 @@ impl DesktopAppController {
     }
 
     fn spawn_replacement(&self) -> Result<(), String> {
+        let platform = if cfg!(windows) { "windows" } else { "linux" };
+        let executable = if cfg!(windows) { "workbench-tray.exe" } else { "workbench-tray" };
         let launcher_path = self
             .repository_root_path
             .join("app")
             .join("tray")
             .join("bin")
-            .join("windows-x64")
-            .join("workbench-tray.exe");
+            .join(format!("{platform}-{}", if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }))
+            .join(executable);
         require_file(&launcher_path)?;
         Command::new(&launcher_path)
             .arg("--workbench-root")
@@ -547,7 +549,10 @@ impl DesktopAppController {
         let entry_path = self.repository_root_path.join("app").join("server").join("index.ts");
         require_file(&tsx_path)?;
         require_file(&entry_path)?;
-        let mut command = Command::new("node");
+        let node_path = self.repository_root_path.join("node_modules").join(".bin")
+            .join(if cfg!(windows) { "node.exe" } else { "node" });
+        require_file(&node_path)?;
+        let mut command = Command::new(node_path);
         command
             .arg("--disable-warning=ExperimentalWarning")
             .arg(tsx_path)

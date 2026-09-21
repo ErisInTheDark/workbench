@@ -44,8 +44,12 @@ export function mergeReloadDirt(
 
 export function partitionReloadScopes(scopes: readonly string[]) {
   const client = scopes.filter((scope) => scope.startsWith("client:"));
+  const host = scopes.filter((scope) => scope.startsWith("host:"));
   return {
-    client: client.includes("client:process") ? ["client:process"] : client,
-    server: scopes.filter((scope) => !scope.startsWith("client:")),
+    client: [
+      ...(host.includes("host:process") ? ["host:process"] : host),
+      ...(client.includes("client:process") ? ["client:process"] : client),
+    ],
+    server: scopes.filter((scope) => !scope.startsWith("client:") && !scope.startsWith("host:")),
   };
 }

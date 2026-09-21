@@ -16,6 +16,7 @@ test("cross-origin actions are rejected; admitted actions do not pin route dispo
   let deviceNodeId: string | null = null;
   const routes = new WorkbenchNetworkRoutes({
     ingress: () => ({ deviceNodeId, manageApp: true, manageNetwork, trustHost }),
+    discovery: () => ({ refreshing: false, peers: [] }),
     connection: () => ({ localPort: null, tailnetPort: 52739 }),
     snapshot: () => ({ configuration: { privateAccess: null } }) as WorkbenchNetworkSnapshot,
     subscribe: () => () => {},

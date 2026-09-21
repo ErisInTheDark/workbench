@@ -4,8 +4,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod desktop_app_controller;
-mod rotating_log_writer;
-mod windows_child_job;
 mod windows_process_wait;
 mod windows_single_instance;
 

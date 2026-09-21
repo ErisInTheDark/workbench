@@ -20,6 +20,11 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
   await fs.mkdir(path.dirname(adapterPath), { recursive: true });
   await fs.mkdir(workingDirectory);
   await fs.copyFile(packageAdapterPath, adapterPath);
+  for (const name of ["WorkbenchBootstrap.mjs", "WorkbenchInstallPrompt.mjs", "SetupCommand.mjs"]) {
+    await fs.copyFile(path.join(import.meta.dirname, name), path.join(root, "package", name));
+  }
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "workbench-root", type: "module" }));
+  await fs.writeFile(path.join(root, "package", "setup.mjs"), "");
   await fs.writeFile(path.join(workingDirectory, "caller-sentinel"), "", "utf8");
 
   if (options.checkoutCli !== false) {
@@ -39,7 +44,7 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
 test("delegates to the checkout wb with the caller context", async (context) => {
   const fixture = await packageFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
-  const result = await execFileAsync("bash", [fixture.adapterPath, "thread", "recall"], {
+  const result = await execFileAsync(process.execPath, [fixture.adapterPath, "thread", "recall"], {
     cwd: fixture.workingDirectory,
   });
   assert.equal(result.stdout, "cwd=preserved|args=thread,recall,\n");
@@ -50,7 +55,7 @@ test("preserves delegated failure and reports a missing checkout", async (contex
   const fixture = await packageFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   await assert.rejects(
-    execFileAsync("bash", [fixture.adapterPath, "unsupported"], {
+    execFileAsync(process.execPath, [fixture.adapterPath, "unsupported"], {
       cwd: fixture.workingDirectory,
       env: { ...process.env, FIXTURE_EXIT_CODE: "7" },
     }),
@@ -63,12 +68,13 @@ test("preserves delegated failure and reports a missing checkout", async (contex
   const missingFixture = await packageFixture({ checkoutCli: false });
   context.after(async () => await fs.rm(missingFixture.root, { force: true, recursive: true }));
   await assert.rejects(
-    execFileAsync("bash", [missingFixture.adapterPath], {
+    execFileAsync(process.execPath, [missingFixture.adapterPath], {
       cwd: missingFixture.workingDirectory,
+      env: { ...process.env, WORKBENCH_THREAD_ID: "fixture-managed-thread" },
     }),
     (error: NodeJS.ErrnoException & { code?: number; stderr?: string }) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr ?? "", /Workbench checkout CLI is unavailable/u);
+      assert.match(error.stderr ?? "", /Managed threads cannot install or launch/u);
       return true;
     },
   );

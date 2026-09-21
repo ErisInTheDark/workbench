@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchDaemonHostOptions: owned child, supervision and observation boundaries.
  * - default WorkbenchDaemonHost: own daemon child startup, endpoint readiness, logs, health recovery, restart and shutdown.
  * Local mechanics:
  * - RunnerLog writes one plain formatted stream to terminal and the active file.
@@ -10,10 +11,12 @@ import { closeSync, openSync, writeSync } from "node:fs";
 import { access, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { createRequire } from "node:module";
 
 import WorkbenchProcessLogger from "../../shared/process/WorkbenchProcessLogger.ts";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint.ts";
-import { killProcessTreeAsync } from "../server/process-helpers.ts";
+// The heavy daemon remains CommonJS; resolve its existing process owner at that boundary.
+const { killProcessTreeAsync } = createRequire(import.meta.url)("../server/process-helpers.ts") as typeof import("../server/process-helpers.ts");
 
 import DaemonHealthWatchdog from "./DaemonHealthWatchdog.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
@@ -34,7 +37,7 @@ interface RunnerLog {
   line(domain: "host", message: string): void;
 }
 
-interface WorkbenchDaemonHostOptions {
+export interface WorkbenchDaemonHostOptions {
   environment?: NodeJS.ProcessEnv;
   healthClient?: Pick<WorkbenchDaemonHealthClient, "probe">;
   loggerFactory?: (logFilePath: string) => RunnerLog;
@@ -43,7 +46,15 @@ interface WorkbenchDaemonHostOptions {
   sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   spawnDaemon?: (daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) => ChildProcess;
   terminateChild?: (child: ChildProcess) => Promise<void>;
+  onFailure?: (error: Error, beforeReady: boolean) => Promise<void> | void;
+  requestRestart?: (fatal?: boolean) => void;
 }
+
+type DaemonLifecycle =
+  | { state: "sleeping" | "stopped" }
+  | { state: "starting"; ready: { promise: Promise<WorkbenchDaemonEndpoint>; resolve(endpoint: WorkbenchDaemonEndpoint): void; reject(error: Error): void } }
+  | { state: "ready"; endpoint: WorkbenchDaemonEndpoint }
+  | { state: "failed"; error: Error };
 
 class WakeSignal {
   private current = this.create();
@@ -176,8 +187,11 @@ export default class WorkbenchDaemonHost {
   private retirement: Promise<void> | null = null;
   private activeLog: RunnerLog | null = null;
   private stopping = false;
+  private lifecycle: DaemonLifecycle = { state: "sleeping" };
+  private runTask: Promise<void> | null = null;
+  private readonly listeners = new Set<() => void>();
 
-  constructor(options: WorkbenchDaemonHostOptions) {
+  constructor(private readonly options: WorkbenchDaemonHostOptions) {
     this.projectRootPath = options.projectRootPath;
     this.daemonDirectoryPath = path.join(this.projectRootPath, "daemon");
     this.logDirectoryPath = path.join(this.projectRootPath, ".workbench", "logs");
@@ -197,47 +211,92 @@ export default class WorkbenchDaemonHost {
     this.restartDelayMs = positiveInteger(this.environment, "RESTART_DELAY_SECONDS", 3) * 1_000;
   }
 
-  async run({ dryRun = false }: { dryRun?: boolean } = {}) {
+  snapshot() {
+    return {
+      state: this.lifecycle.state,
+      endpoint: this.lifecycle.state === "ready" ? this.lifecycle.endpoint : null,
+      failure: this.lifecycle.state === "failed" ? this.lifecycle.error.message.slice(0, 512) : null,
+    };
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  wake(): Promise<WorkbenchDaemonEndpoint> {
+    if (this.lifecycle.state === "ready") return Promise.resolve(this.lifecycle.endpoint);
+    if (this.lifecycle.state === "starting") return this.lifecycle.ready.promise;
+    if (this.stopping) return Promise.reject(new Error("Daemon host is stopping."));
+    if (this.lifecycle.state === "failed") return Promise.reject(this.lifecycle.error);
+    let resolve!: (endpoint: WorkbenchDaemonEndpoint) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<WorkbenchDaemonEndpoint>((accept, fail) => { resolve = accept; reject = fail; });
+    const ready = { promise, resolve, reject };
+    this.lifecycle = { state: "starting", ready };
+    this.publish();
+    void this.run().catch(error => {
+      // run records and publishes lifecycle failure; this boundary owns diagnostics
+      // for callers that already received readiness before supervision failed.
+      this.directLogger.error("host", `supervision failed: ${error instanceof Error ? error.message.slice(0, 512) : "unknown failure"}`);
+    });
+    return ready.promise;
+  }
+
+  run({ dryRun = false }: { dryRun?: boolean } = {}) {
     if (dryRun) {
       this.directLogger.line("host", "dry run: Workbench would start an owned daemon on a random loopback port.");
-      return;
+      return Promise.resolve();
     }
+    if (!this.runTask) this.runTask = this.supervise().catch(async error => {
+      if (!this.stopping && this.lifecycle.state !== "failed") {
+        await this.fail(error instanceof Error ? error : new Error(String(error)), this.lifecycle.state !== "ready");
+      }
+      throw error;
+    }).finally(() => { this.runTask = null; });
+    return this.runTask;
+  }
+
+  private async supervise() {
     await mkdir(this.logDirectoryPath, { recursive: true });
     await this.pruneLogFiles();
-    let restartNumber = 0;
-    while (!this.stopping) {
-      const logFilePath = await this.selectLogFile(restartNumber);
-      const log = this.loggerFactory(logFilePath);
-      this.activeLog = log;
-      try {
-        await this.pruneLogFiles();
-        await this.waitWhilePaused(log);
-        if (this.stopping) break;
-        if (restartNumber === 0) this.logConfiguration(log);
-        log.line("host", `logging complete daemon output to: ${logFilePath}`);
-        const result = await this.runChild(log);
-        if (this.stopping) break;
-        if (result.error) throw result.error;
-        restartNumber += 1;
-        log.line("host", `restarting Workbench daemon in ${this.restartDelayMs / 1_000} seconds after child status ${result.exitCode ?? result.signal ?? "unknown"}.`);
-        try {
-          await this.sleep(this.restartDelayMs, this.stopAbort.signal);
-        } catch (error) {
-          if (!this.stopping) throw error;
-        }
-      } finally {
-        if (this.activeLog === log) this.activeLog = null;
-        log.close();
-      }
+    const logFilePath = await this.selectLogFile(0);
+    const log = this.loggerFactory(logFilePath);
+    this.activeLog = log;
+    try {
+      await this.waitWhilePaused(log);
+      if (this.stopping) return;
+      this.logConfiguration(log);
+      log.line("host", `logging complete daemon output to: ${logFilePath}`);
+      const result = await this.runChild(log);
+      if (this.stopping) return;
+      const beforeReady = this.lifecycle.state !== "ready";
+      const error = result.error ?? new Error(
+        `Daemon exited ${beforeReady ? "before readiness" : "after readiness"} with ${result.exitCode ?? result.signal ?? "unknown status"}.`,
+      );
+      await this.fail(error, beforeReady);
+      this.options.requestRestart?.();
+      if (!this.options.requestRestart) throw error;
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      if (!this.stopping && this.lifecycle.state !== "failed") await this.fail(normalized, this.lifecycle.state !== "ready");
+      throw error;
+    } finally {
+      if (this.activeLog === log) this.activeLog = null;
+      log.close();
     }
   }
 
   async stop(reason = "Daemon host stopped.") {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.lifecycle.state === "starting") this.lifecycle.ready.reject(new Error(reason));
+    this.lifecycle = { state: "stopped" };
+    this.publish();
     this.stopAbort.abort(new Error(reason));
     this.activeAbort?.abort(new Error(reason));
     await this.retireChild();
+    if (this.runTask) await this.runTask;
   }
 
   private async runChild(log: RunnerLog) {
@@ -261,6 +320,11 @@ export default class WorkbenchDaemonHost {
         readiness.failure = new Error("Daemon changed its published process endpoint unexpectedly.");
       } else {
         readiness.endpoint = parsed.data.endpoint;
+        if (!this.stopping) {
+          if (this.lifecycle.state === "starting") this.lifecycle.ready.resolve(parsed.data.endpoint);
+          this.lifecycle = { state: "ready", endpoint: parsed.data.endpoint };
+          this.publish();
+        }
       }
       wake.wake();
     };
@@ -347,6 +411,7 @@ export default class WorkbenchDaemonHost {
     } finally {
       abort.abort(new Error("Daemon child supervision ended."));
       child.off("message", acceptReady);
+      await this.retireChild();
       stdout.flush();
       stderr.flush();
       if (this.activeChild === child) this.activeChild = null;
@@ -355,14 +420,14 @@ export default class WorkbenchDaemonHost {
   }
 
   private logConfiguration(log: RunnerLog) {
-    log.line("host", "starting Workbench daemon restart loop.");
+    log.line("host", "starting an owned Workbench daemon.");
     log.line("host", "command: node --import tsx server/index.ts");
     log.line("host", `working directory: ${this.daemonDirectoryPath}`);
     log.line("host", "listener: OS-assigned loopback port, reported by the owned child.");
     log.line("host", `log directory: ${this.logDirectoryPath}`);
     log.line("host", `log rotation: more than ${this.maxLogLines} lines`);
     log.line("host", `log retention: ${this.maxLogFiles} files`);
-    log.line("host", `restart delay: ${this.restartDelayMs / 1_000} seconds`);
+    log.line("host", "recovery: replace the managed host crash unit before restarting descendants.");
     log.line("host", `inactivity recovery: WebSocket probes at ${this.logIdleTimeoutSeconds / 2} and ${this.logIdleTimeoutSeconds * 3 / 4} seconds; restart after ${this.logIdleTimeoutSeconds} seconds`);
     log.line("host", `pause sentinel: ${this.pauseSentinelPath}`);
     log.line("host", "press Ctrl+C to stop.");
@@ -378,6 +443,19 @@ export default class WorkbenchDaemonHost {
     this.retirement = retirement;
     return retirement;
   }
+
+  private async fail(error: Error, beforeReady: boolean) {
+    if (this.lifecycle.state === "starting") this.lifecycle.ready.reject(error);
+    this.lifecycle = { state: "failed", error };
+    this.publish();
+    try { await this.options.onFailure?.(error, beforeReady); }
+    catch (failure) {
+      this.options.requestRestart?.(true);
+      throw failure;
+    }
+  }
+
+  private publish() { for (const listener of this.listeners) listener(); }
 
   private async waitWhilePaused(log: RunnerLog) {
     let announced = false;

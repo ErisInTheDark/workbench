@@ -48,7 +48,7 @@ test("reports a missing committed launcher without trying to build it", async ()
 });
 
 test("rejects shortcut ownership on unsupported desktop platforms", async () => {
-  const target = fixture({ platform: "linux" });
-  await assert.rejects(target.launcher.installShortcut(), /Windows only/u);
+  const target = fixture({ platform: "darwin" });
+  await assert.rejects(target.launcher.installShortcut(), /Windows|Linux/u);
   assert.deepEqual(target.calls, []);
 });

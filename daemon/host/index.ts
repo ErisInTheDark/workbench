@@ -1,39 +1,39 @@
 /*
- * No exports. Foreground entry starts the standalone daemon host and forwards process signals to its lifecycle owner.
+ * No exports. Start the independent host only inside its acknowledged supervision session.
  */
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import WorkbenchProcessLogger from "../../shared/process/WorkbenchProcessLogger.ts";
 
-import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+import WorkbenchService from "./WorkbenchService.ts";
 
 const logger = new WorkbenchProcessLogger();
 
-function readDryRun(arguments_: readonly string[]) {
-  if (arguments_.length === 0) return false;
-  if (arguments_.length === 1 && arguments_[0] === "--dry-run") return true;
-  throw new Error("Usage: pnpm dev [--dry-run]");
-}
-
 async function main() {
-  const projectRootPath = path.resolve(__dirname, "../..");
-  const runner = new WorkbenchDaemonHost({ projectRootPath });
+  const session = process.env.WORKBENCH_SERVICE_SESSION;
+  if (!session) throw new Error("Start the managed host with wb connect or pnpm dev.");
+  const service = new WorkbenchService({
+    root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), session,
+    warn: message => logger.error("host", message),
+    restart: fatal => setImmediate(() => stop("supervisor replacement", fatal ? 78 : 1)),
+  });
   let stopping: Promise<void> | null = null;
   const stop = (signal: string, exitCode: number) => {
     process.exitCode = exitCode;
-    stopping ??= runner.stop(`Daemon host interrupted by ${signal}.`).catch((error) => {
+    stopping ??= service.close().catch((error) => {
       logger.error("host", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exitCode = 1;
+      if (exitCode === 0) process.exitCode = 1;
     });
   };
-  process.once("SIGHUP", () => stop("SIGHUP", 129));
-  process.once("SIGINT", () => stop("SIGINT", 130));
-  process.once("SIGTERM", () => stop("SIGTERM", 143));
-  await runner.run({ dryRun: readDryRun(process.argv.slice(2)) });
-  await stopping;
+  process.once("SIGHUP", () => stop("SIGHUP", 0));
+  process.once("SIGINT", () => stop("SIGINT", 0));
+  process.once("SIGTERM", () => stop("SIGTERM", 0));
+  await service.start();
+  process.stdout.write("workbench-host-ready\n");
 }
 
 void main().catch((error) => {
   logger.error("host", `failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  process.exitCode = 78;
 });

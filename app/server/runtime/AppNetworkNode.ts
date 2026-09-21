@@ -1,13 +1,12 @@
 /*
  * Default export:
- * - AppNetworkNode: own optional network configuration, sidecar lifetime and listener subscriptions below app state.
+ * - AppNetworkNode: own the app's private host session and local listener subscriptions.
  */
 import path from "node:path";
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
-import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
-import WorkbenchNetworkRepository from "../network/WorkbenchNetworkRepository.ts";
-import WorkbenchLocalDaemon from "../network/WorkbenchLocalDaemon.ts";
+import WorkbenchServiceLauncher from "../../../daemon/host/WorkbenchServiceLauncher.ts";
+import WorkbenchServiceStartup from "../../../daemon/host/WorkbenchServiceStartup.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppHttpNode from "./AppHttpNode.ts";
@@ -18,16 +17,18 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   create: (context, build) => {
     const database = build.get("database");
     const logger = build.get("logger");
-    const localDaemon = new WorkbenchLocalDaemon({
-      endpointPath: context.daemonEndpointPath,
+    const dataRoot = path.dirname(path.dirname(database.databasePath));
+    const endpointPath = path.join(dataRoot, "service", "runtime.json");
+    const launcher = new WorkbenchServiceLauncher({
+      root: context.repositoryRootPath, endpointPath,
+      startup: new WorkbenchServiceStartup({ root: context.repositoryRootPath, dataRoot }),
       warn: message => logger.error("http", message),
     });
-    const network = new WorkbenchNetworkController({
-      repository: new WorkbenchNetworkRepository(database),
-      root: context.repositoryRootPath,
-      stateDirectory: path.join(path.dirname(database.databasePath), "network"),
+    const network = (context.createNetwork ?? (options => new WorkbenchNetworkController(options)))({
+      endpointPath,
+      ensure: async signal => { await launcher.ensure(signal); },
+      wakeLocal: !process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim(),
       warn: message => logger.error("http", message),
-      localDaemon,
       appPort: context.appPort,
       privateIssue: () => {
         const configured = process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim();
@@ -39,25 +40,16 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         }
         return "Private HTTPS cannot use an insecure WORKBENCH_CODEX_APP_SERVER_URL. Remove the override or configure a trusted wss:// endpoint.";
       },
-      readTarget: configuration => {
+      readTarget: () => {
         const app = context.appPort.current?.();
         if (!app) return null;
-        const configuredPublic = process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim();
-        const privateHostname = configuration.privateAccess ? `${configuration.privateAccess.label}.wb.inthedark.boo` : null;
-        // A genuinely external explicit daemon retains its own TLS endpoint;
-        // do not reserve its port on this installation's virtual node.
-        const external = configuredPublic && (!URL.canParse(configuredPublic)
-          || new URL(configuredPublic).hostname !== privateHostname);
-        const daemonPort = external ? null : WORKBENCH_DAEMON_TAILNET_PORT;
-        return { appOrigin: app.appOrigin, daemonOrigin: localDaemon.getSnapshot().endpoint?.origin ?? null, daemonPort };
+        return { appOrigin: app.appOrigin };
       },
     });
     let unsubscribe: (() => void) | undefined;
-    let unsubscribeDaemon: (() => void) | undefined;
     const dispose = async () => {
       unsubscribe?.();
-      unsubscribeDaemon?.();
-      const results = await Promise.allSettled([network.close(), localDaemon.close()]);
+      const results = await Promise.allSettled([network.close(), launcher.close()]);
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length) throw new AggregateError(failures, "Networking disposal failed.");
     };
@@ -75,15 +67,11 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       start: async () => {
         await network.start();
         unsubscribe = context.appPort.subscribe?.(() => network.targetChanged());
-        unsubscribeDaemon = localDaemon.subscribe(() => {
-          void network.targetChanged().catch(() => logger.error("http", "Daemon endpoint forwarding could not be updated."));
-        });
-        await localDaemon.start();
       },
       dispose,
     };
   },
-  description: "Reload optional Tailscale networking, private HTTPS setup and bundled sidecar ownership.",
+  description: "Reload the app's independent host connection and settings handoff.",
   lifecycle: "handoff",
   provides: ["network"],
   requires: ["database", "logger"],
@@ -91,7 +79,10 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   scope: "client:network",
   sources: [
     "app/server/runtime/AppNetworkNode.ts", "app/server/network/**",
-    "shared/http/workbench-network.ts", "app/network/**",
+    "shared/http/workbench-network.ts", "shared/http/workbench-service.ts",
+    "shared/process/WorkbenchServiceClient.ts", "shared/process/workbench-service-endpoint.ts",
+    "daemon/host/WorkbenchServiceLauncher.ts", "daemon/host/WorkbenchServiceStartup.ts",
+    "daemon/host/WindowsServiceStartup.ts", "daemon/host/LinuxServiceStartup.ts",
     "shared/http/workbench-daemon-endpoint.ts", "shared/process/workbench-daemon-endpoint.ts",
   ].join("\n"),
 });

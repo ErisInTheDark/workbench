@@ -28,6 +28,7 @@ import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
+import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
@@ -43,6 +44,11 @@ const daemonListener = new WorkbenchDaemonListener({
 });
 
 const bridgeConnections = new Set<BridgeClient>();
+const serviceAttachmentAbort = new AbortController();
+const serviceLauncher = process.env.WORKBENCH_SERVICE_MANAGED === "1" ? null : new WorkbenchServiceLauncher({
+  root: PROJECT_ROOT,
+  warn: message => logError("daemon", message),
+});
 let bridgeServer: http.Server | null = null;
 let bridgeWebSocketServer: WebSocketServer | null = null;
 let lastReloadResponse: DaemonReloadResponse = {
@@ -158,7 +164,9 @@ function finalizeReloadResponse(
 }
 
 async function stopAllChildren() {
+  serviceAttachmentAbort.abort(new Error("Daemon is stopping."));
   const closures = featureHost ? [featureHost.dispose()] : [];
+  if (serviceLauncher) closures.push(serviceLauncher.close());
 
   for (const client of bridgeConnections) {
     client.close();
@@ -565,6 +573,12 @@ async function startDaemon() {
     });
   }
   log("workbench-socket", `listening on ${endpoint.origin.replace("http:", "ws:")}`);
+  // Publication and provider startup finish before independent networking attaches.
+  if (serviceLauncher) {
+    void serviceLauncher.ensure(serviceAttachmentAbort.signal).catch(error => {
+      if (!serviceAttachmentAbort.signal.aborted) logError("daemon", `network attachment failed: ${error instanceof Error ? error.message.slice(0, 512) : "unknown failure"}`);
+    });
+  }
 }
 
 void startDaemon().catch((error) => {

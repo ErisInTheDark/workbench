@@ -10,7 +10,7 @@ import type WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
 export default class WorkbenchNetworkRoutes {
   private closed = false;
   private readonly responses = new Map<ServerResponse, () => void>();
-  constructor(private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress">) {}
+  constructor(private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress" | "discovery">) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
     const progress = url.pathname === `${WORKBENCH_NETWORK_PATH}/events`;
@@ -26,14 +26,15 @@ export default class WorkbenchNetworkRoutes {
     }
     const snapshot = () => {
       const current = this.controller.ingress(request.headers);
-      const { localPort, change, ...legacy } = this.controller.snapshot();
+      const { localPort, change, daemon, discovery: _discovery, ...legacy } = this.controller.snapshot();
       const version = url.searchParams.get("capabilities");
       return { ...legacy,
-        ...(version === "3" ? { localPort, change } : {}),
+        ...(version === "3" || version === "4" ? { localPort, change } : {}),
+        ...(version === "4" ? { daemon, discovery: current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] } } : {}),
         capabilities: {
           manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
-          ...(version === "2" || version === "3" ? { trustHost: current?.trustHost ?? false } : {}),
-          ...(version === "3" ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
+          ...(["2", "3", "4"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
+          ...(version === "3" || version === "4" ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
         } };
     };
     if (request.method === "GET" && !progress) {
@@ -85,7 +86,7 @@ export default class WorkbenchNetworkRoutes {
       }
       const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "create-setup"].includes(parsed.data.action);
       const currentCapability = this.controller.ingress(request.headers);
-      if (!currentCapability?.manageApp || (networkAction && !currentCapability.manageNetwork)
+      if (!currentCapability || (!currentCapability.manageApp && parsed.data.action !== "daemon-discovery-refresh") || (networkAction && !currentCapability.manageNetwork)
         || (parsed.data.action === "trust-host" && !currentCapability.trustHost)) {
         this.send(response, 403, { error: "This device cannot manage these network settings." });
         return true;

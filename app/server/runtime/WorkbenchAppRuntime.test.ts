@@ -16,6 +16,8 @@ import { promisify } from "node:util";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
+import WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
+import { randomUUID } from "node:crypto";
 import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
 import AppCompilerNode from "./AppCompilerNode.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
@@ -30,6 +32,7 @@ function localRequest(chunks: string[]) {
   const socket = new Socket();
   Object.defineProperty(socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
   request.socket = socket;
+  request.headers = {};
   return request;
 }
 const nonServerSourcePaths = new Set([
@@ -39,11 +42,14 @@ const nonServerSourcePaths = new Set([
   "app/client/WorkbenchBrowserLogForwarder.ts",
   "app/client/WorkbenchClient.ts",
   "app/server/WorkbenchDesktopLauncher.ts",
+  "app/server/LinuxDesktopShortcut.ts",
+  "app/server/build.ts",
 ]);
 
 function isNonServerSourcePath(sourcePath: string) {
   return nonServerSourcePaths.has(sourcePath)
     || sourcePath.startsWith("app/client/components/")
+    || sourcePath.startsWith("app/client/types/")
     || sourcePath.startsWith("app/client/workbench/");
 }
 
@@ -184,7 +190,7 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database", "client:state"]);
-  assert.deepEqual(owners("shared/workbench-data-root.ts"), ["client:database", "client:process", "client:state"]);
+  assert.deepEqual(owners("shared/workbench-data-root.ts"), ["client:database", "client:network", "client:process", "client:state"]);
   assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:process"]);
   assert.equal(owners("shared/reload/ReloadableNodeHost.ts").includes("client:process"), true);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
@@ -266,6 +272,38 @@ test("reloads the database with a fresh repository constructor and no process re
       };
       return repository;
     },
+    createNetwork: options => new WorkbenchNetworkController({
+      ...options,
+      ensure: async () => {},
+      wakeLocal: false,
+      createClient: () => ({
+        start: async () => {},
+        close: async () => {},
+        request: async () => ({ kind: "ok", id: "fixture" }),
+        subscribe: () => () => {},
+        getSnapshot: () => ({
+          phase: "ready",
+          failure: null,
+          snapshot: {
+            identity: { protocol: 1, daemonId: randomUUID(), hostname: "fixture", state: "sleeping", wakeEnabled: false },
+            failure: null, daemonOrigin: null, discovery: { refreshing: false, peers: [] },
+            network: {
+              configuration: { hostServe: { enabled: false, port: 8080 }, privateAccess: null, members: [] },
+              runtime: {
+                hostServe: { phase: "off", message: null, url: null },
+                privateAccess: {
+                  phase: "off", message: null, url: null, hostname: null, loginUrl: null, nodeId: null,
+                  keyFingerprint: null, addresses: [], rootCertificate: null, rootFingerprint: null,
+                  certificateExpiresAt: null, pending: [],
+                },
+              },
+              executable: { available: false, message: null }, hostPlatform: process.platform,
+              busy: false, failure: null, localUrl: null, change: null,
+            },
+          },
+        }),
+      }),
+    }),
     daemonEndpointPath: path.join(rootPath, "daemon", "runtime.json"),
     logger: new WorkbenchProcessLogger({
       color: false,

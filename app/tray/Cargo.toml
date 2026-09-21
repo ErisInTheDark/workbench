@@ -12,7 +12,7 @@ serde_json = "1.0"
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 arboard = { version = "=3.6.1", default-features = false }
 tauri-plugin-opener = "=2.5.4"
-time = { version = "0.3", features = ["local-offset"] }
+workbench-native = { path = "../../shared/native" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

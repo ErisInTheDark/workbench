@@ -49,6 +49,19 @@ test("full app restart subsumes client reloads without swallowing daemon scopes"
   });
 });
 
+test("host and app process replacement subsume only their own graph", () => {
+  assert.deepEqual(partitionReloadScopes([
+    "host:http", "client:http", "host:process", "client:process", "server:core",
+  ]), {
+    client: ["host:process", "client:process"],
+    server: ["server:core"],
+  });
+  assert.deepEqual(partitionReloadScopes(["host:http", "client:process", "server:core"]), {
+    client: ["host:http", "client:process"],
+    server: ["server:core"],
+  });
+});
+
 test("derives sibling highlights from owner metadata and reload all affects every visible scope", () => {
   const scopes = [
     { ...regular, dependantScopes: ["server:websocket", "server:mcp"] },

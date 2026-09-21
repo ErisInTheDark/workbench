@@ -16,13 +16,13 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 
 const ReloadDirtSchema = z.object({
   dirtyScopes: z.array(z.object({
-    dependantScopes: z.array(z.string().regex(/^client:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)).default([]),
+    dependantScopes: z.array(z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)).default([]),
     description: z.string(),
     destructive: z.boolean(),
-    scope: z.string().regex(/^client:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u),
+    scope: z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u),
   }).strict()),
   error: z.string().max(500).nullable(),
-  pendingScopes: z.array(z.string().regex(/^client:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)),
+  pendingScopes: z.array(z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)),
 }).strict();
 const FrontendGenerationSchema = z.object({
   javascript: z.string().min(1).max(200),
@@ -151,7 +151,7 @@ export default class WorkbenchAppRuntimeClient {
 
   async #refresh() {
     try {
-      const response = await this.#fetcher("/api/workbench-app-runtime?version=3");
+      const response = await this.#fetcher("/api/workbench-app-runtime?version=4");
       if (!response.ok) throw new Error((await response.text()).slice(0, 1_000) || `App runtime request failed with ${response.status}.`);
       const parsed = RuntimeResponseSchema.safeParse(await response.json());
       if (!parsed.success) {

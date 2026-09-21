@@ -124,6 +124,79 @@ function fakeLog(lines: string[]) {
   };
 }
 
+test("unexpected supervision failure retires its owned child before rejecting", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-failure-"));
+  const child = fakeChild();
+  let retired = 0;
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: root, environment: {},
+    sleep: async () => { throw new Error("watchdog wait failed"); },
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => child,
+    terminateChild: async owned => {
+      assert.equal(owned, child);
+      retired++;
+      child.emit("exit", 0, null);
+    },
+  });
+  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  await assert.rejects(host.run(), /watchdog wait failed/);
+  assert.equal(retired, 1);
+  assert.equal(host.snapshot().state, "failed");
+});
+
+test("wake coalesces callers and resolves only after child-bound readiness", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-"));
+  const child = fakeChild();
+  const clock = new FakeClock();
+  const spawned = event();
+  let spawns = 0;
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => { spawns++; spawned.resolve(); return child; },
+    terminateChild: async () => { child.emit("exit", 0, null); },
+    requestRestart: () => assert.fail("Normal stop must not restart."),
+  });
+  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  const first = host.wake();
+  const second = host.wake();
+  await spawned.promise;
+  assert.equal(spawns, 1);
+  assert.equal(host.snapshot().state, "starting");
+  reportReady(child);
+  const endpoints = await Promise.all([first, second]);
+  assert.equal(endpoints[0].instanceId, endpoints[1].instanceId);
+  assert.equal(host.snapshot().state, "ready");
+});
+
+test("pre-readiness exit rejects wake and retires the unit instead of respawning locally", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-failed-"));
+  const child = fakeChild();
+  const clock = new FakeClock();
+  const spawned = event();
+  const retired = event();
+  let spawns = 0;
+  let preReadyFailure = false;
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => { spawns++; spawned.resolve(); return child; },
+    terminateChild: async () => { child.emit("exit", 0, null); },
+    onFailure: (_error, beforeReady) => { preReadyFailure = beforeReady; },
+    requestRestart: () => retired.resolve(),
+  });
+  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  const waking = host.wake();
+  const rejected = assert.rejects(waking, /before readiness/i);
+  await spawned.promise;
+  child.emit("exit", 7, null);
+  await rejected;
+  await retired.promise;
+  assert.equal(preReadyFailure, true);
+  assert.equal(spawns, 1);
+});
+
 test("probes the reported endpoint twice before retiring only its owned child", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-"));
   context.after(async () => await rm(root, { force: true, recursive: true }));

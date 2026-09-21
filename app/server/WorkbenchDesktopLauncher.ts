@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - WorkbenchDesktopLauncherOptions: checkout desktop artifact and process adapter ports. Keywords: desktop, launcher, shortcut.
- * - default WorkbenchDesktopLauncher: launch and install the committed native Workbench tray shell. Keywords: app, Tauri, Windows.
+ * - WorkbenchDesktopLauncherOptions: checkout desktop artifact and process boundaries.
+ * - default WorkbenchDesktopLauncher: launch and install the committed native tray shell.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import LinuxDesktopShortcut from "./LinuxDesktopShortcut.ts";
 
 interface CommandOptions {
   cwd: string;
@@ -18,6 +19,7 @@ export interface WorkbenchDesktopLauncherOptions {
   launchDetached?: (command: string, args: string[], options: CommandOptions) => Promise<void>;
   pathExists?: (filePath: string) => Promise<boolean>;
   platform?: NodeJS.Platform;
+  arch?: string;
   repositoryRootPath: string;
   runCommand?: (command: string, args: string[], options: CommandOptions) => Promise<void>;
 }
@@ -48,8 +50,9 @@ async function pathExists(filePath: string) {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -57,6 +60,7 @@ export default class WorkbenchDesktopLauncher {
   private readonly launchDetached: NonNullable<WorkbenchDesktopLauncherOptions["launchDetached"]>;
   private readonly pathExists: NonNullable<WorkbenchDesktopLauncherOptions["pathExists"]>;
   private readonly platform: NodeJS.Platform;
+  private readonly arch: string;
   private readonly repositoryRootPath: string;
   private readonly runCommand: NonNullable<WorkbenchDesktopLauncherOptions["runCommand"]>;
 
@@ -64,12 +68,13 @@ export default class WorkbenchDesktopLauncher {
     this.launchDetached = options.launchDetached ?? launchDetached;
     this.pathExists = options.pathExists ?? pathExists;
     this.platform = options.platform ?? process.platform;
+    this.arch = options.arch ?? process.arch;
     this.repositoryRootPath = path.resolve(options.repositoryRootPath);
     this.runCommand = options.runCommand ?? runCommand;
   }
 
   async start() {
-    this.requireWindows();
+    this.requirePlatform();
     const launcherPath = await this.requireLauncher();
     await this.launchDetached(launcherPath, ["--workbench-root", this.repositoryRootPath], {
       cwd: this.repositoryRootPath,
@@ -80,8 +85,12 @@ export default class WorkbenchDesktopLauncher {
   }
 
   async installShortcut() {
-    this.requireWindows();
+    this.requirePlatform();
     const launcherPath = await this.requireLauncher();
+    if (this.platform === "linux") {
+      await new LinuxDesktopShortcut({ root: this.repositoryRootPath, launcher: launcherPath }).install();
+      return;
+    }
     await this.runCommand("powershell.exe", [
       "-NoLogo",
       "-NoProfile",
@@ -106,8 +115,8 @@ export default class WorkbenchDesktopLauncher {
       this.repositoryRootPath,
       "app", "tray",
       "bin",
-      "windows-x64",
-      "workbench-tray.exe",
+      `${this.platform === "win32" ? "windows" : "linux"}-${this.arch}`,
+      this.platform === "win32" ? "workbench-tray.exe" : "workbench-tray",
     );
     if (!await this.pathExists(launcherPath)) {
       throw new Error(
@@ -117,9 +126,9 @@ export default class WorkbenchDesktopLauncher {
     return launcherPath;
   }
 
-  private requireWindows() {
-    if (this.platform !== "win32") {
-      throw new Error("Workbench desktop shortcuts are currently supported on Windows only.");
+  private requirePlatform() {
+    if (this.platform !== "win32" && this.platform !== "linux") {
+      throw new Error("Workbench desktop launch supports Windows and Linux.");
     }
   }
 }
