@@ -186,7 +186,7 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       assert.equal(session, "managed");
       return { harness: "opencode", threadId, cwd: "C:/workspace" };
     },
-    execute: unused, executeReadOnly: unused,
+    execute: unused,
     transcript: {
       start: async (input, identity, caller) => {
         const reference = { threadId: caller.threadId, turnId: WorkbenchTurnIdSchema.parse("original-turn"), itemId: WorkbenchItemIdSchema.parse(identity.childID),

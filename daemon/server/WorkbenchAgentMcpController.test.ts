@@ -32,7 +32,6 @@ for (const name of ["task_get", "shell"]) {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
       describe: async () => ({ experimental: {}, shellDescription: "test" }),
       patchClaims: async () => "",
-      executeReadOnly: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
       shell: async () => {
         order.push("execute");
         return { cwd: "C:/workspace", shell: "pwsh", exitCode: 3, stdout: "complete stdout", stderr: "complete stderr" };
@@ -76,7 +75,7 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
       describe: async () => ({ experimental: {}, shellDescription: "test" }),
-      patchClaims: unused, shell: unused, executeReadOnly: unused,
+      patchClaims: unused, shell: unused,
       transcript: {
         start: async () => { if (phase === "start") throw new Error("capture failed"); return reference; },
         finish: async (_reference, result) => {
@@ -289,7 +288,6 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
           return { cwd: "/trusted", harness: provider, threadId: WorkbenchThreadIdSchema.parse("wb-caller") };
         },
         shell: async () => { throw new Error("unexpected shell"); },
-        executeReadOnly: async () => { throw new Error("unexpected execution"); },
         patchClaims: async () => { throw new Error("unexpected patch"); },
       };
     },
@@ -843,6 +841,69 @@ test("keeps declared Code Mode waits alive with request-owned progress only", as
     await pulses[0]!();
     assert.deepEqual(progress, [1]);
   } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("shell calls that request progress keep their stream alive", { timeout: 5_000 }, async () => {
+  const pulses: Array<() => Promise<void>> = [];
+  const stopped: string[] = [];
+  const progress: number[] = [];
+  const progressed = deferred<number>();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const controller = codexController({
+    executeCommand: async () => new Response("unused"),
+    daemonOrigin: "http://127.0.0.1:4500",
+    lifecycleLogError: () => {},
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+    shell: {
+      execute: async () => {
+        started.resolve();
+        await release.promise;
+        return { cwd: "C:/workspace", exitCode: 0, shell: "pwsh", stderr: "", stdout: "complete" };
+      },
+    },
+    scheduleProgress: (pulse) => {
+      let active = true;
+      pulses.push(async () => {
+        if (active) await pulse();
+      });
+      return () => {
+        active = false;
+        stopped.push("stopped");
+      };
+    },
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const call = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { command: "pnpm test:lifecycle" },
+      name: "shell",
+    }, undefined, {
+      onprogress: update => {
+        progress.push(update.progress);
+        progressed.resolve(update.progress);
+      },
+      resetTimeoutOnProgress: true,
+    });
+    await started.promise;
+    assert.equal(pulses.length, 1);
+    await pulses[0]!();
+    assert.equal(await progressed.promise, 1);
+    release.resolve();
+    const result = await call;
+    assert.equal(result.isError, false);
+    assert.match(responseText(result), /complete/u);
+    assert.deepEqual(stopped, ["stopped"]);
+    await pulses[0]!();
+    assert.deepEqual(progress, [1]);
+  } finally {
+    release.resolve();
     await client.close();
     await server.close();
   }

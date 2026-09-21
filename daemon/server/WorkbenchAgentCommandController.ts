@@ -15,10 +15,11 @@ import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-ag
 import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
 import WorkbenchAgentCommandLiveTestController from "./WorkbenchAgentCommandControllerLiveTest";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -37,7 +38,7 @@ interface WorkbenchAgentDirectPort {
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
-  executeReadOnly?: (harness: string, ...args: Parameters<WorkbenchProviderTools["executeReadOnly"]>) => ReturnType<WorkbenchProviderTools["executeReadOnly"]>;
+  executeReadOnly?: (request: WorkbenchReadOnlyExecution, signal: AbortSignal) => Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
   requestManagedThread?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
 }
@@ -158,9 +159,9 @@ export default class WorkbenchAgentCommandController {
       ? new WorkbenchAgentCommandLiveTestController(direct.workbenchProjectRoot)
       : null;
     this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({
-      execute: async (harness, request, signal) => {
-        if (!this.direct.executeReadOnly) throw new Error("Provider command execution is not configured.");
-        return await this.direct.executeReadOnly(harness, request, signal);
+      execute: async (request, signal) => {
+        if (!this.direct.executeReadOnly) throw new Error("Workbench command execution is not configured.");
+        return await this.direct.executeReadOnly(request, signal);
       },
     });
   }

@@ -3,7 +3,7 @@
  * - default CodexToolsController: interpret Codex MCP metadata and execute tools inside its native sandbox.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { ProviderToolMetadata, WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { ProviderToolMetadata, WorkbenchProviderTools, WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
 import type CodexCommandExecController from "./CodexCommandExecController";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
@@ -46,7 +46,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     }
   }
 
-  executeReadOnly(...[request, signal]: Parameters<WorkbenchProviderTools["executeReadOnly"]>) {
+  executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal) {
     return this.options.commandExec.execute({
       ...request, disableTimeout: true, sandboxPolicy: { type: "dangerFullAccess" },
     }, signal);

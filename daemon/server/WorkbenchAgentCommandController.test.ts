@@ -454,33 +454,36 @@ test("renders complete help without an internal capability request", async () =>
   }
 });
 
-test("dispatches ripgrep directly with one argument-vector request", async () => {
-  let received: { input: object; signal: AbortSignal } | null = null;
+test("dispatches ripgrep through one provider-neutral argument-vector request", async () => {
+  let received: { request: object; signal: AbortSignal } | null = null;
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
-    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-    async () => { throw new Error("unexpected internal fetch"); },
     {
-      execute: async (input, signal) => {
-        received = { input, signal };
-        return new Response("one match\n");
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeReadOnly: async (request, signal) => {
+        received = { request, signal };
+        return { exitCode: 0, stdout: "one match\n", stderr: "" };
       },
     },
+    async () => { throw new Error("unexpected internal fetch"); },
+    undefined,
     new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
   );
   const server = await startController(controller);
   try {
+    const body = new URLSearchParams(agentCommandBody(["rg", "--", "-n", "a pattern with 'quotes'", "webapp"]));
+    body.set("callerHarness", "opencode");
     const response = await fetch(`${server.origin}/daemon/agent-command`, {
-      body: agentCommandBody(["rg", "--", "-n", "a pattern with 'quotes'", "webapp"]),
+      body,
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "one match\n");
-    assert.deepEqual(received?.input, {
-      args: ["-n", "a pattern with 'quotes'", "webapp"],
+    assert.deepEqual(received?.request, {
+      command: ["rg", "--no-config", "--heading", "-n", "a pattern with 'quotes'", "webapp"],
       cwd: process.cwd(),
-      harness: "codex",
+      env: { RIPGREP_CONFIG_PATH: null },
     });
     assert.equal(received?.signal.aborted, false);
   } finally {

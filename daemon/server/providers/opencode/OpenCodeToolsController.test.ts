@@ -13,7 +13,6 @@ test("native mutation admission checks every resource against the resolved calle
   const controller: WorkbenchProviderTools = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owner"), cwd: "/repo" }),
     execute: async () => { throw new Error("must not execute"); },
-    executeReadOnly: async () => { throw new Error("must not execute"); },
   });
   const input = { callerThreadId: null, raw: JSON.stringify({
     sessionID: "native", resources: ["src/old.ts", "src/new.ts", "removed.ts"],
@@ -37,7 +36,6 @@ test("native admission propagates cancellation and never substitutes caller-supp
   const owner = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("real-owner"), cwd: "/real" }),
     execute: async () => { throw new Error("must not execute"); },
-    executeReadOnly: async () => { throw new Error("must not execute"); },
   });
   const input = { callerThreadId: "forged", raw: JSON.stringify({ sessionID: "native", resources: ["ignored/generated.ts"] }) };
   assert.deepEqual(JSON.parse(await owner.patchClaims(input, async caller => {
@@ -67,7 +65,6 @@ test("transcript capture requires valid child context and resolves authoritative
       return { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owned"), cwd: "/repo" };
     },
     execute: async () => { throw new Error("not executing"); },
-    executeReadOnly: async () => { throw new Error("not executing"); },
     transcript: {
       start: async (_input, context, caller) => {
         starts++;
@@ -102,7 +99,6 @@ test("binds MCP session identity and runs shell through admitted execution", asy
       executions.push(request);
       return { exitCode: 0, stdout: "ok", stderr: "" };
     },
-    executeReadOnly: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
   });
 
   const result = await controller.shell(

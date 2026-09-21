@@ -31,7 +31,7 @@ test("workspace status qualifies recovery facts and keeps roots with no lifecycl
     async readStatus(input: { cwd: string }) {
       calls.push(input.cwd);
       return {
-        pending: [], accepted: [], dirtyClaims: ["one.ts"], cleanClaims: [], unclaimedDirt: ["loose.ts"],
+        pending: [], accepted: [], dirtyClaims: ["one.ts"], cleanClaims: [], stashedClaims: [], unclaimedDirt: ["loose.ts"],
         recovery: [{ paths: ["old.ts"], headMovement: "same", commits: [], omittedCommits: 0,
           comparison: [{ path: "old.ts", additions: 1, deletions: 0, kind: "update", binary: false }] }],
         unavailableRecovery: [],
@@ -113,13 +113,19 @@ class FakeLocalGitArcController {
   readonly proposalDetailCalls: string[] = [];
   readonly proposalPathCalls: string[] = [];
   readonly snapshotCalls: string[] = [];
+  readonly stashFailureRoots = new Set<string>();
+  readonly unstashFailureRoots = new Set<string>();
+  readonly stashCalls: string[] = [];
+  readonly unstashCalls: string[] = [];
+  readonly restashCalls: string[] = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
   private readonly proposals = new Map<string, { cwd: string; paths: string[]; proposalId: string }>();
   private readonly states = new Map<string, {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
-    phase: "active"; proposals: Array<{ proposalId: string; status: "proposed" }>; threadId: string; updatedAt: string;
+    phase: "active" | "stashed"; proposals: Array<{ proposalId: string; status: "proposed" }>; stashedPaths?: string[];
+    threadId: string; updatedAt: string;
   }>();
 
   async readScope(input: { cwd: string }) {
@@ -236,6 +242,52 @@ class FakeLocalGitArcController {
 
   async assertArcReleasable(input: { cwd: string }) {
     if (!this.states.has(input.cwd)) throw new Error("This thread does not own any live Git arc claims.");
+  }
+
+  async assertArcStashable(input: { cwd: string }) {
+    if (this.states.get(input.cwd)?.phase !== "active") throw new Error("This thread does not own an active Git arc.");
+  }
+
+  async assertArcUnstashable(input: { cwd: string }) {
+    if (this.states.get(input.cwd)?.phase !== "stashed") throw new Error("This thread does not own a stashed Git arc.");
+  }
+
+  async stashArc(input: { cwd: string }) {
+    this.stashCalls.push(input.cwd);
+    if (this.stashFailureRoots.has(input.cwd)) throw new Error("stash failed");
+    const state = this.states.get(input.cwd)!;
+    const stashedPaths = [...state.claimedPaths];
+    this.states.set(input.cwd, { ...state, claimedPaths: [], phase: "stashed", stashedPaths });
+    return {
+      checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`,
+      conflictedPaths: [], intentName: state.intentName, kind: "arc", phase: "stashed" as const,
+      repoRoot: input.cwd, scopePaths: [], stashedPaths,
+    };
+  }
+
+  async unstashArc(input: { cwd: string }) {
+    this.unstashCalls.push(input.cwd);
+    if (this.unstashFailureRoots.has(input.cwd)) throw new Error("unstash failed");
+    const state = this.states.get(input.cwd)!;
+    const claimedPaths = [...(state.stashedPaths ?? [])];
+    this.states.set(input.cwd, { ...state, claimedPaths, phase: "active", stashedPaths: undefined });
+    return {
+      checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`,
+      conflictedPaths: [], intentName: state.intentName, kind: "arc", phase: "active" as const,
+      repoRoot: input.cwd, scopePaths: claimedPaths, stashedPaths: [],
+    };
+  }
+
+  async restashArc(input: { cwd: string }) {
+    this.restashCalls.push(input.cwd);
+    const state = this.states.get(input.cwd)!;
+    const stashedPaths = [...state.claimedPaths];
+    this.states.set(input.cwd, { ...state, claimedPaths: [], phase: "stashed", stashedPaths });
+    return {
+      checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`,
+      conflictedPaths: [], intentName: state.intentName, kind: "arc", phase: "stashed" as const,
+      repoRoot: input.cwd, scopePaths: [], stashedPaths,
+    };
   }
 
   async releaseArc(input: { cwd: string; disown: boolean }) {
@@ -503,7 +555,6 @@ test("active claims and Git ignore rules cover patch paths across workspace root
       threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId),
     }),
     execute: async () => { throw new Error("must not execute"); },
-    executeReadOnly: async () => { throw new Error("must not execute"); },
   });
   const admit = async (resources: string[]) => JSON.parse(await native.patchClaims({
     callerThreadId: null, raw: JSON.stringify({ sessionID: "native", resources }),
@@ -903,4 +954,49 @@ test("workspace partial mutation failure still observes every member's post-fail
     [{ paths: ["src/api.ts"], rootId: "api" }],
     [{ paths: [], rootId: "web" }],
   ]);
+});
+
+test("workspace stash and unstash compensate completed members when a later repository fails", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-stash" };
+  const plan = await controller.execute(project, {
+    ...identity,
+    action: "planClaims",
+    addPaths: [],
+    adoptPaths: [],
+    inherit: false,
+    intentName: "stash together",
+    removePaths: [],
+    roots: [
+      { rootId: "api", addPaths: ["one.ts"], adoptPaths: [], removePaths: [] },
+      { rootId: "web", addPaths: ["two.ts"], adoptPaths: [], removePaths: [] },
+    ],
+    start: false,
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    ...identity,
+    action: "arcStart",
+    checkpointCommit: undefined,
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+  });
+
+  local.stashFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.execute(project, { ...identity, action: "arcStash" }), /stash failed/u);
+  assert.deepEqual(local.stashCalls.map(path.normalize), [path.resolve("C:/repo/api"), path.resolve("C:/repo/web")].map(path.normalize));
+  assert.deepEqual(local.unstashCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
+  assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "active");
+
+  local.stashFailureRoots.clear();
+  await controller.execute(project, { ...identity, action: "arcStash" });
+  local.unstashCalls.length = 0;
+  local.unstashFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.execute(project, { ...identity, action: "arcUnstash" }), /unstash failed/u);
+  assert.deepEqual(local.restashCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
+  assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "stashed");
 });

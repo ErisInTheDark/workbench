@@ -10,10 +10,11 @@ import CodexToolsController from "./CodexToolsController";
 import CodexShellController from "./CodexShellController";
 import CodexCommandExecController from "./CodexCommandExecController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexProvider],
+  children: [CodexProvider, WorkbenchAgentCommandNode],
   create: (_context, { get }) => {
     const threads = get("codexThreadOperations");
     const commandExec = new CodexCommandExecController({

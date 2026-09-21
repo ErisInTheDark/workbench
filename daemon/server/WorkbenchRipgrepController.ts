@@ -3,10 +3,11 @@
  * - default WorkbenchRipgrepController: own safe ripgrep arguments and exit semantics above provider execution.
  */
 import { WorkbenchRipgrepExecutionRequestSchema } from "./lib/workbench/commands/ripgrep-command-definition";
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type { WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
 
 interface WorkbenchRipgrepControllerOptions {
-  execute: (harness: string, ...args: Parameters<WorkbenchProviderTools["executeReadOnly"]>) => ReturnType<WorkbenchProviderTools["executeReadOnly"]>;
+  execute(request: WorkbenchReadOnlyExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
 }
 
 function combinedOutput(stdout: string, stderr: string) {
@@ -34,7 +35,7 @@ export default class WorkbenchRipgrepController {
     if (signal.aborted) throw signal.reason;
 
     try {
-      const result = await this.options.execute(request.data.harness, {
+      const result = await this.options.execute({
         command: ["rg", "--no-config", "--heading", ...request.data.args],
         cwd: request.data.cwd,
         env: { RIPGREP_CONFIG_PATH: null },

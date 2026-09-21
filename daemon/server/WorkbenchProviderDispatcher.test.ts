@@ -16,7 +16,7 @@ test("tool capture finishes through the replacement owner with the original pinn
   const reference = { threadId: "thread", turnId: "old-turn", itemId: "item", sourceId: "child",
     parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
   const tools: NonNullable<WorkbenchProvider["tools"]> = {
-    patchClaims: unused, executeReadOnly: unused, describe: unused, caller: unused, shell: unused,
+    patchClaims: unused, describe: unused, caller: unused, shell: unused,
     transcript: { start: async () => reference, finish: async () => assert.fail("old owner retained") },
   };
   f.setTools(tools);
@@ -145,7 +145,7 @@ test("admitted execution retains its provider lease and later calls use replacem
   const finish = deferred();
   const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
   const tools: NonNullable<WorkbenchProvider["tools"]> = {
-    patchClaims: unused, executeReadOnly: unused, describe: unused, caller: unused, shell: unused,
+    patchClaims: unused, describe: unused, caller: unused, shell: unused,
     execute: async () => {
       entered.resolve();
       await finish.promise;

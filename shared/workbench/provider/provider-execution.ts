@@ -73,7 +73,6 @@ export interface WorkbenchProviderTools {
   transcript?: WorkbenchToolTranscript;
   execute?(request: WorkbenchAdmittedExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
   patchClaims(input: { raw: string; callerThreadId: string | null }, check: WorkbenchPatchClaimCheck, signal: AbortSignal): Promise<string>;
-  executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
   describe(): Promise<{
     experimental: Record<string, Record<string, JsonValue>>;
     shellDescription: string;

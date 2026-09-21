@@ -15,7 +15,6 @@ import {
   type WorkbenchShell,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
-import type { WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
 import type CodexExecServer from "./CodexExecServer";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
@@ -215,27 +214,6 @@ export default class CodexShellController {
     }, signal);
   }
 
-  async executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal) {
-    const configuration = await this.configuration(request.cwd);
-    signal.throwIfAborted();
-    return this.options.executor.execute({
-      ...configuration,
-      command: request.command,
-      cwd: request.cwd,
-      env: Object.fromEntries(Object.entries(request.env ?? {}).filter(
-        (entry): entry is [string, string] => entry[1] !== null,
-      )),
-      permissions: {
-        type: "managed",
-        network: "restricted",
-        file_system: {
-          type: "restricted",
-          entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }],
-        },
-      },
-      workspaceRoots: [request.cwd],
-    }, signal);
-  }
 }
 
 export function prepareWorkbenchShellExecution(

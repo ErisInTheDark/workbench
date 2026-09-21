@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { CodexCommandExecRequest } from "./CodexCommandExecController";
 import CodexToolsController from "./CodexToolsController";
 
 test("native metadata resolves WB identity before executing a shell", async () => {
@@ -49,4 +50,31 @@ test("cancelled caller lookup cannot launch a command and missing identity canno
   assert.equal(reads, 0);
   await assert.rejects(controller.shell({ command: "pwd" }, { threadId: "native-thread" }, cancellation.signal), /caller cancelled/u);
   assert.equal(reads, 1);
+});
+
+test("executes Workbench read-only commands through native Codex command execution", async () => {
+  const calls: CodexCommandExecRequest[] = [];
+  const controller = new CodexToolsController({
+    resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
+    commandExec: { execute: async request => {
+      calls.push(request);
+      return { exitCode: 0, stdout: "match\n", stderr: "" };
+    } },
+    readCallerThread: async () => { throw new Error("unexpected caller lookup"); },
+    shell: { execute: async () => { throw new Error("unexpected shell"); } },
+  });
+  const request = {
+    command: ["rg", "--no-config", "needle"],
+    cwd: "C:/workspace",
+    env: { RIPGREP_CONFIG_PATH: null },
+  };
+
+  assert.deepEqual(await controller.executeReadOnly(request, new AbortController().signal), {
+    exitCode: 0, stdout: "match\n", stderr: "",
+  });
+  assert.deepEqual(calls, [{
+    ...request,
+    disableTimeout: true,
+    sandboxPolicy: { type: "dangerFullAccess" },
+  }]);
 });

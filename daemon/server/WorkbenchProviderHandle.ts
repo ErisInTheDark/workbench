@@ -145,7 +145,6 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       return tools.execute(request, signal);
     }, "execute"),
     patchClaims: (input, check, signal) => this.tool(tools => tools.patchClaims(input, check, signal), "patchClaims"),
-    executeReadOnly: (request, signal) => this.tool(tools => tools.executeReadOnly(request, signal), "executeReadOnly"),
     describe: () => this.tool(tools => tools.describe(), "describe"),
     caller: (metadata, signal) => this.tool(tools => tools.caller(metadata, signal), "caller"),
     shell: (input, metadata, signal) => this.tool(tools => tools.shell(input, metadata, signal), "shell"),

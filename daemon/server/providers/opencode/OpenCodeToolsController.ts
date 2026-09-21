@@ -18,7 +18,6 @@ export interface OpenCodeToolsControllerOptions {
     cwd: string;
   }>;
   execute: NonNullable<WorkbenchProviderTools["execute"]>;
-  executeReadOnly: WorkbenchProviderTools["executeReadOnly"];
   transcript?: {
     start(input: Parameters<WorkbenchToolTranscript["start"]>[0], context: OpenCodeToolContext, caller: WorkbenchProviderCaller): ReturnType<WorkbenchToolTranscript["start"]>;
     finish: WorkbenchToolTranscript["finish"];
@@ -71,10 +70,6 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     });
     const result = await admission.execute(prepared, signal);
     return { ...result, cwd: prepared.cwd, shell: prepared.shell };
-  }
-
-  executeReadOnly(...input: Parameters<WorkbenchProviderTools["executeReadOnly"]>) {
-    return this.options.executeReadOnly(...input);
   }
 
   async describe() {
