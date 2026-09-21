@@ -55,11 +55,11 @@ const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 test("status selectors preserve equivalent CLI and MCP inputs", async () => {
   const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc status");
   assert.ok(definition, "status must be registered for CLI and MCP");
-  const mcp = await definition.buildRequestFromJson({ full: ["dirty", "unclaimed-dirt"] }, {
+  const mcp = await definition.buildRequestFromJson({ full: ["dirty", "unclaimed-dirt"], threadId: "target-thread" }, {
     ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null,
   });
   for (const flags of [["--full=dirty,unclaimed-dirt"], ["--full", "dirty,unclaimed-dirt"]]) {
-    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "status", ...flags], gitArcOptions);
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "status", "--thread", "target-thread", ...flags], gitArcOptions);
     assert.equal(parsed.kind, "request");
     if (parsed.kind !== "request") assert.fail("Expected status request.");
     assert.deepEqual(parsed.request.body?.full, ["dirty", "unclaimed-dirt"]);
@@ -755,9 +755,18 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal(compare.request.responseKind, "git-arc-compare");
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "diff",
+    "git", "arc", "diff", "--thread", "target-thread", "--ref", "proposal-one",
   ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
+  if (checkpointDiff.kind !== "request") assert.fail("Expected targeted diff request.");
+  assert.deepEqual(checkpointDiff.request.body, {
+    action: "diff",
+    cwd: "C:/workspace",
+    harness: "codex",
+    ref: "proposal-one",
+    targetThreadId: "target-thread",
+    threadId: "thread-1",
+  });
   assert.equal(checkpointDiff.request.responseKind, "git-arc-diff");
   const pagedDiff = await parseWorkbenchAgentCliCommand([
     "git", "arc", "diff", "--page", "2",
@@ -1098,7 +1107,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
 test("rejects arbitrary request capabilities and unsafe restore", async () => {
   for (const args of [
     ["request", "--url", "http://localhost:43210/api/file"],
-    ["git", "arc", "diff", "--thread", "thread-1", "--ref", "abc", "--", "src/file.ts"],
+    ["git", "arc", "compare", "--thread", "thread-1", "--ref", "abc", "--", "src/file.ts"],
     ["git", "arc", "restore", "--thread", "thread-1", "--ref", "abc"],
     ["git", "arc", "restore", "--ref", "abc"],
     ["thread", "recall", "search", "--thread", "thread-1", "--query", "text", "--limit", "many"],
@@ -1572,9 +1581,9 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     oversizedDiffPaths: ["src/giant.ts"],
     scopePaths: ["src/one.ts"],
     unclaimedDirtPaths: [],
-  }, { action: "diff" });
-  assert.ok(diffResponse.stdout.includes('git_arc_diff {"paths":["src/giant.ts"]}'));
-  assert.ok(diffResponse.stdout.includes('next git_arc_diff {"page":2}'));
+  }, { action: "diff", targetThreadId: "target-thread" });
+  assert.ok(diffResponse.stdout.includes('git_arc_diff {"threadId":"target-thread","paths":["src/giant.ts"]}'));
+  assert.ok(diffResponse.stdout.includes('next git_arc_diff {"threadId":"target-thread","page":2}'));
   const terminalDiffResponse = adapt("git-arc-diff", {
     binaryDiffPaths: ["assets/image.png"],
     checkpointCommit: planRef,

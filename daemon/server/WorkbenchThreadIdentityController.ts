@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadIdentityController: expose database-owned identity and index admitted native bindings for live events.
+ * - default WorkbenchThreadIdentityController: expose database-owned identity, resolve Git arc owners, and index admitted native bindings.
  */
 import { nativeLocationKey } from "./database/thread-identity/native-location-key";
 import {
@@ -20,6 +20,7 @@ import type {
 } from "./database/thread-identity/workbench-thread-identity-types";
 import type { GitArcResolvedThreadIdentity } from "./lib/workbench/git/git-arc-thread-identity";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 export default class WorkbenchThreadIdentityController {
   private disposed = false;
@@ -83,12 +84,37 @@ export default class WorkbenchThreadIdentityController {
       threadId: ThreadReferenceSchema.parse(input.threadId),
     });
     if (!identity) return null;
-    const location = nativeLocationKey(input.repositoryRoot, this.platform);
-    const binding = identity.bindings.find(candidate => (
+    const binding = this.gitArcBindings(identity, input.repositoryRoot).find(candidate => (
       candidate.harness === input.harness
-      && nativeLocationKey(candidate.nativeLocation, this.platform) === location
     ));
     return binding ? { nativeThreadId: binding.nativeThreadId, threadId: identity.threadId } : null;
+  }
+
+  async resolveGitArcThreadOwner(input: {
+    projectId: string;
+    repositoryRoot: string;
+    threadId: string;
+  }): Promise<(GitArcResolvedThreadIdentity & { harness: WorkbenchHarness }) | null> {
+    const identity = await this.resolve({
+      projectId: ProjectIdSchema.parse(input.projectId),
+      threadId: ThreadReferenceSchema.parse(input.threadId),
+    });
+    if (!identity) return null;
+    const bindings = [...new Map(this.gitArcBindings(identity, input.repositoryRoot)
+      .map(binding => [binding.harness, binding]))
+      .values()];
+    if (bindings.length > 1) throw new Error("The managed thread has multiple Git arc bindings for this repository.");
+    const binding = bindings[0];
+    return binding ? {
+      harness: WorkbenchHarnessSchema.parse(binding.harness),
+      nativeThreadId: binding.nativeThreadId,
+      threadId: identity.threadId,
+    } : null;
+  }
+
+  private gitArcBindings(identity: WorkbenchThreadIdentityRecord, repositoryRoot: string) {
+    const location = nativeLocationKey(repositoryRoot, this.platform);
+    return identity.bindings.filter(candidate => nativeLocationKey(candidate.nativeLocation, this.platform) === location);
   }
 
   async observeTurn(input: WorkbenchTurnIdentityMetadata) {

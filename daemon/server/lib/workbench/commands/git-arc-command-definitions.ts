@@ -150,22 +150,25 @@ const release = defineWorkbenchAgentCommand({
 });
 
 function inspectionCommand(action: "compare" | "diff") {
-  const valueFlags = action === "diff" ? ["--ref", "--page"] : ["--ref"];
+  const valueFlags = action === "diff" ? ["--ref", "--page", "--thread"] : ["--ref"];
   return defineWorkbenchAgentCommand({
     description: action === "compare"
       ? "Show per-file change counts for an arc's claimed set or selected paths."
-      : "Show unified diff content for an arc's claimed set or selected paths.",
+      : "Show unified diff content for the caller's or another Workbench thread's claimed set or selected paths.",
     effects: { idempotent: true, readOnly: true },
     helpGroups: ["git-arc"],
     mcpCodeModeEligible: true,
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} [--ref <arc-sha|proposal-id>]${action === "diff" ? " [--page <page>]" : ""} [-- <path> [<path>...]]`,
+    usage: `wb git arc ${action}${action === "diff" ? " [--thread <id>]" : ""} [--ref <arc-sha|proposal-id>]${action === "diff" ? " [--page <page>]" : ""} [-- <path> [<path>...]]`,
     inputSchema: z.object({
       ...(action === "diff" ? { page: z.number().int().positive().optional() } : {}),
       paths: paths.default([]),
-      ref: requiredText.optional().describe("An arc SHA or proposal ID owned by this thread."),
+      ref: requiredText.optional().describe("An arc SHA or proposal ID owned by the selected or caller thread."),
       refs: z.array(memberRefSchema).default([]),
       roots: z.array(rootPathsSchema).default([]),
+      ...(action === "diff" ? {
+        threadId: requiredText.optional().describe("Workbench thread to inspect; omit for the caller."),
+      } : {}),
     }).strict().superRefine((input, context) => {
       if (
         action === "diff"
@@ -185,6 +188,7 @@ function inspectionCommand(action: "compare" | "diff") {
         ref: flags.optional("--ref") ?? undefined,
         refs: [],
         roots: [],
+        ...(action === "diff" ? { threadId: flags.optional("--thread") ?? undefined } : {}),
       };
     },
     buildRequest(input, { callerHarness, callerThreadId, cwd }) {
@@ -195,6 +199,7 @@ function inspectionCommand(action: "compare" | "diff") {
         ...(input.paths.length ? { paths: input.paths } : {}),
         ...(input.refs.length ? { refs: input.refs } : {}),
         ...(input.roots.length ? { roots: input.roots } : {}),
+        ...("threadId" in input && input.threadId ? { targetThreadId: input.threadId } : {}),
       }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
     },
   });
@@ -275,21 +280,28 @@ const scope = defineWorkbenchAgentCommand({
 });
 
 const status = defineWorkbenchAgentCommand({
-  description: "Read compact proposals, dirty/clean claims and unclaimed dirt. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
+  description: "Read compact proposals, dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
   effects: { readOnly: true, idempotent: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "status"],
-  usage: "wb git arc status [--full=dirty,clean,unclaimed-dirt]",
-  inputSchema: z.object({ full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to show as complete path lists instead of counts above five.") }).strict(),
+  usage: "wb git arc status [--thread <id>] [--full=dirty,clean,unclaimed-dirt]",
+  inputSchema: z.object({
+    full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to show as complete path lists instead of counts above five."),
+    threadId: requiredText.optional().describe("Workbench thread to inspect; omit for the caller."),
+  }).strict(),
   parseCliArgs(args) {
     const normalized = args.flatMap(arg => arg.startsWith("--full=") ? ["--full", arg.slice(7)] : [arg]);
-    const flags = new WorkbenchAgentCommandFlags(normalized, { values: ["--full"] });
+    const flags = new WorkbenchAgentCommandFlags(normalized, { values: ["--full", "--thread"] });
     const value = flags.optional("--full");
-    return { full: value === null ? [] : value.split(",").map(part => GitArcStatusFullSchema.parse(part)) };
+    return {
+      full: value === null ? [] : value.split(",").map(part => GitArcStatusFullSchema.parse(part)),
+      threadId: flags.optional("--thread") ?? undefined,
+    };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       ...baseBody(callerHarness, callerThreadId, cwd), action: "arcStatus", full: input.full,
+      ...(input.threadId ? { targetThreadId: input.threadId } : {}),
     }, "git-arc-status");
   },
 });

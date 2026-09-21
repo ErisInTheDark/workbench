@@ -105,7 +105,12 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
   GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
   z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),
-  z.object({ action: z.literal("arcStatus"), full: z.array(GitArcStatusFullSchema).default([]), ...checkpointBaseRequest }).strict(),
+  z.object({
+    action: z.literal("arcStatus"),
+    full: z.array(GitArcStatusFullSchema).default([]),
+    targetThreadId: nonEmptyString.optional(),
+    ...checkpointBaseRequest,
+  }).strict(),
   z.object({
     action: z.literal("plan"),
     adoptPaths: optionalCheckpointPaths.default([]),
@@ -189,6 +194,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ref: nonEmptyString.optional(),
     refs: z.array(GitArcInspectionMemberRefSchema).default([]),
     roots: z.array(GitArcRootPathsSchema).default([]),
+    targetThreadId: nonEmptyString.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({

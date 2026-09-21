@@ -283,64 +283,77 @@ export default class WorkbenchGitArcFeature {
         ...parsed.data, cwd: project.cwd,
         harness: WorkbenchHarnessSchema.parse(parsed.data.harness), threadId: WorkbenchThreadIdSchema.parse(identity.threadId),
       };
-      const owner = { harness: request.harness, threadId: request.threadId };
-      const modifiedSince = request.action === "compare" || request.action === "diff"
+      const target = (request.action === "arcStatus" || request.action === "diff") && request.targetThreadId
+        ? await this.options.identities.resolveGitArcThreadOwner({
+          projectId: project.project.id,
+          repositoryRoot: project.cwd,
+          threadId: request.targetThreadId,
+        })
+        : null;
+      if ((request.action === "arcStatus" || request.action === "diff") && request.targetThreadId && !target) {
+        throw new Error("The target thread has no Git arc identity for this repository.");
+      }
+      const owner = target
+        ? { harness: target.harness, threadId: WorkbenchThreadIdSchema.parse(target.threadId) }
+        : { harness: request.harness, threadId: request.threadId };
+      const effectiveRequest = target ? { ...request, ...owner } : request;
+      const modifiedSince = effectiveRequest.action === "compare" || effectiveRequest.action === "diff"
         ? await this.options.getThreadCreatedAt(project.project.id, owner.harness, owner.threadId)
         : null;
-      if ((request.action === "compare" || request.action === "diff") && modifiedSince === null) {
+      if ((effectiveRequest.action === "compare" || effectiveRequest.action === "diff") && modifiedSince === null) {
         throw new Error("The managed thread creation timestamp is unavailable for Git arc inspection.");
       }
-      if (request.action === "arcWait") {
+      if (effectiveRequest.action === "arcWait") {
         try {
-          return Response.json(await this.waitForPlanAndStart(project, request, owner, signal));
+          return Response.json(await this.waitForPlanAndStart(project, effectiveRequest, owner, signal));
         } catch (error) {
-          throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
+          throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
         }
       }
-      if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
+      if (mutatesGitArcState(effectiveRequest)) this.fencePendingCardReads(project.cwd);
       const execute = async () => {
         try {
-          if (CLAIM_START_ACTIONS.has(request.action)) {
+          if (CLAIM_START_ACTIONS.has(effectiveRequest.action)) {
             const before = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
             if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
             if (before.lifecycle.settled) throw new Error("A settled thread cannot start or continue a Git arc.");
           }
           let response: Response;
           try {
-            response = request.action === "readDiffArtifact"
-              ? await this.dispatch(request)
-              : usesWorkspaceController(project, request)
-                ? Response.json(await this.workspaceController.execute(project, request, { modifiedSince: modifiedSince ?? undefined }))
-                : mutatesGitArcState(request)
+            response = effectiveRequest.action === "readDiffArtifact"
+              ? await this.dispatch(effectiveRequest)
+              : usesWorkspaceController(project, effectiveRequest)
+                ? Response.json(await this.workspaceController.execute(project, effectiveRequest, { modifiedSince: modifiedSince ?? undefined }))
+                : mutatesGitArcState(effectiveRequest)
                   ? await this.options.transitions.run(project.cwd, async () => {
                     try {
-                      return await this.dispatch(request);
+                      return await this.dispatch(effectiveRequest);
                     } finally {
-                      await this.observeLocalClaimSnapshot(project, request.harness, request.threadId);
+                      await this.observeLocalClaimSnapshot(project, effectiveRequest.harness, effectiveRequest.threadId);
                     }
                   })
                   : await (this.options.transitions.read ?? this.options.transitions.run)
-                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(request, modifiedSince ?? undefined));
+                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined));
           } catch (error) {
-            throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
+            throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
           }
-          if (response.ok && CLAIM_START_ACTIONS.has(request.action)) {
+          if (response.ok && CLAIM_START_ACTIONS.has(effectiveRequest.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
             if (after?.lifecycle.settled) {
-              await this.workspaceController.releaseActiveClaim(project, request.harness, request.threadId);
+              await this.workspaceController.releaseActiveClaim(project, effectiveRequest.harness, effectiveRequest.threadId);
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
             }
           }
           return response;
         } finally {
-          if (mutatesGitArcState(request)) {
+          if (mutatesGitArcState(effectiveRequest)) {
             this.notifyClaimMutation();
             await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
           }
         }
       };
-      if (!COALESCED_CARD_READ_ACTIONS.has(request.action)) return await execute();
-      return await this.coalesceCardRead(project.cwd, request, execute);
+      if (!COALESCED_CARD_READ_ACTIONS.has(effectiveRequest.action)) return await execute();
+      return await this.coalesceCardRead(project.cwd, effectiveRequest, execute);
     } catch (error) {
       const failure = error instanceof GitArcFailureException
         ? error.failure

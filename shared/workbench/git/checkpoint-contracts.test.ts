@@ -44,6 +44,20 @@ test("selected diff paths accept redundant page one but never a later page", () 
   if (!rejected.success) assert.deepEqual(readGitArcValidationRejection(rejected.error.issues), { reason: "selectedPathPaging" });
 });
 
+test("only status and diff reads retain another thread target", () => {
+  const common = { cwd: "C:/repo", threadId: "caller" };
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcStatus", full: [], targetThreadId: "target", ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "diff", refs: [], roots: [], targetThreadId: "target", ...common,
+  }).success, true);
+  const mutation = GitCheckpointRequestSchema.parse({
+    action: "arcRelease", disown: false, targetThreadId: "target", ...common,
+  });
+  assert.equal("targetThreadId" in mutation, false);
+});
+
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {
   const obsoleteReloadPlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",

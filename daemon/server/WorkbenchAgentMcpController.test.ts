@@ -452,6 +452,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const diffDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_diff");
     assert.ok(diffDefinition);
     assert.equal("page" in (inventory.tools.find(({ name }) => name === "git_arc_diff")?.inputSchema.properties ?? {}), true);
+    assert.equal("threadId" in (inventory.tools.find(({ name }) => name === "git_arc_diff")?.inputSchema.properties ?? {}), true);
     assert.equal("page" in (inventory.tools.find(({ name }) => name === "git_arc_compare")?.inputSchema.properties ?? {}), false);
     assert.deepEqual(await diffDefinition.buildRequestFromJson({ page: 3 }, {
       callerHarness: "codex",
@@ -464,16 +465,36 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       path: "/api/git-checkpoint",
       responseKind: "git-arc-diff",
     });
-    assert.deepEqual(await diffDefinition.buildRequestFromJson({ ref: "proposal-one" }, {
+    assert.deepEqual(await diffDefinition.buildRequestFromJson({ ref: "proposal-one", threadId: "target-thread" }, {
       callerHarness: "codex",
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
       workbenchOrigin: null,
     }), {
-      body: { action: "diff", cwd: "C:/authoritative", harness: "codex", ref: "proposal-one", threadId: "thread-1" },
+      body: {
+        action: "diff", cwd: "C:/authoritative", harness: "codex", ref: "proposal-one",
+        targetThreadId: "target-thread", threadId: "thread-1",
+      },
       method: "POST",
       path: "/api/git-checkpoint",
       responseKind: "git-arc-diff",
+    });
+    const statusDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_status");
+    assert.ok(statusDefinition);
+    assert.equal("threadId" in (inventory.tools.find(({ name }) => name === "git_arc_status")?.inputSchema.properties ?? {}), true);
+    assert.deepEqual(await statusDefinition.buildRequestFromJson({ threadId: "target-thread" }, {
+      callerHarness: "codex",
+      callerThreadId: "thread-1",
+      cwd: "C:/authoritative",
+      workbenchOrigin: null,
+    }), {
+      body: {
+        action: "arcStatus", cwd: "C:/authoritative", full: [], harness: "codex",
+        targetThreadId: "target-thread", threadId: "thread-1",
+      },
+      method: "POST",
+      path: "/api/git-checkpoint",
+      responseKind: "git-arc-status",
     });
 
     const release = inventory.tools.find(({ name }) => name === "git_arc_release");

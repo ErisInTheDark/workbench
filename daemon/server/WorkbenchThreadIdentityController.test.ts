@@ -150,6 +150,59 @@ test("Windows native path aliases resolve together after cold start without chan
   } finally { controller.dispose(); }
 });
 
+test("Git arc target ownership derives the target harness from its repository binding", async () => {
+  const target = {
+    ...record,
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target"),
+    bindings: ["C:/project", "c:\\PROJECT"].map(nativeLocation => ({
+      ...record.bindings[0]!,
+      harness: "opencode",
+      nativeLocation,
+      nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("target-native"),
+    })),
+  };
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [target],
+  }), "win32");
+  await controller.start();
+  try {
+    assert.deepEqual(await controller.resolveGitArcThreadOwner({
+      projectId: target.projectId,
+      repositoryRoot: target.projectRoot,
+      threadId: target.threadId,
+    }), {
+      harness: "opencode",
+      nativeThreadId: target.bindings[0]!.nativeThreadId,
+      threadId: target.threadId,
+    });
+  } finally { controller.dispose(); }
+});
+
+test("Git arc target ownership rejects ambiguous repository bindings", async () => {
+  const ambiguous = {
+    ...record,
+    bindings: [
+      record.bindings[0]!,
+      {
+        ...record.bindings[0]!,
+        harness: "opencode",
+        nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("other-native"),
+      },
+    ],
+  };
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [ambiguous],
+  }));
+  await controller.start();
+  try {
+    await assert.rejects(controller.resolveGitArcThreadOwner({
+      projectId: ambiguous.projectId,
+      repositoryRoot: ambiguous.projectRoot,
+      threadId: ambiguous.threadId,
+    }), /multiple Git arc bindings/iu);
+  } finally { controller.dispose(); }
+});
+
 test("Linux case-distinct native locations remain separate owners", async () => {
   const first = { ...record, bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/Project" }] };
   const second = { ...record, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("another-owner"), bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/project" }] };

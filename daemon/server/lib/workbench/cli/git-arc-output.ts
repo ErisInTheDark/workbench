@@ -101,6 +101,7 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
     if (!selected) {
       const nextPage = number(payload, "nextPage");
       const target = {
+        ...(request.body?.targetThreadId ? { threadId: request.body.targetThreadId } : {}),
         ...(request.body?.ref ? { ref: request.body.ref } : {}),
         ...(request.body?.checkpointCommit ? { ref: request.body.checkpointCommit } : {}),
         ...(request.body?.refs ? { refs: request.body.refs } : {}),

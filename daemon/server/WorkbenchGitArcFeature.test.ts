@@ -946,3 +946,63 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "rescindProposal", "diff", "createProposal",
   ].sort());
 });
+
+test("status and proposal diff may inspect a cross-harness target without changing caller ownership", async () => {
+  const calls: Array<{ action: string; harness: string; threadId: string; ref?: string }> = [];
+  const timestamps: Array<{ harness: string; threadId: string }> = [];
+  const feature = new WorkbenchGitArcFeature({
+    identities: gitFixtureIdentities(),
+    getThreadCreatedAt: async (_projectId, harness, threadId) => {
+      timestamps.push({ harness, threadId });
+      return 1;
+    },
+    getThreadClaimContext: async () => ({
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      title: "Thread",
+    }),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/Git/Project",
+      project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
+    }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  const internal = (feature as unknown as {
+    controller: {
+      createInspectionSnapshot: () => Promise<object>;
+      diff: (input: { harness: string; threadId: string; ref?: string }) => Promise<object>;
+      listUnclaimedWorkspaceDirt: () => Promise<string[]>;
+      readStatus: (input: { harness: string; threadId: string }) => Promise<object>;
+    };
+  }).controller;
+  internal.createInspectionSnapshot = async () => ({});
+  internal.listUnclaimedWorkspaceDirt = async () => [];
+  internal.readStatus = async input => {
+    calls.push({ action: "status", ...input });
+    return {
+      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [],
+      recovery: [], unavailableRecovery: [],
+    };
+  };
+  internal.diff = async input => {
+    calls.push({ action: "diff", ...input });
+    return { changes: [], checkpointCommit: "a".repeat(40), diff: "", scopePaths: [] };
+  };
+  const caller = { cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
+  const targetThreadId = wbThreadId("opencode", "thread-two");
+  assert.equal((await feature.executeRequest({
+    action: "arcStatus", full: [], targetThreadId, ...caller,
+  })).status, 200);
+  assert.equal((await feature.executeRequest({
+    action: "diff", ref: "proposal-one", targetThreadId, ...caller,
+  })).status, 200);
+  assert.deepEqual(calls, [
+    { action: "status", cwd: "C:/Git/Project", harness: "opencode", threadId: targetThreadId },
+    { action: "diff", cwd: "C:/Git/Project", harness: "opencode", ref: "proposal-one", threadId: targetThreadId },
+  ]);
+  assert.deepEqual(timestamps, [{ harness: "opencode", threadId: targetThreadId }]);
+  assert.equal((await feature.executeRequest({
+    action: "arcStatus", full: [], targetThreadId, ...caller, threadId: "missing-caller",
+  })).status, 400);
+  assert.equal(calls.length, 2);
+});
