@@ -7,6 +7,8 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { GitArcScopeClaimsResponseSchema } from "../shared/workbench/git/git-arc-scope-response";
 import { GitCheckpointRequestSchema } from "../shared/workbench/git/checkpoint-contracts";
+import resolveWorkbenchDataRoot from "../shared/workbench-data-root";
+import { readDaemonEndpoint } from "../shared/process/workbench-daemon-endpoint";
 import ClaimedTestSelector, { type ClaimedTestSelection } from "../daemon/server/lib/workbench/testing/ClaimedTestSelector";
 import ProjectTestCatalog from "./ProjectTestCatalog";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
@@ -46,16 +48,13 @@ export default class ClaimedProjectTestCommand {
       return await (this.options.run ?? (files => new ProjectTestRunner(root).run(files)))(inputs);
     }
     const env = this.options.env ?? process.env;
-    const origin = new URL(env.WORKBENCH_ORIGIN ?? "");
-    if (origin.protocol !== "http:" || !["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname)
-      || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
-      throw new Error("WORKBENCH_ORIGIN must be a loopback HTTP origin.");
-    }
+    const endpoint = await readDaemonEndpoint(path.join(resolveWorkbenchDataRoot({ environment: env }), "daemon", "runtime.json"));
+    if (!endpoint) throw new Error("The Workbench daemon has not published an endpoint.");
     const request = GitCheckpointRequestSchema.parse({
       action: "arcScope", cwd: root, harness: env.WORKBENCH_HARNESS ?? "codex",
       threadId: env.WORKBENCH_THREAD_ID ?? env.CODEX_THREAD_ID ?? "",
     });
-    const response = await (this.options.fetch ?? globalThis.fetch)(new URL("/daemon/git-arc", origin), {
+    const response = await (this.options.fetch ?? globalThis.fetch)(new URL("/daemon/git-arc", endpoint.origin), {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
       redirect: "error",
     });

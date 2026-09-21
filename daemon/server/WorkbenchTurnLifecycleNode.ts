@@ -15,6 +15,7 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchDaemonReloadController, { type WorkbenchDaemonReloadControllerState } from "./WorkbenchDaemonReloadController";
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
 
 interface WorkbenchTurnLifecycleState {
   reloadController?: WorkbenchDaemonReloadControllerState;
@@ -25,7 +26,7 @@ interface WorkbenchTurnLifecycleState {
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, WorkbenchWebSocketNode],
+  children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const toolRevision = new WorkbenchToolRevisionController(state?.toolRevision ?? state?.mcpGeneration);

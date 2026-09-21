@@ -70,6 +70,8 @@ test("loads project reload definitions without starting their services and selec
     assert.ok(!transcript.files.includes(companion), `Unrelated checkpoint battery selected: ${companion}`);
     assert.ok(checkpointSelection.files.includes(companion), `Claimed checkpoint battery omitted: ${companion}`);
   }
-  const outside = path.join(root, "wb");
-  assert.deepEqual(selector.select(["wb"]).files, catalog.companions([outside]));
+  const bridgeSelection = selector.select(["daemon/server/providers/opencode/OpenCodeBridgeNode.ts"]);
+  for (const companion of catalog.companions([path.join(root, "daemon/server/daemon-root-node.ts")])) {
+    assert.ok(bridgeSelection.files.includes(companion), `Production graph validation omitted: ${companion}`);
+  }
 });

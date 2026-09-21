@@ -108,10 +108,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#beforeMigration = beforeMigration;
     this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
-    // const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
-    const execArgv = [...process.execArgv];
-    // if (!execArgv.includes(moduleWarning)) execArgv.push(moduleWarning);
-    this.#worker = new Worker(workerUrl, { execArgv });
+    this.#worker = new Worker(workerUrl);
     this.#worker.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
     this.#worker.on("error", (error) => this.#fail(error));
     this.#worker.on("exit", (code) => {
