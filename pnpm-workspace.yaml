@@ -33,4 +33,4 @@ overrides:
   esbuild@>=0.27.3 <0.28.1: '>=0.28.1'
   postcss@<8.5.10: '>=8.5.10'
 patchedDependencies:
-  tsx@4.21.0: patches/tsx@4.21.0.patch
+  tsx@4.23.13: patches/tsx@4.23.13.patch

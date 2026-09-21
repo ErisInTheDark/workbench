@@ -1,0 +1,12 @@
+diff --git a/dist/temporary-directory-B83uKxJF.cjs b/dist/temporary-directory-B83uKxJF.cjs
+--- a/dist/temporary-directory-B83uKxJF.cjs
++++ b/dist/temporary-directory-B83uKxJF.cjs
+@@ -1 +1 @@
+-"use strict";var s=require("node:path"),r=require("node:os");const{geteuid:e}=process,t=e?e():r.userInfo().username,i=s.join(r.tmpdir(),`tsx-${t}`);exports.tmpdir=i;
++"use strict";var s=require("node:path"),r=require("node:os");const t="workbench",i=s.join(r.tmpdir(),`tsx-${t}`);exports.tmpdir=i;
+diff --git a/dist/temporary-directory-BDDVQOvU.mjs b/dist/temporary-directory-BDDVQOvU.mjs
+--- a/dist/temporary-directory-BDDVQOvU.mjs
++++ b/dist/temporary-directory-BDDVQOvU.mjs
+@@ -1 +1 @@
+-import s from"node:path";import o from"node:os";const{geteuid:r}=process,t=r?r():o.userInfo().username,e=s.join(o.tmpdir(),`tsx-${t}`);export{e as t};
++import s from"node:path";import o from"node:os";const t="workbench",e=s.join(o.tmpdir(),`tsx-${t}`);export{e as t};
