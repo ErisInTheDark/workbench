@@ -266,6 +266,12 @@ export default class WorkbenchAgentMcpController {
       extra.requestId,
       AbortSignal.any([requestSignal, extra.signal]),
       tools,
+      extra._meta?.progressToken === undefined
+        ? undefined
+        : async (progress) => await extra.sendNotification({
+          method: "notifications/progress",
+          params: { progressToken: extra._meta!.progressToken!, progress },
+        }),
     ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
       if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)) continue;
@@ -300,6 +306,21 @@ export default class WorkbenchAgentMcpController {
     return server;
   }
 
+  private startProgressKeepalive(
+    sendProgress: ((progress: number) => Promise<void>) | undefined,
+    signal: AbortSignal,
+  ): (() => void) | null {
+    if (!sendProgress) return null;
+    let progress = 0;
+    return this.scheduleProgress(async () => {
+      try {
+        await sendProgress(++progress);
+      } catch (error) {
+        this.lifecycleLogError("workbench-mcp-progress", sanitizeError(error) || "Workbench MCP progress failed.");
+      }
+    }, signal);
+  }
+
   private async callShell(
     input: object,
     meta: Record<string, unknown> | undefined,
@@ -307,9 +328,10 @@ export default class WorkbenchAgentMcpController {
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    sendProgress?: (progress: number) => Promise<void>,
   ) {
     return this.observeTool("shell", input, meta, signal, tools,
-      () => this.executeShell(input, meta, clientScope, requestId, signal, tools));
+      () => this.executeShell(input, meta, clientScope, requestId, signal, tools, sendProgress));
   }
 
   private async executeShell(
@@ -319,7 +341,9 @@ export default class WorkbenchAgentMcpController {
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    sendProgress?: (progress: number) => Promise<void>,
   ) {
+    let stopProgress: (() => void) | null = null;
     let unregister: (() => void) | null = null;
     try {
       const registration = this.requestRegistry.register(clientScope, requestId, {
@@ -330,6 +354,7 @@ export default class WorkbenchAgentMcpController {
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
+      stopProgress = this.startProgressKeepalive(sendProgress, signal);
       const result = await this.runLoggedCommand(
         "wb shell",
         signal,
@@ -350,6 +375,7 @@ export default class WorkbenchAgentMcpController {
       if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
       return { content: [{ type: "text" as const, text: `Workbench shell failed: ${message}` }], isError: true };
     } finally {
+      stopProgress?.();
       unregister?.();
     }
   }
@@ -420,19 +446,8 @@ export default class WorkbenchAgentMcpController {
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
-      if (
-        sendProgress
-        && definition.mcpCodeModeEligible
-        && definition.mcpRuntimeDrainPolicy === "preserve-across-reload"
-      ) {
-        let progress = 0;
-        stopProgress = this.scheduleProgress(async () => {
-          try {
-            await sendProgress(++progress);
-          } catch (error) {
-            this.lifecycleLogError("workbench-mcp-progress", sanitizeError(error) || "Workbench MCP progress failed.");
-          }
-        }, signal);
+      if (definition.mcpCodeModeEligible && definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
+        stopProgress = this.startProgressKeepalive(sendProgress, signal);
       }
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal);
       if (signal.aborted) throw signal.reason;
