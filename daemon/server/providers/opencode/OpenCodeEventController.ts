@@ -13,20 +13,22 @@ import { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id";
 import type { OpenCodePatchObservation } from "./opencode-workbench-rpc";
+import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 
 export interface OpenCodeEventControllerOptions {
   invalidateModelCatalogs?(): void;
-  observe(facts: WorkbenchProviderObservation): Promise<void>;
+  observe(facts: WorkbenchProviderObservation): Promise<WorkbenchThreadLifecycle | null | void>;
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
     latestTurn(threadId: string): Promise<{ id: string } | null>;
     markExecutionSettled(nativeThreadId: string): void;
     markExecutionStarted(nativeThreadId: string): void;
-    syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; hasPendingSteers?: boolean }>;
-  };
+    syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean }>;
+  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
@@ -109,6 +111,7 @@ export default class OpenCodeEventController {
         return;
       }
       case "session.execution.started": {
+        if (!this.options.threads.acceptExecutionEvent(sessionID, event.durable.seq)) return;
         this.options.threads.markExecutionStarted(sessionID);
         const active = await this.active(sessionID);
         await this.options.transcript.recordTurnState({
@@ -175,7 +178,7 @@ export default class OpenCodeEventController {
         this.options.transcript.appendText({
           ...active,
           source: openCodeContentSource(event.data.assistantMessageID, "reasoning", event.data.ordinal),
-          field: "reasoningContent",
+          field: "reasoningSummary",
           index: 0,
           text: event.data.delta,
         });
@@ -257,13 +260,20 @@ export default class OpenCodeEventController {
       case "session.execution.succeeded":
       case "session.execution.failed":
       case "session.execution.interrupted": {
+        if (!this.options.threads.acceptExecutionEvent(sessionID, event.durable.seq)) return;
+        const startingTurn = this.options.threads.currentTurn(sessionID);
+        const intentVersion = this.options.threads.executionIntentVersion(sessionID);
         this.clearPreviews(sessionID);
         const requestedInterrupt = this.options.threads.consumeRequestedInterrupt?.(sessionID) ?? false;
         const identity = await this.options.threads.syncNative(sessionID);
         if (event.type === "session.execution.succeeded" && identity.hasPendingSteers) return;
-        this.options.threads.markExecutionSettled(sessionID);
+        if (startingTurn && this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId) return;
+        if (identity.latestTurnId && identity.latestTurnId !== this.options.threads.currentTurn(sessionID)?.turnId) return;
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
+        if (startingTurn && (turn.id !== startingTurn.turnId
+          || this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId)) return;
+        this.options.threads.markExecutionSettled(sessionID);
         const status = requestedInterrupt ? "interrupted"
           : event.type === "session.execution.succeeded" ? "completed"
           : event.type === "session.execution.interrupted" ? "interrupted" : "failed";
@@ -275,7 +285,7 @@ export default class OpenCodeEventController {
             observedAt: event.created,
           });
         }
-        await this.options.observe({
+        const lifecycle = await this.options.observe({
           activity: null,
           lifecycle: {
             threadId: identity.threadId,
@@ -286,6 +296,10 @@ export default class OpenCodeEventController {
             },
           },
           title: null,
+        });
+        await this.options.threads.completeExecution({
+          sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id),
+          status, lifecycle: lifecycle || null, intentVersion,
         });
       }
     }
@@ -381,7 +395,7 @@ export default class OpenCodeEventController {
   }
 
   private reasoning(text: string): ThreadItem {
-    return { type: "reasoning", id: "pending", summary: [], content: [text] };
+    return { type: "reasoning", id: "pending", summary: [text], content: [] };
   }
 
 }

@@ -5,7 +5,7 @@
  */
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench-shared/workbench/provider/provider-execution";
-import { OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
+import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchToolAdmissionController from "../../WorkbenchToolAdmissionController";
 import { prepareWorkbenchShellExecution } from "../../CodexShellController";
@@ -83,7 +83,15 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     };
   }
 
-  async patchClaims(): Promise<string> {
-    throw new Error("OpenCode native patch execution is disabled for managed Workbench sessions.");
+  async patchClaims(...[input, check, signal]: Parameters<WorkbenchProviderTools["patchClaims"]>): Promise<string> {
+    signal.throwIfAborted();
+    const request = OpenCodeFileClaimRequestSchema.parse(JSON.parse(input.raw));
+    const caller = await this.caller({ sessionID: request.sessionID }, signal);
+    const result = await check({ ...caller, paths: request.resources });
+    signal.throwIfAborted();
+    return JSON.stringify(result.allowed ? { allowed: true } : {
+      allowed: false,
+      reason: `Unclaimed file changes: ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`.slice(0, 1000),
+    });
   }
 }

@@ -67,6 +67,7 @@ interface ParsedFileChange {
 
 export interface ThreadFileChangeListChange {
   change: FileUpdateChange;
+  details?: ReactNode;
   danger?: boolean;
   detailsAvailable?: boolean;
   presentationLabel?: string;
@@ -393,6 +394,7 @@ function ThreadFileChangeRows ({
             summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
           >
             <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
+            {changes[index].details}
           </ThreadDisclosure>
         ) : change.staticMarker ? (
           <ThreadDisclosureStaticRow

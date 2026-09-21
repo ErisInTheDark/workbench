@@ -97,6 +97,27 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   };
 }
 
+test("native file claim ingress dispatches the exact OpenCode request without trusting form ownership", async t => {
+  const requests: object[] = [];
+  const controller = new WorkbenchAgentCommandController("http://127.0.0.1:4500", {
+    ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    patchClaims: async (harness, input) => {
+      requests.push({ harness, input });
+      return JSON.stringify({ allowed: false, reason: "claim required" });
+    },
+  }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
+  const server = await startController(controller);
+  t.after(server.close);
+  const body = new URLSearchParams(agentCommandBody(["__hook", "file-change-claim"], "C:/untrusted"));
+  body.set("callerHarness", "opencode");
+  const raw = JSON.stringify({ sessionID: "native", resources: ["source.ts", "destination.ts"] });
+  body.set("hookInput", raw);
+  const response = await fetch(server.origin, { method: "POST", body });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { allowed: false, reason: "claim required" });
+  assert.deepEqual(requests, [{ harness: "opencode", input: { raw, callerThreadId: null } }]);
+});
+
 test("dispatches token counting and scopes only managed-thread help by cwd", async () => {
   const requests: object[] = [];
   const controller = new WorkbenchAgentCommandController(

@@ -6,6 +6,57 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import OpenCodeToolsController from "./OpenCodeToolsController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+
+test("native mutation admission checks every resource against the resolved caller", async () => {
+  const checked: object[] = [];
+  const controller: WorkbenchProviderTools = new OpenCodeToolsController({
+    resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owner"), cwd: "/repo" }),
+    execute: async () => { throw new Error("must not execute"); },
+    executeReadOnly: async () => { throw new Error("must not execute"); },
+  });
+  const input = { callerThreadId: null, raw: JSON.stringify({
+    sessionID: "native", resources: ["src/old.ts", "src/new.ts", "removed.ts"],
+  }) };
+  const result = JSON.parse(await controller.patchClaims(input, async value => {
+    checked.push(value);
+    return { allowed: false, uncoveredPaths: ["src/new.ts", "removed.ts"] };
+  }, new AbortController().signal));
+  assert.equal(result.allowed, false);
+  assert.deepEqual(checked, [{
+    cwd: "/repo", harness: "opencode", threadId: "owner",
+    paths: ["src/old.ts", "src/new.ts", "removed.ts"],
+  }]);
+  assert.match(result.reason, /src\/new.ts/);
+  assert.match(result.reason, /removed.ts/);
+});
+
+test("native admission propagates cancellation and never substitutes caller-supplied ownership", async () => {
+  const signal = new AbortController();
+  let checked = 0;
+  const owner = new OpenCodeToolsController({
+    resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("real-owner"), cwd: "/real" }),
+    execute: async () => { throw new Error("must not execute"); },
+    executeReadOnly: async () => { throw new Error("must not execute"); },
+  });
+  const input = { callerThreadId: "forged", raw: JSON.stringify({ sessionID: "native", resources: ["ignored/generated.ts"] }) };
+  assert.deepEqual(JSON.parse(await owner.patchClaims(input, async caller => {
+    checked++;
+    assert.equal(caller.threadId, "real-owner");
+    assert.equal(caller.cwd, "/real");
+    return { allowed: true, uncoveredPaths: [] };
+  }, signal.signal)), { allowed: true });
+  await assert.rejects(owner.patchClaims(input, async () => {
+    checked++;
+    signal.abort(new Error("disposed"));
+    return { allowed: true, uncoveredPaths: [] };
+  }, signal.signal), /disposed/);
+  await assert.rejects(owner.patchClaims(input, async () => {
+    checked++;
+    return { allowed: true, uncoveredPaths: [] };
+  }, signal.signal), /disposed/);
+  assert.equal(checked, 2);
+});
 
 test("transcript capture requires valid child context and resolves authoritative session ownership", async () => {
   const sessions: string[] = [];

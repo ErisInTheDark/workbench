@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getOpenCodeToolDisplay, getOpenCodeFileChanges } from "./opencode";
+import { getWorkbenchMcpCommandDisplay } from "./workbench-mcp";
 
 function item(tool: string, args: Record<string, string | number>): Extract<ThreadItem, { type: "dynamicToolCall" }> {
   return { type: "dynamicToolCall", id: "native", namespace: "opencode", tool, arguments: args,
@@ -40,4 +41,22 @@ test("patch summaries use explicit file headers and discovery summaries retain m
   ] } });
   assert.deepEqual(discovery?.detailRows?.map(row => row.state), ["completed", "inProgress", "failed"]);
   assert.ok(discovery?.summaryText.includes("tools for git"));
+});
+
+test("historical WB calls use the shared matcher without inventing child results", () => {
+  const args = { args: ["needle", "src"] };
+  const shared = getWorkbenchMcpCommandDisplay({ server: "wb", tool: "rg", argumentsValue: args });
+  assert.ok(shared);
+  const wrapper = { ...item("execute", { code: "opaque" }), metadata: { toolCalls: [
+    { tool: "wb.rg", input: args, status: "completed" },
+    { tool: "wb.rg", input: args, status: "running" },
+    { tool: "wb.rg", input: args, status: "error" },
+    { tool: "wb.git_arc_status", input: {}, status: "completed" },
+  ] } };
+  const before = structuredClone(wrapper);
+  const display = getOpenCodeToolDisplay(wrapper);
+  assert.deepEqual(display?.detailRows?.slice(0, 3).map(row => row.summaryParts),
+    [shared.summaryParts, shared.ongoingSummaryParts, shared.summaryParts]);
+  assert.deepEqual(display?.detailRows?.map(row => row.state), ["completed", "inProgress", "failed", "completed"]);
+  assert.deepEqual(wrapper, before);
 });

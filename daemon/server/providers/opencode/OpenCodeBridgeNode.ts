@@ -77,12 +77,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       reconciliation: build.get("transcriptReconciliation"),
       readProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       signal: lifetime.signal,
+      recovery: build.get("turnRecovery"),
     });
     const events = new OpenCodeEventController({
       invalidateModelCatalogs: () => service.invalidateModelCatalogs(),
-      observe: async facts => {
-        await build.get("providerObservations").observe("opencode", facts);
-      },
+      observe: facts => build.get("providerObservations").observe("opencode", facts),
       threads,
       transcript,
     });
@@ -101,7 +100,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: ["openCodeThreadOperations"],
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
-    "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database",
+    "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database", "turnRecovery",
   ],
   safeAll: true,
   scope: "server:opencode",

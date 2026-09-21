@@ -30,6 +30,9 @@ import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTra
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
+import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
   threadId: WorkbenchThreadId;
@@ -65,7 +68,18 @@ export interface OpenCodeThreadOperationsOptions {
   signal: AbortSignal;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
+  recovery: Pick<WorkbenchTurnRecoveryController, "shouldContinue">;
 }
+
+interface SessionExecution {
+  active: boolean;
+  turn: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null;
+  eventSequence: number;
+  intentVersion: number;
+  context?: Parameters<WorkbenchProviderThreads["submit"]>[0]["context"];
+  admission: Promise<void>;
+}
+const supersededContinuation = Symbol("superseded OpenCode continuation");
 
 function modelRef(model: string) {
   const separator = model.indexOf("/");
@@ -111,13 +125,9 @@ function openCodeFailure(operation: string, error: unknown) {
 }
 
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
-  private readonly executionStates = new Map<string, "active" | "idle">();
+  private readonly executions = new Map<string, SessionExecution>();
   private readonly pendingPrompts = new Set<Promise<void>>();
   private readonly sessions = new Map<string, SessionInfo>();
-  private readonly latestTurns = new Map<string, {
-    threadId: Awaited<ReturnType<OpenCodeTranscriptAdapter["record"]>>["threadId"];
-    turnId: NonNullable<Awaited<ReturnType<OpenCodeTranscriptAdapter["record"]>>["latestTurnId"]>;
-  }>();
   private readonly pendingSteers = new Map<string, Map<string, WorkbenchSteerHistoryEntry>>();
   private readonly pendingSteerSessions = new Map<string, Set<string>>();
   private readonly requestedInterruptions = new Set<string>();
@@ -222,11 +232,43 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   async submit(input: Parameters<WorkbenchProviderThreads["submit"]>[0]): Promise<WorkbenchThreadMessageResult> {
-    const { binding, identity } = await this.native(input.threadId);
+    const native = await this.native(input.threadId);
+    const execution = this.execution(native.binding.nativeThreadId);
+    execution.intentVersion++;
+    const context = {
+      ...input.context,
+      activatedSkillPaths: [...new Set([
+        ...(input.context?.activatedSkillPaths ?? []),
+        ...input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
+      ])],
+    };
+    execution.context = context;
+    return this.admit(execution, () => this.submitNative({ ...input, context }, native, execution));
+  }
+
+  private async admit<T>(execution: SessionExecution, operation: () => Promise<T>): Promise<T> {
+    const previous = execution.admission;
+    const release = Promise.withResolvers<void>();
+    execution.admission = release.promise;
+    try {
+      await previous;
+      this.options.signal.throwIfAborted();
+      return await operation();
+    } finally { release.resolve(); }
+  }
+
+  private async submitNative(
+    input: Parameters<WorkbenchProviderThreads["submit"]>[0],
+    { binding, identity }: Awaited<ReturnType<OpenCodeThreadOperations["native"]>>,
+    execution: SessionExecution,
+    continuation?: () => boolean,
+  ): Promise<WorkbenchThreadMessageResult> {
     const client = await this.options.acquire();
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+    if (continuation && (!continuation() || !entry || entry.entryKind === "draft"
+      || !this.options.recovery.shouldContinue(entry.lifecycle, false))) throw supersededContinuation;
     let session = this.sessions.get(binding.nativeThreadId);
-    if (!session || !this.executionStates.has(binding.nativeThreadId)) {
+    if (!session || !execution.turn) {
       const [freshSession, inbox, stored] = await Promise.all([
         client.session.get({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
         client.session.inbox.list({ sessionID: binding.nativeThreadId }, { signal: this.options.signal }),
@@ -236,22 +278,17 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       this.sessions.set(binding.nativeThreadId, session);
       const latest = stored?.thread.turns.at(-1);
       if (latest) {
-        this.latestTurns.set(binding.nativeThreadId, {
+        execution.turn = {
           threadId: identity.threadId,
           turnId: WorkbenchTurnIdSchema.parse(latest.id),
-        });
+        };
       }
-      this.executionStates.set(
-        binding.nativeThreadId,
-        latest && (
+      execution.active = Boolean(latest && (
           inbox.some(isManagedWorkbenchPrompt)
           || latest.status === "inProgress" && session.outcome === undefined
-        ) ? "active" : "idle",
-      );
+        ));
     }
-    const activeTurn = this.executionStates.get(binding.nativeThreadId) === "active"
-      ? this.latestTurns.get(binding.nativeThreadId) ?? null
-      : null;
+    const activeTurn = execution.active ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const request = prompt(input.input);
     const messageId = nativeMessageId(input.clientMessageId);
@@ -266,7 +303,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       },
     };
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
-    await this.options.managed.refresh({
+    // After reload there may be no captured workflow context. Keep the session's installed
+    // instructions for hidden continuation instead of replacing them with an empty workflow.
+    if (!continuation || input.context) await this.options.managed.refresh({
       sessionID: binding.nativeThreadId,
       cwd: session.location.directory,
       projectId: identity.projectId,
@@ -274,8 +313,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       model: settings?.model ?? null,
       agentPath: settings?.agentPath ?? null,
       workflowIds: input.context?.workflowIds ?? [],
-      activatedSkillPaths: input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
+      activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
     });
+    if (continuation && !continuation()) throw supersededContinuation;
+    if (continuation && input.context) {
+      const fresh = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      if (!continuation() || !fresh || fresh.entryKind === "draft"
+        || !this.options.recovery.shouldContinue(fresh.lifecycle, false)) throw supersededContinuation;
+    }
     let resolvePromptOwner!: (owner: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null) => void;
     const promptOwner = new Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null>(resolve => {
       resolvePromptOwner = resolve;
@@ -321,11 +366,11 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       if (!recorded.latestTurnId) {
         throw new Error("OpenCode accepted a root intent without admitting its Workbench turn.");
       }
-      this.latestTurns.set(binding.nativeThreadId, {
+      execution.turn = {
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
-      });
-      this.executionStates.set(binding.nativeThreadId, "active");
+      };
+      execution.active = true;
       resolvePromptOwner({
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
@@ -460,7 +505,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   currentTurn(nativeThreadId: string) {
-    return this.latestTurns.get(nativeThreadId) ?? null;
+    return this.executions.get(nativeThreadId)?.turn ?? null;
   }
 
   async startToolTranscript(
@@ -487,11 +532,66 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   markExecutionStarted(nativeThreadId: string) {
-    this.executionStates.set(nativeThreadId, "active");
+    this.execution(nativeThreadId).active = true;
   }
 
   markExecutionSettled(nativeThreadId: string) {
-    this.executionStates.set(nativeThreadId, "idle");
+    this.execution(nativeThreadId).active = false;
+  }
+
+  acceptExecutionEvent(nativeThreadId: string, sequence: number) {
+    const execution = this.execution(nativeThreadId);
+    if (sequence <= execution.eventSequence) return false;
+    execution.eventSequence = sequence;
+    return true;
+  }
+
+  private execution(nativeThreadId: string) {
+    let execution = this.executions.get(nativeThreadId);
+    if (!execution) {
+      execution = { active: false, turn: null, eventSequence: -1, intentVersion: 0, admission: Promise.resolve() };
+      this.executions.set(nativeThreadId, execution);
+    }
+    return execution;
+  }
+
+  async completeExecution(input: {
+    sessionID: string; eventID: string; turnId: WorkbenchTurnId;
+    status: "completed" | "interrupted" | "failed";
+    lifecycle: WorkbenchThreadLifecycle | null;
+    intentVersion?: number;
+  }) {
+    if (input.status !== "completed" || !this.options.recovery.shouldContinue(input.lifecycle, false)) return;
+    const execution = this.execution(input.sessionID);
+    const version = input.intentVersion ?? execution.intentVersion;
+    const current = () => !this.options.signal.aborted && !execution.active
+      && execution.turn?.turnId === input.turnId && execution.intentVersion === version
+      && !this.pendingSteerSessions.has(input.sessionID) && !this.requestedInterruptions.has(input.sessionID);
+    if (!current() || !execution.turn) return;
+    const threadId = execution.turn.threadId;
+    try {
+      await this.admit(execution, async () => {
+        if (!current()) return;
+        const native = await this.native(threadId);
+        const entry = await this.options.state.controller.getCanonicalThreadEntry(native.identity.projectId, threadId);
+        if (!current() || !entry || entry.entryKind === "draft"
+          || !this.options.recovery.shouldContinue(entry.lifecycle, false)) return;
+        await this.submitNative({
+          threadId, clientMessageId: createWorkbenchThreadRecoveryId(`opencode:${input.eventID}`),
+          input: createWorkbenchUnfinishedTurnInput(), intent: "newTurn", context: execution.context,
+        }, native, execution, current);
+      });
+    } catch (error) {
+      if (error === supersededContinuation) return;
+      if (this.options.signal.aborted) return;
+      console.warn(`[opencode] Unfinished-turn admission failed (${error instanceof Error ? error.name : "unknown error"}).`);
+      await this.options.observe({ activity: null, title: null,
+        lifecycle: { threadId, event: { kind: "recoveryFailed" } } });
+    }
+  }
+
+  executionIntentVersion(nativeThreadId: string) {
+    return this.execution(nativeThreadId).intentVersion;
   }
 
   async resolveToolCaller(nativeThreadId: string, signal: AbortSignal) {
@@ -507,6 +607,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   async settle() {
+    await Promise.all([...this.executions.values()].map(execution => execution.admission));
     await Promise.allSettled(this.pendingPrompts);
   }
 
@@ -532,7 +633,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         { signal: this.options.signal },
       );
       if (inbox.some(item => item.id === messageId)) return;
-      this.executionStates.set(nativeThreadId, "idle");
+      const execution = this.execution(nativeThreadId);
+      if (execution.turn?.turnId === resolvedOwner.turnId) execution.active = false;
       await this.options.observe({
         activity: null,
         lifecycle: {
@@ -556,6 +658,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     messages: SessionMessageInfo[],
     options: Parameters<OpenCodeTranscriptAdapter["record"]>[3] = {},
   ) {
+    const execution = this.execution(session.id);
+    const startingTurn = execution.turn;
+    const startingIntent = execution.intentVersion;
     this.sessions.set(session.id, session);
     const resolution = await this.options.projects.resolveAgentEndpointProjectFromCwd(
       session.location.directory, { endpointName: "OpenCode provider history" },
@@ -575,14 +680,15 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       this.deletePendingSteerSession(clientMessageId);
     }
     if (!this.pendingSteers.get(result.threadId)?.size) this.pendingSteers.delete(result.threadId);
+    if (execution.turn !== startingTurn || execution.intentVersion !== startingIntent
+      || execution.active && execution.turn && result.latestTurnId !== execution.turn.turnId) {
+      return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
+    }
     if (result.latestTurnId) {
-      this.latestTurns.set(session.id, { threadId: result.threadId, turnId: result.latestTurnId });
-      this.executionStates.set(
-        session.id,
-        result.latestTurnState === "inProgress" || this.pendingSteerSessions.has(session.id) ? "active" : "idle",
-      );
+      execution.turn = { threadId: result.threadId, turnId: result.latestTurnId };
+      execution.active = result.latestTurnState === "inProgress" || this.pendingSteerSessions.has(session.id);
     } else {
-      this.executionStates.set(session.id, "idle");
+      this.execution(session.id).active = false;
     }
     return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
   }
@@ -637,6 +743,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     nativeThreadId: string,
     suppliedTurnId?: WorkbenchTurnId,
   ) {
+    this.execution(nativeThreadId).intentVersion++;
     this.requestedInterruptions.add(nativeThreadId);
     try {
       await (await this.options.acquire()).session.interrupt({ sessionID: nativeThreadId });

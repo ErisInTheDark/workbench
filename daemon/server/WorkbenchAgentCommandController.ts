@@ -225,7 +225,8 @@ export default class WorkbenchAgentCommandController {
         sendText(response, 400, "A valid Workbench agent command request is required.\n");
         return;
       }
-      if (argv.length === 2 && argv[0] === "__hook" && argv[1] === "apply-patch-claim") {
+      if (argv.length === 2 && argv[0] === "__hook"
+        && (argv[1] === "apply-patch-claim" || argv[1] === "file-change-claim")) {
         await this.handleApplyPatchClaimHook(form, callerHarness, callerThreadId, response, signal);
         return;
       }

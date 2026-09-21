@@ -203,7 +203,7 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
         kind: "item",
         source: openCodeContentSource(assistant.id, "reasoning", reasoningOrdinal++),
         preferredItemId: null,
-        item: { type: "reasoning", id: assistant.id, summary: [], content: [part.text] },
+        item: { type: "reasoning", id: assistant.id, summary: [part.text], content: [] },
       }];
     }
     const state = part.state;

@@ -5,9 +5,19 @@
  * - openCodeWorkbenchRpc: typed private RPC between the companion and daemon adapter.
  * - OpenCodePatchObservationSchema/OpenCodePatchObservation: transient request-fenced file previews.
  * - OpenCodeToolContextSchema/OpenCodeToolContext: exact companion child and parent identities.
+ * - OpenCodeFileClaimRequestSchema/OpenCodeFileClaimResultSchema: native mutation admission messages.
  */
 import { z } from "zod";
 import { ToolPatchPreviewFileSchema } from "workbench-shared/workbench/thread/tool-patch-preview";
+
+export const OpenCodeFileClaimRequestSchema = z.object({
+  sessionID: z.string().min(1),
+  resources: z.array(z.string().min(1).refine(value => !value.includes("\0"))).min(1),
+});
+export const OpenCodeFileClaimResultSchema = z.discriminatedUnion("allowed", [
+  z.object({ allowed: z.literal(true) }),
+  z.object({ allowed: z.literal(false), reason: z.string().min(1).max(1000) }),
+]);
 
 export const OpenCodeToolContextSchema = z.object({
   childID: z.uuid(),

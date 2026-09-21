@@ -125,3 +125,16 @@ test("reusable no-detail file lists preserve plain rows instead of Codex lifecyc
   assert.equal((html.match(/data-thread-file-change-row-mode="plain"/gu) ?? []).length, 4);
   assert.doesNotMatch(html, /data-thread-file-change-row-mode="static"/u);
 });
+
+test("file lists keep final failed evidence expandable while unfinished targets stay summary-only", () => {
+  const html = renderToStaticMarkup(createElement(ThreadFileChangeList, {
+    changes: [
+      { change: update("src/failed.ts"), danger: true, details: createElement("p", null, "raw failure") },
+      { change: update("src/pending.ts", true), detailsAvailable: false },
+    ],
+  }));
+  assert.equal((html.match(/<details\b/gu) ?? []).length, 1);
+  assert.match(html, /failed\.ts/);
+  assert.match(html, /pending\.ts/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
+});

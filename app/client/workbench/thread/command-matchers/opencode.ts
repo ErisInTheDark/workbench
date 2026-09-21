@@ -6,6 +6,7 @@
 import type { ThreadItem, FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createEmptyCommandSummaryStats, summarizeDisplayParts } from "./helpers";
 import type { ThreadCommandDisplayPart, ThreadCommandSummaryDisplay, ThreadCommandDetailRow } from "./types";
+import { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute } from "./workbench-mcp";
 
 type NativeItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 const record = (value: unknown): Record<string, unknown> | null =>
@@ -63,14 +64,22 @@ export function getOpenCodeToolDisplay(item: NativeItem): ThreadCommandSummaryDi
     const call = record(value);
     if (!call || typeof call.tool !== "string") return [];
     const input = record(call.input);
-    const display = input ? summary(call.tool, input) : null;
+    const wbTool = call.tool.startsWith("wb.") ? call.tool.slice(3) : null;
+    const display = wbTool
+      ? getWorkbenchMcpCommandDisplay({ server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"] })
+      : input ? summary(call.tool, input) : null;
+    const wbRoute = wbTool ? getWorkbenchMcpCommandRoute({
+      server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"],
+    }) : null;
     const query = input && typeof input.query === "string" ? input.query : null;
     const state = call.status === "running" ? "inProgress" : call.status === "completed" ? "completed"
       : call.status === "error" ? "failed" : null;
     if (!state) return [];
     return [{ id: `${item.id}:${index}`, state, summaryParts: display
       ? state === "inProgress" ? display.ongoingSummaryParts : display.summaryParts
-      : [{ type: "text", text: call.tool, variant: "code" }, ...(query ? [{ type: "text" as const, text: ` ${query}` }] : [])] }];
+      : [{ type: "text", text: wbRoute ? `wb ${wbTool!.replaceAll("_", " ")}` : call.tool,
+        ...(wbRoute ? {} : { variant: "code" as const }) },
+        ...(query ? [{ type: "text" as const, text: ` ${query}` }] : [])] }];
   });
   if (!detailRows.length) return null;
   const parts = detailRows.flatMap((row, index): ThreadCommandDisplayPart[] =>

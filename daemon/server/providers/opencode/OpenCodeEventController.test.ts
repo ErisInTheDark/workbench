@@ -7,6 +7,27 @@ import type { OpenCodeEvent } from "@opencode/client";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import OpenCodeEventController from "./OpenCodeEventController";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+import { readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+
+test("reasoning deltas target the visible canonical section before completion", async () => {
+  const deltas: Parameters<OpenCodeTranscriptAdapter["appendText"]>[0][] = [];
+  const owner = new OpenCodeEventController({
+    observe: async () => undefined,
+    threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+    transcript: { recordItem: async () => "item" as never, recordTurnState: async () => undefined,
+      appendText: input => { deltas.push(input); } },
+  });
+  await owner.accept(event({ type: "session.reasoning.started", created: 1,
+    data: { sessionID: "session", assistantMessageID: "assistant", ordinal: 0 } }));
+  await owner.accept(event({ type: "session.reasoning.delta", created: 2,
+    data: { sessionID: "session", assistantMessageID: "assistant", ordinal: 0, delta: "partial thought" } }));
+  const canonical = { type: "reasoning" as const, id: "item", summary: [""], content: [] as string[] };
+  const update = deltas[0]!;
+  const sections = update.field === "reasoningSummary" ? canonical.summary : canonical.content;
+  if (sections[update.index ?? 0] !== undefined) sections[update.index ?? 0] += update.text;
+  assert.equal(readTranscriptText(canonical, "reasoningSummary", 0), "partial thought");
+});
 
 test("previews join exact native calls in either order and cannot survive request replacement or interruption", async () => {
   const previews: Parameters<OpenCodeTranscriptAdapter["previewToolPatch"]>[0][] = [];
@@ -67,6 +88,9 @@ test("native error metadata marks success events failed while retaining complete
 });
 
 const executionLifecycle = {
+  acceptExecutionEvent: () => true,
+  completeExecution: async () => undefined,
+  executionIntentVersion: () => 0,
   markExecutionSettled: (_sessionID: string) => undefined,
   markExecutionStarted: (_sessionID: string) => undefined,
 };
@@ -98,8 +122,65 @@ const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002
 const durable = { aggregateID: "session", seq: 1, version: 1 as const };
 
 function event(value: object) {
-  return value as OpenCodeEvent;
+  return { durable, ...value } as OpenCodeEvent;
 }
+
+test("successful execution reaches unfinished-task enforcement after lifecycle settlement", async () => {
+  const calls: string[] = [];
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId }),
+      latestTurn: async () => ({ id: turnId }),
+      completeExecution: async () => { calls.push("enforce"); },
+    } as never,
+    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+      recordTurnState: async () => undefined },
+    observe: async () => { calls.push("observe"); },
+  });
+  await controller.accept(event({
+    id: "end", created: 3, type: "session.execution.succeeded", durable,
+    data: { sessionID: "session" },
+  }));
+  assert.deepEqual(calls, ["observe", "enforce"]);
+});
+
+test("terminal reconciliation never settles a newer user turn", async () => {
+  for (const changeDuring of ["sync", "latest"] as const) {
+    let current = turnId;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const settled: string[] = [];
+    const controller = new OpenCodeEventController({
+      threads: {
+        ...executionLifecycle,
+        currentTurn: () => ({ threadId, turnId: current }),
+        syncNative: async () => {
+          if (changeDuring === "sync") { entered.resolve(); await release.promise; }
+          return { threadId, latestTurnId: turnId };
+        },
+        latestTurn: async () => {
+          entered.resolve();
+          await release.promise;
+          return { id: current };
+        },
+        markExecutionSettled: () => { settled.push("settled"); },
+        completeExecution: async () => { settled.push("continued"); },
+      },
+      observe: async () => { settled.push("observed"); },
+      transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+        recordTurnState: async () => { settled.push("recorded"); } },
+    });
+    const completion = controller.accept(event({ type: "session.execution.succeeded",
+      id: "end", created: 3, data: { sessionID: "session" } }));
+    await entered.promise;
+    current = WorkbenchTurnIdSchema.parse("new-turn");
+    release.resolve();
+    await completion;
+    assert.deepEqual(settled, []);
+  }
+});
 
 test("streams text directly and performs one canonical read at execution settlement", async () => {
   let syncs = 0;

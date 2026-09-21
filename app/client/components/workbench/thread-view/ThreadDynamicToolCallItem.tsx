@@ -423,11 +423,13 @@ function ThreadQuestionnaireToolCallItem ({
 function ThreadGenericDynamicToolCallItem ({
   item,
   hasCapturedChildren,
+  hasPatchPreview,
   projectFilePaths,
   projectId,
 }: {
   item: DynamicToolCallItem;
   hasCapturedChildren?: boolean;
+  hasPatchPreview?: boolean;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
@@ -443,6 +445,7 @@ function ThreadGenericDynamicToolCallItem ({
       summary={(
         <>
           {hasCapturedChildren ? <ThreadSummaryText text="Code details" />
+            : hasPatchPreview ? <ThreadSummaryText text="Tool details" />
             : outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
             : <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
             <ThreadSummaryText text="Tool" />
@@ -496,9 +499,20 @@ export default function ThreadDynamicToolCallItem ({
   }
 
   const finalChanges = item.status !== "inProgress" ? getOpenCodeFileChanges(item) : [];
+  if (finalChanges.length) {
+    return <ThreadFileChangeList changes={finalChanges.map((change, index) => ({
+      ...change,
+      ...(index === 0 ? { details: <>
+        {item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null}
+        <ThreadToolCallDetails
+          invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
+          output={formatToolCallOutput({ content: item.contentItems })}
+        />
+      </> } : {}),
+    }))} projectFilePaths={projectFilePaths} projectId={projectId}
+      projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+  }
   return <>
-    {finalChanges.length ? <ThreadFileChangeList changes={finalChanges} projectFilePaths={projectFilePaths}
-      projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} /> : null}
     {item.status === "inProgress" && item.patchPreview?.length ? <ThreadFileChangePreviewList
       changes={item.patchPreview.map(file => ({
         change: { path: file.path, kind: file.kind, diff: "" },
@@ -515,6 +529,7 @@ export default function ThreadDynamicToolCallItem ({
       workspaceRoots={workspaceRoots}
     /> : null}
     <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren}
+      hasPatchPreview={item.status === "inProgress" && Boolean(item.patchPreview?.length)}
       projectFilePaths={projectFilePaths} projectId={projectId} />
   </>;
 }

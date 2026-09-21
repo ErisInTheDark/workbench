@@ -8,6 +8,10 @@ import {
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 
 test("late child completion stays in its starting turn after a newer turn is admitted", async () => {
   let latest = turnId;
@@ -51,6 +55,7 @@ function operations(
     questionnaires?: object;
     readPage?: () => Promise<object>;
     signal?: AbortSignal;
+    refresh?: OpenCodeManagedSessionController["refresh"];
   } = {},
 ) {
   const owner: OpenCodeThreadOperations = new OpenCodeThreadOperations({
@@ -100,7 +105,7 @@ function operations(
         metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
         permissions: [],
       }),
-      refresh: async () => undefined,
+      refresh: lifecycle.refresh ?? (async () => undefined),
     },
     questionnaires: lifecycle.questionnaires as never ?? {
       canDeliver: () => false,
@@ -118,6 +123,7 @@ function operations(
       })),
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
+    recovery: new WorkbenchTurnRecoveryController(() => undefined),
   });
   return owner;
 }
@@ -167,6 +173,7 @@ test("admits a created session into thread state with its captured profile", asy
 
 test("fails a public read when no OpenCode binding exists", async () => {
   const owner = new OpenCodeThreadOperations({
+    recovery: new WorkbenchTurnRecoveryController(() => undefined),
     reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
     readProviderCursor: async () => undefined,
     acquire: async () => ({}) as never,
@@ -298,6 +305,212 @@ test("provider-owned active execution submits a steer once with native steer del
     clientUserMessageId: "00000000-0000-4000-8000-000000000010",
     status: "pending",
   }]);
+});
+
+const unfinished: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+
+test("unfinished completion admits the hidden continuation once, while terminal task decisions and interruption do not", async () => {
+  for (const state of [
+    unfinished,
+    { kind: "completed", reason: "agentCompleted", settled: false, agent: { agentStatus: "completed", turnId } },
+    { kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId } },
+    { kind: "needsAttention", reason: "pendingInput", settled: false, requestKey: "question" },
+  ] as WorkbenchThreadLifecycle[]) {
+    const prompts: { text: string; metadata: { workbench: { input: Parameters<typeof isWorkbenchUnfinishedTurnInput>[0] } } }[] = [];
+    const owner = operations({
+      session: { prompt: async input => { prompts.push(input); return {}; } },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    }, {
+      record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }),
+    }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: state }) } });
+    await owner.syncNative(nativeThreadId);
+    const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const, lifecycle: state };
+    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), true);
+    await owner.completeExecution(completion);
+    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), false);
+    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 9), false);
+    await owner.completeExecution({ ...completion, status: "interrupted" });
+    await owner.completeExecution({ ...completion, status: "failed" });
+    assert.equal(prompts.length, state === unfinished ? 1 : 0);
+    if (prompts.length) assert.equal(isWorkbenchUnfinishedTurnInput(prompts[0]!.metadata.workbench.input), true);
+    await owner.settle();
+  }
+});
+
+test("a fresh task decision suppresses a continuation requested against stale unfinished state", async () => {
+  let prompts = 0;
+  const owner = operations({
+    session: { prompt: async () => { prompts++; return {}; } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  { controller: { getCanonicalThreadEntry: async () => ({
+    entryKind: "thread", lifecycle: { kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId } },
+  }) } });
+  await owner.syncNative(nativeThreadId);
+  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", lifecycle: unfinished });
+  assert.equal(prompts, 0);
+});
+
+test("a task blocked during continuation preparation is not submitted", async () => {
+  let reads = 0;
+  let prompts = 0;
+  const owner = operations({
+    session: { prompt: async () => { prompts++; return {}; } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread",
+    lifecycle: ++reads === 1 ? unfinished : {
+      kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId },
+    },
+  }) } });
+  await owner.syncNative(nativeThreadId);
+  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", lifecycle: unfinished });
+  assert.equal(prompts, 0);
+});
+
+test("continuation disposal and failed admission do not retry or lose failure state", async t => {
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+  const signal = new AbortController();
+  const observations: object[] = [];
+  let records = 0;
+  const owner = operations({ message: { list: async () => ({ data: [], cursor: {} }) } }, {
+    record: async () => {
+      if (++records > 2) throw new Error("PRIVATE admission error");
+      return { threadId, latestTurnId: turnId, latestTurnState: "completed" };
+    },
+  }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
+  { signal: signal.signal, observe: async facts => { observations.push(facts); } });
+  await owner.syncNative(nativeThreadId);
+  const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const, lifecycle: unfinished };
+  await owner.completeExecution(completion);
+  assert.equal(records, 3);
+  assert.deepEqual(observations, [{ activity: null, title: null, lifecycle: { threadId, event: { kind: "recoveryFailed" } } }]);
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(warnings.join(""), /PRIVATE/);
+  signal.abort();
+  await owner.completeExecution(completion);
+  assert.equal(records, 3);
+});
+
+test("new user intent admitted before completion enforcement wins over the stale continuation", async () => {
+  const prompts: string[] = [];
+  const nextTurn = WorkbenchTurnIdSchema.parse("next-turn");
+  let recorded = turnId;
+  const owner = operations({
+    session: { prompt: async (input: { text: string }) => { prompts.push(input.text); return {}; } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: recorded, latestTurnState: "completed" }) },
+  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } });
+  await owner.syncNative(nativeThreadId);
+  const version = owner.executionIntentVersion(nativeThreadId);
+  recorded = nextTurn;
+  await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
+    input: [{ type: "text", text: "new direction", text_elements: [] }] });
+  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed",
+    lifecycle: unfinished, intentVersion: version });
+  assert.deepEqual(prompts, ["new direction"]);
+  await owner.settle();
+});
+
+test("hidden continuation retains workflow and activated skill instructions", async () => {
+  const refreshes: Parameters<OpenCodeManagedSessionController["refresh"]>[0][] = [];
+  const owner = operations({
+    session: { prompt: async () => ({}) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
+  { refresh: async input => { refreshes.push(input); } });
+  await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
+    input: [{ type: "skill", name: "review", path: "skills/review" }],
+    context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
+  owner.markExecutionSettled(nativeThreadId);
+  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId,
+    status: "completed", lifecycle: unfinished });
+  assert.equal(refreshes.length, 2);
+  assert.deepEqual(refreshes[1]!.workflowIds, ["default"]);
+  assert.deepEqual(new Set(refreshes[1]!.activatedSkillPaths), new Set(["skills/react", "skills/review"]));
+  await owner.settle();
+});
+
+test("user intent arriving during continuation preparation cancels only the hidden prompt", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const prompts: string[] = [];
+  let prepare = false;
+  const owner = operations({
+    session: { prompt: async (input: { text: string }) => { prompts.push(input.text); return {}; } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
+  { refresh: async () => { if (prepare) { entered.resolve(); await release.promise; } } });
+  await owner.submit({ threadId, clientMessageId: "first", intent: "newTurn",
+    input: [{ type: "text", text: "first", text_elements: [] }], context: { workflowIds: ["default"] } });
+  owner.markExecutionSettled(nativeThreadId);
+  prepare = true;
+  const continuation = owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId,
+    status: "completed", lifecycle: unfinished });
+  await entered.promise;
+  const submission = owner.submit({ threadId, clientMessageId: "next", intent: "newTurn",
+    input: [{ type: "text", text: "new direction", text_elements: [] }] });
+  prepare = false;
+  release.resolve();
+  await Promise.all([continuation, submission]);
+  assert.deepEqual(prompts, ["first", "new direction"]);
+  await owner.settle();
+});
+
+test("late history synchronisation cannot replace a newly admitted turn", async () => {
+  const reading = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const nextTurn = WorkbenchTurnIdSchema.parse("new-turn");
+  let delayHistory = false;
+  const owner = operations({
+    session: { prompt: async () => ({}) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async (_session: object, messages: object[]) => {
+      if (messages.length) return { threadId, latestTurnId: nextTurn, latestTurnState: "inProgress" };
+      if (delayHistory) { reading.resolve(); await release.promise; }
+      return { threadId, latestTurnId: turnId, latestTurnState: "completed" };
+    },
+  });
+  await owner.syncNative(nativeThreadId);
+  delayHistory = true;
+  const history = owner.syncNative(nativeThreadId);
+  await reading.promise;
+  await owner.submit({ threadId, clientMessageId: "new", intent: "newTurn",
+    input: [{ type: "text", text: "new direction", text_elements: [] }] });
+  release.resolve();
+  await history;
+  assert.equal(owner.currentTurn(nativeThreadId)?.turnId, nextTurn);
+  await owner.settle();
+});
+
+test("a late rejected prompt cannot make a newer active turn idle", async () => {
+  const first = Promise.withResolvers<never>();
+  const deliveries: string[] = [];
+  let roots = 0;
+  const owner = operations({
+    session: { prompt: async (input: { delivery: string }) => {
+      deliveries.push(input.delivery);
+      if (deliveries.length === 1) return first.promise;
+      return {};
+    } },
+  }, {
+    record: async () => ({ threadId, latestTurnId: WorkbenchTurnIdSchema.parse(`root-${++roots}`) }),
+    recordSteer: async () => undefined,
+  });
+  for (const id of ["first", "second"]) await owner.submit({
+    threadId, clientMessageId: id, intent: "newTurn",
+    input: [{ type: "text", text: id, text_elements: [] }],
+  });
+  first.reject(new Error("old prompt rejected"));
+  await owner.settle();
+  await owner.submit({ threadId, clientMessageId: "steer", intent: "continue",
+    input: [{ type: "text", text: "new direction", text_elements: [] }] });
+  assert.deepEqual(deliveries, ["queue", "queue", "steer"]);
+  await owner.settle();
 });
 
 test("admits a root turn directly without rereading provider history", async () => {

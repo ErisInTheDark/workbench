@@ -14,6 +14,59 @@ import { createThreadStateTestDatabase } from "../../workbench-thread-state-test
 import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import WorkbenchTranscriptLiveController from "../../database/transcript/WorkbenchTranscriptLiveController";
+import OpenCodeEventController from "./OpenCodeEventController";
+import { writeTranscriptText, readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+
+test("native reasoning streams through SQLite identity and live projection before its end event", async () => {
+  const fixture = createThreadStateTestDatabase();
+  fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const live = new WorkbenchTranscriptLiveController();
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    transcript: {
+      record: async observations => {
+        const result = repository.settle(observations);
+        live.settle(result.changes ?? []);
+        return result;
+      },
+      acceptLiveUpdate: input => live.acceptLiveUpdate(input),
+    },
+  });
+  const admitted = await adapter.record({
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 }, location: { directory: "C:/repo" },
+  }, [{ id: "root", type: "user", text: "work", time: { created: 1 } }],
+  { id: testProjectIds.project, rootPath: "C:/repo" });
+  const active = { threadId: admitted.threadId, turnId: admitted.latestTurnId! };
+  const events = new OpenCodeEventController({
+    observe: async () => undefined,
+    threads: { currentTurn: () => active, latestTurn: async () => ({ id: active.turnId }),
+      acceptExecutionEvent: () => true, completeExecution: async () => undefined, executionIntentVersion: () => 0,
+      syncNative: async () => admitted, markExecutionSettled: () => undefined, markExecutionStarted: () => undefined },
+    transcript: adapter,
+  });
+  const data = { sessionID: "session", assistantMessageID: "assistant", ordinal: 0 };
+  await events.accept({ type: "session.reasoning.started", created: 2, data } as never);
+  const projected = projectWorkbenchTranscript(repository.read({ threadId: active.threadId, turnLimit: 1 })!);
+  assert.ok(projected.success);
+  const reasoning = projected.data.turns[0]!.items.find(item => item.type === "reasoning")!;
+  live.open("view", repository.read({ threadId: active.threadId, turnLimit: 1 }), update => {
+    if (update.kind === "text" && update.itemId === reasoning.id) writeTranscriptText(reasoning, update);
+  });
+  await events.accept({ type: "session.reasoning.delta", created: 3, data: { ...data, delta: "partial" } } as never);
+  assert.equal(readTranscriptText(reasoning, "reasoningSummary", 0), "partial");
+  await events.accept({ type: "session.reasoning.delta", created: 4, data: { ...data, delta: " thought" } } as never);
+  assert.equal(readTranscriptText(reasoning, "reasoningSummary", 0), "partial thought");
+  await events.accept({ type: "session.reasoning.ended", created: 5, data: { ...data, text: "partial thought" } } as never);
+  assert.equal(readTranscriptText(reasoning, "reasoningSummary", 0), "partial thought");
+  const reopened = projectWorkbenchTranscript(repository.read({ threadId: active.threadId, turnLimit: 1 })!);
+  assert.ok(reopened.success);
+  assert.equal(readTranscriptText(reopened.data.turns[0]!.items.find(item => item.id === reasoning.id)!, "reasoningSummary", 0), "partial thought");
+  live.dispose();
+});
 
 test("complete windows settle steers, usage and cursors in SQLite without historical usage regression", async () => {
   const fixture = createThreadStateTestDatabase();
