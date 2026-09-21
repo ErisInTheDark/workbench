@@ -83,6 +83,31 @@ test("Git observations preserve ordered facts, opaque owner identifiers and inde
   }
 });
 
+test("stashed Git observations preserve retained paths without restoring live claims", () => {
+  const { database, repository, threadId } = fixture();
+  try {
+    const active = observations().gitArc!;
+    const stashed: WorkbenchThreadGitObservations = {
+      gitArc: {
+        ...active,
+        claimedPaths: [],
+        phase: "stashed",
+        stashedPaths: ["z.ts", "a.ts"],
+        members: active.members?.map((member) => ({
+          ...member,
+          claimedPaths: [],
+          phase: "stashed",
+          stashedPaths: member.claimedPaths,
+        })),
+      },
+    };
+    repository.replace(threadId, stashed);
+    assert.deepEqual(repository.read(threadId), stashed);
+  } finally {
+    database.close();
+  }
+});
+
 test("failed Git cache replacement restores both observations and the caller transaction can roll it back", () => {
   const { database, repository, threadId } = fixture();
   try {

@@ -56,6 +56,7 @@ const databaseReleases = Object.freeze({
   relationalTranscriptSources: release(46, "64e7ff66b21ee3fdb98e36caf66ae66e8fdfe48f91c33a5b42771cc165a7159f"),
   tertiaryRateLimits: release(47, "d7a13fe60649e93729a8a806c15c2f70919fcbf3e92e7afaaff38586bdbc8ddc"),
   callableToolEvidence: release(48, "1cfebace752cdd12d902dfb8b4dfdf58d342ed2b4e0853e374f75cf9447ab405"),
+  stashedGitArcObservations: release(49, "427c25079c6da6b386b4bd9f0817ad9f27379801ea4141b49bd53f1e4ef3a746"),
 });
 
 export default databaseReleases;

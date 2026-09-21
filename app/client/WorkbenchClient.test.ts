@@ -90,7 +90,7 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
 
-for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias", "voice-events"] as const) {
+for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias", "voice-events", "thread-state-refresh"] as const) {
   test(`route completion never reopens the winning route: ${order}`, async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
@@ -137,6 +137,9 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
               project: { projectId, revision: 1, updateKind: "project", snapshot: { projectId, root: "repo", rootPath, roots, changes: {}, tree: [], workbenchStorageRootPath: `${rootPath}/.workbench` } },
               sidebar: { ...sidebar(), projectId, entries },
             };
+            break;
+          case "workbench/thread-state/refresh":
+            result = { ...sidebar(), projectId, entries, revision: 2 };
             break;
           case "thread/identity/resolve": result = { data: { threadId, harness: "codex", projectId } }; break;
           case "thread/reconcile":
@@ -201,6 +204,12 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
         assert.equal(recovered, 0, "voice notifications must not reopen thread observations");
         notify("workbench/thread-state/reset", {});
         assert.ok(recovered > 0, "real resets must still recover observations");
+        return;
+      }
+      if (order === "thread-state-refresh") {
+        await (client.threadSidebar as ThreadSidebarClient).open(projectId);
+        await client.controls.updateThreadState({ method: "workbench/thread-state/refresh", projectId });
+        assert.equal((client.threadSidebar as ThreadSidebarClient).getProjectSnapshot(projectId)?.revision, 2);
         return;
       }
       if (order === "project-alias") {

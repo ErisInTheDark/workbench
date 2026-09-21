@@ -24,7 +24,7 @@ type GitEntry = {
   intent_name: string;
   intent_description: string;
   updated_at: string;
-  phase: "active" | "resolved" | null;
+  phase: "active" | "stashed" | "resolved" | null;
   harness: string | null;
   thread_id: string | null;
   repo_root: string | null;
@@ -58,13 +58,12 @@ export default class WorkbenchThreadStateGitRepository {
       if (observation.observation_kind === "arc") {
         result.gitArc = WorkbenchGitArcLifecycleStateSchema.parse({
           ...this.readBase(summary),
-          phase: summary.phase,
-          claimedPaths: this.readPaths(summary.id),
+          ...this.readArcPaths(summary),
           proposals: this.readProposals(summary.id),
           ...(members.length ? {
             members: members.map((entry) => ({
-              ...this.readBase(entry), ...this.readMember(entry), phase: entry.phase,
-              claimedPaths: this.readPaths(entry.id), proposals: this.readProposals(entry.id),
+              ...this.readBase(entry), ...this.readMember(entry), ...this.readArcPaths(entry),
+              proposals: this.readProposals(entry.id),
             })),
           } : {}),
         });
@@ -135,7 +134,10 @@ export default class WorkbenchThreadStateGitRepository {
     const insertPath = this.database.prepare(`
       INSERT INTO workbench_thread_git_paths(entry_id, path_index, path) VALUES (?, ?, ?)
     `);
-    (arc ? value.claimedPaths : value.scopePaths).forEach((path, pathIndex) => insertPath.run(id, pathIndex, path));
+    const paths = arc
+      ? value.phase === "stashed" ? value.stashedPaths : value.claimedPaths
+      : value.scopePaths;
+    paths.forEach((path, pathIndex) => insertPath.run(id, pathIndex, path));
     if (arc) {
       const insertProposal = this.database.prepare(`
         INSERT INTO workbench_thread_git_proposals(entry_id, observation_kind, proposal_index, proposal_id, root_id, status)
@@ -171,6 +173,13 @@ export default class WorkbenchThreadStateGitRepository {
       harness: entry.harness, threadId: entry.thread_id, repoRoot: entry.repo_root, rootId: entry.root_id,
       rootIds: roots.map((root) => root.root_id),
     };
+  }
+
+  private readArcPaths(entry: GitEntry) {
+    const paths = this.readPaths(entry.id);
+    return entry.phase === "stashed"
+      ? { claimedPaths: [], phase: entry.phase, stashedPaths: paths }
+      : { claimedPaths: paths, phase: entry.phase };
   }
 
   private readPaths(entryId: string) {

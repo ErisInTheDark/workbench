@@ -1045,7 +1045,17 @@ export async function WorkbenchClient(
     if (request.method === "workbench/thread-state/title/dismiss") {
       await admitPinnedTitleAction(request.projectId, request.identity);
     }
-    const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench(request.method, request));
+    const response = await threadClient.requestWorkbench(request.method, request);
+    if (request.method === "workbench/thread-state/refresh") {
+      const parsed = WorkbenchThreadSidebarSnapshotSchema.safeParse(response);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected Workbench thread state refresh response", parsed.error);
+        throw new Error("The thread state refresh response was invalid.");
+      }
+      threadSidebarClient.accept(parsed.data);
+      return true;
+    }
+    const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(response);
     if (!parsed.success) {
       reportClientSchemaError("Rejected Workbench thread state mutation response", parsed.error);
       throw new Error("The thread state mutation response was invalid.");
