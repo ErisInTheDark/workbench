@@ -1,6 +1,8 @@
 /*
  * No exports. Native boundary for independent daemon host supervision.
  */
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod host_supervisor;
 
 fn main() {

@@ -2,7 +2,6 @@
  * Exports:
  * - default WorkbenchLogFollower: follow bounded recent process output across file rotation.
  */
-import { watch, type FSWatcher } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -10,7 +9,8 @@ import { StringDecoder } from "node:string_decoder";
 type OpenLog = { file: FileHandle; offset: number; decoder: StringDecoder };
 
 export default class WorkbenchLogFollower {
-  private watcher: FSWatcher | null = null;
+  private started = false;
+  private cancelScheduled: (() => void) | null = null;
   private readonly files = new Map<string, OpenLog>();
   private task: Promise<void> | null = null;
   private dirty = false;
@@ -22,21 +22,37 @@ export default class WorkbenchLogFollower {
     prefix: string;
     write(text: string): Promise<void>;
     failed(error: Error): void;
+    schedule?: (callback: () => Promise<void>) => () => void;
   }) {
     if (!/^[a-z-]+$/u.test(options.prefix)) throw new Error("Invalid process log prefix.");
   }
 
   async start() {
-    if (this.watcher || this.closed) throw new Error("Log view has already started or closed.");
+    if (this.started || this.closed) throw new Error("Log view has already started or closed.");
+    this.started = true;
     await fs.mkdir(this.options.directory, { recursive: true });
-    this.watcher = watch(this.options.directory, (_event, file) => {
-      if (!file || file.toString().startsWith(`${this.options.prefix}-`)) {
-        this.dirty = true;
-        if (!this.task) void this.refresh().catch(error => this.options.failed(error instanceof Error ? error : new Error(String(error))));
-      }
-    });
-    this.watcher.on("error", error => this.options.failed(error));
     await this.refresh();
+    this.scheduleNext();
+  }
+
+  private scheduleNext() {
+    if (this.closed) return;
+    // Directory notifications may not report writes to open files on Windows.
+    // Schedule after draining so slow output never creates overlapping reads.
+    const schedule = this.options.schedule ?? (callback => {
+      const timer = setTimeout(() => { void callback(); }, 250);
+      return () => clearTimeout(timer);
+    });
+    this.cancelScheduled = schedule(async () => {
+      this.cancelScheduled = null;
+      if (this.closed) return;
+      try { await this.refresh(); }
+      catch (error) {
+        this.options.failed(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      this.scheduleNext();
+    });
   }
 
   refresh(): Promise<void> {
@@ -45,9 +61,6 @@ export default class WorkbenchLogFollower {
     if (!this.task) {
       this.task = this.drain().finally(() => {
         this.task = null;
-        if (this.dirty && !this.closed) {
-          void this.refresh().catch(error => this.options.failed(error instanceof Error ? error : new Error(String(error))));
-        }
       });
     }
     return this.task;
@@ -79,10 +92,11 @@ export default class WorkbenchLogFollower {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // Rotation already pruned it.
           throw error;
         }
+        const current = { file, offset: 0, decoder: new StringDecoder("utf8") };
+        this.files.set(name, current);
         const size = (await file.stat()).size;
         const recent = this.initial && name === names.at(-1);
-        const current = { file, offset: this.initial ? recent ? Math.max(0, size - 65_536) : size : 0, decoder: new StringDecoder("utf8") };
-        this.files.set(name, current);
+        current.offset = this.initial ? recent ? Math.max(0, size - 65_536) : size : 0;
         await this.read(current, recent);
       }
       if (names.length) this.initial = false;
@@ -114,8 +128,8 @@ export default class WorkbenchLogFollower {
 
   async close() {
     this.closed = true;
-    this.watcher?.close();
-    this.watcher = null;
+    this.cancelScheduled?.();
+    this.cancelScheduled = null;
     try { await this.task; }
     finally {
       const closing = [...this.files.values()].map(current => current.file.close());
