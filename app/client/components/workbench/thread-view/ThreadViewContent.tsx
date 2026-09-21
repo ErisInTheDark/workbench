@@ -70,6 +70,7 @@ import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-a
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadEntryMotionController, { getThreadEntryMotionIdentities } from "./ThreadEntryMotionController";
+import ThreadWorkedRunController from "./ThreadWorkedRunController";
 import {
   ThreadScrollViewportContext,
   useThreadScrollViewportContext,
@@ -355,6 +356,7 @@ export default memo(function ThreadViewContent ({
     : viewInstanceKey;
   const entryMotionOwnerRef = useRef<{
     controller: ThreadEntryMotionController;
+    workedRunController: ThreadWorkedRunController;
     key: string;
     seeded: boolean;
   } | null>(null);
@@ -363,6 +365,7 @@ export default memo(function ThreadViewContent ({
       controller: new ThreadEntryMotionController(
         activeThread?.turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities)),
       ),
+      workedRunController: new ThreadWorkedRunController(),
       key: entryMotionOwnerKey,
       seeded: Boolean(activeThread),
     };
@@ -373,10 +376,12 @@ export default memo(function ThreadViewContent ({
     entryMotionOwnerRef.current.seeded = true;
   }
   const entryMotionController = entryMotionOwnerRef.current.controller;
+  const workedRunController = entryMotionOwnerRef.current.workedRunController;
   const entryMotionContext = useMemo(() => ({
     ...threadScrollViewport,
     entryMotion: entryMotionController,
-  }), [entryMotionController, threadScrollViewport]);
+    workedRunState: workedRunController,
+  }), [entryMotionController, threadScrollViewport, workedRunController]);
   const activeProvider = activeThread?.harness ?? thread.harness;
   const activeSidebarEntry = activeThreadController.state.entry;
   const activeGitArcSelection = useMemo<{

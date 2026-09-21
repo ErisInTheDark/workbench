@@ -2499,6 +2499,7 @@ export function ThreadTranscriptItemsDetails ({
     });
     return <ThreadWorkedRun
       key={ids[0]}
+      identity={ids[0]}
       count={group.length}
       durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
       fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"

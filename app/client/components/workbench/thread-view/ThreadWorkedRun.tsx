@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadWorkedRun: own SQL work-run visibility, age eligibility and reveal intent.
+ * - default ThreadWorkedRun: own SQL work-run visibility, age eligibility, reveal intent, and remount survival.
  */
 "use client";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -11,18 +11,22 @@ import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { reconcileWorkedRun, revealWorkedRun, workedRunReadyAt, type WorkedRunState } from "./thread-worked-run";
 
-export default function ThreadWorkedRun({ children, count, durationMs, initialInactive, newestActivityAt, fileTotals = { additions: 0, deletions: 0 } }: {
+export default function ThreadWorkedRun({ children, count, durationMs, initialInactive, newestActivityAt, fileTotals = { additions: 0, deletions: 0 }, identity }: {
   children: ReactNode;
   count: number;
   durationMs: number | null;
   initialInactive: boolean;
   newestActivityAt: number | null;
   fileTotals?: { additions: number; deletions: number };
+  identity: string;
 }) {
-  const [state, setState] = useState<WorkedRunState>("expanded");
   const element = useRef<HTMLDivElement>(null);
   const restoreLayout = useRef<(() => void) | null>(null);
   const viewportContext = useThreadScrollViewportContext();
+  const [state, setState] = useState<WorkedRunState>(() => viewportContext.workedRunState?.read(identity) ?? "expanded");
+  useEffect(() => {
+    viewportContext.workedRunState?.write(identity, state);
+  }, [identity, state, viewportContext.workedRunState]);
   useEffect(() => viewportContext.onBottomReattached(() => {
     setState(current => reconcileWorkedRun(current, {
       count, newestActivityAt, initialInactive, above: false, now: Date.now(),
