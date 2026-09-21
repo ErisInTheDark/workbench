@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { OpenCodeEvent } from "@opencode/client";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import OpenCodeEventController from "./OpenCodeEventController";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
@@ -14,7 +16,7 @@ test("reasoning deltas target the visible canonical section before completion", 
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+      syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
     transcript: { recordItem: async () => "item" as never, recordTurnState: async () => undefined,
       appendText: input => { deltas.push(input); } },
   });
@@ -35,7 +37,7 @@ test("previews join exact native calls in either order and cannot survive reques
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+      syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
     transcript: {
       appendText: () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return `canonical-${input.source.reference}` as never; },
@@ -70,7 +72,7 @@ test("native error metadata marks success events failed while retaining complete
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId: current }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: current }) },
+      syncNative: async () => ({ threadId }), latestTurn: async () => ({ ...turn(), id: current }) },
     transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return "canonical" as never; } },
   });
@@ -94,7 +96,7 @@ test("write settlement replaces its live preview on the same canonical item for 
     const owner = new OpenCodeEventController({
       observe: async () => undefined,
       threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-        syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+        syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
       transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
         recordItem: async input => { items.push(input); return "canonical-write" as never; },
         previewToolPatch: input => { previews.push(input); } },
@@ -162,6 +164,19 @@ function event(value: object) {
   return { durable, ...value } as OpenCodeEvent;
 }
 
+function turn(status: Turn["status"] = "inProgress", id: string = turnId): Turn {
+  return {
+    completedAt: status === "inProgress" ? null : 2,
+    durationMs: null,
+    error: null,
+    id,
+    items: [],
+    itemsView: "notLoaded",
+    startedAt: 1,
+    status,
+  };
+}
+
 test("successful execution reaches unfinished-task enforcement after lifecycle settlement", async () => {
   const calls: string[] = [];
   const controller = new OpenCodeEventController({
@@ -169,7 +184,7 @@ test("successful execution reaches unfinished-task enforcement after lifecycle s
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId }),
-      latestTurn: async () => ({ id: turnId }),
+      latestTurn: async () => turn(),
       completeExecution: async () => { calls.push("enforce"); },
     } as never,
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
@@ -200,7 +215,7 @@ test("terminal reconciliation never settles a newer user turn", async () => {
         latestTurn: async () => {
           entered.resolve();
           await release.promise;
-          return { id: current };
+          return { ...turn(), id: current };
         },
         markExecutionSettled: () => { settled.push("settled"); },
         completeExecution: async () => { settled.push("continued"); },
@@ -237,14 +252,7 @@ test("streams text directly and performs one canonical read at execution settlem
         syncs++;
         return { threadId };
       },
-      latestTurn: async () => ({
-        id: turnId,
-        status: "completed",
-        items: [],
-        startedAt: 1,
-        completedAt: 6,
-        error: null,
-      }),
+      latestTurn: async () => turn("completed"),
     },
     transcript: {
       recordTurnState: async input => { turnStates.push(input.state); },
@@ -404,12 +412,14 @@ test("materialises an admitted steer only when OpenCode delivers its inbox item"
 
 test("does not complete a WB turn while its next OpenCode steer is pending", async () => {
   const lifecycle: string[] = [];
+  const notifications: WorkbenchTranscriptNotification[] = [];
   const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification); },
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId, hasPendingSteers: true }),
-      latestTurn: async () => ({ id: turnId }),
+      latestTurn: async () => turn(),
     },
     transcript: {
       recordTurnState: async () => undefined,
@@ -426,18 +436,73 @@ test("does not complete a WB turn while its next OpenCode steer is pending", asy
     data: { sessionID: "session" },
   }));
   assert.deepEqual(lifecycle, []);
+  assert.deepEqual(notifications, [], "A pending steer keeps the app's turn active.");
+});
+
+test("broadcasts one settled turn and idle status when an execution ends", async () => {
+  const notifications: WorkbenchTranscriptNotification[] = [];
+  const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification); },
+    observe: async () => undefined,
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId, latestTurnId: turnId }),
+      latestTurn: async () => turn("completed"),
+    },
+    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+      recordTurnState: async () => undefined },
+  });
+
+  await controller.accept(event({
+    id: "execution-end", created: 3, type: "session.execution.succeeded", durable,
+    data: { sessionID: "session" },
+  }));
+
+  assert.deepEqual(notifications, [
+    { method: "turn/completed", params: { threadId, turn: turn("completed") } },
+    { method: "thread/status/changed", params: { threadId, status: { type: "idle" } } },
+  ]);
+});
+
+test("broadcasts an inbox-delivered turn as the app's active turn", async () => {
+  const notifications: WorkbenchTranscriptNotification[] = [];
+  const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification); },
+    observe: async () => undefined,
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId }),
+      latestTurn: async () => turn(),
+    },
+    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+      recordTurnState: async () => undefined },
+  });
+
+  await controller.accept(event({
+    id: "steer-delivered", created: 2, type: "session.inbox.delivered", durable,
+    data: { sessionID: "session", inboxID: "inbox-1" },
+  }));
+
+  assert.deepEqual(notifications, [
+    { method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } } },
+    { method: "turn/started", params: { threadId, turn: turn() } },
+  ]);
 });
 
 test("maps OpenCode cancellation failure to interrupted after a WB stop", async () => {
   const lifecycle: string[] = [];
   const states: string[] = [];
+  const notifications: WorkbenchTranscriptNotification[] = [];
   const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification); },
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       consumeRequestedInterrupt: () => true,
       syncNative: async () => ({ threadId, hasPendingSteers: false }),
-      latestTurn: async () => ({ id: turnId }),
+      latestTurn: async () => turn(),
     },
     transcript: {
       recordTurnState: async input => { states.push(input.state); },
@@ -455,4 +520,8 @@ test("maps OpenCode cancellation failure to interrupted after a WB stop", async 
   }));
   assert.deepEqual(states, ["interrupted"]);
   assert.deepEqual(lifecycle, ["interrupted"]);
+  assert.deepEqual(notifications, [
+    { method: "turn/completed", params: { threadId, turn: { ...turn(), status: "interrupted" } } },
+    { method: "thread/status/changed", params: { threadId, status: { type: "idle" } } },
+  ]);
 });

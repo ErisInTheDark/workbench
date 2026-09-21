@@ -83,6 +83,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       recovery: build.get("turnRecovery"),
     });
     const events = new OpenCodeEventController({
+      broadcast: notification => context.broadcastProviderNotification("opencode", notification),
       invalidateModelCatalogs: () => service.invalidateModelCatalogs(),
       observe: facts => build.get("providerObservations").observe("opencode", facts),
       threads,

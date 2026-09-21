@@ -4,8 +4,9 @@
  * - default OpenCodeEventController: translate OpenCode events into direct live facts and one terminal canonical settlement.
  */
 import type { OpenCodeEvent, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
-import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
+import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ThreadStatus, Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import {
   type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
@@ -19,12 +20,13 @@ import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 
 export interface OpenCodeEventControllerOptions {
+  broadcast?(notification: WorkbenchTranscriptNotification): void;
   invalidateModelCatalogs?(): void;
   observe(facts: WorkbenchProviderObservation): Promise<WorkbenchThreadLifecycle | null | void>;
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
-    latestTurn(threadId: string): Promise<{ id: string } | null>;
+    latestTurn(threadId: string): Promise<Turn | null>;
     markExecutionSettled(nativeThreadId: string): void;
     markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean }>;
@@ -108,6 +110,8 @@ export default class OpenCodeEventController {
           },
           title: null,
         });
+        this.broadcastThreadStatus(identity.threadId, { activeFlags: [], type: "active" });
+        this.broadcastTurn("turn/started", identity.threadId, turn);
         return;
       }
       case "session.execution.started": {
@@ -127,6 +131,7 @@ export default class OpenCodeEventController {
           },
           title: null,
         });
+        this.broadcastThreadStatus(active.threadId, { activeFlags: [], type: "active" });
         return;
       }
       case "session.text.started": {
@@ -297,12 +302,22 @@ export default class OpenCodeEventController {
           },
           title: null,
         });
+        this.broadcastTurn("turn/completed", identity.threadId, { ...turn, status });
+        this.broadcastThreadStatus(identity.threadId, { type: "idle" });
         await this.options.threads.completeExecution({
           sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id),
           status, lifecycle: lifecycle || null, intentVersion,
         });
       }
     }
+  }
+
+  private broadcastThreadStatus(threadId: WorkbenchThreadId, status: ThreadStatus) {
+    this.options.broadcast?.({ method: "thread/status/changed", params: { threadId, status } });
+  }
+
+  private broadcastTurn(method: "turn/started" | "turn/completed", threadId: WorkbenchThreadId, turn: Turn) {
+    this.options.broadcast?.({ method, params: { threadId, turn } });
   }
 
   private async active(sessionID: string): Promise<ActiveTurn> {
