@@ -77,7 +77,7 @@ interface SessionExecution {
   eventSequence: number;
   intentVersion: number;
   context?: Parameters<WorkbenchProviderThreads["submit"]>[0]["context"];
-  admission: Promise<void>;
+  admission: Promise<void> | null;
 }
 const supersededContinuation = Symbol("superseded OpenCode continuation");
 
@@ -125,6 +125,10 @@ function openCodeFailure(operation: string, error: unknown) {
 }
 
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
+  hasPendingWork() {
+    return this.pendingPrompts.size > 0 || this.pendingSteerSessions.size > 0
+      || [...this.executions.values()].some(execution => execution.active || execution.admission !== null);
+  }
   private readonly executions = new Map<string, SessionExecution>();
   private readonly pendingPrompts = new Set<Promise<void>>();
   private readonly sessions = new Map<string, SessionInfo>();
@@ -254,7 +258,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       await previous;
       this.options.signal.throwIfAborted();
       return await operation();
-    } finally { release.resolve(); }
+    } finally {
+      if (execution.admission === release.promise) execution.admission = null;
+      release.resolve();
+    }
   }
 
   private async submitNative(
@@ -549,7 +556,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private execution(nativeThreadId: string) {
     let execution = this.executions.get(nativeThreadId);
     if (!execution) {
-      execution = { active: false, turn: null, eventSequence: -1, intentVersion: 0, admission: Promise.resolve() };
+      execution = { active: false, turn: null, eventSequence: -1, intentVersion: 0, admission: null };
       this.executions.set(nativeThreadId, execution);
     }
     return execution;

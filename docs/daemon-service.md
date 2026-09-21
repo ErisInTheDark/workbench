@@ -10,9 +10,14 @@ Installed commands:
 - `wb shortcut`: install a desktop/menu shortcut without launching or connecting.
 - `pnpm dev`: run host and daemon in the foreground with live output and terminal-owned shutdown. Refuse an existing host; use `wb view daemon` instead.
 - `wb view daemon`: attach to host/daemon logs without launching. Ctrl+C stops daemon and harnesses; another Ctrl+C stops the host.
-- `wb view app`: attach to tray/app logs. Ctrl+C invokes tray Quit, leaving the daemon alone.
+- `wb view app`: attach to tray/app logs. Ctrl+C invokes tray Quit without directly stopping the daemon.
+- `wb view`: attach to combined app/tray and host/daemon logs through the running app. Ctrl+C invokes app/tray Quit; it never directly stops the daemon.
 
-In either view, `q` or closing the terminal detaches without stopping anything. Non-interactive views only stream logs. Intentional daemon stop clears crash-restart intent and blocks incidental forwarding from waking it; launching the app or requesting explicit daemon wake starts it again. Process replacement is reported; reattach before controlling a replacement.
+In every view, `q` or closing the terminal detaches without stopping anything. Non-interactive views only stream logs. Intentional daemon stop clears crash-restart intent and blocks incidental forwarding from waking it; launching the app or requesting explicit daemon wake starts it again. Process replacement is reported; reattach before controlling a replacement.
+
+App Quit disconnects that app's browser tabs from the daemon. Tabs reconnect when their app returns. Older browser tabs need a refresh to adopt this behaviour.
+
+Background-managed daemons sleep after the last connected app leaves and admitted work, harness execution, active goals and background imports finish. The reload graph derives idleness from existing operation and work owners. A daemon-owned one-second memory check runs only while unattended; it performs no filesystem, database or network polling. The host gates wake requests during retirement, remains available and starts a fresh daemon for subsequent authorised use. Foreground `pnpm dev`, standalone daemons and explicit viewer stop retain their existing ownership. Log viewers never keep a daemon awake.
 
 Installation prompts for consent and location. The dim `/wb` suffix is not editable; an existing final `wb` or `workbench` directory suppresses it. Defaults are `%LOCALAPPDATA%\Programs\inthedark\wb` and `~/.local/lib/inthedark/wb`. Runtime data stays separate. `~/.workbench/installation.json` records installation progress and the selected repository.
 

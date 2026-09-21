@@ -309,6 +309,22 @@ test("provider-owned active execution submits a steer once with native steer del
 
 const unfinished: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
 
+test("execution outlives submission and only terminal execution releases the idle boundary", async () => {
+  const pending = Promise.withResolvers<object>();
+  const owner = operations({
+    session: { prompt: async () => pending.promise },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }) });
+  await owner.submit({ threadId, clientMessageId: "idle-boundary", intent: "newTurn",
+    input: [{ type: "text", text: "work", text_elements: [] }] });
+  assert.equal(owner.hasPendingWork(), true);
+  pending.resolve({});
+  await owner.settle();
+  assert.equal(owner.hasPendingWork(), true);
+  owner.markExecutionSettled(nativeThreadId);
+  assert.equal(owner.hasPendingWork(), false);
+});
+
 test("unfinished completion admits the hidden continuation once, while terminal task decisions and interruption do not", async () => {
   for (const state of [
     unfinished,

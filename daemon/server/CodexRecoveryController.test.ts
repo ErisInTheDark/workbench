@@ -26,6 +26,20 @@ function observe(controller: CodexRecoveryController, harness = "codex", threadI
   controller.observeNotification(harness, { method: "turn/started", params: { threadId, turn: { id: "turn" } } });
 }
 
+test("active goals retain execution between turns while paused goals preserve only recovery ownership", () => {
+  const owner = createRecovery();
+  owner.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
+  assert.equal(owner.hasPendingWork(), true);
+  owner.observeNotification("codex", { method: "thread/goal/updated", params: { threadId: "thread", goal: { status: "paused" } } });
+  assert.equal(owner.hasPendingWork(), false);
+  const restored = createRecovery({ state: owner.captureReloadState() });
+  assert.equal(restored.hasPendingWork(), false);
+  restored.observeNotification("codex", { method: "thread/goal/updated", params: { threadId: "thread", goal: { status: "active" } } });
+  assert.equal(restored.hasPendingWork(), true);
+  restored.observeNotification("codex", { method: "thread/goal/cleared", params: { threadId: "thread" } });
+  assert.equal(restored.hasPendingWork(), false);
+});
+
 test("explicit refresh validates an observed started turn and uses the lifecycle scheduler", async () => {
   let execute!: () => void;
   let finishTask = Promise.resolve();

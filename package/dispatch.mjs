@@ -8,7 +8,7 @@ import { access } from "node:fs/promises";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
-const view = args.length === 2 && args[0] === "view" && ["daemon", "app"].includes(args[1]);
+const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
 const command = view ? "view" : args.length === 0 ? "start" : args.length === 1 ? args[0] : null;
 try {
   if (["start", "shortcut", "connect", "disconnect", "view"].includes(command)) {
@@ -20,7 +20,7 @@ try {
     try { await access(node); }
     catch (error) { throw new Error("The checkout's Node runtime is unavailable. Run pnpm install in the Workbench repository.", { cause: error }); }
     await new SetupCommand().run(node, [
-      "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry), view ? args[1] : command,
+      "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry), ...(view ? args.slice(1) : [command]),
     ], { cwd: root, interactive: view });
   } else {
     await new SetupCommand().run("bash", [path.join(root, "wb"), ...args]);

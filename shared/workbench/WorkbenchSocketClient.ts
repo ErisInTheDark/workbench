@@ -74,6 +74,8 @@ export default class WorkbenchSocketClient {
   private hasOpenedSocket = false;
   private lastConsumedEventStreamSequence = 0;
   private disposed = false;
+  private suspended = false;
+  private connectionGeneration = 0;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private eventStreamAckTimer: Timer | null = null;
@@ -103,6 +105,7 @@ export default class WorkbenchSocketClient {
 
   async connectSocket(url?: string) {
     if (this.disposed) throw new Error("Workbench socket client is disposed.");
+    if (this.suspended) throw new Error("Workbench app is unavailable.");
     if (url !== undefined) this.explicitUrl = url;
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.socketPromise) return await this.socketPromise;
@@ -111,7 +114,7 @@ export default class WorkbenchSocketClient {
     try {
       await socketPromise;
     } catch (error) {
-      if (!this.disposed) this.scheduleReconnect();
+      if (!this.disposed && !this.suspended && this.socketPromise === socketPromise) this.scheduleReconnect();
       throw error;
     } finally {
       if (this.socketPromise === socketPromise) this.socketPromise = null;
@@ -119,8 +122,10 @@ export default class WorkbenchSocketClient {
   }
 
   private async openResolvedSocket() {
+    const generation = this.connectionGeneration;
     const url = this.explicitUrl ?? await this.resolveUrl();
     if (this.disposed) throw new Error("Workbench socket client is disposed.");
+    if (this.suspended || generation !== this.connectionGeneration) throw new Error("Workbench app connection was suspended.");
     await this.openSocket(url);
   }
 
@@ -169,13 +174,31 @@ export default class WorkbenchSocketClient {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectTimer || this.disposed) return;
+    if (this.reconnectTimer || this.disposed || this.suspended) return;
     const delay = Math.min(30_000, 250 * 2 ** Math.min(this.reconnectAttempt, 7));
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connectSocket().catch(() => this.scheduleReconnect());
     }, delay);
+  }
+
+  setSuspended(suspended: boolean) {
+    if (this.disposed || this.suspended === suspended) return;
+    this.suspended = suspended;
+    if (!suspended) {
+      void this.connectSocket().catch(() => this.scheduleReconnect());
+      return;
+    }
+    this.connectionGeneration++;
+    this.socketPromise = null;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.socket;
+    if (socket) {
+      this.retireSocket(socket, new Error("Workbench app is unavailable."));
+      socket.close();
+    }
   }
 
   close(code?: number, reason?: string) {

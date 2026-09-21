@@ -90,6 +90,32 @@ class FakeWebSocket {
   }
 }
 
+test("app suspension fences late address resolution and rejects pending requests", async () => {
+  const original = globalThis.WebSocket;
+  const sockets: FakeWebSocket[] = [];
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) { super(url); sockets.push(this); }
+  } as unknown as typeof WebSocket;
+  let resolveAddress!: (url: string) => void;
+  const address = new Promise<string>(resolve => { resolveAddress = resolve; });
+  const client = new WorkbenchSocketClient({ resolveUrl: () => address });
+  try {
+    const opening = client.connect();
+    client.setSuspended(true);
+    resolveAddress("ws://fixture");
+    await assert.rejects(opening, /suspended/);
+    assert.equal(sockets.length, 0);
+    await assert.rejects(client.sendRequest({ method: "unavailable" }), /unavailable/);
+    client.setSuspended(false);
+    await client.connect();
+    assert.equal(sockets.length, 1);
+    const pending = client.sendRequest({ method: "pending" });
+    client.setSuspended(true);
+    await assert.rejects(pending, /unavailable/);
+    assert.equal(sockets[0]!.closeCalls, 1);
+  } finally { client.dispose(); globalThis.WebSocket = original; }
+});
+
 test("default reconnection resolves the current daemon instead of retaining a retired local port", async () => {
   const originalWebSocket = globalThis.WebSocket;
   const originalSetTimeout = globalThis.setTimeout;

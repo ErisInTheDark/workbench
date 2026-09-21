@@ -16,9 +16,13 @@ export class ServiceHttp {
   private readonly remote: HttpReverseProxy;
 
   constructor(private readonly context: ServiceProcessContext) {
-    this.local = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, false), warn: context.warn });
-    this.remote = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, true), warn: context.warn });
+    this.local = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, false), warn: context.warn,
+      activityChanged: context.proxyActivityChanged });
+    this.remote = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, true), warn: context.warn,
+      activityChanged: context.proxyActivityChanged });
   }
+
+  hasPendingWork() { return this.local.hasPendingWork() || this.remote.hasPendingWork(); }
 
   async handle(request: IncomingMessage, response: ServerResponse) {
     const ingress = this.admit(request);

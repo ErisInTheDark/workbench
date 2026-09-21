@@ -192,6 +192,26 @@ function bridgeThread(items: ThreadItem[] = []) {
   };
 }
 
+test("native execution keeps the runtime busy after request settlement until turn completion", async () => {
+  const sql = await recordingFixture();
+  const bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer: { send() {} } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {},
+  });
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread() } });
+    await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+    await bridge.waitForIdle();
+    assert.equal(bridge.hasPendingWork(), true);
+    await bridge.handleUpstreamMessage({ method: "turn/completed", params: {
+      threadId: "thread", turn: { ...bridgeThread().turns[0], status: "completed" },
+    } });
+    await bridge.waitForIdle();
+    assert.equal(bridge.hasPendingWork(), false);
+  } finally { await bridge.dispose(); }
+});
+
 for (const route of ["managed-creation", "internal"] as const) {
   for (const failed of [false, true]) {
     test(`${route} preserves caller correlation for provider ${failed ? "errors" : "results"}`, async () => {

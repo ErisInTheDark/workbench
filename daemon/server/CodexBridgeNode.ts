@@ -353,6 +353,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         await waitForPersistence();
         await bridge.retireAfterHandoff();
       },
+      hasPendingWork: () => bridge.hasPendingWork() || persistence.size > 0,
       registrations: { codexBridge: bridge, codexThreadOperations: threadOperations, codexNativeConfiguration: nativeConfiguration },
       start: () => undefined,
     };

@@ -43,6 +43,8 @@ class TestResponse extends EventEmitter {
   statusCode = 0;
   writableFinished = false;
 
+  write(body: string) { this.body += body; return true; }
+
   end(body?: string | Buffer) {
     if (body !== undefined) this.body += body.toString();
     this.writableFinished = true;
@@ -284,9 +286,15 @@ test("reloads the database with a fresh repository constructor and no process re
   });
 
   let started = false;
+  const lifetimeResponse = new TestResponse();
   try {
     await target.start();
     started = true;
+    const lifetimeRequest = localRequest([]);
+    lifetimeRequest.method = "GET";
+    lifetimeRequest.url = "/api/workbench-app-lifetime";
+    await target.handleRequest(lifetimeRequest, lifetimeResponse as unknown as import("node:http").ServerResponse);
+    assert.equal(lifetimeResponse.statusCode, 200);
     await target.writeAppPort(43_211);
 
     const settingsRequest = localRequest([
@@ -321,6 +329,7 @@ test("reloads the database with a fresh repository constructor and no process re
     await target.handleRequest(request, response as unknown as import("node:http").ServerResponse);
     assert.equal(response.statusCode, 202);
     await reloaded;
+    assert.equal(lifetimeResponse.writableFinished, false, "scoped reload must not end app lifetime");
 
     assert.equal(constructors.length, 2);
     assert.deepEqual(compilerModes, [false, false]);
@@ -370,4 +379,5 @@ test("reloads the database with a fresh repository constructor and no process re
   } finally {
     if (started) await target.close();
   }
+  assert.equal(lifetimeResponse.writableFinished, true);
 });

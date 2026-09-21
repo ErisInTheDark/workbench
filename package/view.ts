@@ -119,8 +119,8 @@ async function main() {
   if (process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim()) {
     throw new Error("Interactive process views are human-only. Agents can inspect persisted logs.");
   }
-  const [target, ...rest] = process.argv.slice(2);
-  if ((target !== "daemon" && target !== "app") || rest.length) throw new Error("Usage: wb view daemon|app");
+  const [target = "all", ...rest] = process.argv.slice(2);
+  if ((target !== "daemon" && target !== "app" && target !== "all") || rest.length) throw new Error("Usage: wb view [daemon|app]");
   const view = new WorkbenchProcessView({ target, input: process.stdin, write, warn,
     connect: target === "daemon" ? daemonConnection : appConnection });
   const detach = () => view.detach();

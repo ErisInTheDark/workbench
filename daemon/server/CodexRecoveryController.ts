@@ -33,6 +33,7 @@ export type CodexUnfinishedTurnPort = (candidate: CodexObservedTurnCandidate, re
 export interface CodexRecoveryControllerState {
   candidates: CodexObservedTurnCandidate[];
   goalOwnedThreads: string[];
+  activeGoalThreads?: string[];
   resumeRequests: Array<[string, JsonRpcRequest]>;
 }
 
@@ -74,14 +75,16 @@ function createCodexTurnRecoveryResumeRequest(request: JsonRpcRequest, threadId:
 
 export default class CodexRecoveryController {
   private readonly candidates = new Map<string, CodexObservedTurnCandidate>();
-  private readonly goalOwnedThreads = new Set<string>();
+  private readonly goalOwnedThreads = new Map<string, boolean>();
   private readonly resumeRequests = new Map<string, JsonRpcRequest>();
   private acceptingRecovery = true;
   private recoveryGeneration = new AbortController();
   constructor(private readonly options: CodexRecoveryOptions) {
     const { state } = options;
     for (const candidate of state?.candidates ?? []) this.candidates.set(candidate.key, structuredClone(candidate));
-    for (const threadId of state?.goalOwnedThreads ?? []) this.goalOwnedThreads.add(threadId);
+    for (const threadId of state?.goalOwnedThreads ?? []) {
+      this.goalOwnedThreads.set(threadId, state?.activeGoalThreads?.includes(threadId) ?? true);
+    }
     for (const [threadId, request] of state?.resumeRequests ?? []) this.resumeRequests.set(threadId, structuredClone(request));
   }
 
@@ -106,7 +109,7 @@ export default class CodexRecoveryController {
       return;
     }
     if (harness === "codex" && request.method === "thread/goal/set" && threadId) {
-      this.goalOwnedThreads.add(threadId);
+      this.goalOwnedThreads.set(threadId, true);
       const candidate = this.candidates.get(`${harness}:${threadId}`);
       if (candidate) candidate.goalOwned = true;
     }
@@ -151,7 +154,7 @@ export default class CodexRecoveryController {
       const goal = record(params?.goal);
       const status = goal?.status;
       if (status === "active" || status === "paused" || status === "blocked" || status === "usageLimited" || status === "budgetLimited") {
-        this.goalOwnedThreads.add(threadId);
+        this.goalOwnedThreads.set(threadId, status === "active");
         if (candidate) candidate.goalOwned = true;
       } else {
         this.goalOwnedThreads.delete(threadId);
@@ -246,10 +249,13 @@ export default class CodexRecoveryController {
   captureReloadState(): CodexRecoveryControllerState {
     return {
       candidates: structuredClone([...this.candidates.values()]),
-      goalOwnedThreads: [...this.goalOwnedThreads],
+      goalOwnedThreads: [...this.goalOwnedThreads.keys()],
+      activeGoalThreads: [...this.goalOwnedThreads].filter(([, active]) => active).map(([threadId]) => threadId),
       resumeRequests: [...this.resumeRequests].map(([threadId, request]) => [threadId, structuredClone(request)]),
     };
   }
+
+  hasPendingWork() { return [...this.goalOwnedThreads.values()].some(active => active); }
 
   listRuntimeDrainPending(now = Date.now()) {
     return this.options.coordinator.listRuntimeDrainPending(now, this.recoveryGeneration.signal);

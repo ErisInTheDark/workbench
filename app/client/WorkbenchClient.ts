@@ -9,6 +9,7 @@
  */
 
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import WorkbenchAppLifetimeClient from "./workbench/app/WorkbenchAppLifetimeClient";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
@@ -313,6 +314,13 @@ export async function WorkbenchClient(
     },
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
+  const appLifetime = new WorkbenchAppLifetimeClient({
+    available: available => threadClient.setAppAvailable(available),
+    status: message => reportStatusMessage(message),
+  });
+  coordinatorLifecycle.addUnsubscribe(() => appLifetime.dispose());
+  try { await appLifetime.start(); }
+  catch (error) { threadClient.dispose(); coordinatorLifecycle.dispose(); throw error; }
   const daemon = new WorkbenchDaemonClient({
     onDisconnect: listener => threadClient.onDisconnect(listener),
     onNotification: (listener) => threadClient.onWorkbenchNotification(listener),

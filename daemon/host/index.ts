@@ -27,6 +27,7 @@ async function main() {
   if (!session) throw new Error("Start the managed host with wb connect or pnpm dev.");
   const service = new WorkbenchService({
     root, session,
+    foreground: process.env.WORKBENCH_FOREGROUND_PIPE === "1",
     warn: message => logger.error("host", message),
     restart: fatal => setImmediate(() => stop("supervisor replacement", fatal ? 78 : 1)),
     stop: () => stop("explicit shutdown", 0),

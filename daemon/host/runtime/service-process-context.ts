@@ -17,6 +17,7 @@ export interface ServiceProcessContext {
   daemonAvailable(): boolean;
   identity(): WorkbenchDaemonIdentity;
   daemonTarget(signal: AbortSignal, remote: boolean): Promise<string>;
+  proxyActivityChanged?(): void;
   publish(): void;
   warn(message: string): void;
   reload(scopes: readonly WorkbenchReloadScope[]): Promise<void>;

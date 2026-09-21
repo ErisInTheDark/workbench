@@ -11,6 +11,7 @@
  */
 import * as project from "./lib/project";
 import type CodexThreadOperations from "./CodexThreadOperations";
+import type WorkbenchDaemonSleepController from "./WorkbenchDaemonSleepController";
 import type CodexConfigurationController from "./CodexConfigurationController";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
@@ -179,6 +180,7 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  daemonSleep: WorkbenchDaemonSleepController;
   transcriptReader: import("./WorkbenchTranscriptReader").default;
   transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;
   voiceSettings: import("./voice/VoiceSettingsStore").default;

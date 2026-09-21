@@ -19,11 +19,13 @@ import {
   type WorkbenchServiceResponse, type WorkbenchServiceSnapshot,
 } from "../../shared/http/workbench-service.ts";
 import type { WorkbenchDaemonIdentity } from "../../shared/http/workbench-daemon-discovery.ts";
-import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+import WorkbenchDaemonHost, { type WorkbenchDaemonHostOptions } from "./WorkbenchDaemonHost.ts";
 import WorkbenchServiceSessions from "./WorkbenchServiceSessions.ts";
 import WorkbenchServiceRuntime from "./runtime/WorkbenchServiceRuntime.ts";
 
 export interface WorkbenchServiceOptions {
+  createDaemon?: (options: WorkbenchDaemonHostOptions) => WorkbenchDaemonHost;
+  foreground?: boolean;
   root: string;
   dataRoot?: string;
   session: string;
@@ -58,8 +60,15 @@ export default class WorkbenchService {
     this.endpointPath = path.join(this.dataRoot, "service", "runtime.json");
     this.sessions = new WorkbenchServiceSessions(() => {
       this.publish();
+      this.daemon.demandChanged();
     });
-    this.daemon = new WorkbenchDaemonHost({
+    this.daemon = (options.createDaemon ?? (configuration => new WorkbenchDaemonHost(configuration)))({
+      hasDemand: () => !this.ready || this.options.foreground === true || this.sessions.current !== null
+        || this.runtime.get("http").hasPendingWork(),
+      onSleep: async () => {
+        await this.runtime.run("database", "record idle daemon sleep", async database => database.stopDaemon());
+        await this.standalone.refresh();
+      },
       projectRootPath: options.root,
       writeLog: options.writeLog,
       lifetime: this.abort.signal,
@@ -82,7 +91,8 @@ export default class WorkbenchService {
         if (!this.endpoint) throw new Error("Service listener is not bound.");
         return this.endpoint.origin;
       },
-      daemonAvailable: () => Boolean(this.daemon.snapshot().endpoint ?? this.standalone.getSnapshot().endpoint),
+      daemonAvailable: () => Boolean(this.currentDaemonEndpoint()),
+      proxyActivityChanged: () => this.daemon.demandChanged(),
       identity: () => this.identity(),
       daemonTarget: (signal, remote) => this.daemonTarget(signal, remote),
       publish: () => this.publish(), warn: options.warn,
@@ -146,7 +156,7 @@ export default class WorkbenchService {
   identity(): WorkbenchDaemonIdentity {
     const database = this.runtime.get("database");
     const daemon = this.daemon.snapshot();
-    const endpoint = daemon.endpoint ?? this.standalone.getSnapshot().endpoint;
+    const endpoint = this.currentDaemonEndpoint();
     return {
       protocol: 1, daemonId: database.daemonId, hostname: hostname().slice(0, 253),
       wakeEnabled: database.wakeEnabled,
@@ -157,11 +167,17 @@ export default class WorkbenchService {
   snapshot(): WorkbenchServiceSnapshot {
     return {
       identity: this.identity(), failure: this.runtime.get("database").startupFailure ?? this.daemon.snapshot().failure,
-      daemonOrigin: this.daemon.snapshot().endpoint?.origin ?? this.standalone.getSnapshot().endpoint?.origin ?? null,
+      daemonOrigin: this.currentDaemonEndpoint()?.origin ?? null,
       network: this.runtime.get("network").snapshot(),
       discovery: this.runtime.get("network").discoverySnapshot(),
       reloadDirt: this.runtime.get("dirt").getSnapshot(),
     };
+  }
+
+  private currentDaemonEndpoint() {
+    return this.daemon.isSupervising
+      ? this.daemon.snapshot().endpoint
+      : this.daemon.snapshot().endpoint ?? this.standalone.getSnapshot().endpoint;
   }
 
   close() {
@@ -189,11 +205,12 @@ export default class WorkbenchService {
   }
 
   private async daemonTarget(signal: AbortSignal, remote: boolean) {
+    await this.daemon.waitForSleep();
     signal.throwIfAborted();
     if (this.daemon.snapshot().state === "stopped") {
       throw new Error("The daemon was intentionally stopped. Launch the app or explicitly request daemon wake to start it again.");
     }
-    const existing = this.daemon.snapshot().endpoint ?? this.standalone.getSnapshot().endpoint;
+    const existing = this.currentDaemonEndpoint();
     if (existing) return existing.origin;
     await this.runtime.run("database", "admit daemon wake", async database => {
       if (this.daemon.snapshot().state === "stopped") throw new Error("The daemon was intentionally stopped.");
@@ -289,7 +306,7 @@ export default class WorkbenchService {
       case "service/stop":
         if (request.instanceId !== this.instanceId) throw new Error("The viewed host was replaced. Attach again before stopping it.");
         if (request.method === "service/stop" && !this.options.stop) throw new Error("Host shutdown is unavailable.");
-        if (this.standalone.getSnapshot().endpoint && !this.daemon.snapshot().endpoint
+        if (!this.daemon.isSupervising && this.standalone.getSnapshot().endpoint && !this.daemon.snapshot().endpoint
           && this.daemon.snapshot().state !== "stopped") {
           throw new Error("This host does not own the running daemon. Stop it from its foreground terminal.");
         }
@@ -299,6 +316,7 @@ export default class WorkbenchService {
         });
         break;
       case "service/daemon/wake":
+        await this.daemon.waitForSleep();
         if (this.daemon.snapshot().state === "stopped") {
           await this.runtime.run("database", "explicitly wake stopped daemon", async database => database.requestDaemon(this.options.session));
           await this.daemon.wake();

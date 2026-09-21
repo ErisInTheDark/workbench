@@ -831,7 +831,7 @@ export default class CodexStdioBridge {
   private readonly transcriptPersistence = new Set<Promise<unknown>>();
   private threadPageReadsPreparedForReload = false;
   private acceptingWork = true;
-  private commandQueue: Promise<unknown> = Promise.resolve();
+  private commandQueue: Promise<unknown> | null = null;
   private readonly pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   private readonly pendingResponses: Map<number, PendingResponse>;
   private readonly retiringResponses: Map<number, PendingResponse>;
@@ -1834,7 +1834,7 @@ export default class CodexStdioBridge {
       onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
     });
-    const work = this.commandQueue
+    const work = (this.commandQueue ?? Promise.resolve())
       .catch(() => undefined)
       .then(() => {
         signal.throwIfAborted();
@@ -1844,7 +1844,10 @@ export default class CodexStdioBridge {
         throw error;
       });
     const nextCommand = Promise.race([work, cancellation]).finally(() => signal.removeEventListener("abort", onAbort));
-    this.commandQueue = nextCommand.catch(() => undefined);
+    const tail = nextCommand.catch(() => undefined).finally(() => {
+      if (this.commandQueue === tail) this.commandQueue = null;
+    });
+    this.commandQueue = tail;
     return await nextCommand;
   }
 
@@ -1856,7 +1859,7 @@ export default class CodexStdioBridge {
     }
     while (true) {
       const currentQueue = this.commandQueue;
-      await currentQueue.catch(() => undefined);
+      await currentQueue?.catch(() => undefined);
       if (this.commandQueue === currentQueue) {
         break;
       }
@@ -3430,6 +3433,13 @@ export default class CodexStdioBridge {
     const activeTurn = getCurrentInProgressTurn({ turns });
     if (!activeTurn) throw new Error(`Active Codex thread ${thread.id} has no current in-progress turn.`);
     return activeTurn;
+  }
+
+  hasPendingWork() {
+    return this.commandQueue !== null || this.transcriptActiveTurns.size > 0
+      || this.pendingResponses.size > 0 || this.retiringResponses.size > 0
+      || this.pendingUserInputRequests.size > 0 || this.transcriptTasks.size > 0
+      || this.transcriptPersistence.size > 0;
   }
 
   private rememberTranscriptActiveTurn(threadId: string, turnId: string) {

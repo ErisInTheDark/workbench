@@ -10,6 +10,7 @@ import WorkbenchService from "./WorkbenchService.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery.ts";
 import WorkbenchProcessLease from "../../shared/process/WorkbenchProcessLease.ts";
+import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
 
 const exec = promisify(execFile);
 
@@ -35,6 +36,8 @@ test("cold service reads and app detach preserve durable identity without waking
   const dataRoot = path.join(root, "data");
   const warnings: string[] = [];
   const services: WorkbenchService[] = [];
+  let demanded = () => true;
+  let demandChanged = () => {};
   const clients: WorkbenchServiceClient[] = [];
   let stopped!: () => void;
   const shutdownRequested = new Promise<void>(resolve => { stopped = resolve; });
@@ -48,8 +51,16 @@ test("cold service reads and app detach preserve durable identity without waking
     ["init", "-q"], ["config", "user.email", "fixture@example.invalid"],
     ["config", "user.name", "Fixture"], ["add", "README.md"], ["commit", "-qm", "fixture"],
   ]) await exec("git", args, { cwd: root });
-  const create = async () => {
+  const create = async (foreground = false) => {
     const service = new WorkbenchService({
+      foreground,
+      createDaemon: options => {
+        demanded = options.hasDemand!;
+        const daemon = new WorkbenchDaemonHost(options);
+        const publish = daemon.demandChanged.bind(daemon);
+        context.mock.method(daemon, "demandChanged", () => { publish(); demandChanged(); });
+        return daemon;
+      },
       root, dataRoot, session: "cold-fixture",
       warn: message => warnings.push(message),
       restart: () => assert.fail("Cold reads must not request a restart."),
@@ -75,6 +86,8 @@ test("cold service reads and app detach preserve durable identity without waking
   });
   clients.push(client);
   await client.start();
+  await client.request({ method: "service/process/read" });
+  assert.equal(demanded(), false, "a log viewer must not demand a daemon");
   await client.request({
     method: "service/app/register",
     registration: {
@@ -83,6 +96,7 @@ test("cold service reads and app detach preserve durable identity without waking
     },
   });
   await client.request({ method: "service/status/read" });
+  assert.equal(demanded(), true, "registered apps retain the daemon without browser activity");
   assert.equal(client.getSnapshot().snapshot?.identity.state, "sleeping");
   const processInfo = await client.request({ method: "service/process/read" });
   assert.equal(processInfo.kind, "process");
@@ -111,10 +125,14 @@ test("cold service reads and app detach preserve durable identity without waking
   assert.equal(first.service.identity().state, "sleeping");
   await client.request({ method: "service/stop", instanceId: first.endpoint.instanceId });
   await shutdownRequested;
+  const detached = new Promise<void>(resolve => { demandChanged = resolve; });
   await client.close();
+  await detached;
+  assert.equal(demanded(), false);
   assert.equal((await fetch(`${first.endpoint.origin}/_workbench-service/identity`)).status, 200);
   await first.service.close();
-  const next = await create();
+  const next = await create(true);
+  assert.equal(demanded(), true, "foreground ownership survives the absence of apps");
   assert.equal(next.service.identity().daemonId, identity.daemonId);
   assert.notEqual(next.endpoint.instanceId, first.endpoint.instanceId);
   assert.equal(next.service.identity().state, "sleeping");

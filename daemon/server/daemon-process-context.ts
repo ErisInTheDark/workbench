@@ -12,8 +12,10 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestController";
+import type { DaemonSleepPorts } from "./WorkbenchDaemonSleepController";
 
 export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
+  "daemonSleep",
   "browseExecution",
   "modules",
   "daemonHttp",
@@ -26,6 +28,7 @@ export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 export interface DaemonProcessContext {
+  sleep?: DaemonSleepPorts;
   dataRootPath: string;
   daemonPackageRoot: string;
   webSocketUrl: string;

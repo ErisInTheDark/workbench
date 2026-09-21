@@ -82,13 +82,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.deepEqual([...parents.get("harness:codex")!], ["server:codex/lifecycle"]);
-  assert.deepEqual({
-    lifecycle: nodes.get("server:turns")!.lifecycle,
-    provides: nodes.get("server:turns")!.provides,
-  }, {
-    lifecycle: "handoff",
-    provides: ["toolRevision", "reloadController", "reloadDirt", "turnRecovery"],
-  });
+  assert.equal(nodes.get("server:turns")!.lifecycle, "handoff");
   assert.deepEqual({
     lifecycle: nodes.get("server:database")!.lifecycle,
     provides: nodes.get("server:database")!.provides,

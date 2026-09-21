@@ -161,6 +161,7 @@ interface WorkbenchThreadClient {
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onDisconnect: (listener: () => void) => () => void;
+  setAppAvailable: (available: boolean) => void;
   onWorkbenchNotification: (listener: (notification: {
     method: "voice/event" | "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
@@ -4913,6 +4914,7 @@ function WorkbenchThreadClient(
 
   return {
     threadObservations,
+    setAppAvailable: available => socket.setSuspended(!available),
     getThreadController,
     recoverThreadControllers: async () => {
       const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));

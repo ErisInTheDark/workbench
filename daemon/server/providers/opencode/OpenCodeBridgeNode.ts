@@ -20,6 +20,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const service = build.get("openCodeService");
     const lifetime = new AbortController();
     let subscription: Promise<void> | null = null;
+    let processingEvent: Promise<void> | null = null;
     const startSubscription = (client: Awaited<ReturnType<typeof service.acquire>>) => subscription ??= (async () => {
       for await (const event of client.event.subscribe({ signal: lifetime.signal })) {
         try {
@@ -28,7 +29,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             if (!parsed.success) logError("opencode", "Invalid companion file-preview observation.");
             else events.acceptPatchPreview(parsed.data);
           } else {
-            await events.accept(event);
+            processingEvent = events.accept(event);
+            try { await processingEvent; }
+            finally { processingEvent = null; }
           }
         } catch (error) {
           if (!lifetime.signal.aborted) {
@@ -86,6 +89,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       transcript,
     });
     return {
+      hasPendingWork: () => processingEvent !== null || threads.hasPendingWork(),
       registrations: { openCodeThreadOperations: threads },
       start: () => undefined,
       dispose: async () => {

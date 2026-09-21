@@ -29,6 +29,7 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
+import { DaemonHostMessageSchema, type DaemonSleepMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
@@ -62,6 +63,11 @@ let lastReloadResponse: DaemonReloadResponse = {
   state: "idle",
 };
 let shuttingDown = false;
+let hostDemand = true;
+const sendSleepMessage = (message: DaemonSleepMessage) => new Promise<void>((resolve, reject) => {
+  if (!process.connected || !process.send) { reject(new Error("Daemon host IPC is unavailable.")); return; }
+  process.send(message, error => error ? reject(error) : resolve());
+});
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
@@ -210,6 +216,24 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
 
 function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonProcessContext {
   return {
+    ...(process.connected ? { sleep: {
+      demanded: () => hostDemand,
+      connected: () => bridgeConnections.size > 0,
+      idle: () => !shuttingDown && featureHost.isIdle(),
+      send: sendSleepMessage,
+      warn: (message: string) => logError("sleep", message),
+      commit: async (id: string) => {
+        shuttingDown = true;
+        try {
+          await sendSleepMessage({ type: "workbench-daemon-sleep-result", id, accepted: true });
+          await stopAllChildren();
+          process.exit(0);
+        } catch (error) {
+          logError("sleep", `shutdown failed: ${error instanceof Error ? error.message.slice(0, 500) : "unknown failure"}`);
+          process.exit(1);
+        }
+      },
+    } } : {}),
     dataRootPath: WORKBENCH_DATA_ROOT,
     daemonPackageRoot: DAEMON_PACKAGE_ROOT,
     isShuttingDown: () => shuttingDown,
@@ -416,6 +440,10 @@ async function startBridgeServer() {
       return;
     }
     if (!await featureHost.get("daemonHttp").admitHttp(request, response)) return;
+    if (shuttingDown) {
+      sendHttpJson(response, 503, { error: "Workbench daemon is stopping." });
+      return;
+    }
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
     if (requestPath === DAEMON_BROWSE_PATH && request.method === "POST") {
       void featureHost.run("browseExecution", (execution) => execution.handleBrowseHttpRequest(request, response), "Browse HTTP request").catch((error) => {
@@ -477,6 +505,10 @@ async function startBridgeServer() {
     }
     void (async () => {
       if (!await featureHost.get("daemonHttp").admitUpgrade(request)) return;
+      if (shuttingDown) {
+        socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        return;
+      }
       if (socket.destroyed) return;
       bridgeWebSocketServer?.handleUpgrade(request, socket, head, (client) => {
         bridgeWebSocketServer?.emit("connection", client, request);
@@ -492,6 +524,7 @@ async function startBridgeServer() {
     const connectionId = `connection-${++nextBridgeConnectionId}`;
     bridgeClientsByConnectionId.set(connectionId, bridgeClient);
     bridgeConnections.add(bridgeClient);
+    featureHost.get("daemonSleep").refresh();
     log("workbench-socket", `client connected (${bridgeConnections.size} active)`);
 
     bridgeClient.on("message", (payload) => {
@@ -507,6 +540,7 @@ async function startBridgeServer() {
           .catch(error => logError("workbench-socket", `disconnect failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
       }
       bridgeConnections.delete(bridgeClient);
+      if (!shuttingDown) featureHost.get("daemonSleep").refresh();
       log("workbench-socket", `client disconnected (${bridgeConnections.size} active)`);
     });
 
@@ -580,6 +614,15 @@ async function startDaemon() {
     });
   }
 }
+
+process.on("message", message => {
+  const parsed = DaemonHostMessageSchema.safeParse(message);
+  if (!parsed.success) { logError("sleep", "Invalid daemon host lifecycle message."); return; }
+  if (parsed.data.type === "workbench-daemon-demand") {
+    hostDemand = parsed.data.required;
+    featureHost?.get("daemonSleep").refresh();
+  } else featureHost?.get("daemonSleep").receive(parsed.data);
+});
 
 void startDaemon().catch((error) => {
   shutdownAndExit(1, error);

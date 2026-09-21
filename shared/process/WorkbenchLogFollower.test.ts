@@ -8,6 +8,27 @@ import path from "node:path";
 import test from "node:test";
 import WorkbenchLogFollower from "./WorkbenchLogFollower.ts";
 
+test("combined following retains recent output and rotation independently for both owners", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-combined-"));
+  await fs.writeFile(path.join(root, "workbench-app-0001.log"), "app recent\n");
+  for (let index = 0; index < 20; index++) {
+    await fs.writeFile(path.join(root, `workbench-host-${String(index).padStart(4, "0")}.log`), `host ${index}\n`);
+  }
+  let output = "";
+  const follower = new WorkbenchLogFollower({
+    directory: root, prefix: ["workbench-app", "workbench-host"], schedule: () => () => {},
+    write: async text => { output += text; }, failed: error => assert.fail(error),
+  });
+  context.after(async () => { await follower.close(); await fs.rm(root, { recursive: true, force: true }); });
+  await follower.start();
+  assert.equal(output, "app recent\nhost 19\n");
+  output = "";
+  await fs.appendFile(path.join(root, "workbench-app-0001.log"), "app live\n");
+  await fs.writeFile(path.join(root, "workbench-host-0020.log"), "host rotated\n");
+  await follower.refresh();
+  assert.equal(output, "app live\nhost rotated\n");
+});
+
 test("scheduled following reads open-file appends and stops scheduling on detach", async context => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-live-"));
   const filename = path.join(root, "workbench-host-0001.log");

@@ -194,6 +194,8 @@ export default class WorkbenchStatsController {
     await this.queue;
   }
 
+  hasPendingWork() { return this.importer.hasPendingWork(); }
+
   reportCaptureFailure(harness: string | null, label: string, error: unknown) {
     this.reportFailure(harness, `${label} capture failed: ${error instanceof Error ? error.message : String(error)}`, "capture");
   }

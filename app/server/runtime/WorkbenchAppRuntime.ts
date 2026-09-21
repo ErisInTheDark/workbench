@@ -22,6 +22,7 @@ import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
+import WorkbenchAppLifetime from "./WorkbenchAppLifetime.ts";
 
 const RUNTIME_PATH = "/api/workbench-app-runtime";
 const MAX_RELOAD_BODY_BYTES = 16_000;
@@ -85,6 +86,7 @@ async function readReloadScopes(request: IncomingMessage) {
 }
 
 export default class WorkbenchAppRuntime {
+  private readonly lifetime = new WorkbenchAppLifetime();
   private appliedReactDevelopmentMode: boolean | null = null;
   private readonly host: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
 
@@ -177,6 +179,7 @@ export default class WorkbenchAppRuntime {
   }
 
   async close() {
+    this.lifetime.close();
     await this.host.dispose();
   }
 
@@ -201,6 +204,10 @@ export default class WorkbenchAppRuntime {
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
     if (!await this.host.get("http").admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
+    if (url.pathname === "/api/workbench-app-lifetime") {
+      this.lifetime.handle(request, response);
+      return;
+    }
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
       const responseVersion = url.searchParams.get("version");
       const reloadDirt = this.host.get("reloadDirt").getSnapshot();

@@ -11,6 +11,7 @@ import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
 import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+import { DaemonHostMessageSchema } from "../../shared/http/workbench-daemon-lifecycle.ts";
 
 function fakeChild() {
   const child = new EventEmitter() as ChildProcess;
@@ -123,6 +124,49 @@ function fakeLog(lines: string[]) {
     line(_domain: "host", message: string) { lines.push(message); },
   };
 }
+
+test("idle sleep fences wake until child retirement and does not request crash recovery", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-idle-sleep-"));
+  const clock = new FakeClock();
+  const children: ChildProcess[] = [];
+  const retiring = event();
+  const retired = event();
+  let spawned = event();
+  let demand = false;
+  const messages: ReturnType<typeof DaemonHostMessageSchema.parse>[] = [];
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    hasDemand: () => demand,
+    onSleep: async () => { retiring.resolve(); await retired.promise; },
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => {
+      const child = fakeChild();
+      Object.defineProperty(child, "connected", { value: true });
+      Object.assign(child, { send(message: object, done: (error: Error | null) => void) {
+        messages.push(DaemonHostMessageSchema.parse(message)); done(null); return true;
+      } });
+      children.push(child); spawned.resolve(); return child;
+    },
+    terminateChild: async child => { if (child.exitCode === null) child.emit("exit", 0, null); },
+    requestRestart: () => assert.fail("Idle sleep is not a crash."),
+  });
+  context.after(async () => { retired.resolve(); await host.stop(); await rm(root, { recursive: true, force: true }); });
+  const starting = host.wake();
+  await spawned.promise; reportReady(children[0]!); await starting;
+  const id = "ff9a81a9-d2c3-484b-8a39-82c824f1fd59";
+  children[0]!.emit("message", { type: "workbench-daemon-sleep-request", id });
+  assert.deepEqual(messages.at(-1), { type: "workbench-daemon-sleep-commit", id, allowed: true });
+  assert.equal(host.snapshot().endpoint, null);
+  children[0]!.emit("message", { type: "workbench-daemon-sleep-result", id, accepted: true });
+  children[0]!.emit("exit", 0, null);
+  await retiring.promise;
+  demand = true;
+  const next = host.wake();
+  assert.equal(children.length, 1);
+  spawned = event(); retired.resolve();
+  await spawned.promise; reportReady(children[1]!); await next;
+  assert.equal(host.snapshot().state, "ready");
+});
 
 test("an intentional stop retires the daemon without recovery and allows an explicit later wake", async context => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-again-"));

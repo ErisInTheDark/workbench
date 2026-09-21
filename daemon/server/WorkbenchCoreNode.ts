@@ -358,6 +358,7 @@ function createWorkbenchCoreFeature(
     },
   };
   return new WorkbenchCoreFeature({
+    hasPendingWork: () => stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: () => projectCatalog.captureReloadState(),
     afterCommit: () => {
       if (!initialCatalog) return;

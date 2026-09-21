@@ -20,6 +20,7 @@ const { killProcessTreeAsync } = createRequire(import.meta.url)("../server/proce
 
 import DaemonHealthWatchdog from "./DaemonHealthWatchdog.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
+import { DaemonSleepMessageSchema, type DaemonHostMessage } from "../../shared/http/workbench-daemon-lifecycle.ts";
 
 type RunnerChildResult = {
   error?: Error;
@@ -38,6 +39,8 @@ interface RunnerLog {
 }
 
 export interface WorkbenchDaemonHostOptions {
+  hasDemand?(): boolean;
+  onSleep?(): Promise<void>;
   environment?: NodeJS.ProcessEnv;
   healthClient?: Pick<WorkbenchDaemonHealthClient, "probe">;
   loggerFactory?: (logFilePath: string) => RunnerLog;
@@ -193,6 +196,7 @@ export default class WorkbenchDaemonHost {
   private lifecycle: DaemonLifecycle = { state: "sleeping" };
   private runTask: Promise<void> | null = null;
   private stopTask: Promise<void> | null = null;
+  private sleepTransition: { id: string; accepted: boolean; done: Promise<void>; resolve(): void } | null = null;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchDaemonHostOptions) {
@@ -217,10 +221,26 @@ export default class WorkbenchDaemonHost {
 
   snapshot() {
     return {
-      state: this.lifecycle.state,
-      endpoint: this.lifecycle.state === "ready" ? this.lifecycle.endpoint : null,
+      state: this.sleepTransition && this.lifecycle.state === "ready" ? "sleeping" as const : this.lifecycle.state,
+      endpoint: !this.sleepTransition && this.lifecycle.state === "ready" ? this.lifecycle.endpoint : null,
       failure: this.lifecycle.state === "failed" ? this.lifecycle.error.message.slice(0, 512) : null,
     };
+  }
+
+  get isSupervising() { return this.runTask !== null; }
+  async waitForSleep() { await this.sleepTransition?.done; }
+
+  demandChanged() {
+    if (!this.options.hasDemand || !this.activeChild?.connected) return;
+    void this.sendHost({ type: "workbench-daemon-demand", required: this.options.hasDemand() })
+      .catch(error => this.directLogger.error("host", `Demand publication failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`));
+  }
+
+  private sendHost(message: DaemonHostMessage) {
+    return new Promise<void>((resolve, reject) => {
+      if (!this.activeChild?.connected) { reject(new Error("Daemon IPC is unavailable.")); return; }
+      this.activeChild.send(message, error => error ? reject(error) : resolve());
+    });
   }
 
   subscribe(listener: () => void) {
@@ -231,6 +251,7 @@ export default class WorkbenchDaemonHost {
   wake(): Promise<WorkbenchDaemonEndpoint> {
     if (this.options.lifetime?.aborted) return Promise.reject(this.options.lifetime.reason);
     if (this.stopTask) return this.stopTask.then(() => this.wake());
+    if (this.sleepTransition) return this.sleepTransition.done.then(() => this.wake());
     if (this.lifecycle.state === "ready") return Promise.resolve(this.lifecycle.endpoint);
     if (this.lifecycle.state === "starting") return this.lifecycle.ready.promise;
     if (this.lifecycle.state === "stopped") {
@@ -263,7 +284,12 @@ export default class WorkbenchDaemonHost {
         await this.fail(error instanceof Error ? error : new Error(String(error)), this.lifecycle.state !== "ready");
       }
       throw error;
-    }).finally(() => { this.runTask = null; });
+    }).finally(() => {
+      this.runTask = null;
+      const sleeping = this.sleepTransition;
+      this.sleepTransition = null;
+      sleeping?.resolve();
+    });
     return this.runTask;
   }
 
@@ -280,6 +306,13 @@ export default class WorkbenchDaemonHost {
       log.line("host", `logging complete daemon output to: ${logFilePath}`);
       const result = await this.runChild(log);
       if (this.stopping) return;
+      if (this.sleepTransition?.accepted && result.exitCode === 0 && !result.error) {
+        await this.options.onSleep?.();
+        this.lifecycle = { state: "sleeping" };
+        log.line("host", "daemon is idle and sleeping; wake service remains available.");
+        this.publish();
+        return;
+      }
       const beforeReady = this.lifecycle.state !== "ready";
       const error = result.error ?? new Error(
         `Daemon exited ${beforeReady ? "before readiness" : "after readiness"} with ${result.exitCode ?? result.signal ?? "unknown status"}.`,
@@ -331,6 +364,31 @@ export default class WorkbenchDaemonHost {
       endpoint: null, failure: null,
     };
     const acceptReady = (message: object) => {
+      const sleep = DaemonSleepMessageSchema.safeParse(message);
+      if (sleep.success) {
+        if (sleep.data.type === "workbench-daemon-sleep-request") {
+          const allowed = this.lifecycle.state === "ready" && !this.stopping && !this.sleepTransition
+            && !(this.options.hasDemand?.() ?? true);
+          if (allowed) {
+            let resolve!: () => void;
+            const done = new Promise<void>(settle => { resolve = settle; });
+            this.sleepTransition = { id: sleep.data.id, accepted: false, done, resolve };
+            this.publish();
+          }
+          void this.sendHost({ type: "workbench-daemon-sleep-commit", id: sleep.data.id, allowed })
+            .catch(error => { readiness.failure = error instanceof Error ? error : new Error(String(error)); wake.wake(); });
+        } else if (this.sleepTransition?.id === sleep.data.id) {
+          if (sleep.data.accepted) this.sleepTransition.accepted = true;
+          else {
+            const transition = this.sleepTransition;
+            this.sleepTransition = null;
+            transition.resolve();
+            this.publish();
+          }
+        }
+        wake.wake();
+        return;
+      }
       const parsed = WorkbenchDaemonReadySchema.safeParse(message);
       if (!parsed.success || parsed.data.endpoint.pid !== child.pid) {
         readiness.failure = new Error("Daemon sent an invalid process-bound readiness message.");
@@ -343,6 +401,7 @@ export default class WorkbenchDaemonHost {
         if (!this.stopping) {
           if (this.lifecycle.state === "starting") this.lifecycle.ready.resolve(parsed.data.endpoint);
           this.lifecycle = { state: "ready", endpoint: parsed.data.endpoint };
+          this.demandChanged();
           this.publish();
         }
       }
@@ -360,6 +419,7 @@ export default class WorkbenchDaemonHost {
 
     try {
       while (!this.stopping) {
+        if (this.sleepTransition?.accepted) return await exited;
         if (readiness.failure) {
           await this.retireChild();
           await exited;

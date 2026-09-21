@@ -145,7 +145,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly requiredScopes: readonly DaemonReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private readonly candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
-  private reloadTail = Promise.resolve();
+  private reloadTail: Promise<void> | null = null;
   private readonly pendingRollbacks = new Set<PendingRollback<TContext, TFeatures, TNotification>>();
   private readonly retirements = new Set<Retirement<TContext, TFeatures, TNotification>>();
   private readonly runtimeDrainTimeoutMs: number;
@@ -201,6 +201,13 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
 
   getSourceState(): ReloadDirtSourceState {
     return this.sourceState;
+  }
+
+  isIdle() {
+    return this.started && !this.starting && !this.hardShutdownStarted && !this.reloadTail
+      && this.candidates.size === 0 && this.retirements.size === 0 && this.pendingRollbacks.size === 0
+      && [...this.nodes.values()].every(node => node.activeOperations.size === 0
+        && !node.gate && !node.instance.hasPendingWork?.());
   }
 
   private describeSourceState(): ReloadDirtSourceState {
@@ -346,7 +353,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
 
   async reload(scopes: readonly DaemonReloadScope[]) {
     this.assertAcceptingWork();
-    const operation = this.reloadTail.then(async () => {
+    const operation = (this.reloadTail ?? Promise.resolve()).then(async () => {
       this.assertAcceptingWork();
       const transition = new ReloadableNodeTransition(
         this.createDeadline(this.runtimeDrainTimeoutMs),
@@ -375,7 +382,10 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         transition.finish();
       }
     });
-    this.reloadTail = operation.catch(() => undefined);
+    const tail = operation.catch(() => undefined).finally(() => {
+      if (this.reloadTail === tail) this.reloadTail = null;
+    });
+    this.reloadTail = tail;
     return await operation;
   }
 

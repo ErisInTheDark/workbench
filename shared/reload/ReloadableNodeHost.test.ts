@@ -20,6 +20,36 @@ interface Objects {
   unrelated: boolean;
 }
 
+test("idleness includes admitted requests, queued reloads and node-owned background work", async () => {
+  let background = true;
+  const graph = () => defineReloadableNodeGraph([
+    ReloadableNode.define<object, { value: number }, never>()({
+      access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
+      lifecycle: "atomic", safeAll: true, sources: "", description: "fixture",
+      create: () => ({ registrations: { value: 1 }, start() {}, dispose() {}, hasPendingWork: () => background }),
+    }),
+  ]);
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, { topologyScope: "server:topology" });
+  assert.equal(host.isIdle(), false);
+  await host.start();
+  assert.equal(host.isIdle(), false);
+  background = false;
+  assert.equal(host.isIdle(), true);
+  const entered = deferred();
+  const release = deferred();
+  const running = host.run("value", async () => { entered.resolve(); await release.promise; });
+  await entered.promise;
+  assert.equal(host.isIdle(), false);
+  release.resolve(); await running;
+  assert.equal(host.isIdle(), true);
+  const reload = host.reload(["server:value"]);
+  assert.equal(host.isIdle(), false);
+  await reload;
+  assert.equal(host.isIdle(), true);
+  await host.dispose();
+  assert.equal(host.isIdle(), false);
+});
+
 void ReloadableNode.define<object, Objects, never>()({
   access: "agent",
   children: [],

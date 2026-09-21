@@ -70,6 +70,8 @@ export default class WorkbenchStatsImportController {
     return this.progress;
   }
 
+  hasPendingWork() { return Boolean(this.starting || this.worker || this.pendingWrite); }
+
   start(): Promise<WorkbenchStatsImportProgress> {
     if (!this.active) return Promise.reject(new Error("Workbench stats importer is disposed."));
     if (this.worker) return Promise.resolve(this.progress);

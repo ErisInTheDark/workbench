@@ -23,7 +23,7 @@ export default class WorkbenchProcessView {
   private readonly lifetime = new AbortController();
 
   constructor(private readonly options: {
-    target: "daemon" | "app";
+    target: "daemon" | "app" | "all";
     input: Pick<ReadStream, "isTTY" | "isRaw" | "setRawMode" | "on" | "off" | "resume" | "pause">;
     write(text: string): Promise<void>;
     warn(message: string): void;
@@ -45,7 +45,7 @@ export default class WorkbenchProcessView {
         if (key !== "\u0003" || this.closed) continue;
         this.commands = this.commands.then(async () => {
           if (this.closed) return;
-          if (this.options.target === "app") {
+          if (this.options.target !== "daemon") {
             await connection.quitApp();
             this.detach();
           } else if (this.stage === "daemon") {
@@ -66,7 +66,9 @@ export default class WorkbenchProcessView {
     try {
       if (this.closed) return;
       follower = (this.options.createFollower ?? (options => new WorkbenchLogFollower(options)))({
-        directory: connection.logDirectory, prefix: connection.logPrefix, write: this.options.write, failed,
+        directory: connection.logDirectory,
+        prefix: this.options.target === "all" ? ["workbench-app", "workbench-host"] : connection.logPrefix,
+        write: this.options.write, failed,
       });
       await follower.start();
       await this.options.write(this.options.input.isTTY

@@ -214,6 +214,7 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
     try { if (this.session) await this.cancel(this.session.start.sessionId); }
     finally { await this.transport.dispose(); }
   }
+  hasPendingWork() { return this.starting || this.session !== null; }
   private owned(sessionId: string) {
     const session = this.session;
     if (!session || session.start.sessionId !== sessionId) throw new Error("Unknown single-file session.");

@@ -135,4 +135,6 @@ export default class WorkbenchTranscriptReconciliationController {
     for (const job of this.queue.splice(0)) job.result.reject(this.controller.signal.reason);
     await this.draining;
   }
+
+  hasPendingWork() { return this.draining !== null || this.queue.length > 0; }
 }

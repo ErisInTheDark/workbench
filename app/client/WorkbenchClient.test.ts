@@ -95,6 +95,8 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalWebSocket = globalThis.WebSocket;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(null, { status: 404 });
     const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
     const pages: Array<{ threadId: string; complete: () => void }> = [];
     let pageReads = 0;
@@ -137,6 +139,11 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
             };
             break;
           case "thread/identity/resolve": result = { data: { threadId, harness: "codex", projectId } }; break;
+          case "thread/reconcile":
+            queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+              data: JSON.stringify({ id: request.id, error: { code: -32000, message: "Recovery unavailable in route fixture." } }),
+            })));
+            return;
           case "workbench/thread-state/observe":
             result = { observation: { ...params, entries: entries.filter(entry => entry.identity.threadId === (params.target as { threadId: string }).threadId), revision: 1, freshness: "fresh", error: null, updateKind: "threadObservation" } };
             break;
@@ -238,6 +245,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       globalThis.window = originalWindow;
       globalThis.document = originalDocument;
       globalThis.WebSocket = originalWebSocket;
+      globalThis.fetch = originalFetch;
       if (originalDaemonUrl === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
       else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalDaemonUrl;
     }

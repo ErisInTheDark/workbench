@@ -32,6 +32,8 @@ export interface ReloadableNodeHandoff {
 }
 
 export interface ReloadableNodeInstance<TObjects extends object, TNotification> {
+  /** Work that survives its admitting request, excluding passive subscriptions. */
+  hasPendingWork?(): boolean;
   activate?(): Promise<void> | void;
   deactivate?(): Promise<void> | void;
   afterCommit?(): void;

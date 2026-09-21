@@ -7,6 +7,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import type { Duplex } from "node:stream";
 
 export interface HttpReverseProxyOptions {
+  activityChanged?(): void;
   target(signal: AbortSignal): Promise<string>;
   warn(message: string): void;
 }
@@ -17,6 +18,8 @@ export default class HttpReverseProxy {
   private closed = false;
 
   constructor(private readonly options: HttpReverseProxyOptions) {}
+
+  hasPendingWork() { return this.requests.size > 0 || this.sockets.size > 0; }
 
   async handle(request: IncomingMessage, response: ServerResponse) {
     const abort = this.admit();
@@ -51,6 +54,7 @@ export default class HttpReverseProxy {
     } finally {
       response.off("close", cancel);
       this.requests.delete(abort);
+      this.options.activityChanged?.();
     }
   }
 
@@ -99,6 +103,7 @@ export default class HttpReverseProxy {
     } finally {
       socket.off("close", cancel);
       this.requests.delete(abort);
+      this.options.activityChanged?.();
     }
   }
 
@@ -112,6 +117,7 @@ export default class HttpReverseProxy {
     if (this.closed) throw new Error("Proxy is closed.");
     const abort = new AbortController();
     this.requests.add(abort);
+    this.options.activityChanged?.();
     return abort;
   }
 
@@ -143,7 +149,11 @@ export default class HttpReverseProxy {
 
   private track(socket: Duplex) {
     this.sockets.add(socket);
-    socket.once("close", () => this.sockets.delete(socket));
+    this.options.activityChanged?.();
+    socket.once("close", () => {
+      this.sockets.delete(socket);
+      this.options.activityChanged?.();
+    });
   }
 
   private report(error: unknown) {

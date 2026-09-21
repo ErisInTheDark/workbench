@@ -27,6 +27,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {
+  hasPendingWork?(): boolean;
   afterCommit?(): void;
   beginRuntimeDrain(): void;
   captureReloadState?(): unknown;
@@ -41,6 +42,8 @@ export default class WorkbenchCoreFeature implements ReloadableNodeInstance<Daem
   constructor(private readonly options: WorkbenchCoreFeatureOptions) {
     this.registrations = options.registrations;
   }
+
+  hasPendingWork() { return this.options.hasPendingWork?.() ?? false; }
 
   beginRuntimeDrain() {
     this.options.beginRuntimeDrain();

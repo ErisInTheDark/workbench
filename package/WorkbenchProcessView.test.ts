@@ -18,7 +18,7 @@ function event() {
   return { promise, resolve };
 }
 
-function fixture(target: "app" | "daemon") {
+function fixture(target: "app" | "daemon" | "all") {
   const input = new Terminal();
   const attached = event();
   const daemonStopped = event();
@@ -66,8 +66,8 @@ test("daemon Ctrl+C requests ordered daemon then host shutdown", async () => {
   assert.equal(f.input.isRaw, false);
 });
 
-test("app Ctrl+C invokes only app Quit", async () => {
-  const f = fixture("app");
+for (const target of ["app", "all"] as const) test(`${target} Ctrl+C invokes only app Quit`, async () => {
+  const f = fixture(target);
   const running = f.view.run();
   await f.attached.promise;
   await Promise.resolve();

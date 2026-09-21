@@ -63,7 +63,7 @@ export default class WorkbenchBootstrap {
 
   async run(args) {
     const managed = this.environment.WORKBENCH_THREAD_ID || this.environment.CODEX_THREAD_ID;
-    const view = args.length === 2 && args[0] === "view" && ["daemon", "app"].includes(args[1]);
+    const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
     const humanCommand = view || args.length === 0 || (args.length === 1 && ["connect", "disconnect", "shortcut"].includes(args[0]));
     if (managed && humanCommand) throw new Error("Managed threads cannot install or launch Workbench services.");
     const linked = path.resolve(this.packageRoot, "..");

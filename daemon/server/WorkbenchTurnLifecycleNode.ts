@@ -16,6 +16,7 @@ import WorkbenchDaemonReloadController, { type WorkbenchDaemonReloadControllerSt
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
+import WorkbenchDaemonSleepController from "./WorkbenchDaemonSleepController";
 
 interface WorkbenchTurnLifecycleState {
   reloadController?: WorkbenchDaemonReloadControllerState;
@@ -29,6 +30,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
+    const daemonSleep = new WorkbenchDaemonSleepController(context.sleep);
     const toolRevision = new WorkbenchToolRevisionController(state?.toolRevision ?? state?.mcpGeneration);
     const reloadDirt = new WorkbenchReloadDirtController({
       getSourceState: build.getSourceState,
@@ -58,6 +60,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       beginHandoff: () => ({
         waitForIdle: async () => {
+          await daemonSleep.suspend();
           turnRecovery.beginRuntimeDrain();
           await turnRecovery.waitForIdle();
         },
@@ -68,6 +71,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           return nextState;
         },
         resume: () => {
+          daemonSleep.resume();
           reloadDirt.resumeAfterFailedReload();
           reloadController.resumeAfterFailedReload();
           turnRecovery.resumeAfterFailedReload();
@@ -82,17 +86,18 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         detached = true;
         return nextState;
       },
-      dispose: async () => { if (!detached) await drain(); },
+      dispose: async () => { await daemonSleep.dispose(); if (!detached) await drain(); },
       listRuntimeDrainPending: () => turnRecovery.listRuntimeDrainPending(),
-      registrations: { toolRevision, reloadController, reloadDirt, turnRecovery },
+      registrations: { toolRevision, reloadController, reloadDirt, turnRecovery, daemonSleep },
       start: async () => {
         await reloadDirt.start();
+        daemonSleep.refresh();
       },
     };
   },
   description: "Reload managed turn recovery and tool catalogue revision with their dependants.",
   lifecycle: "handoff",
-  provides: ["toolRevision", "reloadController", "reloadDirt", "turnRecovery"],
+  provides: ["toolRevision", "reloadController", "reloadDirt", "turnRecovery", "daemonSleep"],
   requires: [],
   safeAll: true,
   scope: "server:turns",

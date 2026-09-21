@@ -56,6 +56,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         },
       } },
       start: () => undefined,
+      hasPendingWork: () => singleFile.hasPendingWork(),
       dispose: () => singleFile.dispose(),
     };
   },

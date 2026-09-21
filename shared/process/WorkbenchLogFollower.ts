@@ -9,6 +9,7 @@ import { StringDecoder } from "node:string_decoder";
 type OpenLog = { file: FileHandle; offset: number; decoder: StringDecoder };
 
 export default class WorkbenchLogFollower {
+  private readonly prefixes: readonly string[];
   private started = false;
   private cancelScheduled: (() => void) | null = null;
   private readonly files = new Map<string, OpenLog>();
@@ -19,12 +20,13 @@ export default class WorkbenchLogFollower {
 
   constructor(private readonly options: {
     directory: string;
-    prefix: string;
+    prefix: string | readonly string[];
     write(text: string): Promise<void>;
     failed(error: Error): void;
     schedule?: (callback: () => Promise<void>) => () => void;
   }) {
-    if (!/^[a-z-]+$/u.test(options.prefix)) throw new Error("Invalid process log prefix.");
+    this.prefixes = [...new Set(typeof options.prefix === "string" ? [options.prefix] : options.prefix)];
+    if (!this.prefixes.length || this.prefixes.some(prefix => !/^[a-z-]+$/u.test(prefix))) throw new Error("Invalid process log prefix.");
   }
 
   async start() {
@@ -69,9 +71,11 @@ export default class WorkbenchLogFollower {
   private async drain() {
     while (this.dirty && !this.closed) {
       this.dirty = false;
-      const names = (await fs.readdir(this.options.directory))
-        .filter(file => file.startsWith(`${this.options.prefix}-`) && file.endsWith(".log"))
-        .sort().slice(-16);
+      const available = await fs.readdir(this.options.directory);
+      const groups = this.prefixes.map(prefix => available
+        .filter(file => file.startsWith(`${prefix}-`) && file.endsWith(".log")).sort().slice(-16));
+      const names = groups.flat();
+      const recentNames = new Set(groups.map(group => group.at(-1)));
       // Another rejected launch can write a newer diagnostic file while the
       // running owner keeps its older file. Follow retained files, not newest only.
       for (const [name, current] of this.files) {
@@ -95,7 +99,7 @@ export default class WorkbenchLogFollower {
         const current = { file, offset: 0, decoder: new StringDecoder("utf8") };
         this.files.set(name, current);
         const size = (await file.stat()).size;
-        const recent = this.initial && name === names.at(-1);
+        const recent = this.initial && recentNames.has(name);
         current.offset = this.initial ? recent ? Math.max(0, size - 65_536) : size : 0;
         await this.read(current, recent);
       }
