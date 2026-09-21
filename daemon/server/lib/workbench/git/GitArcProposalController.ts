@@ -63,8 +63,9 @@ export interface GitArcLifecycleState {
   harness: string;
   intentDescription: string;
   intentName: string;
-  phase: "active" | "resolved";
+  phase: "active" | "stashed" | "resolved";
   proposals: Array<{ proposalId: string; status: "committed" | "proposed" }>;
+  stashedPaths?: string[];
   threadId: string;
   updatedAt: string;
 }
@@ -91,7 +92,11 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
     claimedPaths: entry.claimedPaths,
     intentDescription: entry.intentDescription,
     intentName: entry.intentName,
-    phase: entry.phase === "resolved" ? "resolved" as const : "active" as const,
+    phase: entry.phase === "resolved"
+      ? "resolved" as const
+      : entry.phase === "stashed"
+        ? "stashed" as const
+        : "active" as const,
     proposalIds: entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []),
   };
 }
@@ -101,19 +106,22 @@ function projectLifecycleState(
   lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
   summaries: GitArcProposalSummary[],
 ): GitArcLifecycleState {
-  return {
+  const common = {
     checkpointCommit: lifecycle.checkpointCommit,
-    claimedPaths: lifecycle.claimedPaths,
     harness: entry.harness,
     intentDescription: lifecycle.intentDescription,
     intentName: lifecycle.intentName,
-    phase: lifecycle.phase,
     proposals: summaries.flatMap(({ proposalId, status }) => (
       status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
     )),
     threadId: entry.threadId,
     updatedAt: entry.updatedAt,
   };
+  if (lifecycle.phase === "stashed") {
+    return { ...common, claimedPaths: [], phase: "stashed", stashedPaths: lifecycle.claimedPaths };
+  }
+  if (lifecycle.phase === "resolved") return { ...common, claimedPaths: [], phase: "resolved" };
+  return { ...common, claimedPaths: lifecycle.claimedPaths, phase: "active" };
 }
 
 function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
@@ -250,7 +258,7 @@ async function prepareAcceptedClaimTransition({
     successorCheckpoint = prepared.checkpointCommit;
     updates.push(prepared.update);
   }
-  const nextLifecycle: NonNullable<ReturnType<typeof lifecycleEntry>> = {
+  const nextLifecycle: NonNullable<GitArcRegistryEntry["retainedArc"]> = {
     ...lifecycle,
     checkpointCommit: successorCheckpoint ?? sourceCheckpoint,
     claimedPaths,

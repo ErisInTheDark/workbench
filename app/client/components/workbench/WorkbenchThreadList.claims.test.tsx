@@ -66,28 +66,38 @@ type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>
 function createThreadEntry({
   claimedPaths,
   proposalStatus = null,
+  stashedPaths,
   threadId,
   title,
 }: {
   claimedPaths?: string[];
   proposalStatus?: "committed" | "proposed" | null;
+  stashedPaths?: string[];
   threadId: string;
   title: string;
 }): ThreadEntry {
+  const gitArc: ThreadEntry["gitArc"] = stashedPaths ? {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: [],
+    intentDescription: "Protect the focused sidebar presentation.",
+    intentName: "sidebar claim",
+    phase: "stashed",
+    proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
+    stashedPaths,
+    updatedAt: "2026-08-20T00:00:00.000Z",
+  } : claimedPaths ? {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths,
+    intentDescription: "Protect the focused sidebar presentation.",
+    intentName: "sidebar claim",
+    phase: claimedPaths.length ? "active" : "resolved",
+    proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
+    updatedAt: "2026-08-20T00:00:00.000Z",
+  } as ThreadEntry["gitArc"] : undefined;
   return {
     activityAt: 1_723_456_789_000,
     entryKind: "thread",
-    ...(claimedPaths ? {
-      gitArc: {
-        checkpointCommit: "a".repeat(40),
-        claimedPaths,
-        intentDescription: "Protect the focused sidebar presentation.",
-        intentName: "sidebar claim",
-        phase: claimedPaths.length ? "active" : "resolved",
-        proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
-        updatedAt: "2026-08-20T00:00:00.000Z",
-      },
-    } : {}),
+    ...(gitArc ? { gitArc } : {}),
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { agent: { agentStatus: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["turn-one"] }, kind: "completed", reason: "agentCompleted", settled: false },
     metadata: { archived: false, pinned: false, snoozed: false },
@@ -305,6 +315,17 @@ test("thread rows render counts only for active file claims", () => {
 
   const unclaimedHtml = renderThreads([createThreadEntry({ threadId: "planned", title: "Planned work" })]);
   assert.doesNotMatch(unclaimedHtml, /data-role="thread-file-claim"|claimed files/u);
+});
+
+test("stashed arcs show the archive icon count and retained paths instead of live claims", () => {
+  const html = renderThreads([createThreadEntry({
+    stashedPaths: ["src/one.ts", "src/two.ts"],
+    threadId: "stashed",
+    title: "Stashed work",
+  })]);
+  assert.match(html, /aria-label="Stashed work, Completed, 2 stashed files,/u);
+  assert.match(html, /data-role="thread-file-stash"[\s\S]*?<span>2<\/span>/u);
+  assert.doesNotMatch(html, /data-role="thread-file-claim"/u);
 });
 
 test("claim-free thread rows show only non-empty composer drafts in the claim slot", async () => {

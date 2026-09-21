@@ -49,6 +49,7 @@ export default class GitArcLifecycleController {
       intentName: current.intentName,
       plannedPaths: current.phase === "plan" ? checkpoint.metadata?.scopePaths ?? [] : [],
       claimedPaths: getGitArcLiveClaimPaths(current),
+      ...(current.phase === "stashed" ? { stashedPaths: current.claimedPaths } : {}),
       adoptedPaths: current.phase === "plan" ? checkpoint.metadata?.adoptedPaths ?? [] : [],
       proposals: (await this.proposals.findLifecycleState(input))?.proposals ?? [],
       repoRoot: repository.root,
@@ -79,6 +80,7 @@ export default class GitArcLifecycleController {
     const store = new GitCheckpointStore(repository, this.resolveThreadIdentity);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
+    if (current.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before continuing or editing claims.");
     if (request?.kind === "add") {
       const existing = getGitArcLiveClaimPaths(current);
       const overlapping = request.paths.filter((candidate) => existing.some((claim) => gitArcPathsOverlap(claim, candidate)));

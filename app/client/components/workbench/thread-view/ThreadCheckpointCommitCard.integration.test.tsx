@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
@@ -199,6 +200,48 @@ test("proposals committed through another path render as resolved rather than fa
     renderUnavailableProposal(),
     /data-thread-checkpoint-committed-outside-proposal/u,
   );
+});
+
+test("lifecycle footer swaps whole-arc stash and unstash actions", () => {
+  const common = {
+    cwd: "C:/workspace",
+    harness: "codex" as const,
+    onReleased: async () => undefined,
+    projectId: "project-one",
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    threadLifecycle: { agent: { agentStatus: "completed" }, kind: "completed", reason: "agentCompleted", settled: false } as const,
+  };
+  const active = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    ...common,
+    claim: {
+      checkpointCommit: "a".repeat(40),
+      claimedPaths: ["src/one.ts"],
+      intentDescription: "",
+      intentName: "stash footer",
+      phase: "active",
+      proposals: [],
+      updatedAt: "2026-09-22T00:00:00.000Z",
+    },
+  }));
+  assert.match(active, />Stash files</u);
+  assert.doesNotMatch(active, />Unstash files</u);
+
+  const stashed = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    ...common,
+    claim: {
+      checkpointCommit: "a".repeat(40),
+      claimedPaths: [],
+      intentDescription: "",
+      intentName: "stash footer",
+      phase: "stashed",
+      proposals: [],
+      stashedPaths: ["src/one.ts"],
+      updatedAt: "2026-09-22T00:00:00.000Z",
+    },
+  }));
+  assert.match(stashed, />Unstash files</u);
+  assert.doesNotMatch(stashed, />Stash files</u);
 });
 
 test("proposal cards consume loaded validity from thread observation", () => {

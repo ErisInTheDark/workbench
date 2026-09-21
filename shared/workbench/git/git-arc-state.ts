@@ -1,5 +1,4 @@
 /*
- * Keywords: git, arc, scope, lifecycle, planning drift.
  * Exports:
  * - GitArcClaimChanges: literal, normalised additions, removals and explicit adoptions.
  * - GitArcPlanningDrift: previous snapshot and changed retained paths, before refresh.
@@ -22,11 +21,12 @@ export interface GitArcPlanningDrift {
 }
 
 export interface GitArcScopeState {
-  phase: "plan" | "active" | "resolved";
+  phase: "plan" | "active" | "stashed" | "resolved";
   checkpointCommit: string;
   intentName: string;
   plannedPaths: string[];
   claimedPaths: string[];
+  stashedPaths?: string[];
   adoptedPaths: string[];
   proposals: Array<{ proposalId: string; status: "committed" | "proposed" }>;
   repoRoot: string;
@@ -38,7 +38,7 @@ export interface GitArcMutationResult {
   intentName: string | null;
   kind: "arc" | "noop";
   noOp?: true;
-  phase: "active" | "resolved";
+  phase: "active" | "stashed" | "resolved";
   scopePaths: string[];
   addedClaims: string[];
   removedClaims: string[];
@@ -47,6 +47,8 @@ export interface GitArcMutationResult {
   unchanged: boolean;
   repoRoot: string;
   skippedIgnoredPaths: string[];
+  stashedPaths?: string[];
+  conflictedPaths?: string[];
 }
 
 export function applyGitClaimChanges(existing: readonly string[], changes: GitArcClaimChanges) {

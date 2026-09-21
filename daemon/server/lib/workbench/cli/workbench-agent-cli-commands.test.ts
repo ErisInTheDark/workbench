@@ -64,7 +64,7 @@ test("status selectors preserve equivalent CLI and MCP inputs", async () => {
     if (parsed.kind !== "request") assert.fail("Expected status request.");
     assert.deepEqual(parsed.request.body?.full, ["dirty", "unclaimed-dirt"]);
     assert.deepEqual(parsed.request.body, mcp.body);
-    const status = { pending: [], accepted: [], dirtyClaims: ["a", "b", "c", "d", "e", "f"], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [] };
+    const status = { pending: [], accepted: [], dirtyClaims: ["a", "b", "c", "d", "e", "f"], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [] };
     const output = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify(status) });
     assert.deepEqual(parseGitArcStatus(output.stdout).data, status);
     const empty = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify({ ...status, dirtyClaims: [] }) });
@@ -1453,6 +1453,38 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
   } finally {
     await new Promise<void>((resolve, reject) => cwdServer.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("stash commands are argument-free whole-arc operations with conflict guidance", async () => {
+  for (const [word, action] of [["stash", "arcStash"], ["unstash", "arcUnstash"]] as const) {
+    const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === `git arc ${word}`);
+    assert.ok(definition);
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", word], gitArcOptions);
+    assert.equal(parsed.kind, "request");
+    if (parsed.kind !== "request") assert.fail("Expected stash request.");
+    assert.equal(parsed.request.body?.action, action);
+    assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", word, "one.ts"], gitArcOptions)).kind, "error");
+    await assert.rejects(definition.buildRequestFromJson({ paths: ["one.ts"] }, {
+      ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null,
+    }));
+  }
+  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "unstash"], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  if (parsed.kind !== "request") assert.fail("Expected unstash request.");
+  const output = adaptWorkbenchAgentCliResponse({
+    httpOk: true,
+    request: parsed.request,
+    text: JSON.stringify({
+      checkpointCommit: "a".repeat(40),
+      conflictedPaths: ["src/a.ts"],
+      intentName: "resume work",
+      phase: "active",
+      scopePaths: ["src/a.ts"],
+      stashedPaths: [],
+    }),
+  });
+  assert.match(output.stdout, /Resolve the conflict markers directly/u);
+  assert.deepEqual(parseGitArcReceipt(output.stdout)?.conflictedPaths, ["src/a.ts"]);
 });
 
 test("generated and root launchers follow endpoint publication instead of inherited origin", async () => {

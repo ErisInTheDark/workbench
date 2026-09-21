@@ -14,6 +14,55 @@ import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtu
 
 const fixtureCache = new GitTestFixtureCache();
 
+test("object-only three-way merges return text markers without disturbing Git operation state", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const file = path.join(fixture.root, "conflict.txt");
+  await fs.writeFile(file, "base\n");
+  await repository.run(["add", "conflict.txt"]);
+  await repository.run(["commit", "--quiet", "-m", "add conflict base"]);
+  const base = await repository.currentHead();
+  await fs.writeFile(file, "stashed\n");
+  const stashed = await repository.writeScopedWorktreeTree(["conflict.txt"], base);
+  await repository.restorePaths(base, ["conflict.txt"]);
+  await fs.writeFile(file, "current\n");
+  await repository.run(["add", "conflict.txt"]);
+  await repository.run(["commit", "--quiet", "-m", "change conflict target"]);
+  const current = await repository.currentHead();
+  const index = await repository.writeIndexTree();
+
+  const result = await repository.mergeWorktreeTrees(base, current, stashed);
+  assert.deepEqual(result.conflictedPaths, ["conflict.txt"]);
+  assert.deepEqual(result.unsupportedConflictTypes, []);
+  await repository.restorePaths(result.tree, ["conflict.txt"]);
+  assert.match(await fs.readFile(file, "utf8"), /<<<<<<<[\s\S]*=======[\s\S]*>>>>>>>/u);
+  assert.equal(await repository.writeIndexTree(), index);
+  assert.equal(await repository.run(["ls-files", "--unmerged"]), "");
+  await assert.rejects(repository.run(["rev-parse", "--verify", "MERGE_HEAD"]));
+});
+
+test("object-only three-way merges identify binary conflicts as unsupported", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const file = path.join(fixture.root, "conflict.bin");
+  await fs.writeFile(file, Buffer.from([0, 1, 2]));
+  await repository.run(["add", "conflict.bin"]);
+  await repository.run(["commit", "--quiet", "-m", "add binary conflict base"]);
+  const base = await repository.currentHead();
+  await fs.writeFile(file, Buffer.from([0, 1, 3]));
+  const stashed = await repository.writeScopedWorktreeTree(["conflict.bin"], base);
+  await repository.restorePaths(base, ["conflict.bin"]);
+  await fs.writeFile(file, Buffer.from([0, 1, 4]));
+  await repository.run(["add", "conflict.bin"]);
+  await repository.run(["commit", "--quiet", "-m", "change binary conflict target"]);
+
+  const result = await repository.mergeWorktreeTrees(base, await repository.currentHead(), stashed);
+  assert.deepEqual(result.conflictedPaths, ["conflict.bin"]);
+  assert.deepEqual(result.unsupportedConflictTypes, ["CONFLICT (binary)"]);
+});
+
 test("unborn snapshots preserve staged and untracked files without creating branch history", async (context) => {
   const fixture = await fixtureCache.copy(UNBORN_FIXTURE);
   context.after(fixture.dispose);

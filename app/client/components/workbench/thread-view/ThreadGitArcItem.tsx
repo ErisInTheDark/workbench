@@ -42,6 +42,8 @@ const ACTION_LABELS = {
   rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding", timedOut: "Timed out rescinding" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring", timedOut: "Timed out restoring" },
   start: { completed: "Started", failed: "Failed to start", inProgress: "Starting", timedOut: "Timed out starting" },
+  stash: { completed: "Stashed", failed: "Failed to stash", inProgress: "Stashing", timedOut: "Timed out stashing" },
+  unstash: { completed: "Unstashed", failed: "Failed to unstash", inProgress: "Unstashing", timedOut: "Timed out unstashing" },
   unknown: { completed: "Ran unrecognised action on", failed: "Failed to run action on", inProgress: "Running action on", timedOut: "Timed out running action on" },
 } as const;
 
@@ -65,6 +67,8 @@ function failureAction (action: GitArcCommandAction): GitArcFailureAction {
     rescind: "proposalRescind",
     restore: "restore",
     start: "arcStart",
+    stash: "arcStash",
+    unstash: "arcUnstash",
     unknown: "unknown",
   };
   return actions[action];
@@ -128,7 +132,9 @@ export default function ThreadGitArcItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const state = actionState(outcome);
-  const defaultOpen = commandIntent.action === "status" || commandIntent.action === "unknown";
+  const defaultOpen = commandIntent.action === "status"
+    || commandIntent.action === "unknown"
+    || Boolean(receipt?.conflictedPaths?.length);
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   const adoptPaths = commandIntent.adoptPaths ?? [];
@@ -189,6 +195,10 @@ export default function ThreadGitArcItem ({
       ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
       : commandIntent.action === "release" || commandIntent.action === "restore"
         ? selectedPaths
+        : commandIntent.action === "stash"
+          ? receipt?.stashedPaths ?? []
+          : commandIntent.action === "unstash"
+            ? receipt?.claimedPaths ?? []
         : commandIntent.action === "start" || commandIntent.action === "continue"
           ? failureClaimPaths(failure)
           : [];
@@ -214,7 +224,10 @@ export default function ThreadGitArcItem ({
         ? "Planned"
         : commandIntent.action === "release"
           ? commandIntent.disown ? "Disowned" : "Released"
-          : commandIntent.action === "restore" ? "Restored" : "Claimed";
+          : commandIntent.action === "restore" ? "Restored"
+            : commandIntent.action === "stash" ? "Stashed"
+              : commandIntent.action === "unstash" ? "Unstashed"
+                : "Claimed";
   const failedPlanOrClaim = state === "failed" && (
     commandIntent.action === "plan"
     || commandIntent.action === "planStart"
@@ -462,6 +475,20 @@ export default function ThreadGitArcItem ({
               workspaceRoots={workspaceRoots}
             />
           </ThreadDisclosure>
+        ) : null}
+        {commandIntent.action === "unstash" && receipt?.conflictedPaths?.length ? (
+          <div className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] pt-1.5">
+            <ThreadClaimedFileList
+              label="Resolve conflict markers"
+              marker="dirty"
+              paths={receipt.conflictedPaths}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
+            />
+            <p className="px-2 pb-1 text-[0.78em] text-fg/muted">Edit the markers directly. No Git continuation or abort command is required.</p>
+          </div>
         ) : null}
       </ThreadDisclosure>
       {!isOpen && collapsedContent ? (

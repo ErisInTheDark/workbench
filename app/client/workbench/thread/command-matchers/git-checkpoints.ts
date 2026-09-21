@@ -39,6 +39,8 @@ const ARC_MATCHER_IDS = {
   release: "git-arc.release",
   restore: "git-arc.restore",
   start: "git-arc.start",
+  stash: "git-arc.stash",
+  unstash: "git-arc.unstash",
   planStart: "git-arc.plan-start",
   rescind: "git-arc.rescind",
   unknown: "git-arc.unknown",
@@ -153,6 +155,16 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: ARC_MATCHER_IDS.restore,
     presentationName: "git_arc_restore",
   }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+stash(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.stash,
+    presentationName: "git_arc_stash",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+unstash(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.unstash,
+    presentationName: "git_arc_unstash",
+  }),
   CommandMatcher({
     id: ARC_MATCHER_IDS.unknown,
     match: ({ stage }) => /^wb(?:\.cmd)?\s+git\s+(?:arc|plan)(?:\s|$)/iu.test(stage.text.trim())
@@ -248,6 +260,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       : null;
   }
   if (proposalId) return null;
+  if ((action === "stash" || action === "unstash") && (ref || paths.length || disown)) return null;
   if (action === "restore" && !ref) return null;
   return { action, ...(action === "release" ? { disown } : {}), intentName: null, paths, ref };
 }

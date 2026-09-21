@@ -142,6 +142,13 @@ test("live claims prevent thread settlement while proposals do not", () => {
   assert.equal(gitArcPreventsThreadSettlement(null), false);
   assert.equal(gitArcPreventsThreadSettlement(resolved), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, claimedPaths: ["owned.ts"], phase: "active" }), true);
+  const stashed = {
+    ...resolved,
+    phase: "stashed" as const,
+    stashedPaths: ["owned.ts"],
+  };
+  assert.equal(WorkbenchGitArcLifecycleStateSchema.safeParse(stashed).success, true);
+  assert.equal(gitArcPreventsThreadSettlement(stashed), true);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
 });

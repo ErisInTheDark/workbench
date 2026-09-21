@@ -263,6 +263,32 @@ const claims = defineWorkbenchAgentCommand({
   },
 });
 
+function stashCommand(action: "arcStash" | "arcUnstash", word: "stash" | "unstash") {
+  return defineWorkbenchAgentCommand({
+    description: word === "stash"
+      ? "Pause the caller's complete active arc, preserving its changes while releasing every claim."
+      : "Resume the caller's complete stashed arc, reacquiring every claim before restoring its changes.",
+    effects: { destructive: true },
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", word],
+    usage: `wb git arc ${word}`,
+    inputSchema: z.object({}).strict(),
+    parseCliArgs(args) {
+      if (args.length) throw new Error(`Git arc ${word} accepts no paths or flags.`);
+      return {};
+    },
+    buildRequest(_input, { callerHarness, callerThreadId, cwd }) {
+      return postWorkbenchAgentCommand("/api/git-checkpoint", {
+        action,
+        ...baseBody(callerHarness, callerThreadId, cwd),
+      }, `git-arc-${word}`);
+    },
+  });
+}
+
+const stash = stashCommand("arcStash", "stash");
+const unstash = stashCommand("arcUnstash", "unstash");
+
 const scope = defineWorkbenchAgentCommand({
   description: "Read scope and current proposal IDs/statuses without changing Git. Recover a lost proposal response here before retrying.",
   effects: { readOnly: true, idempotent: true }, helpGroups: ["git-arc"],
@@ -316,6 +342,8 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   status,
   move,
   release,
+  stash,
+  unstash,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
   ...WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS,

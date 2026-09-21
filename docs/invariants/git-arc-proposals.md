@@ -6,3 +6,4 @@
 - Git arc storage writes canonical Workbench thread IDs. Reads resolve legacy provider IDs through admitted identity; unresolved owners are orphaned, inactive, and omitted from normal projections.
 - Proposal summaries do not require diff hydration. Full proposal diffs hydrate on demand through bounded Git work; completed immutable projections may be reused only by exact tree-and-path identity.
 - Every new Workbench Git ref must be handled explicitly by the history rewriter and covered across replacement history.
+- Stashing an arc preserves its complete claimed-path snapshot and original merge base while releasing every live claim. Unstash reacquires the complete claim set, three-way applies all saved changes onto clean target paths, leaves textual conflicts as ordinary worktree markers with no Git operation in progress, and compensates both sides on failure.

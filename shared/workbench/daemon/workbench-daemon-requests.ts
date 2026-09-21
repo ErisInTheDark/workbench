@@ -43,6 +43,7 @@ import type { WorkbenchThreadActionMap } from "../thread/thread-actions.ts";
 import type { WorkbenchModelOption } from "../provider/provider-model.ts";
 import type { WorkbenchAccountLimits } from "../provider/provider-account.ts";
 import type {
+  GitArcStashResult,
   GitCheckpointCompareResult,
   GitCheckpointProposal,
   GitCheckpointRequest,
@@ -116,6 +117,8 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
   "git/arc/release": "arcRelease",
   "git/arc/remove": "arcRemove",
   "git/arc/restore": "restore",
+  "git/arc/stash": "arcStash",
+  "git/arc/unstash": "arcUnstash",
 } as const satisfies Record<string, GitCheckpointRequest["action"]>;
 
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
@@ -150,6 +153,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/arc/release": { params: GitArcParams<"arcRelease">; result: WorkbenchGitArcSuccess };
   "git/arc/remove": { params: GitArcParams<"arcRemove">; result: WorkbenchGitArcSuccess };
   "git/arc/restore": { params: GitArcParams<"restore">; result: WorkbenchGitArcSuccess };
+  "git/arc/stash": { params: GitArcParams<"arcStash">; result: GitArcStashResult };
+  "git/arc/unstash": { params: GitArcParams<"arcUnstash">; result: GitArcStashResult };
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };
   "local-capabilities/update": { params: WorkbenchLocalCapabilitySettingsUpdateRequest; result: WorkbenchLocalCapabilitySettingsResponse };
   "native/file/link-roots": { params: ResolveExternalFileLinkRootsRequest; result: ResolveExternalFileLinkRootsResponse };

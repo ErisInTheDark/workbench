@@ -919,7 +919,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   });
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
   internal.createInspectionSnapshot = async () => ({});
-  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
+  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "stashArc", "unstashArc", "rescindProposal", "diff", "createProposal"] as const) {
     internal[method] = async () => { calls.push(method); return {}; };
   }
   internal.listUnclaimedWorkspaceDirt = async () => [];
@@ -936,6 +936,8 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     { action: "planAdopt", paths: ["src/dirty.ts"], ...common },
     { action: "planStart", intentDescription: "", intentName: "start", paths: ["src/a.ts"], ...common },
     { action: "arcStart", ...common },
+    { action: "arcStash", ...common },
+    { action: "arcUnstash", ...common },
     { action: "proposalRescind", proposalId: "proposal-one", ...common },
     { action: "diff", paths: ["src/a.ts"], ref: "abcdef1", ...common },
     { action: "proposalCreate", amendProposalId: "proposal-one", description: "", title: "amend", ...common },
@@ -943,7 +945,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   const statuses = await Promise.all(requests.map(async (request) => (await feature.executeRequest(request)).status));
   assert.deepEqual(statuses, Array.from({ length: requests.length }, () => 200));
   assert.deepEqual([...calls].sort(), [
-    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "rescindProposal", "diff", "createProposal",
+    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "stashArc", "unstashArc", "rescindProposal", "diff", "createProposal",
   ].sort());
 });
 
@@ -980,7 +982,7 @@ test("status and proposal diff may inspect a cross-harness target without changi
   internal.readStatus = async input => {
     calls.push({ action: "status", ...input });
     return {
-      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [],
+      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [],
       recovery: [], unavailableRecovery: [],
     };
   };

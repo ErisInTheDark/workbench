@@ -62,6 +62,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_status",
   "git_arc_reword",
   "git_arc_start",
+  "git_arc_stash",
+  "git_arc_unstash",
   "git_arc_wait",
   "git_arc_continue",
   "git_arc_mv",
@@ -81,7 +83,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "unknown";
+  action: "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "stash" | "unstash" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
@@ -381,6 +383,8 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_rescind: "rescind",
     git_arc_restore: "restore",
     git_arc_start: "start",
+    git_arc_stash: "stash",
+    git_arc_unstash: "unstash",
   };
   return actions[name] ?? null;
 }
@@ -467,6 +471,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     rescind: "git-arc.rescind",
     restore: "git-arc.restore",
     start: "git-arc.start",
+    stash: "git-arc.stash",
+    unstash: "git-arc.unstash",
     unknown: "git-arc.unknown",
   };
   const stats = action === "compare" || action === "diff" || action === "start"

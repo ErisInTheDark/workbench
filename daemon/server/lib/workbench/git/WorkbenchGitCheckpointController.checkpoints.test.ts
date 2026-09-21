@@ -318,7 +318,7 @@ checkpointTest("plans snapshot claimed work and their checked proposals feed con
   await checkContinuation(repoRoot, threadId, refreshedCheckpoint.checkpointCommit, proposal.proposalId);
 });
 
-checkpointTest("restore discards proposed work while clean unclaim expires only its proposal", 2, async (bundle) => {
+checkpointTest("restore discards proposed work while clean unclaim preserves its proposal snapshot", 2, async (bundle) => {
   const fixture = branchFixture(bundle, "releaseRestore");
   const repoRoot = fixture.root;
   const { restoreThreadId, unclaimThreadId } = fixture.state;
@@ -343,14 +343,15 @@ checkpointTest("restore discards proposed work while clean unclaim expires only 
   const released = await removeFromGitArc({ cwd: repoRoot, paths: ["literal[1].txt"], threadId: unclaimThreadId });
   assert.deepEqual(released.scopePaths, []);
   assert.equal(await controller.findActiveClaim({ cwd: repoRoot, threadId: unclaimThreadId }), null);
-  const cleanProposalAfterUnclaim = await readGitCheckpointProposal({
+  const proposalAfterCleanUnclaim = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
     proposalId: fixture.state.unclaimedProposalId,
     threadId: unclaimThreadId,
   });
-  assert.equal(cleanProposalAfterUnclaim.status, "unavailable");
-  assert.match(cleanProposalAfterUnclaim.unavailableReason ?? "", /no longer has working-tree changes/u);
+  assert.equal(proposalAfterCleanUnclaim.status, "proposed");
+  assert.equal(proposalAfterCleanUnclaim.unavailableReason, null);
+  assert.equal(proposalAfterCleanUnclaim.includeNewerAvailable, true);
 });
 
 checkpointTest("clean release resolves its lifecycle and releases every claim", 1, async (bundle) => {
@@ -361,6 +362,51 @@ checkpointTest("clean release resolves its lifecycle and releases every claim", 
   assert.deepEqual(cleanRelease.releasedClaims, ["selected.txt"]);
   assert.deepEqual(cleanRelease.scopePaths, []);
   assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId }))?.phase, "resolved");
+});
+
+checkpointTest("stash releases claims and conflict-safe unstash restores editable work without Git operation state", 9, async (bundle) => {
+  const { root: repoRoot, state } = branchFixture(bundle, "stash");
+  await write(repoRoot, "selected.txt", "stashed line\n");
+
+  const stashed = await controller.stashArc({ cwd: repoRoot, threadId: state.threadId });
+  assert.equal(stashed.phase, "stashed");
+  assert.deepEqual(stashed.stashedPaths, ["selected.txt"]);
+  assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), "selected checkpoint\n");
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "stashed");
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), false);
+  await assert.rejects(
+    controller.createPlan({ cwd: repoRoot, intentName: "replacement", paths: ["selected.txt"], threadId: state.threadId }),
+    /stashed.*unstash/i,
+  );
+  await assert.rejects(
+    controller.editPlanClaims({ addPaths: ["added.txt"], cwd: repoRoot, inherit: true, threadId: state.threadId }),
+    /stashed.*unstash/i,
+  );
+  await assert.rejects(
+    controller.createAndStartPlan({ cwd: repoRoot, intentName: "replacement", paths: ["selected.txt"], threadId: state.threadId }),
+    /stashed.*unstash/i,
+  );
+
+  await fs.writeFile(path.join(repoRoot, "selected.txt"), Buffer.from([0, 1, 2]));
+  await git(repoRoot, ["add", "--", "selected.txt"]);
+  await git(repoRoot, ["commit", "-m", "change selected to binary while stashed"]);
+  await assert.rejects(controller.unstashArc({ cwd: repoRoot, threadId: state.threadId }), /binary/u);
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "stashed");
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), false);
+
+  await write(repoRoot, "selected.txt", "current line\n");
+  await git(repoRoot, ["add", "--", "selected.txt"]);
+  await git(repoRoot, ["commit", "-m", "change selected while stashed"]);
+  const unstashed = await controller.unstashArc({ cwd: repoRoot, threadId: state.threadId });
+
+  assert.equal(unstashed.phase, "active");
+  assert.deepEqual(unstashed.conflictedPaths, ["selected.txt"]);
+  assert.match(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), /<<<<<<<|=======|>>>>>>>/u);
+  assert.equal((await git(repoRoot, ["write-tree"])).trim(), (await git(repoRoot, ["rev-parse", "HEAD^{tree}"])).trim());
+  assert.equal(await git(repoRoot, ["ls-files", "--unmerged"]), "");
+  await assert.rejects(git(repoRoot, ["rev-parse", "--verify", "MERGE_HEAD"]));
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "active");
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
 });
 
 checkpointTest("dirty disown preserves inactive plans and proposals remain committable after unclaim", 4, async (bundle, context) => {
@@ -652,14 +698,15 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   assert.equal(await fs.readFile(path.join(repoRoot, "unrelated.txt"), "utf8"), "unrelated worktree\n");
 
   await git(repoRoot, ["restore", "--", "literal[1].txt"]);
-  const unavailable = await readGitCheckpointProposal({
+  const reverted = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
     proposalId: fixture.state.cleanProposalId,
     threadId: cleanThreadId,
   });
-  assert.equal(unavailable.status, "unavailable");
-  assert.match(unavailable.unavailableReason ?? "", /no longer has working-tree changes/u);
+  assert.equal(reverted.status, "proposed");
+  assert.equal(reverted.unavailableReason, null);
+  assert.equal(reverted.includeNewerAvailable, true);
 });
 
 checkpointTest("manual commits resolve exact proposals without treating committed history as worktree dirt", 7, async (bundle) => {

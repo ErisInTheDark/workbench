@@ -10,6 +10,7 @@
  * - GitCheckpointRequestSchema/GitCheckpointRequest: stateless checkpoint requests.
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: per-file inspection changes.
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
+ * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  */
 import { z } from "zod";
@@ -173,6 +174,8 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     disown: z.boolean().default(false),
     ...checkpointBaseRequest,
   }),
+  z.object({ action: z.literal("arcStash"), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcUnstash"), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("arcMove"),
     move: GitArcMoveRequestSchema,
@@ -277,7 +280,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
 export type GitCheckpointRequest = z.infer<typeof GitCheckpointRequestSchema>;
 
 const GitCheckpointCompareMemberSchema = z.object({
-  phase: z.enum(["plan", "active", "resolved"]).optional(),
+  phase: z.enum(["plan", "active", "stashed", "resolved"]).optional(),
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
@@ -289,7 +292,7 @@ const GitCheckpointCompareMemberSchema = z.object({
 });
 
 export const GitCheckpointCompareResultSchema = z.object({
-  phase: z.enum(["plan", "active", "resolved"]).optional(),
+  phase: z.enum(["plan", "active", "stashed", "resolved"]).optional(),
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
@@ -301,6 +304,13 @@ export const GitCheckpointCompareResultSchema = z.object({
   scopePaths: optionalCheckpointPaths,
 });
 export type GitCheckpointCompareResult = z.infer<typeof GitCheckpointCompareResultSchema>;
+
+export const GitArcStashResultSchema = z.object({
+  conflictedPaths: z.array(nonEmptyString),
+  phase: z.enum(["active", "stashed"]),
+  stashedPaths: z.array(nonEmptyString),
+}).strict();
+export type GitArcStashResult = z.infer<typeof GitArcStashResultSchema>;
 
 const GitCheckpointCommitMessageSchema = z.object({
   description: z.string(),

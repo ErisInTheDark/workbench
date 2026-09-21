@@ -6,7 +6,7 @@ import test from "node:test";
 import { formatGitArcStatus, parseGitArcStatus, type GitArcStatus } from "./git-arc-status";
 
 const empty: GitArcStatus = {
-  pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+  pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
 };
 
 test("compact status preserves counts separately from expanded and ambiguous literal paths", () => {
@@ -60,4 +60,14 @@ test("clean claim loss omits empty comparison noise", () => {
 
 test("invalid recovery evidence is rejected", () => {
   assert.equal(parseGitArcStatus("Lost claims: one\nHEAD since claim loss: unexpected").success, false);
+});
+
+test("stashed claims round trip with the user-alignment warning", () => {
+  const input = { ...empty, stashedClaims: ["src/a.ts", "src/b.ts"] };
+  const output = formatGitArcStatus(input);
+  assert.equal(output, [
+    "Stashed claims: src/a.ts, src/b.ts",
+    "Arc stashed: only continue working or unstash when you and the user are on the same page about resuming this work.",
+  ].join("\n"));
+  assert.deepEqual(parseGitArcStatus(output).data, input);
 });

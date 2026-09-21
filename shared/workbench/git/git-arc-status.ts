@@ -19,6 +19,7 @@ export const GitArcClaimLossSchema = z.object({
   version: z.literal(1),
   paths: filePaths.min(1),
   head: sha.nullable(),
+  frozen: z.boolean().default(false),
 }).strict();
 export type GitArcClaimLoss = z.infer<typeof GitArcClaimLossSchema>;
 const comparison = z.array(z.object({
@@ -37,13 +38,14 @@ export const GitArcStatusSchema = z.object({
   accepted: z.array(z.object({ proposalId: text, title: z.string(), commitSha: sha }).strict()),
   dirtyClaims: filePaths,
   cleanClaims: filePaths,
+  stashedClaims: filePaths,
   unclaimedDirt: filePaths,
   recovery: z.array(recovery),
   unavailableRecovery: filePaths,
 }).strict();
 export type GitArcStatus = z.infer<typeof GitArcStatusSchema>;
 const presentationSchema = GitArcStatusSchema.extend({
-  dirtyClaims: summary, cleanClaims: summary, unclaimedDirt: summary,
+  dirtyClaims: summary, cleanClaims: summary, stashedClaims: summary, unclaimedDirt: summary,
   recovery: z.array(recovery.extend({ paths: summary })),
 });
 export type GitArcStatusPresentation = z.infer<typeof presentationSchema>;
@@ -99,6 +101,10 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
     ["Clean claims", status.cleanClaims, "clean"],
     ["Unclaimed dirt", status.unclaimedDirt, "unclaimed-dirt"],
   ] as const) if (paths.length) lines.push(`${label}: ${summarize(paths, full.includes(selector))}`);
+  if (status.stashedClaims.length) {
+    lines.push(`Stashed claims: ${summarize(status.stashedClaims)}`);
+    lines.push("Arc stashed: only continue working or unstash when you and the user are on the same page about resuming this work.");
+  }
   for (const lost of status.recovery) {
     lines.push(`Lost claims: ${summarize(lost.paths)}`);
     if (lost.headMovement === "incompatible") lines.push("HEAD since claim loss: incompatible");
@@ -118,7 +124,7 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
 export function parseGitArcStatus(output: string) {
   try {
     const result: GitArcStatusPresentation = {
-      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
     };
     let lost: GitArcStatusPresentation["recovery"][number] | undefined;
     const lines = output.trim() ? output.trim().split(/\r?\n/u) : [];
@@ -132,7 +138,7 @@ export function parseGitArcStatus(output: string) {
         result.recovery.push(lost);
         lost = undefined;
       }
-      if (["Proposals pending", "Proposals accepted", "Dirty claims", "Clean claims", "Unclaimed dirt", "Claim-loss baseline unavailable"].includes(label)) {
+      if (["Proposals pending", "Proposals accepted", "Dirty claims", "Clean claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
         if (seen.has(label)) throw new Error("Duplicate status group.");
         seen.add(label);
       }
@@ -147,6 +153,12 @@ export function parseGitArcStatus(output: string) {
           break;
         case "Dirty claims": result.dirtyClaims = parseSummary(value); break;
         case "Clean claims": result.cleanClaims = parseSummary(value); break;
+        case "Stashed claims": result.stashedClaims = parseSummary(value); break;
+        case "Arc stashed":
+          if (value !== "only continue working or unstash when you and the user are on the same page about resuming this work.") {
+            throw new Error("Invalid stashed guidance.");
+          }
+          break;
         case "Unclaimed dirt": result.unclaimedDirt = parseSummary(value); break;
         case "Lost claims":
           if (lost) throw new Error("Incomplete recovery group.");

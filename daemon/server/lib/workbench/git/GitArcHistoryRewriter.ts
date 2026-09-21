@@ -3,6 +3,7 @@
  * - default GitArcHistoryRewriter: remap affected arc objects, reusing content when parent trees are unchanged.
  * - GitArcHistoryRewritePlan: prepared ref updates, deletes, commit aliases and bounded warnings.
  * - GitArcHistoryRewriteOptions: refs excluded from remapping.
+ * - remapGitArcClaimLossHead: preserve frozen stash bases and remap ordinary loss boundaries.
  * - COMMIT_REWRITE_MAP_REF: durable commit alias ref.
  */
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
@@ -24,6 +25,16 @@ import {
 } from "workbench-shared/workbench/git/git-arc-storage";
 
 export const COMMIT_REWRITE_MAP_REF = "refs/worktree/workbench/commit-rewrites";
+
+export function remapGitArcClaimLossHead(
+  claimLoss: { frozen: boolean; head?: string | null },
+  commits: ReadonlyMap<string, string>,
+) {
+  const head = claimLoss.head ?? null;
+  return claimLoss.frozen || head === null
+    ? head
+    : commits.get(head) ?? head;
+}
 
 export interface GitArcHistoryRewritePlan {
   commits: Map<string, string>;
@@ -182,7 +193,7 @@ export default class GitArcHistoryRewriter {
         invalidClaimLossRefs.push(entry.ref);
         continue;
       }
-      const head = stored.data.head === null ? null : commits.get(stored.data.head) ?? stored.data.head;
+      const head = remapGitArcClaimLossHead(stored.data, commits);
       if (head === stored.data.head) continue;
       const next = await this.repository.createCommitFromTree(
         oldCommit.tree,

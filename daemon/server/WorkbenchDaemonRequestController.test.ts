@@ -763,4 +763,22 @@ test("Git arc dispatch returns domain data and preserves structured failure data
     harness: "codex",
     threadId: "thread",
   }]);
+
+  const unstashResult = { conflictedPaths: ["src/conflict.ts"], phase: "active", stashedPaths: [] };
+  const unstash = createController({ gitArcResponse: Response.json({
+    ...unstashResult,
+    checkpointCommit: "a".repeat(40),
+    scopePaths: ["src/conflict.ts"],
+  }) });
+  assert.deepEqual((await unstash.controller.handle({
+    id: 4,
+    method: "git/arc/unstash",
+    params: { cwd: "C:/git/web/workbench", harness: "codex", threadId: "thread" },
+  })).result, unstashResult);
+  assert.deepEqual(unstash.gitArcRequests, [{
+    action: "arcUnstash",
+    cwd: "C:/git/web/workbench",
+    harness: "codex",
+    threadId: "thread",
+  }]);
 });

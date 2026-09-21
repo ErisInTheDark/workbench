@@ -66,7 +66,7 @@ export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "planClaims", "arcClaims",
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStash", "arcUnstash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
@@ -707,6 +707,8 @@ export default class WorkbenchGitArcFeature {
       case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
+      case "arcStash": return Response.json(await this.controller.stashArc(common));
+      case "arcUnstash": return Response.json(await this.controller.unstashArc(common));
       case "compare": {
         const inspection = await this.controller.createInspectionSnapshot(input.cwd);
         const [result, unclaimedDirtPaths] = await Promise.all([

@@ -24,9 +24,11 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   const members = rows(payload, "members");
   const sources = members.length ? members : [payload];
   const phase = payload.phase === "resolved" ? "resolved"
+    : payload.phase === "stashed" ? "stashed"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
-  const fullScope = action === "scope";
-  const claimedPaths = action === "release" ? paths(payload, "scopePaths")
+  const fullScope = action === "scope" || action === "stash" || action === "unstash";
+  const claimedPaths = action === "stash" ? []
+    : action === "release" ? paths(payload, "scopePaths")
     : action === "compare" || action === "diff"
     ? sources.flatMap(member => member.phase === "resolved" ? [] : paths(member, "scopePaths"))
     : phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
@@ -59,6 +61,8 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
       ...(payload.unchanged === true ? { unchanged: true } : {}),
       additionalClaims: additions.filter((path) => !removed.has(path)),
       removedClaims: removals.filter((path) => !added.has(path)),
+      ...(action === "stash" ? { stashedPaths: paths(payload, "stashedPaths") } : {}),
+      ...(action === "unstash" ? { conflictedPaths: paths(payload, "conflictedPaths") } : {}),
       ...(action === "scope" ? {
         proposals: sources.flatMap((member) => rows(member, "proposals").flatMap((proposal) => {
           const status = string(proposal, "status");
@@ -133,6 +137,11 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   if (action === "restore") {
     const restored = paths(payload, "restoredPaths");
     lines.push(`restored ${restored.length}`, ...restored.map(escapeGitArcValue));
+  }
+  if (action === "unstash" && paths(payload, "conflictedPaths").length) {
+    lines.push(
+      "Resolve the conflict markers directly. No Git continuation or abort command is required.",
+    );
   }
   if (action === "release" && request.body?.disown !== true && claimedPaths.length) {
     lines.push(

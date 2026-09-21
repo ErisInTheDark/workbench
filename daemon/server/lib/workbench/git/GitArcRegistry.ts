@@ -33,7 +33,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
   claimedPaths: string[];
   intentDescription: string;
   intentName: string;
-  phase?: "active" | "plan" | "resolved";
+  phase?: "active" | "plan" | "stashed" | "resolved";
   proposalId?: string | null;
   proposalIds?: string[];
   reloadScopes?: DaemonReloadScope[];
@@ -50,7 +50,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
 }
 
 export function getGitArcLiveClaimPaths(entry: Pick<GitArcRegistryEntry, "claimedPaths" | "phase" | "retainedArc">) {
-  if (entry.phase === "resolved") return [];
+  if (entry.phase === "resolved" || entry.phase === "stashed") return [];
   if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
   return entry.claimedPaths;
 }
@@ -204,7 +204,7 @@ export default class GitArcRegistry {
     const previousClaims = current ? getGitArcLiveClaimPaths(current) : [];
     if (update && current && previousClaims.length && (!next || !getGitArcLiveClaimPaths(next).length)) {
       updates.push(await new GitArcClaimLossStore(this.repository, this.resolveThreadIdentity)
-        .prepare(next ?? current, previousClaims, snapshot));
+        .prepare(next ?? current, previousClaims, snapshot, { frozen: next?.phase === "stashed" }));
     }
     return { nextState, updates };
   }
@@ -338,7 +338,11 @@ export default class GitArcRegistry {
     ))!;
   }
 
-  async prepareSet(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string): Promise<GitArcRegistryMutation> {
+  async prepareSet(
+    entry: Omit<GitArcRegistryEntry, "updatedAt">,
+    expectedCheckpointCommit?: string,
+    options?: Pick<GitArcRegistryReplaceOptions, "claimLossSnapshot">,
+  ): Promise<GitArcRegistryMutation> {
     const { blob, state } = await this.readStored();
     const resolvedInput = await this.resolveIdentity(entry);
     if (!resolvedInput) throw new Error("The Git arc owner identity is unavailable.");
@@ -371,8 +375,13 @@ export default class GitArcRegistry {
       entries: entries.flatMap(raw => canonicalRows.get(raw) ?? []),
       version: 1,
     } satisfies GitArcRegistryState;
-    return await this.prepareMutation(nextState,
-      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF }, current, nextEntry);
+    return await this.prepareMutation(
+      nextState,
+      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
+      current,
+      nextEntry,
+      options?.claimLossSnapshot,
+    );
   }
 
   async release(identity: GitArcIdentity) {

@@ -35,6 +35,8 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-remove"
   | "git-arc-restore"
   | "git-arc-start"
+  | "git-arc-stash"
+  | "git-arc-unstash"
   | "git-arc-wait"
   | "json"
   | "native"

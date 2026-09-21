@@ -236,6 +236,7 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
+    this.rejectStashedPlanning(current);
     const baselinePlan = current?.phase === "plan"
       ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
       : null;
@@ -253,6 +254,7 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
+    this.rejectStashedPlanning(current);
     if (input.inherit && !current) throw new GitArcRejectionError({ reason: "missingLifecycle" }, "This thread has no plan or arc to inherit.");
     const baselinePlan = current?.phase === "plan"
       ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
@@ -314,6 +316,7 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
+    this.rejectStashedPlanning(current);
     const plan = await this.preparePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
@@ -547,6 +550,7 @@ export default class GitArcPlanController {
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
     if (!current) throw new GitArcRejectionError({ reason: "missingLifecycle" }, "This thread does not have a current Git arc or inactive plan.");
+    if (current.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before revising its plan.");
     if (current.phase === "active" && operation !== "add") {
       throw new GitArcRejectionError({ reason: "activePlanMutationRequiresRevision" }, "Activate or revise the plan through combined claims before this legacy operation.");
     }
@@ -555,6 +559,10 @@ export default class GitArcPlanController {
       inherit: true,
       ...(operation === "add" ? { addPaths: input.paths } : operation === "adopt" ? { adoptPaths: input.paths } : { removePaths: input.paths }),
     });
+  }
+
+  private rejectStashedPlanning(current: GitArcRegistryEntry | null) {
+    if (current?.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before revising its plan.");
   }
 
   private async writePlan(

@@ -11,14 +11,16 @@ import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "start"]),
+  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stash", "start", "unstash"]),
   additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
   claimedPathCount: z.number().int().nonnegative().optional(),
   plannedPathCount: z.number().int().nonnegative().optional(),
   adoptedPathCount: z.number().int().nonnegative().optional(),
   fullScope: z.boolean().optional(),
-  phase: z.enum(["plan", "active", "resolved"]).optional(),
+  phase: z.enum(["plan", "active", "stashed", "resolved"]).optional(),
+  stashedPaths: z.array(z.string().min(1)).optional(),
+  conflictedPaths: z.array(z.string().min(1)).optional(),
   plannedPaths: z.array(z.string().min(1)).optional(),
   adoptedPaths: z.array(z.string().min(1)).optional(),
   removedClaims: z.array(z.string().min(1)).optional(),
@@ -82,6 +84,8 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   }
   list("added", receipt.additionalClaims);
   list("removed", receipt.removedClaims);
+  list("stashed", receipt.stashedPaths);
+  list("conflicts", receipt.conflictedPaths);
   list("selected", receipt.selectedPaths);
   list("reload", receipt.reloadScopes);
   if (receipt.rootId) lines.push(`root ${escapeGitArcValue(receipt.rootId)}`);
@@ -117,7 +121,7 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
 
 function parseTextReceipt(output: string) {
   const lines = output.split(/\r?\n/u);
-  const start = lines.findIndex((line) => /^arc \S+ (plan|active|resolved)$/u.test(line));
+  const start = lines.findIndex((line) => /^arc \S+ (plan|active|stashed|resolved)$/u.test(line));
   if (start < 0) return null;
   const [, action, phase] = lines[start]!.split(" ");
   const result: Record<string, string | number | boolean | null | string[] | object[]> = {
@@ -139,7 +143,8 @@ function parseTextReceipt(output: string) {
   };
   const lists: Record<string, string> = {
     claimed: "claimedPaths", planned: "plannedPaths", adopted: "adoptedPaths", added: "additionalClaims",
-    removed: "removedClaims", selected: "selectedPaths", reload: "reloadScopes",
+    removed: "removedClaims", stashed: "stashedPaths", conflicts: "conflictedPaths",
+    selected: "selectedPaths", reload: "reloadScopes",
   };
   while (index < lines.length) {
     const line = lines[index++]!;

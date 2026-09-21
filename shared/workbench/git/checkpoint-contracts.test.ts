@@ -58,6 +58,14 @@ test("only status and diff reads retain another thread target", () => {
   assert.equal("targetThreadId" in mutation, false);
 });
 
+test("stash actions are whole-arc requests without path filters", () => {
+  const common = { cwd: "C:/repo", threadId: "thread-one" };
+  for (const action of ["arcStash", "arcUnstash"] as const) {
+    assert.equal(GitCheckpointRequestSchema.safeParse({ action, ...common }).success, true);
+    assert.equal(GitCheckpointRequestSchema.safeParse({ action, paths: ["src/a.ts"], ...common }).success, false);
+  }
+});
+
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {
   const obsoleteReloadPlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",

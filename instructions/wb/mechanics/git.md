@@ -12,17 +12,19 @@ Selections are thread- and worktree-isolated but do not snapshot contents. The c
 
 ## Workbench Git Plans and Arcs
 
-Workbench stores workflow baselines as local Git objects under hidden per-worktree refs. The registry keeps one current lifecycle entry in `plan`, `active`, or `resolved` phase.
+Workbench stores workflow baselines as local Git objects under hidden per-worktree refs. The registry keeps one current lifecycle entry in `plan`, `active`, `stashed`, or `resolved` phase.
 
 Plan ref: immutable full-worktree snapshot; registry owns current scope, including empty plans.
 
 Arc ref: immutable historical snapshot.
 
-Arc: registered changeset in plan, active or resolved phase. Missing phase means active.
+Arc: registered changeset in plan, active, stashed or resolved phase. Missing phase means active.
 
 Ordinary operations resolve registered lifecycle; omit refs. `git_arc_status` provides compact ownership and recovery facts; `git_arc_scope` provides full lifecycle inventory.
 
 `wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals remain until the next implementation arc starts. Unclaimed dirt excludes all live owners, not older files.
+
+Stashed status retains scope but owns no live claims. Only continue work or unstash when you and the user agree work should resume.
 
 Final claim loss atomically records its exact scope, HEAD and snapshot under the thread's Git refs. Status reports intersecting commits and per-file counts; ref-free compare/diff use that boundary while claims remain absent, including during planning. Explicit plan refs still inspect planning drift. Reads never refresh the boundary. Existing settled-history retention removes it with other thread refs.
 
@@ -85,6 +87,8 @@ Before another implementation pass without scope changes, call `git_arc_continue
 Acceptance releases clean claims. Continuation uses the narrowed live set and reports accepted proposal IDs/commit SHAs. Resolved continuation succeeds without acquiring anything.
 
 Edit active claims with `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })`. **Continuation checks and accepted-outcome reconciliation are included; do not continue first.** Omit unused arrays. CLI uses `wb git arc claims --inherit -- added.ts -removed.ts '*adopted.ts'`.
+
+`git_arc_stash` / `wb git arc stash` saves the whole dirty claim set and releases all live claims. `git_arc_unstash` / `wb git arc unstash` reacquires the whole set and reapplies saved work. Neither accepts paths. Text conflicts are ordinary worktree markers: edit them directly; no Git continue or abort command is required. Unsupported conflicts reject and stay stashed.
 
 After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Exact removals cannot expose dirty owned work; directory claims are not exclusion patterns. Removing final clean scope resolves lifecycle.
 

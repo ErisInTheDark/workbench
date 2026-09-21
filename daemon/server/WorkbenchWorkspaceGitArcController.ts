@@ -359,7 +359,7 @@ export default class WorkbenchWorkspaceGitArcController {
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
         }), undefined, "read");
         const result: GitArcStatus = {
-          pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+          pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
         };
         for (const { member, result: status } of values) {
           const qualify = (paths: string[]) => paths.map(file => this.qualify(project, member, file));
@@ -367,6 +367,7 @@ export default class WorkbenchWorkspaceGitArcController {
           result.accepted.push(...status.accepted);
           result.dirtyClaims.push(...qualify(status.dirtyClaims));
           result.cleanClaims.push(...qualify(status.cleanClaims));
+          result.stashedClaims.push(...qualify(status.stashedClaims));
           result.unclaimedDirt.push(...qualify(status.unclaimedDirt));
           result.unavailableRecovery.push(...status.unavailableRecovery.map(() => member.roots[0]!.id));
           result.recovery.push(...status.recovery.map(lost => ({
@@ -375,7 +376,7 @@ export default class WorkbenchWorkspaceGitArcController {
             comparison: lost.comparison.map(change => ({ ...change, path: this.qualify(project, member, change.path) })),
           })));
         }
-        for (const key of ["dirtyClaims", "cleanClaims", "unclaimedDirt"] as const) result[key] = unique(result[key]).sort();
+        for (const key of ["dirtyClaims", "cleanClaims", "stashedClaims", "unclaimedDirt"] as const) result[key] = unique(result[key]).sort();
         return result;
       }
       case "planClaims":
@@ -402,6 +403,8 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcAdopt":
       case "arcRemove": return await this.executePathMutation(project, members, request);
       case "arcRelease": return await this.executeRelease(project, members, request);
+      case "arcStash":
+      case "arcUnstash": return await this.executeStash(project, members, request);
       case "arcStart":
       case "arcContinue": return await this.executeRefOperation(project, members, request);
       case "arcWait": return await this.findPlanClaimCollisions(project, request);
@@ -639,6 +642,8 @@ export default class WorkbenchWorkspaceGitArcController {
       ...(Array.isArray(value.removedClaims) ? { removedClaims: qualifyPaths(value.removedClaims) } : {}),
       ...(Array.isArray(value.skippedIgnoredPaths) ? { skippedIgnoredPaths: qualifyPaths(value.skippedIgnoredPaths) } : {}),
       ...(Array.isArray(value.restoredPaths) ? { restoredPaths: qualifyPaths(value.restoredPaths) } : {}),
+      ...(Array.isArray(value.stashedPaths) ? { stashedPaths: qualifyPaths(value.stashedPaths) } : {}),
+      ...(Array.isArray(value.conflictedPaths) ? { conflictedPaths: qualifyPaths(value.conflictedPaths) } : {}),
     };
   }
 
@@ -651,7 +656,13 @@ export default class WorkbenchWorkspaceGitArcController {
     return {
       ...first,
       ...(members.some((member) => typeof member.phase === "string") ? {
-        phase: members.some((member) => member.phase === "plan") ? "plan" : members.some((member) => member.phase === "active") ? "active" : "resolved",
+        phase: members.some((member) => member.phase === "plan")
+          ? "plan"
+          : members.some((member) => member.phase === "active")
+            ? "active"
+            : members.some((member) => member.phase === "stashed")
+              ? "stashed"
+              : "resolved",
       } : {}),
       ...(members.every((member) => typeof member.unchanged === "boolean") ? { unchanged: members.every((member) => member.unchanged === true) } : {}),
       acquiredClaims: arrays("acquiredClaims"),
@@ -663,6 +674,8 @@ export default class WorkbenchWorkspaceGitArcController {
       noOp: members.length > 0 && members.every((member) => member.noOp === true),
       releasedClaims: arrays("releasedClaims"),
       restoredPaths: arrays("restoredPaths"),
+      stashedPaths: arrays("stashedPaths"),
+      conflictedPaths: arrays("conflictedPaths"),
       scopePaths: arrays("scopePaths"),
       claimedPaths: arrays("claimedPaths"),
       plannedPaths: arrays("plannedPaths"),
@@ -776,6 +789,84 @@ export default class WorkbenchWorkspaceGitArcController {
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
       }),
       "write",
+      { harness: request.harness, project, threadId: request.threadId },
+    );
+    return this.aggregateResults(project, values);
+  }
+
+  private async runReversibleMembers<T>(
+    selected: readonly RepoMember[],
+    operation: (member: RepoMember) => Promise<T>,
+    rollback: (member: RepoMember, result: T) => Promise<void>,
+    preflight: (member: RepoMember) => Promise<void>,
+    observation: { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string },
+  ) {
+    if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
+    return await this.transitions.runMany(selected.map(({ repoRoot }) => repoRoot), async () => {
+      try {
+        for (const member of selected) {
+          try {
+            await preflight(member);
+          } catch (error) {
+            throw new WorkspaceGitArcMemberError({
+              failedRootIds: member.roots.map(({ id }) => id), completedRootIds: [], stage: "preflight",
+            }, error);
+          }
+        }
+        const results: Array<{ member: RepoMember; result: T }> = [];
+        for (const member of selected) {
+          try {
+            results.push({ member, result: await operation(member) });
+          } catch (error) {
+            const operationError = new WorkspaceGitArcMemberError({
+              failedRootIds: member.roots.map(({ id }) => id), completedRootIds: [], stage: "operation",
+            }, error);
+            const rollbackErrors: unknown[] = [];
+            for (const completed of [...results].reverse()) {
+              try {
+                await rollback(completed.member, completed.result);
+              } catch (rollbackError) {
+                rollbackErrors.push(rollbackError);
+              }
+            }
+            if (rollbackErrors.length) {
+              throw new AggregateError([operationError, ...rollbackErrors], "Workspace Git arc operation failed and member rollback also failed.");
+            }
+            throw operationError;
+          }
+        }
+        return results;
+      } finally {
+        await this.observeMemberClaims(selected, observation);
+      }
+    });
+  }
+
+  private async executeStash(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "arcStash" | "arcUnstash" }>,
+  ) {
+    const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
+    const selectedRoots = new Set(lifecycle?.members
+      .filter(({ phase }) => phase === (request.action === "arcStash" ? "active" : "stashed"))
+      .map(({ repoRoot }) => repoRoot));
+    const selected = members.filter((member) => selectedRoots.has(member.repoRoot));
+    const values = await this.runReversibleMembers(
+      selected,
+      async (member) => request.action === "arcStash"
+        ? await this.local.stashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId })
+        : await this.local.unstashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
+      async (member) => {
+        if (request.action === "arcStash") {
+          await this.local.unstashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
+        } else {
+          await this.local.restashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
+        }
+      },
+      async (member) => request.action === "arcStash"
+        ? await this.local.assertArcStashable({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId })
+        : await this.local.assertArcUnstashable({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
       { harness: request.harness, project, threadId: request.threadId },
     );
     return this.aggregateResults(project, values);
@@ -1050,6 +1141,9 @@ export default class WorkbenchWorkspaceGitArcController {
     const members = await Promise.all(values.map(async ({ member, state }): Promise<WorkspaceGitArcMemberState> => ({
       ...state,
       claimedPaths: state.claimedPaths.map((candidate) => this.qualify(project, member, candidate)),
+      ...(state.phase === "stashed" ? {
+        stashedPaths: state.stashedPaths?.map((candidate) => this.qualify(project, member, candidate)) ?? [],
+      } : {}),
       proposals: await Promise.all(state.proposals.map(async (proposal) => {
         const paths = await this.local.getProposalPaths({ cwd: member.repoRoot, harness: state.harness as WorkbenchHarness, proposalId: proposal.proposalId, threadId: state.threadId });
         const roots = unique(paths.map((candidate) => this.rootForRepoPath(member, candidate).id));
@@ -1060,6 +1154,11 @@ export default class WorkbenchWorkspaceGitArcController {
       rootIds: member.roots.map(({ id }) => id),
     })));
     const first = members[0]!;
+    const phase = members.some(({ phase }) => phase === "active")
+      ? "active" as const
+      : members.some(({ phase }) => phase === "stashed")
+        ? "stashed" as const
+        : "resolved" as const;
     return {
       checkpointCommit: first.checkpointCommit,
       claimedPaths: members.flatMap(({ claimedPaths }) => claimedPaths),
@@ -1067,10 +1166,11 @@ export default class WorkbenchWorkspaceGitArcController {
       intentDescription: first.intentDescription,
       intentName: first.intentName,
       members,
-      phase: members.some(({ phase }) => phase === "active") ? "active" : "resolved",
+      phase,
       proposals: members.flatMap(({ proposals }) => proposals),
       threadId: first.threadId,
       updatedAt: members.map(({ updatedAt }) => updatedAt).sort().at(-1) ?? first.updatedAt,
+      ...(phase === "stashed" ? { stashedPaths: members.flatMap(({ stashedPaths }) => stashedPaths ?? []) } : {}),
     };
   }
 

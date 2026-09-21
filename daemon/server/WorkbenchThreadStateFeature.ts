@@ -10,7 +10,7 @@ import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
@@ -39,7 +39,7 @@ type GitArcPlanState = Omit<RepoGitArcPlanState, "threadId"> & { threadId: Workb
 function projectGitArc(state: GitArcLifecycleState | RepoGitArcLifecycleState | undefined) {
   if (!state) return null;
   const { harness: _harness, reloadScopes: _reloadScopes, threadId: _threadId, ...gitArc } = state as typeof state & { reloadScopes?: unknown };
-  return gitArc;
+  return WorkbenchGitArcLifecycleStateSchema.parse(gitArc);
 }
 
 function legacyGitArc(claim: WorkbenchGitArcActiveClaim) {

@@ -3,7 +3,7 @@
  * - WorkbenchHarnessSchema/WorkbenchHarnessId: stored provider identities, independent of installation.
  * - WorkbenchComposerSettingsState/WorkbenchComposerProfileSelectionState: shared composer settings and selected profile types.
  * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
- * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active and resolved Git work.
+ * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarSnapshot/WorkbenchProjectThreadSidebars: project and aggregate sidebar types.
@@ -264,42 +264,69 @@ const WorkbenchGitArcProposalStateSchema = z.object({
   status: z.enum(["committed", "proposed"]),
 }).strict();
 
-const WorkbenchGitArcMemberStateSchema = z.object({
+const workbenchGitArcMemberState = {
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
-  claimedPaths: z.array(z.string().min(1)),
   harness: z.string().min(1),
   intentDescription: z.string(),
   intentName: z.string().min(1),
-  phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
   repoRoot: z.string().min(1),
   rootId: z.string().min(1),
   rootIds: z.array(z.string().min(1)).min(1),
   threadId: z.string().min(1),
   updatedAt: z.string().min(1),
-}).strict();
+};
 
-export const WorkbenchGitArcLifecycleStateSchema = z.object({
+const WorkbenchGitArcMemberStateSchema = z.discriminatedUnion("phase", [
+  z.object({
+    ...workbenchGitArcMemberState,
+    claimedPaths: z.array(z.string().min(1)).min(1),
+    phase: z.literal("active"),
+  }).strict(),
+  z.object({
+    ...workbenchGitArcMemberState,
+    claimedPaths: z.array(z.string().min(1)).length(0),
+    phase: z.literal("stashed"),
+    stashedPaths: z.array(z.string().min(1)).min(1),
+  }).strict(),
+  z.object({
+    ...workbenchGitArcMemberState,
+    claimedPaths: z.array(z.string().min(1)).length(0),
+    phase: z.literal("resolved"),
+  }).strict(),
+]);
+
+const workbenchGitArcLifecycleState = {
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
-  claimedPaths: z.array(z.string().min(1)),
   intentDescription: z.string(),
   intentName: z.string().min(1),
   members: z.array(WorkbenchGitArcMemberStateSchema).min(1).optional(),
-  phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
   updatedAt: z.string().min(1),
-}).strict().superRefine((value, context) => {
-  if (value.phase === "active" && !value.claimedPaths.length) {
-    context.addIssue({ code: "custom", message: "An active Git arc must own at least one claimed path." });
-  }
-  if (value.phase === "resolved" && value.claimedPaths.length) {
-    context.addIssue({ code: "custom", message: "A resolved Git arc cannot own claimed paths." });
-  }
-});
+};
+
+export const WorkbenchGitArcLifecycleStateSchema = z.discriminatedUnion("phase", [
+  z.object({
+    ...workbenchGitArcLifecycleState,
+    claimedPaths: z.array(z.string().min(1)).min(1),
+    phase: z.literal("active"),
+  }).strict(),
+  z.object({
+    ...workbenchGitArcLifecycleState,
+    claimedPaths: z.array(z.string().min(1)).length(0),
+    phase: z.literal("stashed"),
+    stashedPaths: z.array(z.string().min(1)).min(1),
+  }).strict(),
+  z.object({
+    ...workbenchGitArcLifecycleState,
+    claimedPaths: z.array(z.string().min(1)).length(0),
+    phase: z.literal("resolved"),
+  }).strict(),
+]);
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
 export function gitArcPreventsThreadSettlement(gitArc: WorkbenchGitArcLifecycleState | null | undefined) {
-  return Boolean(gitArc?.claimedPaths.length);
+  return Boolean(gitArc?.claimedPaths.length || gitArc?.phase === "stashed");
 }
 
 export const WorkbenchGitArcPlanStateSchema = z.object({

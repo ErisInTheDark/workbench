@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitRepository: own Git processes, object decoding, paths, snapshots and atomic publication for one repository.
- * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeSnapshot: typed history, object, snapshot and publication facts.
+ * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, merge, snapshot and publication facts.
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  */
@@ -26,6 +26,12 @@ export interface GitHeadMovement {
   changedPaths: string[];
   currentHead: string | null;
   kind: "fast-forward" | "incompatible" | "same";
+}
+
+export interface GitWorktreeMergeResult {
+  conflictedPaths: string[];
+  tree: string;
+  unsupportedConflictTypes: string[];
 }
 
 export interface GitCommitPathChange {
@@ -636,6 +642,47 @@ export default class WorkbenchGitRepository {
     } catch (error) {
       throw new Error(`Commit rewrite conflicts while merging changes after ${base}.`, { cause: error });
     }
+  }
+
+  async mergeWorktreeTrees(
+    baseTreeish: string | null,
+    currentTreeish: string | null,
+    stashedTreeish: string,
+  ): Promise<GitWorktreeMergeResult> {
+    const [base, current, stashed] = await Promise.all([
+      this.resolveTree(baseTreeish),
+      this.resolveTree(currentTreeish),
+      this.resolveTree(stashedTreeish),
+    ]);
+    const result = await this.runWithInputResult([
+      "merge-tree", "--write-tree", "--name-only", "--messages", "-z", `--merge-base=${base}`, current, stashed,
+    ], "", { ...process.env, LC_ALL: "C" }, [0, 1]);
+    const fields = result.stdout.split("\0");
+    const tree = fields.shift()?.trim() ?? "";
+    if (!COMMIT_PATTERN.test(tree)) throw new Error("Git did not return a merged worktree tree.");
+    if (result.exitCode === 0) return { conflictedPaths: [], tree, unsupportedConflictTypes: [] };
+
+    const conflictedPaths: string[] = [];
+    while (fields.length && fields[0]) conflictedPaths.push(fields.shift()!);
+    if (fields[0] === "") fields.shift();
+    const conflictTypes: string[] = [];
+    while (fields.length && fields[0]) {
+      const pathCount = Number(fields.shift());
+      if (!Number.isSafeInteger(pathCount) || pathCount < 0 || fields.length < pathCount + 2) {
+        throw new Error("Git returned invalid merge conflict metadata.");
+      }
+      fields.splice(0, pathCount);
+      const conflictType = fields.shift()!;
+      const message = fields.shift()!;
+      if (conflictType.startsWith("CONFLICT")) conflictTypes.push(conflictType);
+      if (message.includes("Cannot merge binary files:")) conflictTypes.push("CONFLICT (binary)");
+    }
+    const supported = new Set(["CONFLICT (content)", "CONFLICT (contents)", "CONFLICT (add/add)"]);
+    return {
+      conflictedPaths: [...new Set(conflictedPaths)].sort((left, right) => left.localeCompare(right)),
+      tree,
+      unsupportedConflictTypes: [...new Set(conflictTypes.filter((type) => !supported.has(type)))].sort(),
+    };
   }
 
   async firstParentRange(target: string, head: string) {

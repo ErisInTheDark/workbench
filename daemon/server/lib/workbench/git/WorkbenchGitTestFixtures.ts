@@ -348,7 +348,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [
     demand(UNBORN_FIXTURE, 1),
-    demand(THREAD_GIT_BASE_FIXTURE, 5),
+    demand(THREAD_GIT_BASE_FIXTURE, 7),
   ], nested: false }],
   ["WorkbenchWorkingTreeRepository.test.ts", { fixtures: [
     demand(UNBORN_FIXTURE, 1),

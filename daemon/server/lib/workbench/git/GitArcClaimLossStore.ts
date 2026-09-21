@@ -35,9 +35,19 @@ export default class GitArcClaimLossStore {
     return resolved;
   }
 
-  async prepare(identity: Identity, paths: string[], snapshot?: GitWorktreeSnapshot): Promise<GitRefUpdate> {
+  async prepare(
+    identity: Identity,
+    paths: string[],
+    snapshot?: GitWorktreeSnapshot,
+    options: { frozen?: boolean } = {},
+  ): Promise<GitRefUpdate> {
     const boundary = snapshot ?? await this.repository.writeWorktreeSnapshot();
-    const metadata: GitArcClaimLoss = GitArcClaimLossSchema.parse({ version: 1, paths, head: boundary.head });
+    const metadata: GitArcClaimLoss = GitArcClaimLossSchema.parse({
+      version: 1,
+      paths,
+      head: boundary.head,
+      frozen: options.frozen ?? false,
+    });
     const commit = await this.repository.createCommitFromTree(boundary.tree, boundary.head, JSON.stringify(metadata));
     const ref = this.ref({ ...identity, threadId: (await this.identity(identity)).threadId });
     return { newValue: commit, oldValue: await this.repository.readRef(ref) ?? "0".repeat(40), ref };

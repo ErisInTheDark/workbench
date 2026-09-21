@@ -265,6 +265,8 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ["wb git arc wait", "git_arc_wait", {}],
     ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
+    ["wb git arc stash", "git_arc_stash", {}],
+    ["wb git arc unstash", "git_arc_unstash", {}],
     ["wb git arc compare", "git_arc_compare", { paths: [] }],
     ["wb git arc status --full=dirty,clean", "git_arc_status", { full: ["dirty", "clean"] }],
     ["wb thread recall", "thread_recall", {}],
@@ -907,6 +909,19 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     paths: [],
     ref: null,
   });
+  assert.deepEqual(parseGitArcCommand("wb git arc stash"), {
+    action: "stash",
+    intentName: null,
+    paths: [],
+    ref: null,
+  });
+  assert.deepEqual(parseGitArcCommand("wb git arc unstash"), {
+    action: "unstash",
+    intentName: null,
+    paths: [],
+    ref: null,
+  });
+  assert.equal(parseGitArcCommand("wb git arc stash -- src/file.ts"), null);
 
   const start = getThreadCommandDisplay({
     command: "wb git arc start --ref abc",

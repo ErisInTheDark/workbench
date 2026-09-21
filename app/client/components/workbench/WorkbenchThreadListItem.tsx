@@ -86,6 +86,7 @@ function ThreadTooltipContent({
   snoozed,
   status,
   statusClassName,
+  stashed,
   title,
   identity,
 }: {
@@ -99,6 +100,7 @@ function ThreadTooltipContent({
   snoozed: boolean;
   status: string;
   statusClassName: string;
+  stashed: boolean;
   title: string;
   identity?: { harness: WorkbenchHarness; threadId: WorkbenchThreadId };
 }) {
@@ -118,7 +120,7 @@ function ThreadTooltipContent({
         <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
           <div className="contents [--fg-bg:var(--thread-files-bg)]">
             <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
-              <FlagIcon size={14} />
+              {stashed ? <ArchiveIcon size={14} /> : <FlagIcon size={14} />}
             </span>
             {claimedPaths.map((filePath) => (
               <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />
@@ -205,7 +207,8 @@ export default function WorkbenchThreadListItem({
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
   const hasActiveGitArc = gitArc?.phase === "active";
-  const claimedPaths = gitArc?.claimedPaths ?? [];
+  const stashed = gitArc?.phase === "stashed";
+  const claimedPaths = stashed ? gitArc.stashedPaths : gitArc?.claimedPaths ?? [];
   const claimedFileCount = claimedPaths.length;
   const showComposerDraft = claimedFileCount === 0 && hasComposerDraft;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
@@ -250,7 +253,7 @@ export default function WorkbenchThreadListItem({
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
   const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
-  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} ${stashed ? "stashed" : "claimed"} ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -314,7 +317,7 @@ export default function WorkbenchThreadListItem({
       </svg>
       {presentation === "row" ? <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
-          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
+          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} stashed={stashed} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
           enabled={showTooltip && !isDragActive}
           interactive
         >
@@ -380,7 +383,9 @@ export default function WorkbenchThreadListItem({
           metadata={(
             <span className="grid items-center">
               {claimedFileCount ? (
-                <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon size={14} /><span>{claimedFileCount}</span></span>
+                <span data-role={stashed ? "thread-file-stash" : "thread-file-claim"} className="inline-flex items-center gap-0.5" aria-label={`${claimedFileCount} ${stashed ? "stashed" : "claimed"} ${claimedFileCount === 1 ? "file" : "files"}`}>
+                  {stashed ? <ArchiveIcon size={14} /> : <FlagIcon size={14} />}<span>{claimedFileCount}</span>
+                </span>
               ) : showComposerDraft ? (
                 <span data-role="thread-composer-draft" className="inline-flex size-4 items-center justify-center" title="Unsent draft">
                   <ComposerDraftIcon size={14} />

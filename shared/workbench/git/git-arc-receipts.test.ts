@@ -64,3 +64,17 @@ test("historical JSON receipts remain readable", () => {
 test("truncated inventory does not become a successful partial receipt", () => {
   assert.equal(parseGitArcReceipt(`arc scope active\nref ${ref}\nclaimed 2\none.ts\nend arc`), null);
 });
+
+test("unstash receipts retain the complete stashed set and textual conflicts", () => {
+  const receipt = {
+    action: "unstash" as const,
+    claimedPaths: ["src/a.ts", "src/b.ts"],
+    conflictedPaths: ["src/b.ts"],
+    fullScope: true,
+    intentName: "resume work",
+    phase: "active" as const,
+    ref,
+    version: 1 as const,
+  };
+  assert.deepEqual(parseGitArcReceipt(formatGitArcTextReceipt(receipt)), receipt);
+});

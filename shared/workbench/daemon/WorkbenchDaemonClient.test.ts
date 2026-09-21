@@ -180,6 +180,15 @@ test("Git arc requests return exact domain results and preserve structured failu
     }),
     comparison,
   );
+  const stashResult = { conflictedPaths: ["src/conflict.ts"], phase: "active" as const, stashedPaths: [] };
+  const stashClient = new WorkbenchDaemonClient({
+    request: async <TResponse>() => stashResult as TResponse,
+  });
+  assert.deepEqual(await stashClient.git.arc.unstash({
+    cwd: "C:/git/web/workbench",
+    harness: "codex",
+    threadId: "thread",
+  }), stashResult);
 
   const failure = {
     action: "compare" as const,

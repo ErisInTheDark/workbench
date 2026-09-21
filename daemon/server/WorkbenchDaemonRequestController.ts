@@ -18,6 +18,7 @@ import {
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
+    GitArcStashResultSchema,
     GitCheckpointCompareResultSchema,
     GitCheckpointProposalSchema,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -490,7 +491,13 @@ export default class WorkbenchDaemonRequestController {
     }
     const parsed = method === "git/arc/compare"
       ? GitCheckpointCompareResultSchema.safeParse(value)
-      : GitCheckpointProposalSchema.safeParse(value);
+      : method === "git/arc/stash" || method === "git/arc/unstash"
+        ? GitArcStashResultSchema.safeParse({
+          conflictedPaths: (value as { conflictedPaths?: unknown }).conflictedPaths,
+          phase: (value as { phase?: unknown }).phase,
+          stashedPaths: (value as { stashedPaths?: unknown }).stashedPaths,
+        })
+        : GitCheckpointProposalSchema.safeParse(value);
     if (!parsed.success) throw new Error(`The ${method} result did not match its contract.`);
     return parsed.data;
   }

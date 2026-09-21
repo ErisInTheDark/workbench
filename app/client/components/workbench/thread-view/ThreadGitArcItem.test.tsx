@@ -54,9 +54,21 @@ test("status and unknown Git arc cards start open while operation cards start cl
   for (const action of ["status", "unknown"] as const) {
     assert.match(renderCard(action), /<details[^>]*\bopen=/u, action);
   }
-  for (const action of ["mv", "compare", "diff", "claims", "scope", "continue", "plan", "planStart", "release", "rescind", "restore", "start"] as const) {
+  for (const action of ["mv", "compare", "diff", "claims", "scope", "continue", "plan", "planStart", "release", "rescind", "restore", "start", "stash", "unstash"] as const) {
     assert.doesNotMatch(renderCard(action), /<details[^>]*\bopen=/u, action);
   }
+});
+
+test("conflicted unstash receipts open with editable paths and no Git continuation guidance", () => {
+  const html = renderCard("unstash", receipt("unstash", {
+    claimedPaths: ["src/conflict.ts"],
+    conflictedPaths: ["src/conflict.ts"],
+    fullScope: true,
+  }));
+  assert.match(html, /<details[^>]*\bopen=/u);
+  assert.match(html, /Resolve conflict markers/u);
+  assert.match(html, /src\/conflict\.ts/u);
+  assert.match(html, /No Git continuation or abort command is required/u);
 });
 
 test("closed claim cards show representative icon rows and a remaining count", () => {

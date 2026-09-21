@@ -23,12 +23,13 @@ import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
-type ReleaseAction = "restore" | "restoreAndUnclaim" | "unclaim";
+type LifecycleAction = "restore" | "restoreAndUnclaim" | "stash" | "unclaim" | "unstash";
 type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
 type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & {
-  phase?: "active" | "resolved";
+  phase?: "active" | "stashed" | "resolved";
   proposalIds?: string[];
   proposals: Array<{ proposalId: string; status: GitArcProposalStatus }>;
+  stashedPaths?: string[];
 };
 
 export default function ThreadGitArcLifecycleCard({
@@ -58,13 +59,14 @@ export default function ThreadGitArcLifecycleCard({
   const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
   const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
   const isShiftPressed = useNonTextInputShiftKey();
-  const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
+  const [activeAction, setActiveAction] = useState<LifecycleAction | null>(null);
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
+  const [conflictedPaths, setConflictedPaths] = useState<string[]>([]);
   const [failure, setFailure] = useState<GitArcFailure | null>(null);
   const memberRefs = claim.members?.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })) ?? [];
 
   useEffect(() => {
-    if (phase === "resolved" || !claim.claimedPaths.length) {
+    if (phase !== "active" || !claim.claimedPaths.length) {
       setChangeState("clean");
       return;
     }
@@ -87,12 +89,18 @@ export default function ThreadGitArcLifecycleCard({
     return () => controller.abort();
   }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, daemon, harness, phase, threadId]);
 
-  const release = async (action: ReleaseAction) => {
+  const runAction = async (action: LifecycleAction) => {
     if (activeAction) return;
     setActiveAction(action);
     setFailure(null);
     try {
-      if (action === "restore" || action === "restoreAndUnclaim") {
+      if (action === "stash" || action === "unstash") {
+        const result = action === "stash"
+          ? await daemon.git.arc.stash({ cwd, harness, threadId })
+          : await daemon.git.arc.unstash({ cwd, harness, threadId });
+        setConflictedPaths(result.conflictedPaths);
+        await onReleased();
+      } else if (action === "restore" || action === "restoreAndUnclaim") {
         const confirmRestore = action === "restoreAndUnclaim";
         await daemon.git.arc.restore(memberRefs.length ? {
             confirmRestore,
@@ -121,12 +129,12 @@ export default function ThreadGitArcLifecycleCard({
         });
       }
       if (action === "restore") setChangeState("clean");
-      else await onReleased();
+      else if (action !== "stash" && action !== "unstash") await onReleased();
     } catch (releaseError) {
       setFailure(releaseError instanceof GitArcFailureException
         ? releaseError.failure
         : createGitArcOperationRejected(
-          action === "unclaim" ? "arcRelease" : "restore",
+          action === "unclaim" ? "arcRelease" : action === "stash" ? "arcStash" : action === "unstash" ? "arcUnstash" : "restore",
           releaseError instanceof Error ? releaseError.message : "Unable to release the Git arc claim.",
         ));
     } finally {
@@ -136,6 +144,7 @@ export default function ThreadGitArcLifecycleCard({
 
   if (phase === "resolved" && !visibleProposals.length) return null;
   const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
+  const lifecyclePaths = phase === "stashed" ? claim.stashedPaths ?? [] : claim.claimedPaths;
 
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
@@ -161,16 +170,21 @@ export default function ThreadGitArcLifecycleCard({
               contentClassName="mt-1 pl-1"
               summary={(
                 <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                  <span>{claim.claimedPaths.length} claimed {claim.claimedPaths.length === 1 ? "file" : "files"}</span>
+                  <span>{lifecyclePaths.length} {phase === "stashed" ? "stashed" : "claimed"} {lifecyclePaths.length === 1 ? "file" : "files"}</span>
                   <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
-                    {changeState === "dirty" ? (
+                    {phase === "stashed" ? (
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unstash")}>
+                        {activeAction === "unstash" ? "Unstashing." : "Unstash files"}
+                      </PrimaryButton>
+                    ) : null}
+                    {phase === "active" && changeState === "dirty" ? (
                       showCombinedAction ? (
                         <PrimaryButton
                           key="restore-and-unclaim"
                           className="!px-3 !py-1.5 !text-[0.76rem]"
                           disabled={activeAction !== null}
                           holdToConfirmMs={2000}
-                          onClick={() => void release("restoreAndUnclaim")}
+                          onClick={() => void runAction("restoreAndUnclaim")}
                           tone="danger"
                         >
                           {activeAction === "restoreAndUnclaim" ? "Restoring & unclaiming…" : "Restore & unclaim"}
@@ -182,7 +196,7 @@ export default function ThreadGitArcLifecycleCard({
                             className="!px-3 !py-1.5 !text-[0.76rem]"
                             disabled={activeAction !== null}
                             holdToConfirmMs={2000}
-                            onClick={() => void release("restore")}
+                            onClick={() => void runAction("restore")}
                             tone="danger"
                           >
                             {activeAction === "restore" ? "Restoring…" : "Restore files"}
@@ -191,24 +205,30 @@ export default function ThreadGitArcLifecycleCard({
                             key="unclaim"
                             className="!px-3 !py-1.5 !text-[0.76rem]"
                             disabled={activeAction !== null}
-                            onClick={() => void release("unclaim")}
+                            onClick={() => void runAction("unclaim")}
                           >
                             {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
                           </PrimaryButton>
                         </>
                       )
-                    ) : changeState === "clean" ? (
-                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void release("unclaim")}>
+                    ) : phase === "active" && changeState === "clean" ? (
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unclaim")}>
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
                       </PrimaryButton>
-                    ) : changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
+                    ) : phase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
+                    {phase === "active" ? (
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("stash")}>
+                        {activeAction === "stash" ? "Stashing…" : "Stash files"}
+                      </PrimaryButton>
+                    ) : null}
                   </span>
                 </span>
               )}
               summaryClassName="text-[0.76em] leading-[1.45] text-fg/muted"
             >
               <ThreadClaimedFileList
-                paths={claim.claimedPaths}
+                marker={phase === "stashed" ? "unclaimed" : undefined}
+                paths={lifecyclePaths}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
@@ -223,6 +243,20 @@ export default function ThreadGitArcLifecycleCard({
                 projectRootPath={projectRootPath}
                 workspaceRoots={workspaceRoots}
               />
+            ) : null}
+            {conflictedPaths.length ? (
+              <div className="mt-2 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] pt-2">
+                <ThreadClaimedFileList
+                  label="Resolve conflict markers"
+                  marker="dirty"
+                  paths={conflictedPaths}
+                  projectFilePaths={projectFilePaths}
+                  projectId={projectId}
+                  projectRootPath={projectRootPath}
+                  workspaceRoots={workspaceRoots}
+                />
+                <p className="m-0 px-2 pb-1 text-[0.76em] text-fg/muted">Edit the markers directly. No Git continuation or abort command is required.</p>
+              </div>
             ) : null}
           </div>
         ) : null}

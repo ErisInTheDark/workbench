@@ -36,6 +36,7 @@ async function checkAtomicLoss(prepared: ClaimLossFixture) {
   await controller.releaseArc({ ...identity, disown: true });
   const boundary = await store.read(identity);
   assert.ok(boundary);
+  assert.equal(boundary.frozen, false);
   assert.deepEqual(boundary.paths, ["one.txt"]);
   await fs.writeFile(path.join(fixture.root, "one.txt"), "later\n");
   assert.equal((await store.read(identity))?.commit, boundary.commit);
@@ -56,6 +57,13 @@ async function checkAtomicLoss(prepared: ClaimLossFixture) {
   await controller.releaseArc({ ...identity, disown: true });
   const replacement = await store.read(identity);
   assert.notEqual(replacement?.commit, boundary.commit);
+  assert.equal(replacement?.frozen, false);
+  const frozenUpdate = await store.prepare(identity, ["one.txt"], {
+    head: replacement!.head,
+    tree: replacement!.tree,
+  }, { frozen: true });
+  await repository.updateRefs([frozenUpdate]);
+  assert.equal((await store.read(identity))?.frozen, true);
   const ref = replacement!.ref;
   await controller.pruneThreadHistory(identity);
   assert.equal(await repository.readRef(ref), null);

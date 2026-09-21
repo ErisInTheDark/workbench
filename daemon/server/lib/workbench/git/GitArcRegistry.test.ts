@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { getGitArcLiveClaimPaths, REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
 import type { GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
@@ -28,6 +28,12 @@ function input(threadId: string, claimedPaths: string[]): Omit<GitArcRegistryEnt
   const { updatedAt: _updatedAt, ...value } = entry(threadId, claimedPaths);
   return value;
 }
+
+test("stashed entries retain their complete path set without exposing live claims", () => {
+  const stashed = { ...entry("stashed", ["one.ts", "two.ts"]), phase: "stashed" as const };
+  assert.deepEqual(stashed.claimedPaths, ["one.ts", "two.ts"]);
+  assert.deepEqual(getGitArcLiveClaimPaths(stashed), []);
+});
 
 function fixture(entries: GitArcRegistryEntry[]) {
   const written = new Map<string, string>();
